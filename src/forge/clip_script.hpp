@@ -30,6 +30,15 @@
 //   let ring  = revolve { bead 0.15 0.9  0.24 1.05 } axis=y    a section turned about an axis
 //   let curl  = spiral 0 2 0 r=0.3 tighten=0.6 tube=0.04 turns=2.5 axis=z
 //
+//   let tree  = branch 0 0 0 h=1.4 r=0.06 levels=5 count=3 spread=0.11 lean=0.3 seed=7
+//   let bed   = scatter { pebble } x=0.07 z=0.07 nx=24 nz=24 jitter=0.45 turn=0.5
+//   let arris = intersection { face_a face_b } chamfer=0.02   a FLAT cut on one seam
+//   let bark  = fbm size=0.06 octaves=4 stretch=1,9,1         a grain that runs one way
+//   let craze = cell_edge size=0.12 seed=4                    the seams, which is what a crack is
+//   let cavity= occlusion { part_portico } r=0.22             0 in the open, 1 buried
+//   let arris_wear = curvature { part_portico } r=0.10        + on an edge, - in a corner
+//   let up    = facing { part_portico } axis=y                + up-facing, - down
+//
 //   paint stone
 //   paint moss  where=grain above=0.55 facing=y at=0.6
 //   weather overgrown 0.4 on=post          only where that shape is; see WeatherRequest::scope

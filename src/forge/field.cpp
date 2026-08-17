@@ -49,6 +49,50 @@ f64 smooth_min(f64 a, f64 b, f64 k) {
 
 f64 smooth_max(f64 a, f64 b, f64 k) { return -smooth_min(-a, -b, k); }
 
+// The FLAT version of the same two, which is what a chamfer is — see Op::ChamferUnion.
+//
+// The extra term is the forty-five degree plane through the seam: for two perpendicular faces
+// `a` and `b`, `(a + b - k)/root2` is exactly the signed distance to the plane `a + b = k`, so a
+// chamfer between two walls is not an approximation of a chamfer, it is one.
+//
+// # The clamp, which is not decoration
+//
+// Without it the field is not one-Lipschitz. Deep inside two overlapping shapes `a` and `b` are
+// both about -t, the extra term is -root2*t - k/root2, and a field that falls by root2 metres per
+// metre breaks the one promise `metric_slack` makes on this engine's behalf: that a reading at a
+// block's centre bounds what the field can be anywhere in the block. Settling reads that promise,
+// and a block wrongly settled is matter that is silently not there.
+//
+// So the term is floored (and, for the max, ceilinged) at one chamfer's worth away from the plain
+// min. That bounds the whole op's deviation from `min(a, b)` — which IS one-Lipschitz — by
+// k/root2 everywhere, which is an additive slack of root2*k and exactly the shape of allowance
+// `metric_slack` is built to carry. It cannot move the SURFACE, because the clamp only bites
+// where `min(a, b)` is already negative and the chamfer face lies where it is positive.
+constexpr f64 kInvRoot2 = 0.7071067811865476;
+
+f64 chamfer_min(f64 a, f64 b, f64 k) {
+    if (k <= 0.0) return std::min(a, b);
+    const f64 plain = std::min(a, b);
+    return std::min(plain, std::max((a + b - k) * kInvRoot2, plain - k * kInvRoot2));
+}
+
+f64 chamfer_max(f64 a, f64 b, f64 k) { return -chamfer_min(-a, -b, k); }
+
+// The point a stretched grain is really asked at — see the block above Op::Sine in field.hpp.
+//
+// A stored zero means one, so a node built before the stretch existed reads exactly as it did, and
+// the all-ones case returns the point untouched rather than dividing by one three times. That is
+// what makes the claim "a clip that never writes `stretch=` pays nothing for it" true rather than
+// nearly true: six comparisons the branch predictor gets right every time, against three divides
+// on the hottest path in the sampler.
+Vec3 stretched(Vec3 p, f64 sx, f64 sy, f64 sz) {
+    if ((sx == 0.0 || sx == 1.0) && (sy == 0.0 || sy == 1.0) && (sz == 0.0 || sz == 1.0)) {
+        return p;
+    }
+    return {p.x / ((sx != 0.0) ? sx : 1.0), p.y / ((sy != 0.0) ? sy : 1.0),
+            p.z / ((sz != 0.0) ? sz : 1.0)};
+}
+
 // How far a point is from a box, SQUARED, for the cull test — which compares against a distance it
 // already has and so never needs the root. One square root per child per evaluation is not much; a
 // hundred million evaluations with thirty children each is a hundred million square roots too many.
@@ -162,6 +206,70 @@ void cell_noise(Vec3 p, f64 size, u32 seed, f64& nearest, f64& second) {
     }
     nearest = best * size;
     second = next * size;
+}
+
+// --- scatter: the numbers a tiled cell draws for its own copy ---------------------------------
+//
+// See Op::Scatter in field.hpp for what this is for. Three hashes of the cell's index, and the
+// only thing worth being careful about is that they are hashes of the INDEX and of nothing else:
+// a scatter whose numbers came from the point would shimmer as the sampler moved across a copy,
+// and one whose numbers came from a counter would depend on the order the sampler happened to
+// visit cells in.
+
+// Which axis a scattered copy spins about: the first with no period, and y when all three repeat.
+// A gravel bed repeats in x and z, so its pebbles turn about y; ivy on a wall repeats in x and y,
+// so its leaves turn about z. Both are what the author meant and neither is written down.
+u32 scatter_spin_axis(const f64* a) {
+    for (u32 axis = 0; axis < 3; ++axis) {
+        if (a[axis] <= 0.0) return axis;
+    }
+    return 1u;
+}
+
+// Where a scattered copy's cell asks its child, and by how much the answer must be multiplied on
+// the way back out.
+//
+// The forward transform on the copy is scale, then spin, then shift, then tile; this is its
+// inverse applied to the point in the opposite order. `scale` comes back as a multiplier because
+// a UNIFORM scale of s reports s * d(p / s) exactly — no approximation and nothing to allow for.
+Vec3 scatter_point(const f64* a, Vec3 p, const f64 cell[3], f64& scale) {
+    const f64 jitter = clamp(a[6], 0.0, 1.0);
+    const i64 cx = static_cast<i64>(cell[0]);
+    const i64 cy = static_cast<i64>(cell[1]);
+    const i64 cz = static_cast<i64>(cell[2]);
+
+    Vec3 q = p;
+    for (u32 axis = 0; axis < 3; ++axis) {
+        const f64 period = a[axis];
+        if (period <= 0.0) continue;   // no period, no cell, and so nothing to move it within
+        const f64 shift = (jitter > 0.0)
+                              ? period * jitter * (hash_to_unit(cx, cy, cz, 0x51ed270bu + axis) -
+                                                   0.5)
+                              : 0.0;
+        q = with_axis(q, axis, axis_of(p, axis) - period * cell[axis] - shift);
+    }
+
+    const f64 turn = (a[7] != 0.0)
+                         ? a[7] * (hash_to_unit(cx, cy, cz, 0x9e3779b9u) - 0.5) * 2.0
+                         : 0.0;
+    if (turn != 0.0) {
+        const u32 spin = scatter_spin_axis(a);
+        u32 u = 0, v = 0;
+        other_axes(spin, u, v);
+        const f64 angle = -turn * kTau;
+        const f64 c = std::cos(angle), s = std::sin(angle);
+        const f64 x = axis_of(q, u), y = axis_of(q, v);
+        q = with_axis(q, u, x * c - y * s);
+        q = with_axis(q, v, x * s + y * c);
+    }
+
+    // The same dial as the position: "how irregular", once, rather than three keys an author has
+    // to balance against one another. Never larger than one, so a copy never outgrows the box its
+    // own bounds were worked out from.
+    scale = (jitter > 0.0) ? 1.0 - jitter * hash_to_unit(cx, cy, cz, 0x2545f491u) : 1.0;
+    if (scale <= 1e-6) scale = 1e-6;
+    if (scale != 1.0) q = {q.x / scale, q.y / scale, q.z / scale};
+    return q;
 }
 
 // --- the exact distance functions ---------------------------------------------------------
@@ -714,6 +822,16 @@ u32 Field::smooth_intersect(const std::vector<u32>& parts, f64 blend) {
     return combine(Op::SmoothIntersection, parts, blend);
 }
 
+u32 Field::chamfer_unite(const std::vector<u32>& parts, f64 width) {
+    return combine(Op::ChamferUnion, parts, width);
+}
+u32 Field::chamfer_subtract(const std::vector<u32>& parts, f64 width) {
+    return combine(Op::ChamferDifference, parts, width);
+}
+u32 Field::chamfer_intersect(const std::vector<u32>& parts, f64 width) {
+    return combine(Op::ChamferIntersection, parts, width);
+}
+
 namespace {
 Node unary(Op op, u32 child) {
     Node n;
@@ -752,6 +870,20 @@ u32 Field::repeat(u32 child, Vec3 period, Vec3 limit) {
     Node n = unary(Op::Repeat, child);
     n.a[0] = period.x; n.a[1] = period.y; n.a[2] = period.z;
     n.a[3] = limit.x;  n.a[4] = limit.y;  n.a[5] = limit.z;
+    return push(n);
+}
+
+u32 Field::scatter(u32 child, Vec3 period, Vec3 limit, f64 jitter, f64 turn) {
+    // With nothing drawn per cell this IS a repeat, so it becomes one: an author sweeping `jitter`
+    // and `turn` down to nought should land back on the shape they started from, in the same
+    // number of nodes and at the same cost, rather than on a scatter that happens to draw zero.
+    if (jitter <= 0.0 && turn == 0.0) return repeat(child, period, limit);
+
+    Node n = unary(Op::Scatter, child);
+    n.a[0] = period.x; n.a[1] = period.y; n.a[2] = period.z;
+    n.a[3] = limit.x;  n.a[4] = limit.y;  n.a[5] = limit.z;
+    n.a[6] = clamp(jitter, 0.0, 1.0);
+    n.a[7] = turn;
     return push(n);
 }
 
@@ -828,47 +960,53 @@ u32 Field::waves(u32 axis, f64 period_a, f64 period_b, f64 phase) {
     return push(n);
 }
 
-u32 Field::noise(f64 size, u32 seed) {
+u32 Field::noise(f64 size, u32 seed, Vec3 stretch) {
     Node n;
     n.op = Op::Noise;
     n.a[0] = size; n.a[1] = static_cast<f64>(seed);
+    n.a[2] = stretch.x; n.a[3] = stretch.y; n.a[4] = stretch.z;
     return push(n);
 }
 
-u32 Field::fbm(f64 size, u32 octaves, f64 gain, f64 lacunarity, u32 seed) {
+u32 Field::fbm(f64 size, u32 octaves, f64 gain, f64 lacunarity, u32 seed, Vec3 stretch) {
     Node n;
     n.op = Op::Fbm;
     n.a[0] = size; n.a[1] = static_cast<f64>(octaves); n.a[2] = gain;
     n.a[3] = lacunarity; n.a[4] = static_cast<f64>(seed);
+    n.a[5] = stretch.x; n.a[6] = stretch.y; n.a[7] = stretch.z;
     return push(n);
 }
 
-u32 Field::ridged(f64 size, u32 octaves, f64 gain, f64 lacunarity, u32 seed) {
+u32 Field::ridged(f64 size, u32 octaves, f64 gain, f64 lacunarity, u32 seed, Vec3 stretch) {
     Node n;
     n.op = Op::Ridged;
     n.a[0] = size; n.a[1] = static_cast<f64>(octaves); n.a[2] = gain;
     n.a[3] = lacunarity; n.a[4] = static_cast<f64>(seed);
+    n.a[5] = stretch.x; n.a[6] = stretch.y; n.a[7] = stretch.z;
     return push(n);
 }
 
-u32 Field::rasp(f64 size, f64 depth, u32 seed) {
+u32 Field::rasp(f64 size, f64 depth, u32 seed, Vec3 stretch) {
     Node n;
     n.op = Op::Rasp;
     n.a[0] = size; n.a[1] = depth; n.a[2] = static_cast<f64>(seed);
+    n.a[3] = stretch.x; n.a[4] = stretch.y; n.a[5] = stretch.z;
     return push(n);
 }
 
-u32 Field::cells(f64 size, u32 seed) {
+u32 Field::cells(f64 size, u32 seed, Vec3 stretch) {
     Node n;
     n.op = Op::Cells;
     n.a[0] = size; n.a[1] = static_cast<f64>(seed);
+    n.a[2] = stretch.x; n.a[3] = stretch.y; n.a[4] = stretch.z;
     return push(n);
 }
 
-u32 Field::cell_edge(f64 size, u32 seed) {
+u32 Field::cell_edge(f64 size, u32 seed, Vec3 stretch) {
     Node n;
     n.op = Op::CellEdge;
     n.a[0] = size; n.a[1] = static_cast<f64>(seed);
+    n.a[2] = stretch.x; n.a[3] = stretch.y; n.a[4] = stretch.z;
     return push(n);
 }
 
@@ -1205,6 +1343,21 @@ f64 Field::eval(u32 at, Vec3 p) const {
             for (u32 i = 1; i < n.children; ++i) d = smooth_max(d, eval(n.child[i], p), a[0]);
             return d;
         }
+        case Op::ChamferUnion: {
+            f64 v = eval(n.child[0], p);
+            for (u32 i = 1; i < n.children; ++i) v = chamfer_min(v, eval(n.child[i], p), a[0]);
+            return v;
+        }
+        case Op::ChamferIntersection: {
+            f64 v = eval(n.child[0], p);
+            for (u32 i = 1; i < n.children; ++i) v = chamfer_max(v, eval(n.child[i], p), a[0]);
+            return v;
+        }
+        case Op::ChamferDifference: {
+            f64 v = eval(n.child[0], p);
+            for (u32 i = 1; i < n.children; ++i) v = chamfer_max(v, -eval(n.child[i], p), a[0]);
+            return v;
+        }
         case Op::SmoothDifference: {
             f64 d = eval(n.child[0], p);
             for (u32 i = 1; i < n.children; ++i) d = smooth_max(d, -eval(n.child[i], p), a[0]);
@@ -1289,6 +1442,49 @@ f64 Field::eval(u32 at, Vec3 p) const {
             }
             return best;
         }
+        case Op::Scatter: {
+            // `repeat`'s fold, with the cell INDEX carried instead of the folded point, because
+            // the index is what the per-cell numbers are drawn from. The leaning-neighbour walk is
+            // the same and is needed for the same reason — the copy in this cell is not
+            // necessarily the nearest one, and with a jitter it is even less likely to be.
+            f64 cell[3] = {0.0, 0.0, 0.0};
+            f64 leaning[3];
+            u32 axes[3];
+            u32 neighbours = 0;
+            for (u32 axis = 0; axis < 3; ++axis) {
+                const f64 period = a[axis];
+                if (period <= 0.0) continue;
+                const f64 limit = a[3 + axis];
+                const f64 value = axis_of(p, axis);
+                f64 here = std::round(value / period);
+                if (limit > 0.0) here = clamp(here, -limit, limit);
+                cell[axis] = here;
+
+                f64 other = here + ((value - period * here >= 0.0) ? 1.0 : -1.0);
+                if (limit > 0.0) other = clamp(other, -limit, limit);
+                if (other != here) {
+                    axes[neighbours] = axis;
+                    leaning[neighbours] = other;
+                    ++neighbours;
+                }
+            }
+
+            const auto ask = [&](const f64 which[3]) {
+                f64 scale = 1.0;
+                const Vec3 q = scatter_point(a, p, which, scale);
+                return scale * eval(n.child[0], q);
+            };
+
+            f64 best = ask(cell);
+            for (u32 mask = 1; mask < (1u << neighbours); ++mask) {
+                f64 other[3] = {cell[0], cell[1], cell[2]};
+                for (u32 i = 0; i < neighbours; ++i) {
+                    if ((mask >> i) & 1u) other[axes[i]] = leaning[i];
+                }
+                best = std::min(best, ask(other));
+            }
+            return best;
+        }
         case Op::PolarRepeat: {
             const u32 count = std::max(1u, static_cast<u32>(a[0]));
             const u32 axis = static_cast<u32>(a[1]);
@@ -1351,28 +1547,35 @@ f64 Field::eval(u32 at, Vec3 p) const {
             return std::sin(kTau * (axis_of(p, u) / pa + a[3])) *
                    std::sin(kTau * (axis_of(p, v) / pb + a[3]));
         }
-        case Op::Noise: return value_noise(p, a[0], static_cast<u32>(a[1]));
+        case Op::Noise:
+            return value_noise(stretched(p, a[2], a[3], a[4]), a[0], static_cast<u32>(a[1]));
         case Op::Fbm:
-            return fbm_noise(p, a[0], static_cast<u32>(a[1]), a[2], a[3], static_cast<u32>(a[4]));
+            return fbm_noise(stretched(p, a[5], a[6], a[7]), a[0], static_cast<u32>(a[1]), a[2],
+                             a[3], static_cast<u32>(a[4]));
         case Op::Ridged: {
-            const f64 v = fbm_noise(p, a[0], static_cast<u32>(a[1]), a[2], a[3],
-                                    static_cast<u32>(a[4]));
+            const f64 v = fbm_noise(stretched(p, a[5], a[6], a[7]), a[0], static_cast<u32>(a[1]),
+                                    a[2], a[3], static_cast<u32>(a[4]));
             return 1.0 - 2.0 * std::abs(v);
         }
         case Op::Rasp: {
             // Ridges an order finer than the surface they sit on, which is what a filed or
-            // scratched face looks like: many shallow parallel gouges rather than lumps.
-            const f64 v = fbm_noise(p, a[0], 3u, 0.5, 2.7, static_cast<u32>(a[2]));
+            // scratched face looks like: many shallow parallel gouges rather than lumps. Stretched
+            // they are what a file, a claw chisel or a saw actually leaves, which is parallel
+            // gouges all running one way.
+            const f64 v = fbm_noise(stretched(p, a[3], a[4], a[5]), a[0], 3u, 0.5, 2.7,
+                                    static_cast<u32>(a[2]));
             return -std::abs(v) * a[1];
         }
         case Op::Cells: {
             f64 nearest = 0.0, second = 0.0;
-            cell_noise(p, a[0], static_cast<u32>(a[1]), nearest, second);
+            cell_noise(stretched(p, a[2], a[3], a[4]), a[0], static_cast<u32>(a[1]), nearest,
+                       second);
             return nearest;
         }
         case Op::CellEdge: {
             f64 nearest = 0.0, second = 0.0;
-            cell_noise(p, a[0], static_cast<u32>(a[1]), nearest, second);
+            cell_noise(stretched(p, a[2], a[3], a[4]), a[0], static_cast<u32>(a[1]), nearest,
+                       second);
             return second - nearest;   // zero on a seam, growing towards a cell's middle
         }
 
@@ -1833,13 +2036,21 @@ void Field::build_bounds() {
             }
 
             case Op::Union:
-            case Op::SmoothUnion: {
+            case Op::SmoothUnion:
+            // A chamfer fills the valley between two shapes, so it can put matter a little outside
+            // both of them — as far as the forty-five degree plane reaches, which is inside the
+            // box grown by the chamfer's own width. Growing by that keeps the cull sound as well
+            // as the box honest: a point `t` outside the grown box is at least `t + width` from
+            // either child, so the chamfer term is at least (2t + width)/root2 > t and the plain
+            // minimum is at least t, and the cull is told no less than the truth.
+            case Op::ChamferUnion: {
                 box = bounds_of(n.child[0]);
                 for (u32 c = 1; c < n.children; ++c) box = merged(box, bounds_of(n.child[c]));
-                if (n.op == Op::SmoothUnion) box = grown(box, a[0]);
+                if (n.op == Op::SmoothUnion || n.op == Op::ChamferUnion) box = grown(box, a[0]);
                 break;
             }
             case Op::Intersection:
+            case Op::ChamferIntersection:
             case Op::SmoothIntersection: {
                 box = bounds_of(n.child[0]);
                 for (u32 c = 1; c < n.children; ++c) box = overlapped(box, bounds_of(n.child[c]));
@@ -1873,7 +2084,10 @@ void Field::build_bounds() {
                 break;
             }
             // Carving can only remove, so what is left is inside what it started as.
+            // A chamfered cut only ever removes more, so what is left is still inside the first
+            // child.
             case Op::Difference:
+            case Op::ChamferDifference:
             case Op::SmoothDifference: box = bounds_of(n.child[0]); break;
 
             case Op::Translate: {
@@ -1994,6 +2208,55 @@ void Field::build_bounds() {
                     if (period <= 0.0) continue;         // this axis does not repeat
                     if (limit <= 0.0) { unlimited = true; break; }
                     const f64 reach = period * limit;
+                    child.low = with_axis(child.low, axis, axis_of(child.low, axis) - reach);
+                    child.high = with_axis(child.high, axis, axis_of(child.high, axis) + reach);
+                }
+                box = unlimited ? everywhere() : child;
+                break;
+            }
+
+            // The same, with the three things a cell draws allowed for in the order the copy is
+            // built: scaled about its own origin, spun about its own axis, moved within its cell,
+            // and only then tiled.
+            //
+            // Each of the three is taken at its WORST rather than at the value any particular cell
+            // drew, because a box is a claim about every copy at once. Shrinking is the one that
+            // looks harmless and is not: a copy whose box does not straddle the origin moves
+            // TOWARD the origin as it shrinks, so a shape modelled at arm's length would walk out
+            // of a box built round its full-sized self.
+            case Op::Scatter: {
+                Aabb child = bounds_of(n.child[0]);
+                if (child.infinite()) { box = child; break; }
+                const f64 jitter = clamp(a[6], 0.0, 1.0);
+
+                const f64 smallest = std::max(1.0 - jitter, 1e-6);
+                child.low = {std::min(child.low.x, child.low.x * smallest),
+                             std::min(child.low.y, child.low.y * smallest),
+                             std::min(child.low.z, child.low.z * smallest)};
+                child.high = {std::max(child.high.x, child.high.x * smallest),
+                              std::max(child.high.y, child.high.y * smallest),
+                              std::max(child.high.z, child.high.z * smallest)};
+
+                if (a[7] != 0.0) {
+                    const u32 spin = scatter_spin_axis(a);
+                    u32 u = 0, v = 0;
+                    other_axes(spin, u, v);
+                    const f64 reach =
+                        std::hypot(std::max(std::abs(axis_of(child.low, u)),
+                                            std::abs(axis_of(child.high, u))),
+                                   std::max(std::abs(axis_of(child.low, v)),
+                                            std::abs(axis_of(child.high, v))));
+                    child.low = with_axis(with_axis(child.low, u, -reach), v, -reach);
+                    child.high = with_axis(with_axis(child.high, u, reach), v, reach);
+                }
+
+                bool unlimited = false;
+                for (u32 axis = 0; axis < 3; ++axis) {
+                    const f64 period = a[axis];
+                    const f64 limit = a[3 + axis];
+                    if (period <= 0.0) continue;
+                    if (limit <= 0.0) { unlimited = true; break; }
+                    const f64 reach = period * limit + period * jitter * 0.5;
                     child.low = with_axis(child.low, axis, axis_of(child.low, axis) - reach);
                     child.high = with_axis(child.high, axis, axis_of(child.high, axis) + reach);
                 }
@@ -2138,12 +2401,16 @@ const char* op_name(Op op) {
         case Op::SmoothUnion: return "smooth-union";
         case Op::SmoothDifference: return "smooth-difference";
         case Op::SmoothIntersection: return "smooth-intersection";
+        case Op::ChamferUnion: return "chamfer-union";
+        case Op::ChamferDifference: return "chamfer-difference";
+        case Op::ChamferIntersection: return "chamfer-intersection";
         case Op::Translate: return "translate";
         case Op::Rotate: return "rotate";
         case Op::Scale: return "scale";
         case Op::Mirror: return "mirror";
         case Op::Repeat: return "repeat";
         case Op::PolarRepeat: return "polar-repeat";
+        case Op::Scatter: return "scatter";
         case Op::Shell: return "shell";
         case Op::Round: return "round";
         case Op::Offset: return "offset";
@@ -2553,6 +2820,20 @@ f64 Field::metric_slack(u32 at) const {
         case Op::SmoothIntersection:
             return worst_child(n.children);
 
+        // A chamfer is `min` (or `max`) plus a bounded correction, and the bound is what the clamp
+        // in `chamfer_min` exists to give. The correction never moves the answer more than one
+        // chamfer's half-diagonal away from the plain minimum, so the field is the plain
+        // minimum's — one metre per metre, and the children's own slack — plus twice that: once
+        // because the reading may be that far out, and once because the point being asked about
+        // may be that far in. The same doubling every allowance in this file carries.
+        case Op::ChamferUnion:
+        case Op::ChamferDifference:
+        case Op::ChamferIntersection: {
+            const f64 base = worst_child(n.children);
+            if (base >= kInfiniteSlack) return kInfiniteSlack;
+            return base + 2.0 * kInvRoot2 * std::abs(n.a[0]);
+        }
+
         // Moving the point before asking. A rigid motion preserves distance exactly, and folding
         // about a plane is the distance to the shape and its reflection, which is also exact.
         case Op::Translate:
@@ -2595,6 +2876,40 @@ f64 Field::metric_slack(u32 at) const {
                 if (axis_of(child.high, axis) - axis_of(child.low, axis) > period) {
                     return kInfiniteSlack;
                 }
+            }
+            return base;
+        }
+
+        // The same argument as `repeat`, with the three things a cell draws counted into the room
+        // a copy needs.
+        //
+        // Being able to say yes here is most of the point of the op. A gravel bed is tens of
+        // thousands of copies, and a field that cannot settle a box is one asked per voxel: the
+        // difference between a bed that samples in a second and one that samples in a minute is
+        // entirely this test. So the room is worked out rather than assumed — the copy shrinks
+        // (never grows), may be spun through the circle its own corners reach, and may be moved by
+        // half the jitter either way, and all of that has to leave it inside its own cell.
+        case Op::Scatter: {
+            const f64 base = metric_slack(n.child[0]);
+            if (base >= kInfiniteSlack) return kInfiniteSlack;
+            Aabb child = bounds_of(n.child[0]);
+            const f64 jitter = clamp(n.a[6], 0.0, 1.0);
+            if (n.a[7] != 0.0 && !child.infinite()) {
+                const u32 spin = scatter_spin_axis(n.a);
+                u32 u = 0, v = 0;
+                other_axes(spin, u, v);
+                const f64 reach = std::hypot(
+                    std::max(std::abs(axis_of(child.low, u)), std::abs(axis_of(child.high, u))),
+                    std::max(std::abs(axis_of(child.low, v)), std::abs(axis_of(child.high, v))));
+                child.low = with_axis(with_axis(child.low, u, -reach), v, -reach);
+                child.high = with_axis(with_axis(child.high, u, reach), v, reach);
+            }
+            for (u32 axis = 0; axis < 3; ++axis) {
+                const f64 period = n.a[axis];
+                if (period <= 0.0) continue;
+                if (child.infinite()) return kInfiniteSlack;
+                const f64 extent = axis_of(child.high, axis) - axis_of(child.low, axis);
+                if (extent + period * jitter > period) return kInfiniteSlack;
             }
             return base;
         }
@@ -2649,6 +2964,11 @@ struct MirrorFrame {
     u32 axes[3]{0, 0, 0};
     f64 lean[3]{0.0, 0.0, 0.0};
     u32 neighbours = 0;
+    // What the copy currently being asked about was scaled by, so the answer can be multiplied
+    // back on the way out. `scatter` is the only op that changes the point AND the answer by the
+    // same number, and a frame is the only place that number can wait — the recursive evaluator
+    // holds it in a local, and this one has no locals that survive a push.
+    f64 scale = 1.0;
 };
 
 // The fourteen directions `occlusion` asks along, and the six `curvature` does. Written here rather
@@ -2711,6 +3031,9 @@ f64 mirror_fold(Op op, const f64* a, f64 acc, f64 v) {
         case Op::SmoothUnion: return smooth_min(acc, v, a[0]);
         case Op::SmoothIntersection: return smooth_max(acc, v, a[0]);
         case Op::SmoothDifference: return smooth_max(acc, -v, a[0]);
+        case Op::ChamferUnion: return chamfer_min(acc, v, a[0]);
+        case Op::ChamferIntersection: return chamfer_max(acc, v, a[0]);
+        case Op::ChamferDifference: return chamfer_max(acc, -v, a[0]);
         case Op::Add: return acc + v;
         case Op::Multiply: return acc * v;
         default: return v;
@@ -2727,7 +3050,8 @@ bool mirror_op_known(Op op) {
         case Op::Facing: case Op::Displace: case Op::Blend: case Op::Union: case Op::Intersection:
         case Op::Difference: case Op::SmoothUnion: case Op::SmoothIntersection:
         case Op::SmoothDifference: case Op::Add: case Op::Multiply: case Op::Min: case Op::Max:
-        case Op::Repeat:
+        case Op::ChamferUnion: case Op::ChamferIntersection: case Op::ChamferDifference:
+        case Op::Repeat: case Op::Scatter:
             return true;
         default:
             return false;
@@ -2803,6 +3127,7 @@ bool Field::mirror_eval(u32 at, Vec3 p, f64& out, u32* deepest) const {
             stack[top].p = narrow(where);
             stack[top].acc = 0.0;
             stack[top].neighbours = 0;
+            stack[top].scale = 1.0;
             ++top;
             return true;
         };
@@ -3092,6 +3417,7 @@ bool Field::mirror_eval(u32 at, Vec3 p, f64& out, u32* deepest) const {
             // ---- every child at the same point, folded together ---------------------------
             case Op::Union: case Op::Intersection: case Op::Difference:
             case Op::SmoothUnion: case Op::SmoothIntersection: case Op::SmoothDifference:
+            case Op::ChamferUnion: case Op::ChamferIntersection: case Op::ChamferDifference:
             case Op::Add: case Op::Multiply: case Op::Min: case Op::Max: {
                 if (f.step > 0) {
                     f.acc = (f.step == 1) ? ret : mirror_fold(n.op, a, f.acc, ret);
@@ -3145,6 +3471,63 @@ bool Field::mirror_eval(u32 at, Vec3 p, f64& out, u32* deepest) const {
                 }
                 ++f.step;
                 if (!push(n.child[0], shifted)) return false;
+                continue;
+            }
+
+            // ---- the same walk, over cell INDICES rather than folded points ------------------
+            //
+            // `repeat` can carry the folded point from cell to cell because every copy sits the
+            // same way in its cell. A scatter's do not, so what is carried is the index and the
+            // point is rebuilt from it each time — which is also what makes this frame need a
+            // `scale`, since the copy's own size has to survive the push and come back.
+            case Op::Scatter: {
+                const auto cell_at = [&](u32 mask, f64 out[3]) {
+                    out[0] = f.fold.x;
+                    out[1] = f.fold.y;
+                    out[2] = f.fold.z;
+                    for (u32 i = 0; i < f.neighbours; ++i) {
+                        if ((mask >> i) & 1u) out[f.axes[i]] = f.lean[i];
+                    }
+                };
+
+                if (f.step == 0) {
+                    f64 cell[3] = {0.0, 0.0, 0.0};
+                    f.neighbours = 0;
+                    for (u32 axis = 0; axis < 3; ++axis) {
+                        const f64 period = a[axis];
+                        if (period <= 0.0) continue;
+                        const f64 limit = a[3 + axis];
+                        const f64 value = axis_of(f.p, axis);
+                        f64 here = std::round(value / period);
+                        if (limit > 0.0) here = clamp(here, -limit, limit);
+                        cell[axis] = here;
+                        f64 other = here + ((value - period * here >= 0.0) ? 1.0 : -1.0);
+                        if (limit > 0.0) other = clamp(other, -limit, limit);
+                        if (other != here) {
+                            f.axes[f.neighbours] = axis;
+                            f.lean[f.neighbours] = other;
+                            ++f.neighbours;
+                        }
+                    }
+                    f.fold = Vec3{cell[0], cell[1], cell[2]};
+                    f.step = 1;
+                    const Vec3 q = scatter_point(a, f.p, cell, f.scale);
+                    f.scale = narrow(f.scale);
+                    if (!push(n.child[0], q)) return false;
+                    continue;
+                }
+
+                const f64 came_back = f.scale * ret;
+                const u32 done = f.step - 1;
+                f.acc = (done == 0) ? came_back : std::min(f.acc, came_back);
+                const u32 combinations = 1u << f.neighbours;
+                if (f.step >= combinations) { finish(f.acc); continue; }
+                f64 cell[3];
+                cell_at(f.step, cell);
+                ++f.step;
+                const Vec3 q = scatter_point(a, f.p, cell, f.scale);
+                f.scale = narrow(f.scale);
+                if (!push(n.child[0], q)) return false;
                 continue;
             }
 

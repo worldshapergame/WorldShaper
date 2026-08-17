@@ -1456,3 +1456,332 @@ TEST_CASE("four primitives answer less than the distance to their own box") {
     }
     CHECK(worst_ratio < 0.99);   // under-reports: the cull's assumption, broken
 }
+
+// --- the chamfer: a flat cut on one seam ------------------------------------------------------
+//
+// `round=` rounds a whole shape and `smooth=` blends a whole seam. Neither is what a mason cuts:
+// a chamfer is FLAT, it is at forty-five degrees, and it applies to the one edge where two faces
+// meet. So what these check is the flatness — the surface is a plane and the distance to it is a
+// real distance — because a chamfer that is secretly a small round is indistinguishable in a
+// screenshot and different in every raking light.
+
+TEST_CASE("a chamfered union fills the valley with a plane at forty-five degrees") {
+    Field f;
+    const f64 k = 0.20;
+    // Two half spaces meeting at the origin: solid where x <= 0, and solid where y <= 0.
+    const u32 west = f.plane({1, 0, 0}, 0.0);
+    const u32 south = f.plane({0, 1, 0}, 0.0);
+    const u32 cut = f.chamfer_unite({west, south}, k);
+
+    // The chamfer face is the plane x + y = k. Its middle is on the surface...
+    CHECK(at(f, cut, k * 0.5, k * 0.5, 0.0) == doctest::Approx(0.0).epsilon(1e-9));
+    // ...and stepping away from it along its own normal is a true distance, which is what says the
+    // face is a plane rather than a curve wearing one's name.
+    for (f64 t = 0.01; t < 0.06; t += 0.01) {
+        const f64 off = t * 0.7071067811865476;
+        CHECK(at(f, cut, k * 0.5 + off, k * 0.5 + off, 0.0) == doctest::Approx(t));
+        CHECK(at(f, cut, k * 0.5 - off, k * 0.5 - off, 0.0) == doctest::Approx(-t));
+    }
+    // Far along either face the chamfer has done nothing at all: a seam treatment that quietly
+    // moved the faces would be a rounding by another name.
+    CHECK(at(f, cut, 0.0, 3.0, 0.0) == doctest::Approx(0.0));
+    CHECK(at(f, cut, 3.0, 0.0, 0.0) == doctest::Approx(0.0));
+    CHECK(at(f, cut, -0.4, 3.0, 0.0) == doctest::Approx(-0.4));
+    CHECK(at(f, cut, 3.0, -0.4, 0.0) == doctest::Approx(-0.4));
+}
+
+TEST_CASE("a chamfered intersection takes the arris off and leaves both faces standing") {
+    Field f;
+    const f64 k = 0.30;
+    const u32 quadrant = f.chamfer_intersect({f.plane({1, 0, 0}, 0.0), f.plane({0, 1, 0}, 0.0)}, k);
+
+    // The arris that was at the origin is now the plane x + y = -k.
+    CHECK(at(f, quadrant, -k * 0.5, -k * 0.5, 0.0) == doctest::Approx(0.0).epsilon(1e-9));
+    // Just inside the old corner is air, and it was stone before the chamfer.
+    CHECK(at(f, quadrant, -0.01, -0.01, 0.0) > 0.0);
+    Field plain;
+    CHECK(plain.eval(plain.intersect({plain.plane({1, 0, 0}, 0.0), plain.plane({0, 1, 0}, 0.0)}),
+                     {-0.01, -0.01, 0.0}) < 0.0);
+    // A metre back along either face nothing has moved.
+    CHECK(at(f, quadrant, -1.0, -0.5, 0.0) == doctest::Approx(-0.5));
+    CHECK(at(f, quadrant, -0.5, -1.0, 0.0) == doctest::Approx(-0.5));
+}
+
+TEST_CASE("a chamfer of nought is the plain join, to the last bit") {
+    // The dial has to reach zero and land exactly on the operation it is a variation of, or every
+    // author sweeping it discovers a step at the end of the sweep.
+    Field f;
+    const u32 a = f.sphere({-0.4, 0, 0}, 0.8);
+    const u32 b = f.box({0.5, 0, 0}, {0.5, 0.5, 0.5});
+    const u32 plain = f.unite({a, b});
+    const u32 zero = f.chamfer_unite({a, b}, 0.0);
+    const u32 cut_plain = f.subtract({b, a});
+    const u32 cut_zero = f.chamfer_subtract({b, a}, 0.0);
+    for (int i = -6; i <= 6; ++i) {
+        for (int j = -4; j <= 4; ++j) {
+            const Vec3 p{i * 0.27, j * 0.31, 0.13};
+            CHECK(f.eval(zero, p) == f.eval(plain, p));
+            CHECK(f.eval(cut_zero, p) == f.eval(cut_plain, p));
+        }
+    }
+}
+
+TEST_CASE("a chamfer never leaves the plain join by more than the slack it declares") {
+    // The whole reason `chamfer_min` carries a clamp, and the exact property `metric_slack` sells.
+    //
+    // A chamfer is `min(a, b)` — which moves at most a metre per metre — plus a correction. Left
+    // unclamped that correction is unbounded INSIDE two overlapping shapes: at the origin below,
+    // both spheres answer -0.7, and the raw forty-five degree term is -1.166 against a plain join
+    // of -0.700. Settling reads `metric_slack` and believes it, so an unbounded correction would
+    // let a block be called solid on a reading that does not bound what is in it — matter silently
+    // missing, which is D613's class.
+    //
+    // Clamped, the deviation is exactly one chamfer's half-diagonal and never more, and the slack
+    // is twice that: once because the reading may be that far out, once because the point asked
+    // about may be that far in.
+    Field f;
+    const f64 k = 0.25;
+    const f64 furthest = k * 0.7071067811865476;
+    const u32 one = f.sphere({-0.3, 0, 0}, 1.0);
+    const u32 two = f.sphere({0.3, 0, 0}, 1.0);
+    const u32 plain = f.unite({one, two});
+    const u32 joined = f.chamfer_unite({one, two}, k);
+
+    const f64 slack = f.metric_slack(joined);
+    CHECK(slack < Field::kInfiniteSlack);
+    CHECK(slack == doctest::Approx(2.0 * furthest));
+
+    // The interior point the clamp was written for, pinned to the number: -0.700 - 0.177, and not
+    // the -1.166 the unclamped term would have given.
+    CHECK(f.eval(plain, {0, 0, 0}) == doctest::Approx(-0.7));
+    CHECK(f.eval(joined, {0, 0, 0}) == doctest::Approx(-0.7 - furthest));
+
+    f64 worst = 0.0;
+    for (int i = -80; i <= 80; ++i) {
+        for (int j = -40; j <= 40; ++j) {
+            for (int m = -3; m <= 3; ++m) {
+                const Vec3 p{i * 0.02, j * 0.02, m * 0.09};
+                worst = std::max(worst, std::abs(f.eval(joined, p) - f.eval(plain, p)));
+            }
+        }
+    }
+    CHECK(worst <= furthest + 1e-9);
+    CHECK(worst == doctest::Approx(furthest));   // and it does reach it, so the bound is tight
+}
+
+TEST_CASE("the box round a chamfered union holds the matter the chamfer added") {
+    // A chamfer puts stone where neither shape was, so a box built from the two shapes alone would
+    // cut the new fillet off — and cutting a piece off a clip is the failure that says nothing.
+    Field f;
+    const f64 k = 0.3;
+    const u32 joined = f.chamfer_unite(
+        {f.box({-0.6, 0, 0}, {0.5, 0.5, 0.5}), f.box({0, -0.6, 0}, {0.5, 0.5, 0.5})}, k);
+    f.build_bounds();
+    const Field::Aabb box = f.bounds_of(joined);
+    REQUIRE(!box.infinite());
+    for (int i = -30; i <= 30; ++i) {
+        for (int j = -30; j <= 30; ++j) {
+            const Vec3 p{i * 0.05, j * 0.05, 0.0};
+            if (f.eval(joined, p) > 0.0) continue;
+            CHECK(p.x >= box.low.x - 1e-9);
+            CHECK(p.x <= box.high.x + 1e-9);
+            CHECK(p.y >= box.low.y - 1e-9);
+            CHECK(p.y <= box.high.y + 1e-9);
+        }
+    }
+}
+
+// --- scatter: the thing that stops a surface reading as a lattice ------------------------------
+
+TEST_CASE("a scatter that draws nothing IS a repeat, and is stored as one") {
+    // The dial reaching zero has to land on the operation it varies, and here it has to land on it
+    // in NODES too: a scatter of no jitter that cost a hash per axis per sample would be a tax on
+    // every author who set the dial to nought and left it there.
+    Field f;
+    const u32 pebble = f.sphere({0, 0, 0}, 0.02);
+    const u32 grid = f.repeat(pebble, {0.1, 0, 0.1}, {5, 0, 5});
+    const u32 same = f.scatter(pebble, {0.1, 0, 0.1}, {5, 0, 5}, 0.0, 0.0);
+    CHECK(f.node(same).op == forge::Op::Repeat);
+    for (int i = -20; i <= 20; ++i) {
+        for (int k = -20; k <= 20; ++k) {
+            const Vec3 p{i * 0.031, 0.0, k * 0.027};
+            CHECK(f.eval(same, p) == f.eval(grid, p));
+        }
+    }
+}
+
+TEST_CASE("a scatter moves, turns and resizes its copies, and a repeat does neither") {
+    Field f;
+    const u32 chip = f.box({0, 0, 0}, {0.03, 0.01, 0.02});
+    const u32 grid = f.repeat(chip, {0.12, 0, 0.12}, {6, 0, 6});
+    const u32 bed = f.scatter(chip, {0.12, 0, 0.12}, {6, 0, 6}, 0.4, 0.5);
+    usize differing = 0;
+    usize looked = 0;
+    for (int i = -18; i <= 18; ++i) {
+        for (int k = -18; k <= 18; ++k) {
+            const Vec3 p{i * 0.037, 0.0, k * 0.041};
+            ++looked;
+            if (std::abs(f.eval(bed, p) - f.eval(grid, p)) > 1e-9) ++differing;
+        }
+    }
+    // Not "some differ" but "most differ": a scatter whose draw was constant, or keyed on
+    // something that does not change from cell to cell, would still move a handful of points.
+    CHECK(differing * 2 > looked);
+}
+
+TEST_CASE("a scatter is the true distance to the nearest copy, not to the copy in this cell") {
+    // The leaning-neighbour walk, and the reason `repeat` has one. Folding blindly reports the
+    // distance back to the copy in this cell, which OVER-states — the dangerous direction, because
+    // a sampler that believes it skips over the thing that is there. With a jitter the copy sits
+    // off-centre in its cell by construction, so this is the case that fold was written for.
+    //
+    // Checked as a Lipschitz property rather than against a second copy of the placement
+    // arithmetic, which would only prove the two agree with each other.
+    Field f;
+    const u32 pebble = f.sphere({0, 0, 0}, 0.03);
+    const u32 bed = f.scatter(pebble, {0.1, 0, 0.1}, {8, 0, 8}, 0.5, 0.5);
+    const f64 step = 0.004;
+    f64 worst = 0.0;
+    for (int i = -120; i <= 120; ++i) {
+        for (int k = -30; k <= 30; ++k) {
+            const Vec3 p{i * step, 0.0, k * step * 3.0};
+            const Vec3 q{p.x + step, p.y, p.z};
+            worst = std::max(worst, std::abs(f.eval(bed, q) - f.eval(bed, p)));
+        }
+    }
+    CHECK(worst <= step + 1e-9);
+}
+
+TEST_CASE("the box round a scatter holds every copy, shrunk and spun and moved") {
+    // Three things can walk a copy out of a box built round the child as authored, and the one
+    // that looks harmless is the shrinking: a shape modelled away from its own origin moves TOWARD
+    // the origin as it shrinks, so a box round the full-sized shape does not contain the small
+    // ones. The child here is deliberately off-origin for that reason.
+    Field f;
+    const u32 chip = f.sphere({0.06, 0, 0}, 0.02);
+    const u32 bed = f.scatter(chip, {0.25, 0, 0.25}, {3, 0, 3}, 0.5, 0.5);
+    f.build_bounds();
+    const Field::Aabb box = f.bounds_of(bed);
+    REQUIRE(!box.infinite());
+    usize solid = 0;
+    for (int i = -100; i <= 100; ++i) {
+        for (int j = -6; j <= 6; ++j) {
+            for (int k = -100; k <= 100; ++k) {
+                const Vec3 p{i * 0.011, j * 0.011, k * 0.011};
+                if (f.eval(bed, p) > 0.0) continue;
+                ++solid;
+                REQUIRE(p.x >= box.low.x - 1e-9);
+                REQUIRE(p.x <= box.high.x + 1e-9);
+                REQUIRE(p.y >= box.low.y - 1e-9);
+                REQUIRE(p.y <= box.high.y + 1e-9);
+                REQUIRE(p.z >= box.low.z - 1e-9);
+                REQUIRE(p.z <= box.high.z + 1e-9);
+            }
+        }
+    }
+    CHECK(solid > 0);   // a box that holds nothing holds everything
+}
+
+TEST_CASE("a scatter says whether its copies fit, and refuses to promise when they do not") {
+    // The settling test, which is most of what the op is worth: a gravel bed that can settle a box
+    // samples in a second and one that cannot is asked per voxel.
+    Field f;
+    const u32 pebble = f.sphere({0, 0, 0}, 0.02);
+    const u32 roomy = f.scatter(pebble, {0.2, 0, 0.2}, {4, 0, 4}, 0.3, 0.5);
+    f.build_bounds();
+    CHECK(f.metric_slack(roomy) == doctest::Approx(0.0));
+
+    // The same pebble in a cell it cannot fit in, jitter and all: no bounded number of neighbours
+    // is enough, and there is nothing honest to say.
+    Field tight;
+    const u32 big = tight.sphere({0, 0, 0}, 0.05);
+    const u32 crowded = tight.scatter(big, {0.11, 0, 0.11}, {4, 0, 4}, 0.5, 0.0);
+    tight.build_bounds();
+    CHECK(tight.metric_slack(crowded) >= Field::kInfiniteSlack);
+}
+
+TEST_CASE("the mirror evaluator walks a scatter and a chamfer to the same number") {
+    // R12b's demand, applied to the two new ops: the shader-shaped walk reaches the recursive
+    // evaluator's answer or says it cannot. A scatter is the harder of the two, because it is the
+    // only op that changes the point AND the answer by the same drawn number.
+    Field f;
+    const u32 pebble = f.sphere({0.01, 0, 0}, 0.03);
+    const u32 bed = f.scatter(pebble, {0.15, 0, 0.15}, {3, 0, 3}, 0.4, 0.5);
+    const u32 arris = f.chamfer_intersect(
+        {f.box({0, 0.4, 0}, {0.3, 0.3, 0.3}), f.sphere({0, 0.4, 0}, 0.42)}, 0.05);
+    const u32 root = f.chamfer_unite({bed, arris}, 0.02);
+    f.build_bounds();
+
+    forge::Op missing = forge::Op::Constant;
+    REQUIRE(f.mirror_covers(root, &missing));
+    for (int i = -12; i <= 12; ++i) {
+        for (int j = -6; j <= 10; ++j) {
+            for (int k = -12; k <= 12; ++k) {
+                const Vec3 p{i * 0.048, j * 0.057, k * 0.051};
+                f64 mine = 0.0;
+                REQUIRE(f.mirror_eval(root, p, mine));
+                CHECK(mine == f.eval(root, p));
+            }
+        }
+    }
+}
+
+// --- the stretch: a grain that runs one way ----------------------------------------------------
+
+TEST_CASE("a stretched grain is the same grain, and a stretch of one changes nothing") {
+    // Bit-identical, not approximately: every node in every clip in the repository was built
+    // without a stretch, and a grain that moved by a rounding would move every displaced surface
+    // in the building.
+    Field f;
+    const u32 plain = f.fbm(0.3, 4, 0.5, 2.0, 3);
+    const u32 ones = f.fbm(0.3, 4, 0.5, 2.0, 3, {1.0, 1.0, 1.0});
+    const u32 grains = f.cells(0.4, 2);
+    const u32 grains_one = f.cells(0.4, 2, {1.0, 1.0, 1.0});
+    for (int i = -9; i <= 9; ++i) {
+        for (int j = -9; j <= 9; ++j) {
+            const Vec3 p{i * 0.13, j * 0.17, 0.07};
+            CHECK(f.eval(ones, p) == f.eval(plain, p));
+            CHECK(f.eval(grains_one, p) == f.eval(grains, p));
+        }
+    }
+}
+
+TEST_CASE("a grain stretched along one axis varies less along it") {
+    // The whole point: bark runs up a trunk, rain runs down a wall, a saw runs across a stone.
+    // Measured as total variation along each axis rather than by eye, because "it looks streaky"
+    // is not a thing a test can hold.
+    Field f;
+    const u32 bark = f.fbm(0.1, 4, 0.5, 2.0, 11, {1.0, 8.0, 1.0});
+    const auto walk = [&](Vec3 from, Vec3 along) {
+        f64 total = 0.0;
+        f64 last = f.eval(bark, from);
+        for (int i = 1; i <= 400; ++i) {
+            const Vec3 p = from + along * (i * 0.005);
+            const f64 now = f.eval(bark, p);
+            total += std::abs(now - last);
+            last = now;
+        }
+        return total;
+    };
+    const f64 across = walk({0.03, 0.11, 0.07}, {1, 0, 0});
+    const f64 up = walk({0.03, 0.11, 0.07}, {0, 1, 0});
+    CHECK(up * 3.0 < across);
+}
+
+TEST_CASE("a stretched grain still says how far it can swing, so a displacement can be bounded") {
+    // `value_range` is what turns a displacement into a box. The stretch changes where the grain
+    // is read and not what it can reach, so the range must be exactly what it was — a stretch that
+    // quietly returned "unknown" would give every clip using one an infinite skip slack.
+    Field f;
+    const u32 bark = f.fbm(0.1, 4, 0.5, 2.0, 11, {1.0, 8.0, 1.0});
+    f64 low = 0.0, high = 0.0;
+    REQUIRE(f.value_range(bark, low, high));
+    CHECK(low == doctest::Approx(-1.0));
+    CHECK(high == doctest::Approx(1.0));
+
+    const u32 trunk = f.displace(f.cylinder({0, 0, 0}, 0.2, 1.0, 1), bark, 0.02);
+    f.build_bounds();
+    const Field::Aabb box = f.bounds_of(trunk);
+    REQUIRE(!box.infinite());
+    CHECK(box.high.x == doctest::Approx(0.22));
+}

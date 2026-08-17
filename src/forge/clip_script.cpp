@@ -272,6 +272,157 @@ bool is_moulding(const std::string& s) {
            s == "scotia" || s == "cyma" || s == "cyma_reversa";
 }
 
+// --- branch: everything that forks ------------------------------------------------------------
+//
+// A trunk that splits into limbs that split again. Trees and their bare winter branches, roots
+// breaking a pavement, the scrolled bar of a gate, a candelabrum, a coral, a vein of ore, the
+// ribs of a fan vault: one shape, and this repository builds every one of them a capsule at a
+// time. `clips/facility/terrace.clip` has four citrus trees and each is a single straight capsule
+// with a lumpy ball on top, because eleven limbs written out by hand is eleven lines of arithmetic
+// an author has to do in their head and then cannot re-proportion afterwards.
+//
+// # Why this is a MACRO and not a node
+//
+// Because `build_moulding` above already settled the argument: "there is nothing a cyma can do
+// that an intersection of a box and two ellipses cannot, and one fewer node type is one fewer
+// thing that can be wrong about a distance." A branch is a chain of capsules, a capsule is an
+// exact distance, and a union of exact distances is exact. Written as a node instead, every
+// evaluation would have to REGENERATE the tree — recompute forty rotations to find out that the
+// point is nowhere near any of them — where as nodes the boxes do that for nothing.
+//
+// # What it costs, and it is nodes rather than time
+//
+// `segments * (count^levels - 1) / (count - 1)` capsules, which is 30 for the defaults and 4372
+// for `levels=7 count=4 segments=3`. The parser refuses anything over kMostCapsules and says so
+// with the arithmetic, because the failure otherwise is a clip that takes a minute to parse.
+//
+// Time is bounded by the boxes: the capsules are united into a BALANCED tree rather than the chain
+// `Field::unite` builds, so a point outside the tree's box is rejected in one test and a point
+// inside it descends about log4(n) levels. A chain would have made every sample near the tree walk
+// all n unions in turn, which is the difference between a tree costing what a wall costs and a
+// tree costing what the rest of the clip costs.
+
+constexpr usize kMostCapsules = 1500;
+
+struct BranchPlan {
+    Vec3 base{0.0, 0.0, 0.0};
+    u32 axis = 1;
+    f64 length = 2.0;
+    f64 radius = 0.08;
+    u32 levels = 4;
+    u32 count = 2;
+    f64 spread = 0.10;    // how far a limb forks off its parent, in turns
+    f64 lean = 0.25;      // how strongly a limb is pulled back toward the growth axis, 0 to 1
+    f64 shrink = 0.72;    // length multiplier per level
+    f64 taper = 0.62;     // radius multiplier per level
+    u32 segments = 2;     // capsules per limb, so a limb narrows along its own length
+    u32 seed = 1;
+};
+
+usize branch_capsules(const BranchPlan& plan) {
+    usize limbs = 0;
+    usize row = 1;
+    for (u32 level = 0; level < plan.levels; ++level) {
+        limbs += row;
+        if (limbs > kMostCapsules) return limbs * plan.segments;   // already too many
+        row *= plan.count;
+    }
+    return limbs * plan.segments;
+}
+
+Vec3 cross_of(Vec3 a, Vec3 b) {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+
+// The same hash the field's own noise uses, so a branch is identical on every machine for the same
+// reason the grain is. Keyed on the LIMB's identity rather than on a running counter, so adding a
+// level does not reshuffle the limbs that were already there.
+f64 branch_unit(u32 id, u32 salt) {
+    u32 x = id * 0x9e3779b9u ^ (salt * 0x85ebca6bu);
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return static_cast<f64>(x) * (1.0 / 4294967296.0);
+}
+
+void grow_limb(Field& f, const BranchPlan& plan, Vec3 from, Vec3 dir, f64 length, f64 radius,
+               u32 level, u32 id, std::vector<u32>& out) {
+    if (length <= 0.0 || radius <= 0.0 || out.size() >= kMostCapsules) return;
+
+    const f64 tip_radius = radius * plan.taper;
+    const u32 pieces = (plan.segments > 0) ? plan.segments : 1u;
+    Vec3 at = from;
+    for (u32 s = 0; s < pieces; ++s) {
+        const f64 t0 = static_cast<f64>(s) / static_cast<f64>(pieces);
+        const f64 t1 = static_cast<f64>(s + 1) / static_cast<f64>(pieces);
+        const Vec3 next = from + dir * (length * t1);
+        // A capsule carries ONE radius, so each piece takes the mean of its own two ends. The step
+        // between pieces is what a taper looks like at a voxel and a half, which is what these are.
+        const f64 r0 = radius + (tip_radius - radius) * t0;
+        const f64 r1 = radius + (tip_radius - radius) * t1;
+        out.push_back(f.capsule(at, next, (r0 + r1) * 0.5));
+        at = next;
+    }
+    if (level + 1 >= plan.levels) return;
+
+    // A frame across the limb, from whichever world axis is least parallel to it — taking the
+    // nearest one instead gives a degenerate cross product for a vertical trunk, which is the
+    // commonest case there is.
+    const Vec3 away = (std::abs(dir.y) < 0.9) ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
+    const Vec3 side = normalise(cross_of(dir, away));
+    const Vec3 other = normalise(cross_of(dir, side));
+
+    Vec3 grow{0, 0, 0};
+    if (plan.axis == 0) grow.x = 1.0;
+    else if (plan.axis == 1) grow.y = 1.0;
+    else grow.z = 1.0;
+
+    const Vec3 tip = from + dir * length;
+    for (u32 c = 0; c < plan.count; ++c) {
+        const u32 kid = id * 7919u + c + 1u;
+        // Spread evenly round the parent and then jogged, so two limbs never leave at the same
+        // bearing and the whole fork never looks turned from a template.
+        const f64 spacing = 1.0 / static_cast<f64>(plan.count);
+        const f64 azimuth =
+            (static_cast<f64>(c) * spacing + branch_unit(kid, 1u) * spacing) * 2.0 * 3.14159265358979323846;
+        const f64 angle = plan.spread * 2.0 * 3.14159265358979323846 *
+                          (0.6 + 0.8 * branch_unit(kid, 2u));
+        Vec3 out_dir = dir * std::cos(angle) +
+                       (side * std::cos(azimuth) + other * std::sin(azimuth)) * std::sin(angle);
+        // ...and then pulled back toward the growth axis. This one line is the difference between
+        // a fractal and a tree: real limbs turn back toward the light, so a bough leaves its trunk
+        // at a wide angle and then rises, which is what an eye reads as growth rather than as
+        // geometry.
+        out_dir = normalise(out_dir + grow * plan.lean);
+        const f64 kid_length = length * plan.shrink * (0.82 + 0.36 * branch_unit(kid, 3u));
+        grow_limb(f, plan, tip, out_dir, kid_length, tip_radius, level + 1, kid, out);
+    }
+}
+
+// A balanced tree of unions rather than the left-leaning chain `Field::unite` builds.
+//
+// `unite` folds four at a time into a chain, so the box on every node of it is the box round
+// everything below — which culls nothing, and a point near a tree of a thousand capsules would
+// walk all two hundred and fifty of its unions. Grouped four at a time from the bottom instead,
+// the depth is log4(n) and each group's box is tight round four neighbouring limbs, because the
+// limbs come out of the walk above in depth-first order and depth-first order is nearly spatial.
+u32 unite_tree(Field& f, std::vector<u32> parts) {
+    if (parts.empty()) return f.constant(1e30);
+    while (parts.size() > 1) {
+        std::vector<u32> next;
+        next.reserve((parts.size() + 3) / 4);
+        for (usize i = 0; i < parts.size(); i += 4) {
+            const usize end = std::min(i + 4, parts.size());
+            next.push_back(f.unite(std::vector<u32>(parts.begin() + static_cast<isize>(i),
+                                                    parts.begin() + static_cast<isize>(end))));
+        }
+        parts.swap(next);
+    }
+    return parts[0];
+}
+
 // --- the parser -------------------------------------------------------------------------
 
 class Parser {
@@ -372,6 +523,15 @@ private:
         f64 number(const std::string& key, f64 fallback) const {
             auto it = numbers.find(key);
             return (it != numbers.end() && !it->second.empty()) ? it->second[0] : fallback;
+        }
+        // One value of a list, for the keys written `stretch=8,1,1`. A key given ONE number means
+        // that number on every axis, which is what `size=` already means and what an author writes
+        // when they want a grain twice as coarse in every direction.
+        f64 number_at(const std::string& key, usize index, f64 fallback) const {
+            auto it = numbers.find(key);
+            if (it == numbers.end() || it->second.empty()) return fallback;
+            if (it->second.size() == 1) return it->second[0];
+            return (index < it->second.size()) ? it->second[index] : fallback;
         }
         bool has(const std::string& key) const {
             return numbers.count(key) != 0 || words.count(key) != 0;
@@ -635,6 +795,49 @@ bool Parser::call(u32& out) {
         return true;
     }
 
+    // --- everything that forks -----------------------------------------------------------------
+    //
+    //   let bough = branch 0 12.75 0 h=0.62 r=0.05 levels=5 count=3 spread=0.11 lean=0.30 seed=7
+    //
+    // A trunk from the point given, growing along `axis`, forking `count` ways `levels` times. See
+    // the block above BranchPlan for what it is for and what it costs — briefly, it costs NODES
+    // and not time, and the parser refuses a plan that would cost too many of them.
+    if (head == "branch") {
+        BranchPlan plan;
+        plan.base = {arg(0, 0), arg(1, 0), arg(2, 0)};
+        plan.axis = axis_from(keys.word("axis", "y")) % 3u;
+        plan.length = keys.number("h", 2.0);
+        plan.radius = keys.number("r", 0.08);
+        plan.levels = static_cast<u32>(std::clamp(keys.number("levels", 4.0), 1.0, 9.0));
+        plan.count = static_cast<u32>(std::clamp(keys.number("count", 2.0), 1.0, 6.0));
+        plan.spread = keys.number("spread", 0.10);
+        plan.lean = std::clamp(keys.number("lean", 0.25), 0.0, 1.0);
+        plan.shrink = keys.number("shrink", 0.72);
+        plan.taper = keys.number("taper", 0.62);
+        plan.segments = static_cast<u32>(std::clamp(keys.number("segments", 2.0), 1.0, 8.0));
+        plan.seed = static_cast<u32>(keys.number("seed", 1.0));
+
+        const usize wanted = branch_capsules(plan);
+        if (wanted > kMostCapsules) {
+            fail("branch levels=" + std::to_string(plan.levels) + " count=" +
+                 std::to_string(plan.count) + " segments=" + std::to_string(plan.segments) +
+                 " is " + std::to_string(wanted) + " capsules and the limit is " +
+                 std::to_string(kMostCapsules) + " -- drop a level or a fork");
+            return false;
+        }
+        Vec3 grow{0, 0, 0};
+        if (plan.axis == 0) grow.x = 1.0;
+        else if (plan.axis == 1) grow.y = 1.0;
+        else grow.z = 1.0;
+
+        std::vector<u32> limbs;
+        limbs.reserve(wanted);
+        grow_limb(f, plan, plan.base, grow, plan.length, plan.radius, 0u,
+                  plan.seed * 2654435761u + 1u, limbs);
+        out = unite_tree(f, limbs);
+        return true;
+    }
+
     // --- combining ---------------------------------------------------------------------------
     if (head == "union" || head == "difference" || head == "intersection" || head == "add" ||
         head == "multiply" || head == "min" || head == "max") {
@@ -643,12 +846,35 @@ bool Parser::call(u32& out) {
             fail(head + " needs a { } with at least one thing in it");
             return false;
         }
+        // Keys may follow the block as well as precede it, exactly as they may for the one-child
+        // operations below — which is what `clips/facility/requests/halls.md` asked for and what
+        // `clips/facility/BRIEF.md` has always documented:
+        //
+        //   let name = union { a b c }     # smooth=0.1 rounds the joins
+        //
+        // Written that way it did not parse. `union { a b } smooth=0.02` swallowed the block, left
+        // `smooth` unread, and the next pass took it for a statement — so the error arrived under
+        // the word `smooth`, on a later line, saying "unknown statement". Two clips carry a comment
+        // explaining the workaround and one of them explains it twice.
+        keys_into(keys);
         const f64 smooth = keys.number("smooth", 0.0);
-        if (head == "union") out = (smooth > 0.0) ? f.smooth_unite(parts, smooth) : f.unite(parts);
+        // `chamfer=` is the flat seam to `smooth=`'s round one, and it is what a mason cuts: the
+        // arris of a plinth, the stop of a jamb, the corner of a rusticated block. Both given, the
+        // blend wins, because two treatments of one seam is a mistake and the older word is the
+        // one already in the clips.
+        const f64 chamfer = keys.number("chamfer", 0.0);
+        if (head == "union")
+            out = (smooth > 0.0)    ? f.smooth_unite(parts, smooth)
+                  : (chamfer > 0.0) ? f.chamfer_unite(parts, chamfer)
+                                    : f.unite(parts);
         else if (head == "difference")
-            out = (smooth > 0.0) ? f.smooth_subtract(parts, smooth) : f.subtract(parts);
+            out = (smooth > 0.0)    ? f.smooth_subtract(parts, smooth)
+                  : (chamfer > 0.0) ? f.chamfer_subtract(parts, chamfer)
+                                    : f.subtract(parts);
         else if (head == "intersection")
-            out = (smooth > 0.0) ? f.smooth_intersect(parts, smooth) : f.intersect(parts);
+            out = (smooth > 0.0)    ? f.smooth_intersect(parts, smooth)
+                  : (chamfer > 0.0) ? f.chamfer_intersect(parts, chamfer)
+                                    : f.intersect(parts);
         else if (head == "add") out = f.add(parts);
         else if (head == "multiply") out = f.multiply(parts);
         else if (head == "min") out = f.minimum(parts);
@@ -658,10 +884,12 @@ bool Parser::call(u32& out) {
 
     // --- one-child operations ------------------------------------------------------------------
     if (head == "translate" || head == "rotate" || head == "scale" || head == "mirror" ||
-        head == "repeat" || head == "around" || head == "shell" || head == "round" ||
+        head == "repeat" || head == "scatter" || head == "around" || head == "shell" ||
+        head == "round" ||
         head == "revolve" || head == "offset" || head == "twist" || head == "bend" || head == "abs" ||
         head == "negate" || head == "step" || head == "smoothstep" || head == "clamp" ||
-        head == "remap" || head == "power" || head == "displace" || head == "blend") {
+        head == "remap" || head == "power" || head == "displace" || head == "blend" ||
+        head == "occlusion" || head == "curvature" || head == "facing") {
         std::vector<u32> parts = block();
         if (parts.empty()) {
             // Also allow `shell walls 0.1` without braces, which reads better for one child.
@@ -693,6 +921,19 @@ bool Parser::call(u32& out) {
             out = f.repeat(child,
                            {keys.number("x", 0), keys.number("y", 0), keys.number("z", 0)},
                            {keys.number("nx", 0), keys.number("ny", 0), keys.number("nz", 0)});
+        else if (head == "scatter") {
+            // `repeat`'s keys, plus the two that stop it looking like a repeat:
+            //
+            //   let bed = scatter { pebble } x=0.07 z=0.07 nx=24 nz=24 jitter=0.45 turn=0.5
+            //
+            // `jitter` is a fraction of the cell and moves AND resizes each copy; `turn` is the
+            // largest spin either way, in turns, so 0.5 is a free one. Both nought is a `repeat`
+            // and becomes one. See Op::Scatter for the cost, which is `repeat`'s.
+            out = f.scatter(child,
+                            {keys.number("x", 0), keys.number("y", 0), keys.number("z", 0)},
+                            {keys.number("nx", 0), keys.number("ny", 0), keys.number("nz", 0)},
+                            keys.number("jitter", arg(0, 0.35)), keys.number("turn", 0.0));
+        }
         else if (head == "around") {
             // Over an arc rather than the whole circle, `count` copies span it INCLUSIVELY: the
             // first sits on `from` and the last on `to`. Over a whole turn the old spacing stands
@@ -726,6 +967,29 @@ bool Parser::call(u32& out) {
         else if (head == "bend")
             out = f.bend(child, keys.number("turns", arg(0, 0.25)),
                          axis_from(keys.word("axis", "y")) % 3u);
+        // --- what the shape is DOING here, which the language could not ask until now ---------
+        //
+        // `Field` has been able to answer these three since weathering was written, and a clip has
+        // never been able to ask. So `weather sea 0.5` could put salt in the hollows and an author
+        // could not put moss in them, which is backwards: the five weathers are five opinions and
+        // these are the facts they are built out of.
+        //
+        //   let cavity = occlusion { part_portico } r=0.22    0 in the open, 1 buried
+        //   let arris  = curvature { part_portico } r=0.10    + on an edge, - in a corner
+        //   let up     = facing    { part_portico } axis=y    + up, - down
+        //
+        //   paint soot  where=cavity above=0.55
+        //   paint worn  where=arris  above=0.30
+        //
+        // They are the whole of what a surface scanned off a real building has that a modelled one
+        // does not: dirt where the rain never reaches, wear where a hand or a shoulder has passed,
+        // a wash of pale stone under every sill. And they are EXPENSIVE — an occlusion evaluates
+        // its child fourteen times, a curvature seven and a facing six — so name a small shape,
+        // not the building, and pair them with `on=` so the rule is only asked where it can fire.
+        else if (head == "occlusion") out = f.occlusion(child, keys.number("r", arg(0, 0.15)));
+        else if (head == "curvature") out = f.curvature(child, keys.number("r", arg(0, 0.05)));
+        else if (head == "facing")
+            out = f.facing(child, axis_from(keys.word("axis", "y")) % 3u);
         else if (head == "abs") out = f.absolute(child);
         else if (head == "negate") out = f.negate(child);
         else if (head == "step") out = f.step(child, keys.number("at", arg(0, 0.0)));
@@ -772,9 +1036,21 @@ bool Parser::call(u32& out) {
                       keys.number("b", 1.0), keys.number("phase", 0.0));
         return true;
     }
+    // Every grain below takes `stretch=`, which multiplies its feature size along each axis:
+    //
+    //   let bark  = fbm size=0.06 octaves=4 stretch=1,9,1      runs UP a trunk
+    //   let streak= ridged size=0.35 octaves=3 stretch=3,1,3   ...and rain runs DOWN a wall
+    //   let riven = cells size=0.09 stretch=4,1,4              slate splits in one plane
+    //
+    // One number means the same on all three axes. See the block above Op::Sine in field.hpp for
+    // why this cannot be had from `scale`, which would divide the pattern's amplitude with it.
+    const auto stretch_of = [&]() {
+        return Vec3{keys.number_at("stretch", 0, 1.0), keys.number_at("stretch", 1, 1.0),
+                    keys.number_at("stretch", 2, 1.0)};
+    };
     if (head == "noise") {
         out = f.noise(keys.number("size", arg(0, 1.0)),
-                      static_cast<u32>(keys.number("seed", 1.0)));
+                      static_cast<u32>(keys.number("seed", 1.0)), stretch_of());
         return true;
     }
     if (head == "fbm" || head == "ridged") {
@@ -783,18 +1059,30 @@ bool Parser::call(u32& out) {
         const f64 gain = keys.number("gain", 0.5);
         const f64 lacunarity = keys.number("lacunarity", 2.0);
         const u32 seed = static_cast<u32>(keys.number("seed", 1.0));
-        out = (head == "fbm") ? f.fbm(size, octaves, gain, lacunarity, seed)
-                              : f.ridged(size, octaves, gain, lacunarity, seed);
+        out = (head == "fbm") ? f.fbm(size, octaves, gain, lacunarity, seed, stretch_of())
+                              : f.ridged(size, octaves, gain, lacunarity, seed, stretch_of());
         return true;
     }
     if (head == "rasp") {
         out = f.rasp(keys.number("size", arg(0, 0.05)), keys.number("depth", 1.0),
-                     static_cast<u32>(keys.number("seed", 1.0)));
+                     static_cast<u32>(keys.number("seed", 1.0)), stretch_of());
         return true;
     }
     if (head == "cells") {
         out = f.cells(keys.number("size", arg(0, 0.5)),
-                      static_cast<u32>(keys.number("seed", 1.0)));
+                      static_cast<u32>(keys.number("seed", 1.0)), stretch_of());
+        return true;
+    }
+    // The seams BETWEEN the cells rather than the cells, which is what a crack is: a branching
+    // network that meets itself at junctions and never simply stops. `Field` has had it since the
+    // weathering was written and a clip has never been able to say it — so `weather cracks` could
+    // craze a wall and an author could not craze a glaze, a plaster, a dry riverbed or a pane.
+    //
+    //   let craze = cell_edge size=0.12 seed=4
+    //   let glaze = displace { pot craze } amount=-0.004
+    if (head == "cell_edge" || head == "cracks") {
+        out = f.cell_edge(keys.number("size", arg(0, 0.5)),
+                          static_cast<u32>(keys.number("seed", 1.0)), stretch_of());
         return true;
     }
     if (head == "checker") {
