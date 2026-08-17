@@ -152,8 +152,22 @@ enum class Op : u8 {
     // with a rotated box per edge. `union { face_a face_b } chamfer=0.02` cuts exactly the one
     // edge where those two meet and leaves the rest of both alone.
     //
-    // Cost is one add, one subtract and one multiply on top of the min or max it replaces — the
-    // cheapest thing in this list, and cheaper than the extra node an author writes today.
+    // # What it costs, and it is NOT the arithmetic
+    //
+    // The arithmetic is one add, one subtract, one multiply and a clamp on top of the min or max
+    // it replaces, which is nothing. Measured, a plinth and a die at metre 128, three interleaved
+    // rounds:
+    //
+    //   union                                    0.57 s of CPU
+    //   union chamfer=0.0005                     0.58 s        the same, to the noise
+    //   union chamfer=0.035                      0.87 s        1.5x
+    //
+    // The control arm is the middle row and it is what says where the cost is: the SAME op with a
+    // negligible width measures as the plain union, so the three operations really are free. What
+    // the width buys is `metric_slack` — 2/root2 times the width, 0.049 m at 35 mm — and slack is
+    // what stops a block settling. So a chamfer costs in proportion to how wide it is, through
+    // settling and not through arithmetic, and a 5 mm arris on a building costs almost nothing
+    // while a 50 mm one on every seam is a real bill.
     //
     // **The sign is the one every other size key here has**, which is worth saying out loud
     // because `offset by=` is not: `offset` is `field + by`, so a POSITIVE `by` shrinks, which
@@ -228,8 +242,25 @@ enum class Op : u8 {
     // to promise anything when a copy does not fit. **Model the thing on its own origin** and it
     // always does; a pebble modelled 0.06 m off to one side is what found this.
     //
-    // Cost is `repeat`'s — one to eight evaluations of the child — plus three hashes and, when
-    // `turn` is not zero, one sine and one cosine.
+    // # What it costs, measured rather than reasoned
+    //
+    // A bed of 625 ellipsoids over 3.6 m square, sampled at metre 128, three interleaved rounds
+    // against the same bed written as a `repeat`:
+    //
+    //   repeat                                   0.22 s of CPU
+    //   scatter, jitter 0.45, turn 0.5           0.32 s        1.4x
+    //
+    // That 1.4 is the whole of the arithmetic: one to eight evaluations of the child, as `repeat`,
+    // plus three hashes per candidate cell, one divide and one multiply for the size, and a sine
+    // and a cosine when `turn` is not nought.
+    //
+    // **And the same bed at a period of 0.09 instead of 0.15 costs 1.14 s — 2.6x — for identical
+    // stones.** Nothing about the arithmetic changed. What changed is that a spun pebble 0.077 m
+    // across, moved by up to 0.041 m, no longer fits in a 0.09 m cell, so `metric_slack` refuses
+    // to promise a distance, so nothing settles and every voxel of the bed is asked one at a time.
+    // The fit test above is therefore not a technicality an author can ignore — it is the
+    // difference between a gravel bed costing 1.4 repeats and costing 2.6 of them, and the lever
+    // is the period, which is free to change.
     Scatter,
 
     // --- changing the answer --------------------------------------------------------------

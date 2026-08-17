@@ -1698,6 +1698,23 @@ TEST_CASE("a scatter says whether its copies fit, and refuses to promise when th
     const u32 crowded = tight.scatter(big, {0.11, 0, 0.11}, {4, 0, 4}, 0.5, 0.0);
     tight.build_bounds();
     CHECK(tight.metric_slack(crowded) >= Field::kInfiniteSlack);
+
+    // And the pair the cost measurement in field.hpp was taken on, so the number quoted there
+    // stays attached to the thing that produced it. The same 0.030 x 0.016 x 0.024 stone in a
+    // 0.09 m cell and in a 0.15 m one: spun, it is 0.077 m across and travels up to 0.041 m, so
+    // the small cell cannot hold it and the bed stops settling. That is the 1.4x-against-2.6x in
+    // the header, and it is one number in the clip that moves it.
+    Field narrow;
+    const u32 stone = narrow.ellipsoid({0, 0, 0}, {0.030, 0.016, 0.024});
+    const u32 packed = narrow.scatter(stone, {0.09, 0, 0.09}, {12, 0, 12}, 0.45, 0.5);
+    narrow.build_bounds();
+    CHECK(narrow.metric_slack(packed) >= Field::kInfiniteSlack);
+
+    Field spaced;
+    const u32 same_stone = spaced.ellipsoid({0, 0, 0}, {0.030, 0.016, 0.024});
+    const u32 spread = spaced.scatter(same_stone, {0.15, 0, 0.15}, {12, 0, 12}, 0.45, 0.5);
+    spaced.build_bounds();
+    CHECK(spaced.metric_slack(spread) == doctest::Approx(0.0));
 }
 
 TEST_CASE("the mirror evaluator walks a scatter and a chamfer to the same number") {
