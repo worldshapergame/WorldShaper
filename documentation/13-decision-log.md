@@ -8844,3 +8844,87 @@ remembering the next time a control arm feels like too much trouble.
 | D668 | **The split points are arbitrary and the comment says so** | decision | There is no seam in the chain; a false taxonomy in a comment is worse than none |
 | D668 | **`--light-read-period` clamps before it doubles** | fault | A negative value hung the game before the first frame; found by feeding every flag a negative |
 | D668 | **`ci.yml` cancels superseded runs, per ref** | decision | Safe here in the way it was not in `pages.yml` (D667): nothing is scheduled, so nothing displaces a queued run |
+
+## D669 — twenty agents audited every cut in the building, and the instrument was wrong twice
+
+The owner asked for two things at once: detail enough that the facility reads as a scan, and "ways to
+check sdfs are cutting the other proper sdfs and not cutting more or less sdfs than they should…
+especially fixing windows cutting what they shouldn't". Twenty agents, each in its own worktree on
+files nobody else held, each required to build, measure both arms and hand back numbers.
+
+**The headline is not any of the bugs. It is that the tool everyone was measuring with was wrong in
+two separate ways, and both were found by agents who first concluded their own work was broken.**
+
+### The instrument, twice
+
+**`--part` sampled the wrong box, for the life of the facility.** `apply_origin` translates the
+solid, every paint rule and the bounds, and the comment above it says the whole point is that
+nothing is left behind. `script.parts` — the names `--part` asks by, and the names the clip viewer
+bakes every fragment through — was left behind. It does not fail; it answers. The facility shifts
+3.50 m, so `--part part_dome` returned an **11.75 × 1.00 × 11.75 m saucer wearing one material**
+where the dome is 4 m tall and wears six: the slice that still fell inside the dropped box, painted
+by whatever rule was 3.50 m lower. `--part part_pilasters` reported eleven materials on a part that
+paints two. D666 recorded this same 3.50 m as a *clip authoring* trap; it is also, and mostly, a
+measurement trap. The shipped building was never affected — it is built from `solid`, which moved
+correctly — which is exactly what let it survive: only the numbers were wrong.
+
+**"PAINT RULES THAT NEVER FIRED" had never printed.** `rule_cost` counted evaluations rather than
+matches and was never switched on, so the line that every brief in this programme leaned on — treat
+a rule that never fired as a bug in your work — reported nothing, ever. Every "no rules never fired"
+in every report was vacuous, including the ones relayed to the owner. Corrected, it splits into
+`never asked` (1 of 365) and `never matched` (**30 of 365**), and the second is a real list:
+`windows_glass`, `roof_ceiling`, `entablature_relief`, `dome_lan_ball` among them. The building's
+only refracting material is painted by a rule that matches no voxel.
+
+### The cut audit, which is the thing that was asked for
+
+`clipcheck --cuts` lists every subtracted operand with what it removed and **which named part it took
+it from**; `--cut <name>` gives one in detail with boxes and a section. It separates a cut that
+removed nothing at all from one merely thinner than a voxel at the resolution asked, and it refuses
+to report a number it cannot stand behind — 19 cuts under a `revolve` are listed as *not audited*
+rather than guessed. Run against the tree that still had them, it names both bugs that had been
+found by hand:
+
+```
+walls_channels   8.910   walls_ring 8.29  walls_quoins 0.59   <- the neighbour it was never meant to reach
+steps_joints     0.000                                        <- REMOVED NOTHING, and covers no matter
+```
+
+### What the cutters were doing
+
+**Every opening in the building was cut 1.80 m through a 0.90 m wall.** `windows.clip` said so in
+its own header and called it "more than any sane outer wall"; the assumption underneath was about a
+file allowed to change, and nobody had checked. Past the inner face it was deleting **14.153 m³** of
+room lining, now 2.670 and stopping at exactly the 0.10 of slack. Its victims had all written the
+damage down without being able to reach the cause: `stair.clip` lost **0.32 m³ out of the half
+landing's north-east corner in both wings** — a hole in a floor people walk up onto; `salon.clip`
+hid a 0.56 × 1.80 m hole behind a pier; `halls.clip` stopped both great halls 1.15 m short of their
+own wall; `chapel.clip` hand-built the embrasures the cutter should have made. The west lesser door
+was separately boring **0.79 m³ of solid stone out of the chapel**.
+
+**And the opposite failure, which has no symptom at all.** `offset { steps_mass } by=-0.045` was
+written to shrink a core to cut joints from and grew it instead — `offset` is `field + by` and
+negative is matter, so POSITIVE shrinks, and `BRIEF.md`'s own example taught it backwards. The
+difference was empty and every joint in the great stair did not exist: **2,423,674 voxels on both
+sides**, no error, no floating component, no missing material. That half of the owner's question is
+the half nothing reports.
+
+### Rooms that could be looked at and not entered
+
+The library's four pieces of furniture all stood on the centre line, leaving **1.78 m** of clear
+room (now 8.66); its doorway measured 0.59 m across because a grille bar stood in the opening. The
+chapel's altar rail ran wall to wall — the 0.344 m a probe returned was the air *outside* the
+building. The great stair could not carry a 1.20 m body anywhere. The vestibule was 1.125 m wide
+where a person has to walk.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D669 | **`apply_origin` moves the names a file bound** | fault | `--part` sampled an unmoved shape in a box moved 3.50 m; two agents blamed their own fragment first |
+| D669 | **`never fired` counted evaluations and was never switched on** | fault | The line every brief leaned on had never printed; 30 of 365 rules match no voxel |
+| D669 | **A cut audit names the part it took matter from** | decision | "void_windows removed 0.18 m³ of part_stair" is the sentence that finds these; a volume alone is not actionable |
+| D669 | **A cut that removes NOTHING is reported as loudly as one that removes too much** | decision | It is half the question and the half with no symptom — the stair's joints sampled identically on both sides |
+| D669 | **An opening is cut to the wall's thickness, not to a generous constant** | fault | 1.80 through 0.90, 56 openings, 14.153 m³ of other people's rooms |
+| D669 | **The wall states its own thickness** | decision | Four fragments had each guessed it and two deformed around the guess |
+| D669 | **`offset by=` is positive to shrink, and the brief said otherwise** | fault | A whole staircase's joints did not exist and nothing said so |
+| D669 | **19 cuts under a `revolve` are "not audited" rather than estimated** | honesty | One world point maps to many local ones; a number that cannot be stood behind is worse than none |
+| D669 | **Agents were told the premise and said it was wrong** | honesty | Two worked from a `main` predating the cutter fix, checked rather than complied, and were right |
