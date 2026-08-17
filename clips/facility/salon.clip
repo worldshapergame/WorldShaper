@@ -77,18 +77,36 @@
 #     4.455   frame head          and the rocaille cartouche stands astride it, to 4.635
 #     4.68    cornice foot        4.95 - 0.27
 #     4.95    cornice top / cove springing   1.80 + 3.15 (7 M), and doors.clip's side-door head
-#     5.40    ceiling soffit      4.95 + M, the cove being a quarter round of M
+#     5.85    ceiling soffit      4.95 + 2 M, the cove being a quarter round of 2 M
 #     6.00    top of the slab     the zone's ceiling; the piano nobile floor is at 6.30
 #
-#   Clear height under the cornice is 3.15 and under the chandelier 2.11 — both past the brief's
-#   2.10 — and the doorway is 3.15 clear, past the 2.40 a door wants.
+#   THE COVE WAS 0.45 DEEP AND THE SOFFIT WAS AT 5.40, AND BOTH MOVED FOR ONE REASON: the
+#   chandelier. Its lowest crystal hung at 3.915 and the clear air under it MEASURED 2.125 m — past
+#   the brief's 2.10 for standing in and nowhere near the 2.40 a room wants along the line people
+#   walk, which is the line this thing hangs on. It is 1.485 m tall from its bottom finial to its
+#   canopy, so in a room 3.15 m in the clear it CANNOT be raised: there is nowhere for it to go. So
+#   the room got taller instead. The cornice did not move — 4.95 is doors.clip's side-door head and
+#   the mirrors' 7 M is measured off it — and the cove was deepened from M to 2 M, which lifts the
+#   flat soffit to 5.85 and leaves 0.15 of slab under the ballroom's own 0.30. The chandelier went
+#   up 0.45 with it and now measures 2.562 m of clear air under it.
+#
+#   Clear height under the cornice is 3.15, under the cove 4.05, and under the chandelier 2.562 —
+#   and the doorway is 3.125 clear and 1.125 wide.
 #
 # WHERE THE DOOR IS. doors.clip cuts `doors_sd_void_e` at x 4.50 .. 6.30, y 1.80 .. 4.95,
 # z -7.95 .. -5.70: the lesser south door, and it lands 0.30 inside my west wall. So the room is
-# entered at its south-west corner, through an opening 0.90 (2 M) wide in the west wall, and this
-# file cuts that opening itself as well — `salon_door_air` — so that the room reads correctly when
-# it is measured on its own, and so that nothing is left standing between 6.30 and 6.39 where the
-# door's own void stops.
+# entered at its south-west corner, through an opening in the west wall, and this file cuts that
+# opening itself as well — `salon_door_air` — so that the room reads correctly when it is measured
+# on its own, and so that nothing is left standing between 6.30 and 6.39 where the door's own void
+# stops.
+#
+# IT IS 1.125 (2.5 M) WIDE AND IT WAS 0.90 (2 M). The south jamb is not mine and cannot move: it is
+# walls.clip's own south wall, whose inner face is z = -6.60, and the doorway is in the corner
+# against it. So the opening measured 0.969 m in the assembled building — under the metre a person
+# needs to walk through carrying anything — and the only jamb that could move was the north one,
+# which went from -5.70 to -5.475. Measured after: 1.125 m. The west silk panel went 0.09 north with
+# it so that there are still 0.065 of lining between the cut and the next thing, which is what every
+# other cut end in this room stands clear by.
 #
 # WHERE THE WINDOWS ARE. Three in the south wall at x = 8.10 (round-headed), 10.80 and 13.50
 # (square-headed), 1.35 wide, sill 2.70; one in the east wall at z = -5.40, the same square head.
@@ -122,21 +140,27 @@ let salon_dado_pans = union {
                    box 6.975 1.90 -3.50   14.175 2.60 -3.30 }
 }
 
-# THE TWO CORNER PIERS ON THE NORTH WALL, AND WHY THEY ARE NOT A DECISION ABOUT TASTE.
+# THE TWO CORNER PIERS ON THE NORTH WALL. THEY WERE A PATCH AND THEY ARE NOT ONE ANY MORE.
 #
-# windows.clip puts five ground-storey windows in the east front, at z = 0 and +-2.70 and +-5.40.
-# The one at z = -5.40 is mine and this room is built round it. The one at z = -2.70 IS NOT: its
-# opening runs z -3.375 .. -2.025, which is 0.36 north of my room, but its REVEAL runs 1.80 m into
-# the building, from x 16.18 back to x 14.20 — and that is straight through the east end of my
-# north wall. Measured on the assembled building at metre 8: my north wall stands solid to
-# x = 14.20 and then there is a hole 0.56 m wide and 1.80 m tall through it, from the room's
-# north-east corner into the pocket behind, with a glazed sash 1.5 m away at the far end of it.
+# What this note used to say: windows.clip puts five ground-storey windows in the east front, at
+# z = 0 and +-2.70 and +-5.40. The one at z = -5.40 is mine and this room is built round it. The one
+# at z = -2.70 is not — its opening runs z -3.375 .. -2.025, which is 0.36 north of my room — but its
+# REVEAL was cut 1.80 m into a wall 0.90 thick, from x 16.18 back to x 14.20, and that ran straight
+# through the east end of my north wall. Measured then, at metre 8: the wall stood solid to x = 14.20
+# and there was a hole 0.56 m wide and 1.80 m tall through it into the pocket behind. The two piers
+# were how it was closed: 0.18 of pier standing IN FRONT of the cut, which stops at z = -3.375 and
+# cannot reach past it.
 #
-# It cannot be closed by making the wall thicker, because the cut takes the wall's whole depth. It
-# is closed by standing 0.18 of pier IN FRONT of it, at z -3.54 .. -3.36, because the cut stops at
-# z = -3.375 and cannot reach past it. So the room's north-east corner is a pier, and the
-# north-west corner is given the same one so that the wall reads as pier / five panels / pier
-# rather than as one panel with a patch on it.
+# THE HOLE IS GONE. windows.clip cut its `wall_cut` from 1.80 to 1.00 on 2026-08-17 — the wall's own
+# 0.90 and 0.10 of slack — so the east-front reveal now stops at x = 15.00 instead of 14.20, which is
+# 0.10 past walls.clip's inner face and 0.15 into the lap at the very corner of my block. Nothing of
+# this room is inside it.
+#
+# THE PIERS STAY, AND NOT OUT OF SENTIMENT. They cost the room 0.18 of depth at each end — 2.97 in
+# the clear where the middle of the wall gives 3.15, and the widest thing a person is is 0.60 — so
+# nothing about walking in here turns on them. What they buy is that the north wall reads as
+# pier / five panels / pier, which is how a panelled wall of this date ends, instead of five panels
+# running into a corner. They are now what they always looked like and were not.
 #
 # The pocket north of this wall is not mine and is still open: whoever ends up owning the fabric
 # between this room and the east hall should look at the windows at z = 0 and z = -2.70, which at
@@ -152,7 +176,7 @@ let salon_sp_s_e = box 14.310 2.79 -6.54   14.625 4.365 -6.45
 let salon_sp_n_w = box  6.525 2.79 -3.60    6.840 4.365 -3.51
 let salon_sp_n_e = box 14.310 2.79 -3.60   14.625 4.365 -3.51
 let salon_sp_e_n = box 14.73  2.79 -6.42   14.82  4.365 -6.165
-let salon_sp_w_n = box  6.33  2.79 -5.49    6.42  4.365 -4.77
+let salon_sp_w_n = box  6.33  2.79 -5.40    6.42  4.365 -4.68
 let salon_silk_pans = union {
     salon_sp_s_w salon_sp_s_e salon_sp_n_w salon_sp_n_e salon_sp_e_n salon_sp_w_n
 }
@@ -210,7 +234,12 @@ let salon_room_air = box 6.39 1.80 -6.51   14.76 4.95 -3.36
 # solid of revolution: at the top it is the core box, at 0.45 below it the core grown by 0.45, and
 # between the two a quarter circle. Four cavettos mitred at the corners would have left four seams
 # in the one surface in this room that has no seam in it.
-let salon_cove_air = round { box 7.065 4.05 -5.835   14.085 4.95 -4.035 } by=0.45
+# THE RADIUS IS 0.90 (2 M) AND THE CORE BOX MOVED WITH IT, so that the springing does not: grown by
+# 0.90 the box still reaches x 6.615 .. 14.535 and z -6.285 .. -3.585 at y 4.95, which is exactly the
+# face of the cornice corona and exactly where the old one sprang from. Only the top moved, from
+# 5.40 to 5.85. The flat soffit above it is 6.12 x 0.90 — inset two modules all round instead of
+# one — and the slab over that is 0.15, with the ballroom's own 0.30 on top of it.
+let salon_cove_air = round { box 7.515 4.20 -5.385   13.635 4.95 -4.485 } by=0.90
 
 # The doorway, cut to doors.clip's own head at 4.95 and its own jamb at -5.70. It runs from 5.90 to
 # 6.615 and back to -6.65 so that it is cut past both faces of my west wall AND past the 6.48 the
@@ -218,7 +247,7 @@ let salon_cove_air = round { box 7.065 4.05 -5.835   14.085 4.95 -4.035 } by=0.4
 # and not 6.52: at 6.52 it left a sliver of lining 0.005 wide against the silk panel's edge, which
 # the sampler filled conservatively and then reported as 67 floating voxels. Every cut end in this
 # room now stands at least 0.065 clear of the next thing, which is two voxels at metre 32.
-let salon_door_air = box 5.90 1.80 -6.65   6.615 4.95 -5.70
+let salon_door_air = box 5.90 1.80 -6.65   6.615 4.95 -5.475
 
 # The window reveals, cut to exactly windows.clip's openings and no further. Square heads at 4.50,
 # the round head springing at 4.05 and crowning at 4.725. The z of the south three runs -6.70 ..
@@ -239,7 +268,54 @@ let salon_fire_air = box 10.485 1.80 -3.62   11.115 2.52 -3.24
 let salon_hollow = union {
     salon_room_air salon_cove_air salon_door_air salon_windows salon_fire_air salon_sunk
 }
-let salon_shell  = difference { salon_block salon_hollow }
+# ================================================================================================
+# THE FLOOR IS LAID AND NOT POURED
+# ================================================================================================
+#
+# The marquetry in here is PAINTED and stays painted — that is load note 3's harder half and the
+# reason this room exists as much as the mirrors are. But a parquet floor is two things and only one
+# of them was here: the pattern, and the fact that it is made of separate pieces that do not quite
+# line up. So the blocks are laid SQUARE on a 0.90 (2 M) grid with the joints CUT 0.030 wide and
+# 0.06 deep, and the painted lattice runs DIAGONALLY at 0.675 over the top of them, so the two
+# systems never once coincide and both can be read for what they are — a cut arris a sampler can
+# find, and a colour change it cannot, on the same square metre of the same floor under the same
+# raking sun.
+#
+# And about one block in six has LIFTED, which is what a floor of this age does: a scatter of them
+# stand 0.0375 and 0.030 proud — 1.2 and 0.96 of a voxel at metre 32 — on two grids of 1.80 and 2.70
+# that do not share a period. Each is bedded 0.04 INTO the slab and sits inside its own 0.90 square
+# with 0.075 of clearance to the joints either side, so it is a bump on a solid and can no more come
+# loose than the dado can. `displace` would have said the same thing more smoothly and it was tried
+# first, upstairs: a displaced slab with joints cut in it came back with ten and eleven floating
+# voxels at metre 32 where a flat one with the same joints had none.
+let salon_pq_zone = box 6.66 1.74 -6.24   14.49 1.92 -3.63
+let salon_pq_gx = box -0.015 1.74 -7.00   0.015 1.92 -3.00
+let salon_pq_gz = box 6.50 1.74 -0.015   14.60 1.92 0.015
+let salon_pq_joints = intersection {
+    union {
+        translate { repeat { salon_pq_gx } x=0.90 nx=5 } 10.80 0 0
+        translate { repeat { salon_pq_gz } z=0.90 nz=2 } 0 0 -4.95
+    }
+    salon_pq_zone
+}
+let salon_pq_pad_a  = box -0.36 1.76 -0.36   0.36 1.8375 0.36 round=0.012
+let salon_pq_pad_b  = box -0.36 1.76 -0.36   0.36 1.83   0.36 round=0.012
+let salon_pq_proud = intersection {
+    union {
+        translate { repeat { repeat { salon_pq_pad_a } x=1.80 nx=3 } z=1.80 nz=2 } 11.25 0 -4.50
+        translate { repeat { repeat { salon_pq_pad_b } x=2.70 nx=2 } z=2.70 nz=1 }  9.45 0 -5.40
+    }
+    box 6.75 1.70 -6.15   14.40 1.90 -3.72
+}
+
+# THE LIFTED BLOCKS ARE UNIONED ON AFTER THE HOLLOW AND NOT BEFORE IT. They stand 0.0375 above the
+# floor plane, which is 0.0375 INSIDE `salon_room_air`; put them in the block and cut the room out
+# of it and every one of them is deleted by the room it is laid in — which is the same mistake, at
+# a smaller scale, that took every sconce, bench and statue out of this building in D608.
+let salon_shell  = union {
+    difference { salon_block  salon_hollow  salon_pq_joints }
+    salon_pq_proud
+}
 let salon_piered = difference { salon_piers salon_sunk }
 
 # ================================================================================================
@@ -279,10 +355,49 @@ let salon_cor_gilt = union {
     salon_cor_s_cyma salon_cor_s_cor  salon_cor_n_cyma salon_cor_n_cor
     salon_cor_e_cyma salon_cor_e_cor  salon_cor_w_cyma salon_cor_w_cor
 }
-let salon_cornice = union {
-    salon_cor_gilt
-    salon_cor_s_fil salon_cor_s_core  salon_cor_n_fil salon_cor_n_core
-    salon_cor_e_fil salon_cor_e_core  salon_cor_w_fil salon_cor_w_core
+# AND THE TWO THINGS THAT MAKE IT A SECTION RATHER THAN A STEP AND A CURVE.
+#
+# A BED MOULD under the fillet: an `ovolo`, 0.045 tall, from the wall face out to the fillet's own
+# 0.09 — so the profile now reads quarter round, dentils, cyma, corona instead of starting flat.
+# It stops at 4.635, which is exactly where the rocaille cartouches over the glasses stop, so it
+# runs behind none of them and through none of them.
+#
+# DENTILS, cut out of the fillet that was already there rather than stood in front of it. 0.09 wide
+# on a 0.18 (0.4 M) pitch, the slot 0.045 deep into a member that projects 0.09, so every dentil
+# keeps 0.045 of continuous core and the course cannot come apart however the grid falls. It is a
+# subtraction: no volume added, no component added, and the one dead band in the profile becomes
+# the enrichment an order of this date always has.
+let salon_cor_s_bed = ovolo 6.39 4.635 -6.51   14.76 4.68 -6.42 run=x
+let salon_cor_n_bed = ovolo 6.39 4.635 -3.36   14.76 4.68 -3.45 run=x
+let salon_cor_e_bed = ovolo 14.76 4.635 -6.51  14.67 4.68 -3.36 run=z
+let salon_cor_w_bed = ovolo 6.39 4.635 -6.51   6.48 4.68 -3.36  run=z
+
+let salon_dent_s = intersection {
+    translate { repeat { box -0.045 4.683 -6.465   0.045 4.767 -6.41 } x=0.18 nx=24 } 10.80 0 0
+    box 6.39 4.67 -6.47   14.76 4.78 -6.40
+}
+let salon_dent_n = intersection {
+    translate { repeat { box -0.045 4.683 -3.405   0.045 4.767 -3.46 } x=0.18 nx=24 } 10.80 0 0
+    box 6.39 4.67 -3.46   14.76 4.78 -3.40
+}
+let salon_dent_e = intersection {
+    translate { repeat { box 14.715 4.683 -0.045   14.66 4.767 0.045 } z=0.18 nz=10 } 0 0 -4.95
+    box 14.66 4.67 -6.51   14.72 4.78 -3.36
+}
+let salon_dent_w = intersection {
+    translate { repeat { box 6.435 4.683 -0.045   6.49 4.767 0.045 } z=0.18 nz=10 } 0 0 -4.95
+    box 6.43 4.67 -6.51   6.49 4.78 -3.36
+}
+let salon_dentils = union { salon_dent_s salon_dent_n salon_dent_e salon_dent_w }
+
+let salon_cornice = difference {
+    union {
+        salon_cor_gilt
+        salon_cor_s_fil salon_cor_s_core  salon_cor_n_fil salon_cor_n_core
+        salon_cor_e_fil salon_cor_e_core  salon_cor_w_fil salon_cor_w_core
+        salon_cor_s_bed salon_cor_n_bed   salon_cor_e_bed salon_cor_w_bed
+    }
+    salon_dentils
 }
 
 # ================================================================================================
@@ -318,7 +433,18 @@ let salon_pgl_bead = round {
     }
 } by=0.015
 
-let salon_pgl = union { salon_pgl_frame salon_pgl_bead }
+# THE RAISED OUTER MOULDING, and it is what turns a frame into a frame. What was here was a flat
+# ring 0.09 wide standing 0.09 proud, with a bead on the inner arris: two surfaces, both parallel to
+# the wall, and in a raking light nothing between them. The outer half of that ring now stands 0.05
+# further out again with a 0.020 arris on it, so the section is wall, fillet, raised moulding, sunk
+# ground, bead, glass — five steps in 0.09 — and every one of the nine glasses in this room casts a
+# line down its own outside as well as round its plate. It is written as the difference of two boxes
+# for the same reason the frame is: a ring's four mitres come free.
+let salon_pgl_out = difference {
+    box -0.54  -0.09  -0.09   0.54  1.665 0.14  round=0.020
+    box -0.495 -0.045  0.0    0.495 1.62  0.30
+}
+let salon_pgl = union { salon_pgl_frame salon_pgl_out salon_pgl_bead }
 
 # ================================================================================================
 # THE ROCAILLE — one asymmetric cartouche, drawn once, over every glass
@@ -524,7 +650,8 @@ let salon_scn_flames = union {
 #
 # Built about the origin because `around` turns about the y axis through it, and translated to
 # (10.80, -4.95) — the middle window's axis and the room's own centre line to within 0.015 — with
-# no dy, because every height in it is absolute. The whole thing is caught in a box before the
+# no dy, because every height in it is absolute. Every one of those heights went up 0.45 when the
+# cove was deepened; see the section note at the top of this file for why. The whole thing is caught in a box before the
 # translate: `around` is a rotation and a rotation reports infinite bounds, and windows.clip
 # measured what that costs when it is left bare (705 million field evaluations for one part).
 #
@@ -540,87 +667,113 @@ let salon_scn_flames = union {
 # Sizes: beads 0.045 circumradius (0.083 across the flats, 2.7 voxels), pendeloques 0.030 (0.052
 # across, 1.7 voxels) and 0.10 long. Both inside the brief's 0.05 .. 0.09.
 
-let salon_ch_canopy = cylinder 0 5.31 0  r=0.135 h=0.18 axis=y
-let salon_ch_stem   = cylinder 0 4.71 0  r=0.12  h=1.14 axis=y
-let salon_ch_knop   = sphere   0 4.95 0  r=0.12
-let salon_ch_ball   = sphere   0 4.14 0  r=0.15
-let salon_ch_fin_a  = sphere   0 4.02 0  r=0.09
-let salon_ch_fin_b  = sphere   0 3.96 0  r=0.045
+# EVERY HEIGHT IN IT WENT UP 0.45 WITH THE CEILING. See the section note at the top: the clear air
+# under the lowest crystal measured 2.125 m and now measures 2.562 m.
+#
+# AND THE STEM IS A TURNED BALUSTER RATHER THAN A PIPE WITH A BALL ON IT. It was one cylinder and
+# one sphere: a shape with two radii in it and no profile at all, on the axis of a room with nine
+# mirrors in it, so it is reflected eight times over and every one of those is the same pipe. It is
+# a `revolve` of a seven-member section now — a vase, two knops and a shaft — which is exact, and
+# the section never goes under 0.12 of radius, so nothing about how it survives a coarse grid has
+# changed. THE `union { }` INSIDE THE BRACES IS NOT OPTIONAL: `revolve` is a one-child operation
+# and takes only the first shape in the block, silently. The ballroom's stove urn had been a plain
+# disc for exactly that reason and nobody could see it.
+let salon_ch_canopy = cylinder 0 5.76 0  r=0.135 h=0.18 axis=y
+let salon_ch_stem   = revolve 0 4.59 0 { union {
+    box 0 0.00 -1   0.200 0.10 1
+    box 0 0.10 -1   0.150 0.22 1
+    box 0 0.22 -1   0.120 0.42 1
+    box 0 0.42 -1   0.185 0.52 1
+    box 0 0.52 -1   0.120 0.78 1
+    box 0 0.78 -1   0.165 0.87 1
+    box 0 0.87 -1   0.120 1.14 1
+} } axis=y
+let salon_ch_ball   = sphere   0 4.59 0  r=0.15
+let salon_ch_fin_a  = sphere   0 4.47 0  r=0.09
+let salon_ch_fin_b  = sphere   0 4.41 0  r=0.045
 
-let salon_ch_ring_a = torus 0 4.86 0  ring=0.45  tube=0.048 axis=y
-let salon_ch_ring_b = torus 0 4.59 0  ring=0.36  tube=0.042 axis=y
-let salon_ch_ring_c = torus 0 4.32 0  ring=0.225 tube=0.042 axis=y
+let salon_ch_ring_a = torus 0 5.31 0  ring=0.45  tube=0.048 axis=y
+let salon_ch_ring_b = torus 0 5.04 0  ring=0.36  tube=0.042 axis=y
+let salon_ch_ring_c = torus 0 4.77 0  ring=0.225 tube=0.042 axis=y
 
-let salon_ch_spoke_a = around { capsule 0 4.86 0   0.46 4.86 0  r=0.048 } count=6 axis=y
-let salon_ch_spoke_b = around { capsule 0 4.59 0   0.37 4.59 0  r=0.045 } count=4 axis=y
-let salon_ch_spoke_c = around { capsule 0 4.32 0   0.235 4.32 0 r=0.045 } count=4 axis=y
+let salon_ch_spoke_a = around { capsule 0 5.31 0   0.46 5.31 0  r=0.048 } count=6 axis=y
+let salon_ch_spoke_b = around { capsule 0 5.04 0   0.37 5.04 0  r=0.045 } count=4 axis=y
+let salon_ch_spoke_c = around { capsule 0 4.77 0   0.235 4.77 0 r=0.045 } count=4 axis=y
 
 # The eight candles, on the corona itself. They are INSIDE the ring the drops hang from, so every
 # tier below is lit from above and behind — which is where the caustic on the parquet comes from.
-let salon_ch_noz   = cylinder 0.45 4.905 0  r=0.05 h=0.09  axis=y
-let salon_ch_bob   = cylinder 0.45 4.965 0  r=0.09 h=0.03  axis=y
-let salon_ch_wax   = cylinder 0.45 5.07 0   r=0.045 h=0.18 axis=y
-let salon_ch_fire  = ellipsoid 0.45 5.190 0 rx=0.048 ry=0.09 rz=0.048
-let salon_ch_cands = around { union { salon_ch_noz salon_ch_bob } } count=8 axis=y
+# THE BOBECHE IS TURNED. A socket, a swell and a flared lip, revolved about its own axis at radius
+# 0.45 — where two stacked cylinders were a nozzle with a coin on top of it. Every member of the
+# section is 0.040 tall, which is 1.28 voxels at metre 32: written 0.020 and 0.022 tall, the same
+# three members in the ballroom shed their outer rim and came back as SEVENTY-TWO floating
+# fragments of two and three voxels, one ring per candle.
+let salon_ch_pan   = revolve 0.45 5.31 0 { union {
+    box 0 0.000 -1   0.052 0.040 1
+    box 0 0.040 -1   0.082 0.080 1
+    box 0 0.080 -1   0.102 0.120 1
+} } axis=y
+let salon_ch_wax   = cylinder 0.45 5.495 0  r=0.045 h=0.23 axis=y
+let salon_ch_fire  = ellipsoid 0.45 5.640 0 rx=0.048 ry=0.09 rz=0.048
+let salon_ch_cands = around { salon_ch_pan } count=8 axis=y
 let salon_ch_waxes = around { salon_ch_wax }  count=8 axis=y
 let salon_ch_fires = around { salon_ch_fire } count=8 axis=y
 
 # ONE STRING: four octagon beads and a pendeloque, drawn at a radius and a height. Written out four
 # times rather than made a function because the language has none, and the four differ anyway.
 
-# tier one — 32 strings of 5 off the corona at 4.86, radius 0.45.  160 solids
+# tier one — 32 strings of 5 off the corona at 5.31, radius 0.45.  160 solids
 let salon_ch_t1 = around {
     union {
-        prism 0.45 4.860 0 r=0.045 h=0.06 sides=8 axis=y turn=0
-        prism 0.45 4.810 0 r=0.045 h=0.06 sides=8 axis=y turn=0.0625
-        prism 0.45 4.760 0 r=0.042 h=0.06 sides=8 axis=y turn=0
-        prism 0.45 4.710 0 r=0.036 h=0.06 sides=8 axis=y turn=0.0625
-        prism 0.45 4.635 0 r=0.030 h=0.10 sides=6 axis=y turn=0
+        prism 0.45 5.310 0 r=0.045 h=0.06 sides=8 axis=y turn=0
+        prism 0.45 5.260 0 r=0.045 h=0.06 sides=8 axis=y turn=0.0625
+        prism 0.45 5.210 0 r=0.042 h=0.06 sides=8 axis=y turn=0
+        prism 0.45 5.160 0 r=0.036 h=0.06 sides=8 axis=y turn=0.0625
+        prism 0.45 5.085 0 r=0.030 h=0.10 sides=6 axis=y turn=0
     }
 } count=32 axis=y
 
-# tier two — 24 strings of 4 off ring B at 4.59, radius 0.36.  96 solids
+# tier two — 24 strings of 4 off ring B at 5.04, radius 0.36.  96 solids
 let salon_ch_t2 = around {
     union {
-        prism 0.36 4.590 0 r=0.045 h=0.06 sides=8 axis=y turn=0
-        prism 0.36 4.540 0 r=0.042 h=0.06 sides=8 axis=y turn=0.0625
-        prism 0.36 4.490 0 r=0.036 h=0.06 sides=8 axis=y turn=0
-        prism 0.36 4.415 0 r=0.030 h=0.10 sides=6 axis=y turn=0
+        prism 0.36 5.040 0 r=0.045 h=0.06 sides=8 axis=y turn=0
+        prism 0.36 4.990 0 r=0.042 h=0.06 sides=8 axis=y turn=0.0625
+        prism 0.36 4.940 0 r=0.036 h=0.06 sides=8 axis=y turn=0
+        prism 0.36 4.865 0 r=0.030 h=0.10 sides=6 axis=y turn=0
     }
 } count=24 axis=y
 
-# tier three — 20 strings of 4 off ring C at 4.32, radius 0.225.  80 solids
+# tier three — 20 strings of 4 off ring C at 4.77, radius 0.225.  80 solids
 let salon_ch_t3 = around {
     union {
-        prism 0.225 4.320 0 r=0.045 h=0.06 sides=8 axis=y turn=0
-        prism 0.225 4.270 0 r=0.042 h=0.06 sides=8 axis=y turn=0.0625
-        prism 0.225 4.220 0 r=0.036 h=0.06 sides=8 axis=y turn=0
-        prism 0.225 4.145 0 r=0.030 h=0.10 sides=6 axis=y turn=0
+        prism 0.225 4.770 0 r=0.045 h=0.06 sides=8 axis=y turn=0
+        prism 0.225 4.720 0 r=0.042 h=0.06 sides=8 axis=y turn=0.0625
+        prism 0.225 4.670 0 r=0.036 h=0.06 sides=8 axis=y turn=0
+        prism 0.225 4.595 0 r=0.030 h=0.10 sides=6 axis=y turn=0
     }
 } count=20 axis=y
 
-# tier four — 12 strings of 4 off the bottom ball at 4.14.  48 solids
+# tier four — 12 strings of 4 off the bottom ball at 4.59.  48 solids
 let salon_ch_t4 = around {
     union {
-        prism 0.12 4.140 0 r=0.045 h=0.06 sides=8 axis=y turn=0
-        prism 0.12 4.090 0 r=0.042 h=0.06 sides=8 axis=y turn=0.0625
-        prism 0.12 4.040 0 r=0.036 h=0.06 sides=8 axis=y turn=0
-        prism 0.12 3.965 0 r=0.030 h=0.10 sides=6 axis=y turn=0
+        prism 0.12 4.590 0 r=0.045 h=0.06 sides=8 axis=y turn=0
+        prism 0.12 4.540 0 r=0.042 h=0.06 sides=8 axis=y turn=0.0625
+        prism 0.12 4.490 0 r=0.036 h=0.06 sides=8 axis=y turn=0
+        prism 0.12 4.415 0 r=0.030 h=0.10 sides=6 axis=y turn=0
     }
 } count=12 axis=y
 
 # and 16 spires standing UP off ring C, which is the other half of what a cut-glass chandelier does
 # with light: 384 + 16 = 400.
 let salon_ch_t5 = around {
-    prism 0.225 4.395 0 r=0.036 h=0.18 sides=6 axis=y turn=0
+    prism 0.225 4.845 0 r=0.036 h=0.18 sides=6 axis=y turn=0
 } count=16 axis=y
 
-let salon_ch_box   = box -0.62 3.88 -0.62   0.62 5.42 0.62
+let salon_ch_box   = box -0.62 4.33 -0.62   0.62 5.87 0.62
 let salon_ch_glass = translate { intersection {
         union { salon_ch_t1 salon_ch_t2 salon_ch_t3 salon_ch_t4 salon_ch_t5 }
         salon_ch_box } } 10.80 0 -4.95
 let salon_ch_gilt  = translate { intersection {
-        union { salon_ch_canopy salon_ch_stem salon_ch_knop salon_ch_ball
+        union { salon_ch_canopy salon_ch_stem salon_ch_ball
                 salon_ch_fin_a salon_ch_fin_b
                 salon_ch_ring_a salon_ch_ring_b salon_ch_ring_c
                 salon_ch_spoke_a salon_ch_spoke_b salon_ch_spoke_c salon_ch_cands }
@@ -657,6 +810,55 @@ let salon_con_tops = union {
 }
 
 # ================================================================================================
+# THE WINDOW SEAT — under the middle south window, and the only soft thing in the room
+# ================================================================================================
+#
+# Everything else in here is marble, glass, gilt wood and lacquered floor, and a room that answers
+# a light with nothing but hard specular lobes is only half a test. `damask` is rough=246 with
+# sheen=10 and `silk` is 200 with 15; both are on the wall already as sunk panels 0.03 deep, which
+# is a colour on a plane. This is the same two materials wrapped round a solid, three metres from
+# nine mirrors and directly under the one window whose sun crosses the floor.
+#
+# AND IT IS NOT A ROUNDED BOX, WHICH IS THE WHOLE OF WHAT MAKES UPHOLSTERY READ AS UPHOLSTERY: the
+# squab is BUTTONED — three spheres subtracted on a 0.35 pitch, each pulling a dimple 0.18 across
+# and 0.045 deep, which is 1.4 voxels of relief at metre 32 — its seam is PIPED with a bead 0.044
+# across drawn as a zero-thickness ring and rounded, and it stands on TURNED legs, each a `revolve`
+# of a five-member section rather than a stick.
+#
+# It sits under windows.clip's opening and not in it: the sill is 2.70 and the cushion tops out at
+# 2.385. Its back rail is buried 0.04 into the south lining, so the whole thing is knitted to the
+# wall along 1.26 m whatever the legs do at a coarse metre, and the legs go down to 1.72 — under the
+# floor and under the 1.74 the board joints are cut to.
+let salon_ws_back  = box 10.17 1.80 -6.55   11.43 2.34 -6.44  round=0.010
+let salon_ws_rail  = box 10.17 2.16 -6.51   11.43 2.25 -6.06  round=0.012
+let salon_ws_apron = box 10.21 2.01 -6.51   11.39 2.16 -6.10  round=0.010
+let salon_ws_leg = revolve 0 1.72 0 { union {
+    box 0 0.00 -1   0.055 0.05 1
+    box 0 0.05 -1   0.034 0.11 1
+    box 0 0.11 -1   0.052 0.18 1
+    box 0 0.18 -1   0.030 0.26 1
+    box 0 0.26 -1   0.046 0.32 1
+} } axis=y
+let salon_ws_frame = union {
+    salon_ws_back salon_ws_rail salon_ws_apron
+    translate { salon_ws_leg } 10.30 0 -6.15
+    translate { salon_ws_leg } 11.30 0 -6.15
+}
+let salon_ws_cush = box 10.19 2.22 -6.49   11.41 2.385 -6.08 round=0.045
+let salon_ws_pipe = round {
+    difference {
+        box 10.19 2.34 -6.49   11.41 2.34 -6.08
+        box 10.22 2.34 -6.46   11.38 2.34 -6.11
+    }
+} by=0.022
+let salon_ws_buttons = intersection {
+    translate { repeat { sphere 0 2.455 0 r=0.115 } x=0.35 nx=1 } 10.80 0 -6.285
+    box 10.30 2.36 -6.44   11.30 2.60 -6.13
+}
+let salon_ws_cushion = difference { union { salon_ws_cush salon_ws_pipe } salon_ws_buttons }
+let salon_window_seat = union { salon_ws_frame salon_ws_cushion }
+
+# ================================================================================================
 # THE PART
 # ================================================================================================
 
@@ -670,6 +872,7 @@ let salon_built = union {
     salon_sconces
     salon_chandelier
     salon_furniture
+    salon_window_seat
 }
 
 # AND THE OPENINGS TAKEN OUT OF THE WHOLE OF IT AGAIN, AFTER THE TRIM IS ON.
@@ -723,12 +926,12 @@ paint boiserie where=salon_dado    below=0.02
 let salon_cove_face = round { salon_cove_air } by=0.05
 paint gesso where=salon_cove_face below=0.02
 
-let salon_ceil_field = box 7.11 5.30 -5.79   14.04 5.48 -4.08
+let salon_ceil_field = box 7.56 5.75 -5.34   13.59 5.93 -4.53
 paint silk where=salon_ceil_field below=0.02
 
 let salon_ceil_ring = difference {
-    box 7.065 5.30 -5.835   14.085 5.48 -4.035
-    box 7.095 5.30 -5.805   14.055 5.48 -4.065
+    box 7.515 5.75 -5.385   13.635 5.93 -4.485
+    box 7.545 5.75 -5.355   13.605 5.93 -4.515
 }
 paint gold_leaf where=salon_ceil_ring below=0.02
 
@@ -745,6 +948,28 @@ paint gold_leaf where=salon_ceil_ring below=0.02
 # same sun, so the two can be compared rather than argued about.
 let salon_fl_zone = box 6.39 1.70 -6.51   14.76 1.86 -3.36
 paint parquet where=salon_fl_zone below=0.02
+
+# AND THE PATH THAT HAS BEEN WALKED IN IT, which is the one thing on this floor that is honestly
+# PAINT. A worn track is not a shape: it is the lacquer gone and the wood under it left bare, paler
+# and rougher, in the places feet go, and it has no arris anywhere. `parquet` carries lacquer=10 and
+# `oak` carries none and is rougher, so the two beside each other under the same low sun are a
+# clearcoat lobe and a diffuse one at the same incidence in the same frame — which is load note 4's
+# whole question, asked twice on one floor instead of once.
+#
+# It runs from the door in the south-west corner down the length of the room, and it is painted HERE
+# — after the field and BEFORE the marquetry — because that is the truth about a worn floor: the
+# ebony and the walnut are harder than the ground they are set into and they still read after the
+# polish has gone off around them.
+let salon_wear = intersection {
+    union {
+        ellipsoid  7.30 1.80 -5.90 rx=1.10 ry=0.30 rz=0.55
+        ellipsoid  9.40 1.80 -5.20 rx=1.30 ry=0.30 rz=0.50
+        ellipsoid 11.60 1.80 -4.95 rx=1.30 ry=0.30 rz=0.48
+        ellipsoid 13.60 1.80 -5.05 rx=1.10 ry=0.30 rz=0.52
+    }
+    salon_fl_zone
+}
+paint oak where=salon_wear below=0.02
 
 let salon_fl_field  = box 6.615 1.60 -6.285   14.535 1.96 -3.585
 let salon_fl_border = difference { salon_fl_zone salon_fl_field }
@@ -811,8 +1036,30 @@ paint marble where=salon_chim_cyma   below=0.02
 let salon_fire_face = round { salon_fire_air } by=0.05
 paint iron where=salon_fire_face below=0.02
 
+# AND WHAT THE FIRE HAS DONE TO THE MARBLE ROUND IT, and it is paint because soot is. A stain has no
+# arris, no thickness and nothing for a sampler to find, which is the whole case for painting it and
+# the whole case against cutting it. `tuff` is 150,142,124 at rough=250 against `marble` at
+# 228,225,217 with translucency — a dead grey over a stone you can see into, which is exactly what
+# fifty winters of smoke leave on a chimneypiece. It is kept under 2.86 so it stays on the surround
+# and the shelf and never reaches the overmantel glass.
+let salon_soot = intersection {
+    union {
+        ellipsoid 10.80 2.52 -3.55 rx=0.40 ry=0.34 rz=0.26
+        ellipsoid 10.80 2.66 -3.62 rx=0.30 ry=0.20 rz=0.20
+    }
+    union { salon_chim_sur salon_chim_shelf salon_chim_cyma salon_chim_breast }
+}
+paint tuff where=salon_soot below=0.02
+
 # --- the fittings ------------------------------------------------------------------------------
 paint ormolu  where=salon_sconces      below=0.02
+# THE TARNISH, which is the other thing paint is for. Fire-gilt bronze goes dark where a flame has
+# stood on it every night for fifty years: a nozzle and a drip pan are not `ormolu` at rough=48 any
+# more, they are `bronze` at 110 with the gold burnt off. The band catches the nozzles and the bobs
+# and nothing else — the tapers and the flames are repainted below, which is why this can be a plain
+# box round the top of the fitting rather than a shape cut to it.
+let salon_scn_burn = intersection { salon_sconces box 6.39 3.15 -6.60   14.76 3.28 -3.20 }
+paint bronze where=salon_scn_burn below=0.02
 paint gilt    where=salon_ch_gilt      below=0.02
 paint crystal where=salon_ch_glass     below=0.02
 paint wax     where=salon_ch_wicks     below=0.02
@@ -823,3 +1070,10 @@ paint taper   where=salon_scn_flames   below=0.02
 # --- the furniture -----------------------------------------------------------------------------
 paint ormolu where=salon_furniture below=0.02
 paint marble where=salon_con_tops  below=0.02
+
+# The window seat: a gilt frame, a damask squab, and the piping in the silk that is on the walls.
+# The piping goes on after the damask because a later coat covers an earlier one and the bead
+# straddles the cushion's own surface.
+paint gilt   where=salon_ws_frame below=0.035
+paint damask where=salon_ws_cush  below=0.02
+paint silk   where=salon_ws_pipe  below=0.02

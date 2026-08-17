@@ -72,10 +72,22 @@
 #    struts and reported THREE HUNDRED AND TWENTY COMPONENTS.
 #
 # 5. AND THE MATERIALS NOTHING ELSE IN THE BUILDING USES. mirror, crystal, ormolu, gold_leaf,
-#    silver, boiserie, gesso, parquet, ebony, faience, silk, damask, wax, taper, giallo, rosso.
-#    Three golds a stop apart (ormolu 48, gilt 64, gold_leaf 40) are on the same pier as `silver`
-#    at 36 and `mirror` at 6, so "is the metal right" becomes a comparison the eye can make inside
-#    one frame instead of a yes/no about one sample.
+#    silver, boiserie, gesso, parquet, ebony, faience, silk, damask, velvet, wax, taper, giallo,
+#    rosso. Three golds a stop apart (ormolu 48, gilt 64, gold_leaf 40) are on the same pier as
+#    `silver` at 36 and `mirror` at 6, so "is the metal right" becomes a comparison the eye can make
+#    inside one frame instead of a yes/no about one sample. `velvet` — rough=252 with sheen, the
+#    RETRO-REFLECTIVE end of the whole range and the exact opposite failure mode from the mirror
+#    four metres away — had been in the contract since the state rooms were written and was used by
+#    NOTHING until the banquette was put against the west wall.
+#
+# 6. AND WHAT WEAR LOOKS LIKE, WHICH IS THE ONE THING IN HERE THAT IS HONESTLY PAINT.
+#
+#    The rule for this room is: a feature 3 cm across is MATTER. Every joint in the floor is cut,
+#    every dentil is cut, the frames have a real section and the bobeches are turned. What is
+#    painted is what has no shape at all — the track worn through the lacquer down the middle of the
+#    floor in `oak` against `parquet`'s clearcoat, the soot bloom on the ceiling over each
+#    chandelier and up the corner over the stove in `tuff`, and the ormolu burnt back to `bronze` on
+#    every girandole pan a flame has stood in. None of those is a solid and none of them should be.
 # ================================================================================================
 #
 # THE MODULE, AND WHERE EVERY NUMBER CAME FROM. M = 0.45, D = 0.90.
@@ -103,7 +115,14 @@
 #                         in it is on one of them or on the 1.35 (3 M) half-bay between two.
 #    9.45  12.15          the south mirror piers — the half-bays between the windows
 #    8.10  9.45  10.80  12.15   the north mirror piers
-#   14.40 = 32 M          the door out to the stair, 0.90 (2 M) wide
+#   13.725 .. 14.85       the door out to the stair. BOTH JAMBS ARE ON THE MODULE — 30.5 M and
+#   = 30.5 M .. 33 M      33 M — and the opening between them is 1.125 (2.5 M) wide. It was 0.90
+#                         (2 M) on the axis x = 14.40, and 0.90 MEASURES 0.906 m in the assembled
+#                         building, which is under the metre a person needs to walk through
+#                         without scraping both jambs. It could not be widened east: the doorcase
+#                         reaches 0.1125 past each jamb and its east edge was already at 14.9625,
+#                         with only 0.1875 of wall left to the room's east face. So the west jamb
+#                         moved 0.225 (M/2) west and the axis with it, to 14.2875.
 #
 #   SECTION
 #    6.00   underside of my floor slab = ceiling of the mirror salon below
@@ -136,11 +155,15 @@
 #          whole footprint, lapping 0.05 into the south and east walls.
 #   SOUTH  and EAST, walls.clip's outer walls, 0.90 thick. windows.clip has already cut three
 #          piano nobile aedicules through the south one at x = 8.10, 10.80 and 13.50.
-#          ITS `windows_pn_cut` IS 1.35 x 2.25 AND RUNS BACK TO z = -5.70 — 0.90 m PAST THE INNER
-#          FACE OF THE WALL AND INTO THIS ROOM. Everything in this file stands clear of those three
-#          boxes; the base course, the boiserie and the architraves are all cut back to the jambs,
-#          and there is no console, no hanging and no chandelier inside one. Anything put in one is
-#          deleted by the manifest, silently.
+#          ITS `windows_pn_cut` NOW RUNS BACK TO z = -6.50 AND NOT TO -5.70, AND THIS NOTE USED TO
+#          SAY THE OPPOSITE IN CAPITALS. The cutter was 1.80 deep through a wall 0.90 thick, so it
+#          came 0.90 m past the inner face and a metre of this room's south side was a keep-out
+#          strip nobody had written down. windows.clip fixed it on 2026-08-17: `wall_cut` is 1.00 —
+#          the wall's 0.90 and 0.10 of slack — so the hole now stops 0.10 past the inner face at
+#          -6.50, which is 0.01 SHORT of this room's finished face at -6.51. Nothing of mine is in
+#          it and nothing of mine ever was; the strip it used to forbid is now ordinary room, and
+#          the base course, the boiserie and the architraves stop on the jambs because that is where
+#          an architrave stops and not because a cutter made them.
 #   NORTH  the east hall's groin vaults, whose crowns are at 6.525 and whose block runs to 6.975 in
 #          z +-2.925. This room stops at z = -3.00 for that reason and nothing here goes north of
 #          it. The doorway at x = 14.40 opens onto the strip east of that block.
@@ -162,16 +185,96 @@ include "_contract.clip"
 # The floor slab. Its top is the piano nobile at 6.30 and its underside is the mirror salon's
 # ceiling at 6.00. It laps 0.05 into the south and east walls, which are solid stone and nobody's
 # room, and it stops dead on the zone limits at x 6.00 and z -3.00.
-let ball_floor = box 6.00 6.00 -6.65   15.15 6.30 -3.00 round=0.012
+#
+# AND IT IS A LAID FLOOR NOW AND NOT A SLAB WITH A PICTURE ON IT.
+#
+# What was here was one flat box with a marquetry PAINTED on its top: every line in the pattern a
+# colour change and not one arris in eighty square metres. That is exactly half of what a parquet
+# floor is, and the missing half is the half a photograph of a real room is made of — the joints
+# between the blocks, and the fact that no two blocks are quite level.
+#
+# So: the JOINTS ARE CUT, 0.030 wide — one voxel at metre 32 — on a 0.45 (M) grid struck at 45
+# degrees to the room, so no joint ever lies along a row of voxels; plus a joint round the border
+# where the ebony banding starts. They are cut from 6.24 upward, 0.06 into a slab 0.30 thick, so
+# 0.24 m of it is continuous under every joint and the floor cannot be cut into blocks.
+#
+# And the UNEVENNESS IS BLOCKS THAT HAVE LIFTED, drawn as matter: a scatter of parquet squares
+# standing 0.0375 and 0.030 proud of their neighbours — 1.2 and 0.96 of a voxel — on two grids of
+# 1.35 and 1.80 that do not share a period, so about one block in seven is high and no two high
+# ones are the same distance apart. Each one is bedded 0.04 INTO the slab and sits inside its own
+# diamond with 0.03 to spare either side of the joints, so it is a bump on a solid and can no more
+# come loose than the cornice can.
+#
+# IT IS NOT `displace`, AND THAT WAS TRIED FIRST AND MEASURED. The obvious way to make a floor
+# uneven is to displace the slab by the contract's `grain_stone` at 0.030, and it works: a floor
+# plane wandering between 6.27 and 6.33 over a 0.35 m period, one loose voxel at metre 32, and a
+# grazing sun that breaks across it instead of sliding over it. It does NOT survive having joints
+# cut in it. Displacement pushes a field, and a difference of a box and forty slots is a bound
+# rather than a distance, so the slot walls move by the wrong amount and shed:
+#
+#   flat slab, joints cut                      1 component, 0 floating
+#   displaced slab, no joints                  2 components, 1 floating
+#   displaced slab, joints 0.030 cut after     6 components, 5 floating
+#   displaced slab, joints 0.045 cut after    11 components, 10 floating
+#   joints cut first, then displaced          11 components, 10 floating
+#
+# all at metre 32, one edit apart, on this room alone. Blocks that have lifted are the same
+# observation about a real floor made out of matter that cannot come apart, and they cost nothing.
+#
+# AND THE PAINTED MARQUETRY STAYS PAINTED. That was never the thing to fix: this room's whole
+# argument is that it has 0.070 m lines with no geometry under them and 0.030 m lines that are cut,
+# in the same frame — see the note over the paint section. The cut joints are a SECOND system on a
+# different pitch and a different angle from the painted rays and ribbons, so the two never lie on
+# top of each other and both can still be seen for what they are.
+let ball_floor_flat = box 6.00 6.00 -6.65   15.15 6.30 -3.00 round=0.012
+
+# The joints. `ball_pq_zone` is where a joint is allowed to be, and the stove's footprint is taken
+# out of it: the stove's base stands on the floor and a groove under it would saw at its foot for no
+# gain, since nothing can see the floor there anyway.
+let ball_pq_zone = difference {
+    box 7.08 6.24 -6.06   14.47 6.42 -3.99
+    box 6.40 6.20 -4.40    7.40 6.50 -3.40
+}
+let ball_pq_rib  = box -0.015 6.24 -6.00   0.015 6.42 6.00
+let ball_pq_set  = repeat { ball_pq_rib } x=0.45 nx=10
+let ball_pq_edge = difference {
+    box 7.14 6.24 -6.00   14.41 6.42 -4.05
+    box 7.17 6.24 -5.97   14.38 6.42 -4.08
+}
+let ball_pq_joints = intersection {
+    union {
+        translate { rotate { ball_pq_set } y=0.125 }  10.775 0 -5.025
+        translate { rotate { ball_pq_set } y=-0.125 } 10.775 0 -5.025
+        ball_pq_edge
+    }
+    ball_pq_zone
+}
+
+# The blocks that have lifted. Built in the joints' own turned frame so every one of them lands on
+# a diamond centre — 0.225 and 0.675 are 0.5 and 1.5 of the 0.45 grid — and clipped to the field.
+let ball_pq_pad_a  = box -0.17 6.26 -0.17   0.17 6.3375 0.17 round=0.010
+let ball_pq_pad_b  = box -0.17 6.26 -0.17   0.17 6.33   0.17 round=0.010
+let ball_pq_pads_a = translate { repeat { repeat { ball_pq_pad_a } x=1.35 nx=4 } z=1.35 nz=4 }  0.225 0  0.225
+let ball_pq_pads_b = translate { repeat { repeat { ball_pq_pad_b } x=1.80 nx=3 } z=1.80 nz=3 } -0.675 0  0.675
+# THE CLIPPING BOX STOPS INSIDE THE BORDER JOINT AND NOT ON IT. Cut flush with the ring's outer
+# line, three pads were sliced into a sliver 0.01 wide standing between the ring and the clip, and
+# all three came back as single floating voxels at metre 32. It stops 0.03 inside the ring's inner
+# line instead, so no lifted block can ever straddle the border joint.
+let ball_pq_proud = intersection {
+    translate { rotate { union { ball_pq_pads_a ball_pq_pads_b } } y=0.125 } 10.775 0 -5.025
+    box 7.20 6.20 -5.94   14.35 6.40 -4.11
+}
+
+let ball_floor = difference { union { ball_floor_flat ball_pq_proud } ball_pq_joints }
 
 # The two walls this room builds for itself, 1 M thick, up to the top of the ceiling slab. Both
 # start at 6.25 so they are certainly bedded in the floor.
 let ball_wall_w = box 6.00 6.25 -6.65   6.50 11.25 -3.00 round=0.012
 
-# THE DOORWAY, 0.90 (2 M) wide on x = 14.40 (32 M) and 2.40 m high, which is the brief's door
-# height. It is cut from z = -3.68 so it takes the boiserie lining with it and leaves a clean
-# reveal; its foot is at 6.30 so it cannot bite into the floor slab and leave a step.
-let ball_door_void = box 13.95 6.30 -3.68   14.85 8.70 -2.95
+# THE DOORWAY, 1.125 (2.5 M) wide between jambs on 30.5 M and 33 M, and 2.40 m high, which is the
+# brief's door height. It is cut from z = -3.68 so it takes the boiserie lining with it and leaves
+# a clean reveal; its foot is at 6.30 so it cannot bite into the floor slab and leave a step.
+let ball_door_void = box 13.725 6.30 -3.68   14.85 8.70 -2.95
 let ball_wall_n_mass = box 6.00 6.25 -3.50   15.15 11.25 -3.00 round=0.012
 
 # The boiserie ground: 0.09 (M/5) of panelling on all four walls, which is what makes the four
@@ -240,11 +343,55 @@ let ball_corn_w_cor  = box 6.54 9.765 -6.51   6.675 9.90 -3.54  round=0.008
 let ball_corn_e_bed  = cyma_reversa 15.01 9.585 -6.51  14.92 9.675 -3.54  run=z
 let ball_corn_e_bnd  = box 14.92 9.675 -6.51  15.01 9.765 -3.54  round=0.008
 let ball_corn_e_cor  = box 14.875 9.765 -6.51 15.01 9.90 -3.54  round=0.008
-let ball_cornice = union {
-    ball_corn_s_bed ball_corn_s_bnd ball_corn_s_cor
-    ball_corn_n_bed ball_corn_n_bnd ball_corn_n_cor
-    ball_corn_w_bed ball_corn_w_bnd ball_corn_w_cor
-    ball_corn_e_bed ball_corn_e_bnd ball_corn_e_cor
+# AND THE TWO MEMBERS THAT MAKE IT A SECTION AND NOT A STAIRCASE.
+#
+# Three members of which two were plain boxes is a profile with nothing curved in it below the
+# cyma, and 8.47 m of it runs across the top of a wall that has three windows raking light along
+# it. So:
+#
+#   an ASTRAGAL under the foot of the cornice, 9.5175 .. 9.585, projecting 0.045 — a half round,
+#   drawn as a moulding section and run straight, one per wall, mitred by the union at the corners
+#   like everything else in here. Where a rocaille cresting stands in front of it (the backplate
+#   reaches 0.07 proud and the astragal only 0.045) it is simply buried, which is what a cartouche
+#   applied over a cornice does.
+#
+#   DENTILS, cut out of the plain band that was already there rather than added in front of it.
+#   0.09 wide on a 0.18 (0.4 M) pitch, the slot 0.045 deep into a band 0.09 deep, so every dentil
+#   keeps 0.045 of continuous core behind it and the course CANNOT come apart however the grid
+#   falls — which a row of forty-nine free-standing blocks 2.9 voxels across certainly could. It is
+#   a subtraction and not an addition, so it adds no volume, no component and no risk, and it turns
+#   the one dead band in the profile into the enrichment an Ionic cornice is supposed to have.
+let ball_corn_s_ast = bead 6.54 9.5175 -6.51   15.01 9.585 -6.465 run=x
+let ball_corn_n_ast = bead 6.54 9.5175 -3.54   15.01 9.585 -3.585 run=x
+let ball_corn_w_ast = bead 6.54 9.5175 -6.51   6.585 9.585 -3.54  run=z
+let ball_corn_e_ast = bead 15.01 9.5175 -6.51  14.965 9.585 -3.54 run=z
+
+let ball_dent_s = intersection {
+    translate { repeat { box -0.045 9.676 -6.465   0.045 9.764 -6.40 } x=0.18 nx=24 } 10.80 0 0
+    box 6.54 9.66 -6.52   15.01 9.78 -6.39
+}
+let ball_dent_n = intersection {
+    translate { repeat { box -0.045 9.676 -3.64   0.045 9.764 -3.585 } x=0.18 nx=24 } 10.80 0 0
+    box 6.54 9.66 -3.65   15.01 9.78 -3.58
+}
+let ball_dent_w = intersection {
+    translate { repeat { box 6.585 9.676 -0.045   6.64 9.764 0.045 } z=0.18 nz=10 } 0 0 -5.025
+    box 6.58 9.66 -6.51   6.65 9.78 -3.54
+}
+let ball_dent_e = intersection {
+    translate { repeat { box 14.91 9.676 -0.045   14.965 9.764 0.045 } z=0.18 nz=10 } 0 0 -5.025
+    box 14.90 9.66 -6.51   14.97 9.78 -3.54
+}
+let ball_dentils = union { ball_dent_s ball_dent_n ball_dent_w ball_dent_e }
+
+let ball_cornice = difference {
+    union {
+        ball_corn_s_bed ball_corn_s_bnd ball_corn_s_cor ball_corn_s_ast
+        ball_corn_n_bed ball_corn_n_bnd ball_corn_n_cor ball_corn_n_ast
+        ball_corn_w_bed ball_corn_w_bnd ball_corn_w_cor ball_corn_w_ast
+        ball_corn_e_bed ball_corn_e_bnd ball_corn_e_cor ball_corn_e_ast
+    }
+    ball_dentils
 }
 
 # --- THE BASE COURSE -----------------------------------------------------------------------------
@@ -252,19 +399,19 @@ let ball_cornice = union {
 # 1 M high, projecting 0.045, with a cap projecting 0.09. It breaks at every window because the
 # windows in this room stand on the floor.
 let ball_base_s = union {
-    box 6.54 6.28 -6.51   15.01 6.705 -6.465 round=0.008
+    box 6.54 6.22 -6.51   15.01 6.705 -6.465 round=0.008
     box 6.54 6.705 -6.51  15.01 6.75  -6.42  round=0.014
 }
 let ball_base_n = union {
-    box 6.54 6.28 -3.585   15.01 6.705 -3.54 round=0.008
+    box 6.54 6.22 -3.585   15.01 6.705 -3.54 round=0.008
     box 6.54 6.705 -3.63   15.01 6.75  -3.54 round=0.014
 }
 let ball_base_w = union {
-    box 6.54 6.28 -6.51   6.585 6.705 -3.54 round=0.008
+    box 6.54 6.22 -6.51   6.585 6.705 -3.54 round=0.008
     box 6.54 6.705 -6.51  6.63  6.75  -3.54 round=0.014
 }
 let ball_base_e = union {
-    box 14.965 6.28 -6.51  15.01 6.705 -3.54 round=0.008
+    box 14.965 6.22 -6.51  15.01 6.705 -3.54 round=0.008
     box 14.92  6.705 -6.51 15.01 6.75  -3.54 round=0.014
 }
 let ball_base = difference {
@@ -321,10 +468,23 @@ let ball_relief = union { ball_rz_s ball_rz_n ball_rz_cov_s ball_rz_cov_n }
 # room for, so the plate is 1.125 (2.5 M) and the four frames abut into a continuous mirrored wall
 # — 10.1 m2 of it, facing 3.0 m2 on the south and three open windows.
 
+# AND THE FRAME HAS A SECTION NOW, WHICH IS THE DIFFERENCE BETWEEN A FRAME AND A PLANK. It was one
+# flat plate 0.09 proud with a bead on its inner arris: three surfaces, all parallel, and in a
+# raking light nothing between them. It is now three members stepping in — a raised outer moulding
+# 0.135 proud with a 0.026 arris on it, the flat ground at 0.09, and the gilt astragal at 0.0895 on
+# the inner arris — so a low sun across the south wall casts a line down the outside of every frame
+# and a second one round the glass, which is what a carved and gilded frame does and a plate does
+# not. The outer moulding is written as the difference of two boxes, so it is a ring and its four
+# mitres come free.
+#
 # --- the narrow pier, for the south wall ---
 let ball_pn_frame = difference {
     box -0.4725 6.75 -0.05   0.4725 9.27 0.09  round=0.010
     box -0.3375 6.885 0.0    0.3375 9.135 0.12
+}
+let ball_pn_out = difference {
+    box -0.4725 6.75  -0.05   0.4725 9.27   0.135  round=0.026
+    box -0.405  6.8175 0.0    0.405  9.2025 0.30
 }
 let ball_pn_glass = box -0.3375 6.885 0.0   0.3375 9.135 0.045 round=0.006
 let ball_pn_bead = union {
@@ -338,6 +498,10 @@ let ball_pn_bead = union {
 let ball_pw_frame = difference {
     box -0.675 6.75 -0.05   0.675 9.27 0.09  round=0.010
     box -0.5625 6.885 0.0   0.5625 9.135 0.12
+}
+let ball_pw_out = difference {
+    box -0.675  6.75  -0.05   0.675  9.27   0.135  round=0.026
+    box -0.6075 6.8175 0.0    0.6075 9.2025 0.30
 }
 let ball_pw_glass = box -0.5625 6.885 0.0   0.5625 9.135 0.045 round=0.006
 let ball_pw_bead = union {
@@ -365,17 +529,31 @@ let ball_gir_plate = union {
 # of this room reported the four candles of the north girandoles as four separate components,
 # 18 voxels each, hanging in the air in front of a mirror. 0.052 is 1.7 voxels and it holds. The
 # same arithmetic set the chandeliers' strand rods.
+# AND THE SAME TWO THINGS THE CHANDELIER ARMS HAVE: a knop where the branch turns over, and a
+# turned bobeche instead of a washer. The pan is a `revolve` of three members about its own axis —
+# a socket, a swell and a flared lip — which is exact, where three stacked cylinders are a
+# staircase and a single cylinder is a coin.
 let ball_gir_arm_e = union {
     capsule  0.03 7.74 0.09    0.175 7.815 0.135 r=0.026
+    sphere   0.175 7.815 0.135 r=0.040
     capsule  0.175 7.815 0.135  0.20 7.92 0.15  r=0.024
-    cylinder 0.20 7.945 0.15 r=0.055 h=0.04 axis=y
+    revolve 0.20 7.925 0.15 { union {
+        box 0.0 0.000 -1   0.034 0.036 1
+        box 0.0 0.036 -1   0.052 0.072 1
+        box 0.0 0.072 -1   0.066 0.108 1
+    } } axis=y
     cylinder 0.20 8.045 0.15 r=0.024 h=0.20 axis=y
     ellipsoid 0.20 8.185 0.15 rx=0.024 ry=0.044 rz=0.024
 }
 let ball_gir_arm_w = union {
     capsule -0.03 7.74 0.09   -0.175 7.815 0.135 r=0.026
+    sphere  -0.175 7.815 0.135 r=0.040
     capsule -0.175 7.815 0.135 -0.20 7.92 0.15  r=0.024
-    cylinder -0.20 7.945 0.15 r=0.055 h=0.04 axis=y
+    revolve -0.20 7.925 0.15 { union {
+        box 0.0 0.000 -1   0.034 0.036 1
+        box 0.0 0.036 -1   0.052 0.072 1
+        box 0.0 0.072 -1   0.066 0.108 1
+    } } axis=y
     cylinder -0.20 8.045 0.15 r=0.024 h=0.20 axis=y
     ellipsoid -0.20 8.185 0.15 rx=0.024 ry=0.044 rz=0.024
 }
@@ -481,6 +659,14 @@ let ball_wa_unit = difference {
     box -0.7875 6.30 -0.05   0.7875 8.6625 0.09  round=0.010
     box -0.675  6.20 -0.10   0.675  8.55   0.20
 }
+# The same raised outer moulding the mirror frames have, 0.135 proud on a 0.0675 face, so a window
+# architrave and a mirror architrave read as one order round the whole south wall. Its inner box
+# stops at 0.72 and 8.595, both OUTSIDE windows.clip's 1.35 x 2.25 opening, so nothing of it stands
+# in the hole the manifest deletes.
+let ball_wa_out = difference {
+    box -0.7875 6.30 -0.05   0.7875 8.6625 0.135 round=0.026
+    box -0.72   6.30  0.0    0.72   8.595  0.30
+}
 let ball_wa_bead = union {
     capsule -0.6975 6.30 0.0675  -0.6975 8.5725 0.0675 r=0.022
     capsule  0.6975 6.30 0.0675   0.6975 8.5725 0.0675 r=0.022
@@ -488,11 +674,20 @@ let ball_wa_bead = union {
 }
 
 let ball_south_frames = union {
-    translate { union { ball_wa_unit ball_wa_bead } }  8.10 0 -6.51
-    translate { union { ball_wa_unit ball_wa_bead } } 10.80 0 -6.51
-    translate { union { ball_wa_unit ball_wa_bead } } 13.50 0 -6.51
-    translate { union { ball_pn_frame ball_pn_bead } }  9.45 0 -6.51
-    translate { union { ball_pn_frame ball_pn_bead } } 12.15 0 -6.51
+    translate { union { ball_wa_unit ball_wa_out ball_wa_bead } }  8.10 0 -6.51
+    translate { union { ball_wa_unit ball_wa_out ball_wa_bead } } 10.80 0 -6.51
+    translate { union { ball_wa_unit ball_wa_out ball_wa_bead } } 13.50 0 -6.51
+    translate { union { ball_pn_frame ball_pn_out ball_pn_bead } }  9.45 0 -6.51
+    translate { union { ball_pn_frame ball_pn_out ball_pn_bead } } 12.15 0 -6.51
+}
+# The gilt beads on their own, so the one line that is actually gilded can be painted gold instead
+# of taking the frames' gesso. The file has always called them gilt and always painted them white.
+let ball_south_beads = union {
+    translate { ball_wa_bead }  8.10 0 -6.51
+    translate { ball_wa_bead } 10.80 0 -6.51
+    translate { ball_wa_bead } 13.50 0 -6.51
+    translate { ball_pn_bead }  9.45 0 -6.51
+    translate { ball_pn_bead } 12.15 0 -6.51
 }
 let ball_south_glass = union {
     translate { ball_pn_glass }  9.45 0 -6.51
@@ -521,10 +716,19 @@ let ball_south_roc_raw = union {
 # wall.
 let ball_north_frames = intersection {
     translate { rotate { union {
-        translate { union { ball_pw_frame ball_pw_bead } } -8.10 0 0
-        translate { union { ball_pw_frame ball_pw_bead } } -9.45 0 0
-        translate { union { ball_pw_frame ball_pw_bead } } -10.80 0 0
-        translate { union { ball_pw_frame ball_pw_bead } } -12.15 0 0
+        translate { union { ball_pw_frame ball_pw_out ball_pw_bead } } -8.10 0 0
+        translate { union { ball_pw_frame ball_pw_out ball_pw_bead } } -9.45 0 0
+        translate { union { ball_pw_frame ball_pw_out ball_pw_bead } } -10.80 0 0
+        translate { union { ball_pw_frame ball_pw_out ball_pw_bead } } -12.15 0 0
+    } } y=0.5 } 0 0 -3.54
+    box 7.30 6.70 -3.72   12.90 9.32 -3.40
+}
+let ball_north_beads = intersection {
+    translate { rotate { union {
+        translate { ball_pw_bead } -8.10 0 0
+        translate { ball_pw_bead } -9.45 0 0
+        translate { ball_pw_bead } -10.80 0 0
+        translate { ball_pw_bead } -12.15 0 0
     } } y=0.5 } 0 0 -3.54
     box 7.30 6.70 -3.70   12.90 9.32 -3.40
 }
@@ -560,17 +764,17 @@ let ball_north_roc_raw = intersection {
 # where the damask goes, because a hanging over a door is what a German state room did with the
 # one panel it could not fill with mirror.
 let ball_dc_arch = difference {
-    box 13.8375 6.30 -3.54   14.9625 8.8125 -3.63  round=0.010
-    box 13.95   6.20 -3.44   14.85   8.70   -3.80
+    box 13.6125 6.30 -3.54   14.9625 8.8125 -3.63  round=0.010
+    box 13.725  6.20 -3.44   14.85   8.70   -3.80
 }
 let ball_dc_bead = union {
-    capsule 13.9275 6.30 -3.6075   13.9275 8.7225 -3.6075 r=0.022
+    capsule 13.7025 6.30 -3.6075   13.7025 8.7225 -3.6075 r=0.022
     capsule 14.8725 6.30 -3.6075   14.8725 8.7225 -3.6075 r=0.022
-    capsule 13.9275 8.7225 -3.6075 14.8725 8.7225 -3.6075 r=0.022
+    capsule 13.7025 8.7225 -3.6075 14.8725 8.7225 -3.6075 r=0.022
 }
 let ball_dc_supra = union {
-    box 13.8375 8.8125 -3.54   14.9625 9.27 -3.585 round=0.010
-    box 13.905  8.8875 -3.585  14.895  9.2025 -3.6075 round=0.008
+    box 13.6125 8.8125 -3.54   14.9625 9.27 -3.585 round=0.010
+    box 13.68   8.8875 -3.585  14.895  9.2025 -3.6075 round=0.008
 }
 let ball_doorcase = union { ball_dc_arch ball_dc_bead ball_dc_supra }
 
@@ -623,7 +827,10 @@ let ball_silk = union { ball_silk_ribs ball_silk_field }
 # Drawn in the same local frame as everything else that stands against a wall: x = 0 on its own
 # axis, z = 0 the finished face, +z into the room. The top is at 7.20 — the floor plus 2 M — and it
 # is 0.48 deep, so it laps under the foot of the mirror frame above it and is certainly joined to
-# it. The legs start at 6.28, inside the floor slab.
+# it. The legs start at 6.18, which is 0.12 below the floor and 0.06 below the deepest the joints
+# are cut. Everything in this room that stands on the floor was let down past the joints for the
+# same reason — the base course to 6.22, the stove's plinth to 6.20, the banquette's legs to 6.18 —
+# because a foot bedded to 6.28 is a foot standing on the 0.06 of parquet the joints take away.
 let ball_con_top = box -0.54 7.11 0.0   0.54 7.20 0.48  round=0.014
 let ball_con_apron = union {
     box -0.495 6.93 0.39   0.495 7.11 0.435 round=0.012
@@ -633,11 +840,11 @@ let ball_con_apron = union {
     capsule -0.28 6.885 0.4125   0.28 6.885 0.4125 r=0.042
 }
 let ball_con_leg_e = union {
-    capsule  0.435 6.28 0.40    0.455 6.72 0.31 r=0.036
+    capsule  0.435 6.18 0.40    0.455 6.72 0.31 r=0.036
     capsule  0.455 6.72 0.31    0.435 6.96 0.27 r=0.030
 }
 let ball_con_leg_w = union {
-    capsule -0.435 6.28 0.40   -0.455 6.72 0.31 r=0.036
+    capsule -0.435 6.18 0.40   -0.455 6.72 0.31 r=0.036
     capsule -0.455 6.72 0.31   -0.435 6.96 0.27 r=0.030
 }
 let ball_con_frame = union { ball_con_apron ball_con_leg_e ball_con_leg_w }
@@ -667,16 +874,24 @@ let ball_con_e_frame = intersection {
 # rough=60 with a lacquer, so it is a glazed white body beside plain white plaster and white gesso
 # in the same corner — three whites at three different specular answers, which is the same argument
 # the three golds make on the mirror piers.
-let ball_stv_base = box 6.45 6.28 -4.35   7.35 6.75 -3.45  round=0.018
+let ball_stv_base = box 6.45 6.20 -4.35   7.35 6.75 -3.45  round=0.018
 let ball_stv_body = box 6.50 6.75 -4.30   7.30 8.55 -3.45  round=0.030
 let ball_stv_belt = box 6.45 8.55 -4.35   7.35 8.685 -3.45 round=0.018
 let ball_stv_cor  = box 6.45 8.685 -4.35  7.35 8.82 -3.45  round=0.018
-let ball_stv_urn  = revolve 6.90 8.78 -3.90 {
+# `union { }` INSIDE THE BRACES, AND IT HAS TO BE THERE. `revolve` is a ONE-CHILD operation: it
+# takes parts[0] and drops everything else in the block without a word. Written as four bare boxes,
+# as this urn was from the day it was drawn, only the FIRST is turned — so what has stood on top of
+# this stove all along is a plain disc 0.40 across and 0.09 thick with no neck, no belly and no
+# finial. Nothing says so: not the component count, not the volume, not the material list, not
+# `never fired`. It was found because a chandelier written the same way lost its stem and 456
+# voxels of chandelier came back as a floating component. Every `revolve` in this file now names
+# its own union.
+let ball_stv_urn  = revolve 6.90 8.78 -3.90 { union {
     box 0.0 0.0 -1   0.20 0.09 1
     box 0.0 0.09 -1  0.10 0.135 1
     box 0.0 0.135 -1 0.225 0.36 1
     box 0.0 0.36 -1  0.09 0.50 1
-} axis=y
+} } axis=y
 # THE TILES. Seven courses of 0.27 (0.6 M) and a joint every 0.20, cut 0.06 into the two faces the
 # room can see and 0.036 wide — a voxel and a bit — so a glazed white body is broken up by a grid of
 # thin dark lines rather than being one smooth prism. THE GROOVES ARE CUT INTO THE FACES AND NOT
@@ -695,6 +910,67 @@ let ball_stv_tiles = union { ball_stv_courses ball_stv_joints_e ball_stv_joints_
 let ball_stv_body_cut = difference { ball_stv_body ball_stv_tiles }
 
 let ball_stove = union { ball_stv_base ball_stv_body_cut ball_stv_belt ball_stv_cor ball_stv_urn }
+
+# ================================================================================================
+# THE BANQUETTE — the one soft thing in the room, against the west wall
+# ================================================================================================
+#
+# A ballroom is a room people sit down in between dances and there was nowhere in here to sit. It
+# is also the only upholstered object in the building, which is the reason it is worth the twenty
+# lines: `velvet` is rough=252 with sheen=14, the RETRO-REFLECTIVE end of the material range — a
+# fabric that is brightest where you look along the light — and it has been in the contract since
+# the state rooms were written and used by nothing. It now sits four metres from `mirror` at
+# rough=6 and under a chandelier of `crystal`, which is the widest spread of answers to one light
+# that this building can put in one frame.
+#
+# AND IT IS NOT A ROUNDED BOX, WHICH IS THE WHOLE OF WHAT MAKES UPHOLSTERY LOOK LIKE UPHOLSTERY:
+#
+#   the squab is BUTTONED — seven spheres subtracted on a 0.29 pitch, each pulling a dimple 0.178
+#   across and 0.040 deep into the top surface, which is 1.3 voxels of relief at metre 32 and the
+#   thing that tells the eye there is stuffing behind the cloth rather than wood;
+#   its seam is PIPED — a bead 0.048 across run right round the cushion at 6.70, drawn as a
+#   zero-thickness rectangular ring and rounded, so the four mitres come free;
+#   and it stands on TURNED LEGS, each a `revolve` of a five-member profile — foot, neck, swell,
+#   shaft, block — which is exact, where a stack of five cylinders is a staircase.
+#
+# The back rail is buried 0.04 into the west boiserie, so the whole piece is knitted to the wall
+# along 1.75 m regardless of what the legs do at a coarse metre. The legs go down to 6.18, well
+# under the floor.
+#
+# WHERE IT STANDS AND WHY IT IS NOT IN THE WAY. West wall, z -6.30 .. -4.55, 0.52 deep. The stove
+# occupies z -4.35 .. -3.45 of the same wall and there is 0.20 between them; the room is 8.47 m
+# long, so past its front face at x 7.06 there are 7.95 m of clear floor, and the clear run in z
+# past it — measured — is 2.156 m at x 7.20, where the brief asks for 1.20.
+let ball_bq_back  = box 6.50 6.30 -6.30   6.66 6.99 -4.55  round=0.010
+let ball_bq_rail  = box 6.54 6.48 -6.30   7.06 6.60 -4.55  round=0.014
+let ball_bq_apron = box 6.58 6.33 -6.26   7.02 6.48 -4.59  round=0.012
+let ball_bq_leg = revolve 0 6.18 0 { union {
+    box 0.0 0.0  -1   0.058 0.05 1
+    box 0.0 0.05 -1   0.036 0.11 1
+    box 0.0 0.11 -1   0.055 0.19 1
+    box 0.0 0.19 -1   0.032 0.27 1
+    box 0.0 0.27 -1   0.048 0.33 1
+} } axis=y
+let ball_bq_legs = union {
+    translate { ball_bq_leg } 6.90 0 -6.22
+    translate { ball_bq_leg } 6.90 0 -5.425
+    translate { ball_bq_leg } 6.90 0 -4.63
+}
+let ball_banq_frame = union { ball_bq_back ball_bq_rail ball_bq_apron ball_bq_legs }
+
+let ball_bq_cush = box 6.575 6.55 -6.275   7.035 6.765 -4.575 round=0.050
+let ball_bq_pipe = round {
+    difference {
+        box 6.575 6.70 -6.275   7.035 6.70 -4.575
+        box 6.605 6.70 -6.245   7.005 6.70 -4.605
+    }
+} by=0.024
+let ball_bq_buttons = intersection {
+    translate { repeat { sphere 0 6.845 0 r=0.12 } z=0.29 nz=3 } 6.805 0 -5.425
+    box 6.60 6.72 -6.32   7.01 6.98 -4.53
+}
+let ball_bq_cushion = difference { union { ball_bq_cush ball_bq_pipe } ball_bq_buttons }
+let ball_banquette  = union { ball_banq_frame ball_bq_cushion }
 
 # ================================================================================================
 # THE TRELLIS — a gold_leaf lattice on the ceiling and both coves, 0.030 wide, 0.055 proud
@@ -748,25 +1024,51 @@ let ball_trellis = union {
 # a strand one solid rather than a column of beads that miss each other by half a voxel.
 #
 #   10.80   the ceiling soffit, where the rose is
-#    9.90   the canopy's apex
-#    9.72   the upper ring, radius 0.27
-#    9.53   the outer ring, radius 0.585 — hung off the arms
-#    9.45   THE CORONA, radius 0.45 (M)
-#    9.12   the lower ring, radius 0.315
-#    8.62   the point of the finial. 2.32 m of head height under it, and the brief asks 2.10.
+#   10.11   the canopy's apex
+#    9.93   the upper ring, radius 0.27
+#    9.74   the outer ring, radius 0.585 — hung off the arms
+#    9.66   THE CORONA, radius 0.45 (M)
+#    9.33   the lower ring, radius 0.315
+#    8.85   the point of the finial.
+#
+# EVERYTHING BELOW THE ROSE WAS LIFTED 0.21 AND THE STEM SHORTENED BY THE SAME, and the reason is
+# a measurement rather than a taste. Hung where it was, the finial's icosahedron came to 8.64 and
+# `--gap y@8.10,-5.025` on the assembled building reported 2.344 m of clear air under all three
+# chandeliers. That clears the brief's 2.10 for standing in and it does NOT clear the 2.40 a room
+# wants along the line people actually walk — and these three hang on the room's own centre line,
+# which is exactly that line. Lifted, the same measurement is 2.531 m. The rose did not move with
+# them: raised, its cylinder and its torus would have gone up inside the ceiling slab, which runs
+# 10.80 to 11.25, and the one part of a chandelier that has to be seen against the ceiling would
+# have disappeared into it.
 
 let ball_ch_rose = union {
     cylinder 0 10.74 0 r=0.20 h=0.15 axis=y
     torus    0 10.695 0 ring=0.15 tube=0.032 axis=y
-    cylinder 0 10.56 0 r=0.075 h=0.36 axis=y
+    cylinder 0 10.56 0 r=0.110 h=0.36 axis=y
 }
-let ball_ch_stem   = cylinder 0 10.08 0 r=0.036 h=0.96 axis=y
-let ball_ch_canopy = cone 0 9.60 0 r=0.25 h=0.32 axis=y
+# THE STEM IS A TURNED BALUSTER AND NOT A ROD, and that is a measurement as much as it is a piece
+# of ormolu. It was `cylinder r=0.036`, 0.072 across. At metre 8 a voxel is 0.125 and a voxel is
+# tested at its CENTRE: the three chandeliers stand on x = 8.10, 10.80 and 13.50, whose nearest
+# voxel centres are 0.0375, 0.0125 and 0.0625 away, so the rod was inside the middle one's column
+# and outside the other two's. Lifted 0.21 into a new phase, the one on 13.50 lost its stem
+# altogether and the whole chandelier — 456 voxels of it — came back as a FLOATING COMPONENT. The
+# profile below never goes under 0.070 of radius, which is 0.14 across and past 0.0625 whatever the
+# phase, and it is what a chandelier stem actually is: a vase, a shaft, and two knops.
+let ball_ch_stem = revolve 0 9.81 0 { union {
+    box 0 0.00 -1   0.175 0.10 1
+    box 0 0.10 -1   0.140 0.20 1
+    box 0 0.20 -1   0.112 0.30 1
+    box 0 0.30 -1   0.155 0.38 1
+    box 0 0.38 -1   0.112 0.55 1
+    box 0 0.55 -1   0.140 0.62 1
+    box 0 0.62 -1   0.112 0.75 1
+} } axis=y
+let ball_ch_canopy = cone 0 9.81 0 r=0.25 h=0.32 axis=y
 
-let ball_ch_ring1 = torus 0 9.45 0 ring=0.45  tube=0.045 axis=y
-let ball_ch_ring2 = torus 0 9.72 0 ring=0.27  tube=0.040 axis=y
-let ball_ch_ring3 = torus 0 9.12 0 ring=0.315 tube=0.038 axis=y
-let ball_ch_ring4 = torus 0 9.53 0 ring=0.585 tube=0.038 axis=y
+let ball_ch_ring1 = torus 0 9.66 0 ring=0.45  tube=0.075 axis=y
+let ball_ch_ring2 = torus 0 9.93 0 ring=0.27  tube=0.040 axis=y
+let ball_ch_ring3 = torus 0 9.33 0 ring=0.315 tube=0.038 axis=y
+let ball_ch_ring4 = torus 0 9.74 0 ring=0.585 tube=0.038 axis=y
 
 # The eight struts that hang each ring off the stem, and THEY ARE 0.060 ACROSS AND NOT 0.040. Every
 # one of them is a raking rod in mid-air, so it has nothing to be knitted to along its length, and
@@ -774,36 +1076,67 @@ let ball_ch_ring4 = torus 0 9.53 0 ring=0.585 tube=0.038 axis=y
 # voxels while the two on 8.10 and 10.80 held. That is what a feature at the edge of the grid does:
 # it survives at one phase and not at another, and NOTHING BUT A COMPONENT COUNT WILL TELL YOU.
 let ball_ch_spokes1 = intersection {
-    around { capsule 0 9.62 0   0.45 9.45 0 r=0.030 } count=8 axis=y
-    box -0.50 9.38 -0.50   0.50 9.70 0.50
+    around { capsule 0 9.83 0   0.45 9.66 0 r=0.060 } count=8 axis=y
+    box -0.50 9.59 -0.50   0.50 9.91 0.50
 }
 let ball_ch_spokes2 = intersection {
-    around { capsule 0.05 9.83 0   0.27 9.72 0 r=0.030 } count=8 axis=y
-    box -0.32 9.64 -0.32   0.32 9.90 0.32
+    around { capsule 0.05 10.04 0   0.27 9.93 0 r=0.030 } count=8 axis=y
+    box -0.32 9.85 -0.32   0.32 10.11 0.32
 }
 let ball_ch_spokes3 = intersection {
-    around { capsule 0.45 9.42 0   0.315 9.13 0 r=0.030 } count=8 axis=y
-    box -0.50 9.06 -0.50   0.50 9.48 0.50
+    around { capsule 0.45 9.63 0   0.315 9.34 0 r=0.030 } count=8 axis=y
+    box -0.50 9.27 -0.50   0.50 9.69 0.50
 }
 
-# the arms: eight of them, out and up off the corona, each with a pan, a wax taper and its flame
+# THE ARMS, AND AN ARM IS NOT A BENT TUBE WITH A DISC ON THE END OF IT.
+#
+# AND THEY ARE 0.10 ACROSS AND NOT 0.056, WHICH IS A MEASUREMENT AND NOT A TASTE. Every one of the
+# twenty-four arms in this room is a raking rod in mid-air carrying a pan, a taper and a flame, and
+# at METRE 8 — the metre the whole building is counted at — a voxel is 0.125 and every one of them
+# let go of the corona and came back as its own floating component. That is not new and it is not
+# mine: the same six islands are in the report for this room before any of this work, at 9.62 to
+# 9.88, where the arms used to hang. What IS new is that a turned bobeche is a bigger blob than a
+# washer, so more of them registered and the count went from 33 to 38.
+#
+# Measured, on this room alone, at metre 8:
+#
+#   corona tube 0.045, spokes 0.060, arm 0.056     38 components, 116 floating voxels
+#   corona tube 0.075, spokes 0.120, arm 0.104     31 components,  86 floating voxels
+#
+# and the whole building with it, 757 to 755. So the corona is 0.15 across, its spokes are 0.12 and
+# the branch is 0.104 at the shoulder — which is what a cast ormolu chandelier carrying eight
+# candles and four hundred crystals actually looks like, and thinner than that was a wire drawing of
+# one. Nothing about metre 32 changed: it was one component before and it is one component now.
+#
+# A cast ormolu branch has a section that changes down its length and a KNOP where the S turns
+# over, and the thing the candle stands in is a turned bobeche — a socket, a swell and a flared
+# lip — not a washer. Both are drawn here as what they are: the knop is a sphere on the sweep, and
+# the pan is a `revolve` of a three-member profile about its own axis at radius 0.63, which is
+# exact where a stack of cylinders is a staircase. The lip flares to 0.096 and stands 0.02 proud of
+# the swell under it, which is 0.64 of a voxel of relief at metre 32 — visible as a highlight round
+# every one of the twenty-four flames in this room and as nothing at all at metre 8.
 let ball_ch_arm = union {
-    capsule 0.42 9.47 0   0.60 9.62 0 r=0.028
-    capsule 0.60 9.62 0   0.63 9.77 0 r=0.028
-    capsule 0.60 9.62 0   0.585 9.53 0 r=0.024
-    cylinder 0.63 9.79 0 r=0.075 h=0.045 axis=y
+    capsule 0.42 9.68 0   0.60 9.83 0 r=0.052
+    sphere  0.52 9.7625 0 r=0.064
+    capsule 0.60 9.83 0   0.63 9.98 0 r=0.046
+    capsule 0.60 9.83 0   0.585 9.74 0 r=0.040
+    revolve 0.63 9.955 0 { union {
+        box 0.0 0.000 -1   0.050 0.040 1
+        box 0.0 0.040 -1   0.078 0.080 1
+        box 0.0 0.080 -1   0.098 0.120 1
+    } } axis=y
 }
 let ball_ch_arms = intersection {
     around { ball_ch_arm } count=8 axis=y
-    box -0.72 9.40 -0.72   0.72 9.83 0.72
+    box -0.74 9.61 -0.74   0.74 10.03 0.74
 }
 let ball_ch_wax = intersection {
-    around { cylinder 0.63 9.90 0 r=0.026 h=0.26 axis=y } count=8 axis=y
-    box -0.68 9.76 -0.68   0.68 10.04 0.68
+    around { cylinder 0.63 10.11 0 r=0.026 h=0.26 axis=y } count=8 axis=y
+    box -0.68 9.97 -0.68   0.68 10.25 0.68
 }
 let ball_ch_flame = intersection {
-    around { ellipsoid 0.63 10.07 0 rx=0.026 ry=0.048 rz=0.026 } count=8 axis=y
-    box -0.68 10.01 -0.68   0.68 10.13 0.68
+    around { ellipsoid 0.63 10.28 0 rx=0.026 ry=0.048 rz=0.026 } count=8 axis=y
+    box -0.68 10.22 -0.68   0.68 10.34 0.68
 }
 
 # THE DROPS. Four tiers, twenty-four strands each, and every strand is a rod with solids threaded
@@ -815,58 +1148,58 @@ let ball_ch_flame = intersection {
 # voxel — and the pendeloques came back as three floating clusters of thirteen voxels each. Through
 # the centre they cannot come apart however the grid falls.
 let ball_ch_str1 = union {
-    capsule 0.45 9.47 0   0.45 8.95 0 r=0.030
-    octa 0.45 9.40 0 r=0.040
-    octa 0.45 9.31 0 r=0.040
-    octa 0.45 9.22 0 r=0.040
-    octa 0.45 9.13 0 r=0.040
-    dodeca 0.45 9.04 0 r=0.042
-    icosa 0.45 8.95 0 r=0.050
+    capsule 0.45 9.68 0   0.45 9.16 0 r=0.030
+    octa 0.45 9.61 0 r=0.040
+    octa 0.45 9.52 0 r=0.040
+    octa 0.45 9.43 0 r=0.040
+    octa 0.45 9.34 0 r=0.040
+    dodeca 0.45 9.25 0 r=0.042
+    icosa 0.45 9.16 0 r=0.050
 }
 let ball_ch_tier1 = intersection {
     around { ball_ch_str1 } count=24 axis=y
-    box -0.52 8.89 -0.52   0.52 9.50 0.52
+    box -0.52 9.10 -0.52   0.52 9.71 0.52
 }
 let ball_ch_str2 = union {
-    capsule 0.27 9.74 0   0.27 9.42 0 r=0.030
-    octa 0.27 9.66 0 r=0.038
-    octa 0.27 9.58 0 r=0.038
-    dodeca 0.27 9.50 0 r=0.040
-    icosa 0.27 9.42 0 r=0.044
+    capsule 0.27 9.95 0   0.27 9.63 0 r=0.030
+    octa 0.27 9.87 0 r=0.038
+    octa 0.27 9.79 0 r=0.038
+    dodeca 0.27 9.71 0 r=0.040
+    icosa 0.27 9.63 0 r=0.044
 }
 let ball_ch_tier2 = intersection {
     around { ball_ch_str2 } count=24 axis=y
-    box -0.34 9.36 -0.34   0.34 9.78 0.34
+    box -0.34 9.57 -0.34   0.34 9.99 0.34
 }
 let ball_ch_str3 = union {
-    capsule 0.315 9.14 0   0.315 8.73 0 r=0.030
-    octa 0.315 9.05 0 r=0.038
-    octa 0.315 8.97 0 r=0.038
-    octa 0.315 8.89 0 r=0.038
-    dodeca 0.315 8.81 0 r=0.040
-    icosa 0.315 8.73 0 r=0.044
+    capsule 0.315 9.35 0   0.315 8.94 0 r=0.030
+    octa 0.315 9.26 0 r=0.038
+    octa 0.315 9.18 0 r=0.038
+    octa 0.315 9.10 0 r=0.038
+    dodeca 0.315 9.02 0 r=0.040
+    icosa 0.315 8.94 0 r=0.044
 }
 let ball_ch_tier3 = intersection {
     around { ball_ch_str3 } count=24 axis=y
-    box -0.38 8.67 -0.38   0.38 9.18 0.38
+    box -0.38 8.88 -0.38   0.38 9.39 0.38
 }
 let ball_ch_str4 = union {
-    capsule 0.585 9.55 0   0.585 9.35 0 r=0.030
-    octa 0.585 9.44 0 r=0.038
-    icosa 0.585 9.35 0 r=0.042
+    capsule 0.585 9.76 0   0.585 9.56 0 r=0.030
+    octa 0.585 9.65 0 r=0.038
+    icosa 0.585 9.56 0 r=0.042
 }
 let ball_ch_tier4 = intersection {
     around { ball_ch_str4 } count=24 axis=y
-    box -0.65 9.29 -0.65   0.65 9.60 0.65
+    box -0.65 9.50 -0.65   0.65 9.81 0.65
 }
 
 # The finial: a stem down the middle of the corona, a ball and a big icosahedron on the point of
-# it. 8.64 is the lowest thing in this room and it is 2.34 m over the floor, where the brief asks
-# for 2.10.
+# it. 8.85 is the lowest thing in this room and it is 2.55 m over the floor, where the brief asks
+# for 2.10 and the walking route wants 2.40.
 let ball_ch_finial = union {
-    cylinder 0 9.28 0 r=0.030 h=0.72 axis=y
-    sphere 0 8.90 0 r=0.10
-    icosa 0 8.74 0 r=0.10
+    cylinder 0 9.49 0 r=0.030 h=0.72 axis=y
+    sphere 0 9.11 0 r=0.10
+    icosa 0 8.95 0 r=0.10
 }
 
 let ball_ch_gilt = union {
@@ -917,6 +1250,7 @@ let ball_rocaille = intersection {
 
 let ball_mirrors = union { ball_south_glass ball_north_glass }
 let ball_frames  = union { ball_south_frames ball_north_frames ball_doorcase }
+let ball_beads   = union { ball_south_beads ball_north_beads ball_dc_bead }
 let ball_gir_all = union { ball_south_gir ball_north_gir }
 let ball_gir_wax_all = union {
     translate { ball_gir_wax }  9.45 0 -6.51
@@ -953,7 +1287,7 @@ let ball_hangings = union { ball_hang_damask ball_silk }
 let part_ballroom = union {
     ball_shell
     ball_frames ball_mirrors ball_rocaille ball_trellis
-    ball_gir_all ball_hangings ball_consoles ball_stove
+    ball_gir_all ball_hangings ball_consoles ball_stove ball_banquette
     ball_chand_all
 }
 
@@ -966,6 +1300,34 @@ let part_ballroom = union {
 # away by its own room and what survived would be the 0.05 m of backplate buried in the wall. That
 # is exactly what happened to every sconce, bench and statue in the building (D608); read the long
 # comment at the bottom of clips/facility.clip. So the difference below is not a formality.
+#
+# AND WHAT THE CUT AUDIT SAYS ABOUT IT, WHICH IS THAT IT REMOVES NOTHING AT ALL:
+#
+#   clipcheck clips/facility.clip --metre 8 --cut void_ballroom
+#     cut       void_ballroom   (operand 1 of the difference at node 7667)
+#     carves    built
+#     its box   6.54 2.80 -6.51 .. 15.01 7.30 -3.54 m
+#     removed   0.000 m3 (0 voxels)  (nothing)
+#     cut air   103.785 m3 of its volume covered nothing at all
+#
+# and nothing at metre 32 either. That is worth reading twice, because "a room's void removes
+# nothing" has two possible meanings and only one of them is a fault.
+#
+# IT IS THE HARMLESS ONE, AND IT IS CHECKED RATHER THAN ASSUMED. It does not mean the room was never
+# hollowed: the room is 4.50 m of clear air from floor to ceiling and `--gap y@12.15,-5.025` on the
+# assembled building measures 4.406 m of it, closed at both ends, which is not a number a solid room
+# can return. It means the air was ALREADY air before the subtraction ran. This fragment builds an
+# enclosure — a floor, two walls, a lining on four faces, a cove and a ceiling — and puts nothing in
+# the middle; walls.clip leaves the inside of the main block empty, because `walls_ring` is the
+# difference of two boxes; and no other fragment reaches in here. So there is nothing for the void
+# to take, and the 103.785 m3 it covers is exactly the room.
+#
+# IT STAYS. A void that removes nothing today is the only thing standing between this room and the
+# day somebody carries a wall, a vault or a floor slab across x 6.54 .. 15.01 — and that is not
+# hypothetical, it is what the upper east hall will do when it is built to meet the doorway at the
+# east end of my north wall. The audit line is the RECEIPT for that, not a complaint: it says in one
+# line that nobody else's matter is standing in this room, which is a thing worth knowing and a
+# thing nothing else in the report will tell you.
 let ball_air = box 6.54 6.30 -6.51   15.01 10.80 -3.54
 let void_ballroom = difference { ball_air part_ballroom }
 
@@ -1018,6 +1380,28 @@ paint plaster where=ball_floor below=0.02
 
 let ball_fl_zone = box 6.54 6.18 -6.51   15.01 6.36 -3.54
 paint parquet where=ball_fl_zone below=0.02
+
+# AND THE PATH PEOPLE HAVE WORN IN IT, which is the one thing on this floor that is honestly PAINT
+# and not matter. A worn track is not a shape: it is the lacquer gone and the wood under it left
+# bare and pale and rough, in the places feet go, and there is no geometry to it at all. `parquet`
+# carries lacquer=10 and `oak` carries none and is rougher, so the two beside each other under the
+# same window are a clearcoat lobe and a diffuse one at the same incidence in the same frame —
+# which is the comparison the salon downstairs was built to make and this floor can now make too.
+#
+# It is four overlapping ellipsoids down the room and a fifth turning to the door, and it is
+# painted HERE — after the field and BEFORE the inlays — because that is the truth about a worn
+# marquetry floor: the ebony and the walnut are harder than the ground they are set into and they
+# still read after the polish has gone off the ground around them.
+let ball_wear = intersection {
+    union {
+        ellipsoid  8.30 6.27 -5.05 rx=1.25 ry=0.30 rz=0.52
+        ellipsoid 10.60 6.27 -4.95 rx=1.45 ry=0.30 rz=0.46
+        ellipsoid 12.90 6.27 -5.10 rx=1.30 ry=0.30 rz=0.55
+        ellipsoid 14.10 6.27 -4.35 rx=0.80 ry=0.30 rz=0.62
+    }
+    ball_fl_zone
+}
+paint oak where=ball_wear below=0.02
 
 let ball_fl_field = box 7.08 6.18 -6.06   14.47 6.36 -3.99
 let ball_fl_border = difference { ball_fl_zone ball_fl_field }
@@ -1077,6 +1461,37 @@ paint plaster where=ball_cove below=0.02
 paint plaster where=ball_ceiling below=0.02
 paint gesso   where=ball_cornice below=0.02
 
+# --- WHAT THE CANDLES AND THE STOVE HAVE DONE TO THE PLASTER, AND IT IS PAINT BECAUSE SOOT IS ----
+#
+# Twenty-four flames burn under each of three chandeliers, 0.47 m below a white ceiling, and a
+# faience stove burns in the north-west corner. Neither leaves a shape behind; both leave a stain,
+# and a stain has no arris, no thickness and nothing for a sampler to find — which is exactly the
+# case for painting it and exactly the case against cutting it. `tuff` is 150,142,124 at rough=250:
+# a dead grey-buff against `plaster` at 226,222,212, which is what a smoke bloom on white plaster
+# actually looks like.
+#
+# A rosette over each chandelier, and a plume rising out of the corner the stove stands in. They go
+# on BEFORE the trellis, so the gold ribs still run gold across a dirty ceiling rather than the
+# soot lying on top of the gold, which is not how a gilder's ceiling ages.
+let ball_ch_smoke = intersection {
+    union {
+        cylinder  8.10 10.72 -5.025 r=0.62 h=0.24 axis=y
+        cylinder 10.80 10.72 -5.025 r=0.62 h=0.24 axis=y
+        cylinder 13.50 10.72 -5.025 r=0.62 h=0.24 axis=y
+    }
+    ball_ceiling
+}
+paint tuff where=ball_ch_smoke below=0.02
+
+let ball_stv_smoke = intersection {
+    union {
+        ellipsoid 6.90 9.10 -3.90 rx=0.60 ry=0.90 rz=0.60
+        ellipsoid 6.90 9.80 -3.90 rx=0.42 ry=0.70 rz=0.42
+    }
+    union { ball_lin_w ball_lin_n ball_wall_w ball_wall_n ball_cove ball_cornice }
+}
+paint tuff where=ball_stv_smoke below=0.02
+
 # The reveals of the three windows and of the door: the faces the light actually enters over.
 let ball_rev_faces = round { union { ball_win_cuts ball_door_void } } by=0.05
 paint gesso where=ball_rev_faces below=0.02
@@ -1117,13 +1532,16 @@ let ball_pl_scroll_w = intersection {
     }
     box 6.50 7.00 -6.00   6.60 8.90 -4.05
 }
+# IT MOVED 0.20 WEST WHEN THE DOORWAY WIDENED. The doorcase's west edge is now at 13.6125 and this
+# ornament's ground reached 13.80, so the scroll would have been painted under the doorcase's own
+# gesso and lost. The zone stops at 13.55, which is 0.0625 clear of the doorcase.
 let ball_pl_scroll_n = intersection {
     union {
-        spiral 13.35 8.20 -3.52 r=0.27 tighten=0.5 tube=0.020 turns=1.15 axis=z
-        capsule 13.05 7.65 -3.52   13.62 8.72 -3.52 r=0.018
-        capsule 13.05 7.65 -3.52   13.20 7.05 -3.52 r=0.016
+        spiral 13.15 8.20 -3.52 r=0.27 tighten=0.5 tube=0.020 turns=1.15 axis=z
+        capsule 12.85 7.65 -3.52   13.42 8.72 -3.52 r=0.018
+        capsule 12.85 7.65 -3.52   13.00 7.05 -3.52 r=0.016
     }
-    box 12.86 6.90 -3.56   13.80 8.90 -3.48
+    box 12.86 6.90 -3.56   13.55 8.90 -3.48
 }
 let ball_pl_scrolls = union {
     intersection { ball_pl_scroll_w ball_lin_w }
@@ -1133,6 +1551,11 @@ paint gold_leaf where=ball_pl_scrolls below=0.02
 
 # --- THE APPLIED WORK -------------------------------------------------------------------------------
 paint gesso     where=ball_frames below=0.035
+# THE BEADS ARE GILT AND HAVE ALWAYS BEEN DESCRIBED AS GILT AND WERE PAINTED WHITE. `ball_pn_bead`
+# is inside `ball_frames`, and `ball_frames` is gesso, so the one line in every frame that is
+# actually gold came out the same colour as the wood it sits on — 22 m of it, over eleven frames
+# and a doorcase. Named separately and painted after, so a later coat covers an earlier one.
+paint gold_leaf where=ball_beads below=0.035
 paint gold_leaf where=ball_rocaille below=0.035
 
 # The silver in the rocaille: the lower half of every cresting, so that a white-and-silver ground
@@ -1144,6 +1567,13 @@ paint damask where=ball_hang_damask below=0.035
 paint silk   where=ball_silk below=0.035
 paint faience where=ball_stove below=0.035
 
+# The banquette: a gilt frame, a velvet squab, and the piping in the same silk as the east wall.
+# The piping goes on after the velvet because a later coat covers an earlier one and the bead
+# straddles the cushion's own surface.
+paint gilt   where=ball_banq_frame below=0.035
+paint velvet where=ball_bq_cush below=0.02
+paint silk   where=ball_bq_pipe below=0.02
+
 paint giallo where=ball_console_giallo below=0.035
 paint rosso  where=ball_console_rosso below=0.035
 paint giallo where=ball_con_e_top below=0.035
@@ -1154,6 +1584,14 @@ paint gilt   where=ball_con_e_frame below=0.035
 paint gold_leaf where=ball_trellis below=0.035
 paint mirror where=ball_mirrors below=0.035
 paint ormolu where=ball_gir_all below=0.035
+# AND THE TARNISH, WHICH IS THE OTHER THING PAINT IS FOR. Fire-gilt bronze goes dark where a flame
+# stands on it: the bobeche of a girandole that has been lit every night for fifty years is not
+# `ormolu` at rough=48, it is `bronze` at rough=110 with the gold burnt off it. The band below
+# catches the pans and the tops of the branches and nothing else; the tapers and the flames are
+# repainted at the bottom of this file, which is why this can be a plain box round the top of the
+# fitting rather than a shape cut to it.
+let ball_gir_burn = intersection { ball_gir_all box 6.54 7.90 -6.60   15.01 8.40 -3.40 }
+paint bronze where=ball_gir_burn below=0.035
 paint gilt   where=ball_chand_gilt below=0.035
 paint crystal where=ball_chand_drops below=0.035
 
