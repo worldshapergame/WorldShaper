@@ -23,6 +23,24 @@
 # with the floor, the two walls and a lid put back, so that `--gap` reports the storey rather than
 # the seven metres of air between the gallery and the roof; see its own note at the bottom.
 #
+# AND A HEAD-HEIGHT PROBE IS HALF OF WHAT A STAIR HAS TO PROVE. The other half is that the stair
+# ARRIVES SOMEWHERE, and this file could not prove it and did not until 2026-08-17: every one of
+# `stair_probe_head`'s volumes was empty over a gallery that no room on the piano nobile could be
+# reached from. A 2.40 m box standing over a hole in the floor is perfectly empty. So the second
+# measurement is a FLOOR measurement and it lives in a manifest of its own, because a route crosses
+# three fragments and no fragment can see past its own edge:
+#
+#     bash tools/clipcheck.sh clips/facility/requests/stair-route-probe.clip --metre 16 \
+#          --part sr_floor_all    -> EMPTY.  A skin 0.10 m thick under the whole walking line,
+#                                            MINUS the assembled building. Anything it reports is
+#                                            floor that is not there.
+#     ... --part sr_head_all      -> EMPTY.  The same walking line as volume, against the whole
+#                                            building rather than against this part alone.
+#     ... --part sr_cut_check     -> EMPTY.  Nothing of mine inside anybody's void.
+#
+# Before the bridge below was built, `sr_floor_all` reported 1,922 voxels at metre 16 and the stair
+# went nowhere at all. See THE BRIDGE, at the gallery.
+#
 # ================================================================================================
 # WHAT CHANGED, AND WHY THE RISER SPLIT AND THE PLAN BOTH MOVED
 #
@@ -152,10 +170,16 @@
 #     and cantilevers only the 0.45 of the well.
 #   - the gallery slab is y 5.895..6.30 and every opening's band is 2.70..4.50 or 6.30..8.55, so it
 #     lies in the 1.80 m of blind wall between them.
-#   - THE ONE THING THAT IS CLOSE: the gallery's south handrail, at z 4.4775..4.7025, passes the
-#     end-wall opening at z = 5.40 whose reveal begins at 4.725. That is 22 mm — 0.7 of a voxel at
-#     metre 32. It is clear, it was clear before, and it is the only member in this file with less
-#     than 0.09 to give. Do not move that rail north.
+#   - THE ONE THING THAT USED TO BE CLOSE, AND IS NOT ANY MORE: the gallery's south handrail, at
+#     z 4.4775..4.7025, ran to x = 15.10 and passed the end-wall opening at z = 5.40 whose reveal
+#     begins at 4.725 — 22 mm, 0.7 of a voxel at metre 32, and the only member in this file with
+#     less than 0.09 to give. That rail now stops at x = 13.65 where the bridge goes through it, so
+#     the nearest it comes to any opening is 1.35 m. The instruction it carried — do not move that
+#     rail north — still stands for what is left of it.
+#   - AND THE BRIDGE IS IN THE SAME BLIND BAND AS THE GALLERY. Its slab is y 5.895..6.30 at
+#     x 13.50..15.25, z 3.05..4.65, and the east openings' bands are y 2.70..4.50 and 6.30..8.55, so
+#     it lies under the second exactly as the gallery does. Its rail and its corner newel occupy
+#     x 13.4775..13.7025, which is 1.30 m west of the nearest reveal at 15.00.
 #
 # WHERE IT MEETS ITS NEIGHBOURS
 #
@@ -163,12 +187,21 @@
 #                    joints of `void_stair` are cut 42 mm into its top.
 #   walls.clip       north inner face z = 6.60, east inner face x = 15.10 — `wall_thick` 0.90 off
 #                    the contract's block outline, stated at the top of that file since 2026-08-16.
-#                    The half landing, the upper flight and the gallery are bedded 0.15 into them.
+#                    The half landing, the upper flight, the gallery and the bridge are bedded 0.15
+#                    into them.
 #   halls.clip       its block face is z = 2.925, grown to 2.940 by its own round, and its top is
 #                    6.975. The lower flight and the half landing are bedded 0.065 into it, which
 #                    is what lets them take a wall on that side instead of a balustrade. NOTHING
 #                    OF MINE NEEDS THAT BLOCK CUT: it is solid to 6.975 there, and the 65 mm I
 #                    stand in is 65 mm of a 900 mm wall.
+#   enfilade.clip    the picture gallery, x 13.95..15.10 in the clear, floor slab y 6.00..6.30 over
+#                    x 13.585..15.215 and ending at z 3.115, and a north archway `enf_dr_un` at
+#                    x 13.95..15.10, y 6.30..8.70, z 3.00..3.15. THE BRIDGE BELOW LANDS ON THAT
+#                    SLAB, lapping 0.065 into it, and passes UNDER that archway with its top face on
+#                    the archway's own floor line. Nothing of mine is inside it — checked as
+#                    `--part sr_cut_check` on the route probe, which must report an empty clip,
+#                    because `void_enfilade` is subtracted from the whole building after assembly
+#                    and would delete anything of mine in there without a word.
 #
 # THE MODULE. D = 0.90, M = 0.45. Every number below is a multiple or simple fraction of one of
 # those, or of the stair's own two contract numbers, the riser 0.18 (0.4 M) and the run 0.32.
@@ -188,6 +221,12 @@
 #   4.95 = 11 M  well / upper flight                riser split is decided by
 #   6.60         north wall inner face
 #   6.75 = 15 M  0.15 into that wall
+#
+#   and the bridge, which is new:
+#  13.50 = 30 M  bridge west edge             3.05  bridge south end, 0.065 into enfilade's slab
+#  13.59         its balustrade line          3.115 enfilade.clip's own north face
+#                = 13.50 + 0.09, the gallery  4.65  bridge north end, 0.15 into the gallery
+#                run's own setback from 4.50  3.13  where the head-height box may start
 
 include "_contract.clip"
 
@@ -438,14 +477,72 @@ let stair_flight_b = difference {
 # joint between them at x = 10.02 has no step in it at all. Paved to the same 0.90 (D) grid as the
 # half landing and the floor below, on the same lines.
 #
-# WHEN SOMEBODY BUILDS THE REST OF THE UPPER FLOOR it butts this: the open edges are z = 4.50
-# from x 10.02 to 15.10, and x = 10.02 from z 4.50 to 4.95. Both carry a balustrade now because
-# a landing over a 4.5 m drop has to; take the first out when there is a floor on the other side
-# of it, and LEAVE THE SECOND — it is over the open well.
+# THE REST OF THE UPPER FLOOR HAS BEEN BUILT AND THIS IS WHERE IT BUTTS. That paragraph used to
+# read "WHEN somebody builds it": the open edges are z = 4.50 from x 10.02 to 15.10, and x = 10.02
+# from z 4.50 to 4.95, and it said to take the first balustrade out when there is a floor on the
+# other side of it and to LEAVE THE SECOND, which is over the open well. Both instructions are
+# carried out below — the south balustrade now stops at x = 13.50 and the bridge goes through the
+# gap, and the well's own guard is untouched.
 let stair_gall_slab = box 10.035 5.910 4.515   15.235 6.285 6.735 round=0.015
-let stair_gall_j_x  = repeat { box 13.332 6.264 4.50   13.368 6.320 6.75 } x=0.90 nx=4
+
+# ------------------------------------------------------------------------------------------------
+# THE BRIDGE — 1.45 m of floor at 6.30, and the reason this stair now goes somewhere
+# ------------------------------------------------------------------------------------------------
+#
+# THE FAULT IT FIXES, measured before it was built and written up in requests/stair.md: from the
+# top of this stair a person could reach NOTHING. Four rooms stand at 6.30 in this building — the
+# two stair galleries, the two picture galleries of enfilade.clip, ballroom.clip on the east front
+# and library.clip on the west — and every one of the last four was cut off from every one of the
+# first two by a hole in the floor. `clips/facility/requests/stair-route-probe.clip`, part
+# `sr_floor_all`, is a skin 0.10 m thick under the whole walking line minus the assembled building,
+# and at metre 16 it came back with 1,922 voxels of MISSING FLOOR in four pieces: 874 in each wing
+# where this bridge now is, and a hairline at each of the two south thresholds (see requests).
+#
+# enfilade.clip states the same hole from its own side and could not close it: "Between them,
+# x 14.05..15.10 by z 3.10..4.515, THERE IS NO FLOOR — it is the open well over the lower flight.
+# A person leaving the ballroom reaches the north end of my gallery and stops there. Bridging it
+# means taking out stair.clip's own south balustrade at z = 4.59, which is that file's line and not
+# mine." This is that file, and this is that balustrade taken out.
+#
+# WHERE IT IS. x 13.50 (30 M) .. 15.25, z 3.05 .. 4.65. It laps 0.05 into enfilade.clip's own floor
+# slab at the south (that slab is x 13.585..15.215, y 5.985..6.315, ending at z 3.115) and 0.15 into
+# the gallery at the north, so the three are one solid and there is no joint to open. Its top is
+# 6.30 and its soffit 5.895, which is the gallery's own waist carried straight on — enfilade.clip's
+# slab is 0.30 thick and mine is 0.405, so there is a 0.105 beam line in the soffit at z = 3.10 and
+# no step at all in the floor over it.
+#
+# WHY IT IS 1.60 m IN THE CLEAR WHEN THE ARCHWAY AT ITS SOUTH END IS 1.15. enfilade.clip's archway
+# is x 13.95..15.10 — every millimetre between halls.clip's block face and walls.clip's inner face —
+# and this bridge could have been the same 1.15 and been a corridor. It is not, for two reasons that
+# are both measurements. The first: 1.15 is UNDER the 1.20 a circulation route is held to, and the
+# 0.45 I can add on the west is the only place on the whole route where any width exists at all, so
+# the walking face here is 13.7025 and the clear is 1.3975 m, and the pinch is unambiguously somebody
+# else's archway rather than shared between us. The second: west of 13.95 there is nothing to lean
+# on, so the edge has to carry a guard whatever its width, and a guard set 0.09 in from the slab
+# edge — the same setback the gallery's own balustrade has from z = 4.50 — costs the route nothing
+# it had. The slab is 1.75 across because 0.15 of it is buried in the east wall, like the gallery's.
+#
+# WHAT IS UNDER IT. The passage under the stair, floor at 1.80, so the soffit at 5.895 gives 4.077 m
+# — the deepest head height anywhere in this part. It roofs 2.8 m2 of a room whose whole load is
+# that it is lit only by bounce; what it gives back is the north half of windows.clip's east light
+# at z 2.025..3.375, whose piano-nobile band is y 6.30..8.55 and whose reveal reaches x = 15.00.
+# enfilade.clip's gallery has that window as far as z = 3.10 and this bridge has the rest of it, so
+# the one place on this floor where you change direction is the one place with daylight in it.
+#
+# NOTHING OF IT IS INSIDE ANYBODY'S CUTTER, and that is checked rather than reasoned:
+# `enf_dr_un` — enfilade.clip's north archway, which the manifest subtracts as part of
+# `void_enfilade` — is x 13.95..15.10 by z 3.00..3.15 and y 6.30 .. 8.70, and this slab's top face
+# IS 6.30, so it lies wholly under it. Run `--part sr_cut_check` on the route probe: EMPTY.
+let stair_brg_slab = box 13.515 5.910 3.065   15.235 6.285 4.635 round=0.015
+
+# The paving. The joints are the gallery's own — the same 0.90 (D) grid, on the same lines, cut in
+# one difference with it so the bridge is the same pavement and not a patch of one. The x run is
+# simply carried south from z 4.50 to 3.05; the z run at 4.95 already had members at 4.05 and 3.15
+# that fell in mid-air over the well and cut nothing, and they land on the bridge now.
+let stair_gall_j_x  = repeat { box 13.332 6.264 3.05   13.368 6.320 6.75 } x=0.90 nx=4
 let stair_gall_j_z  = repeat { box 10.02 6.264 4.932   15.25 6.320 4.968 } z=0.90 nz=2
-let stair_gallery   = difference { stair_gall_slab  union { stair_gall_j_x stair_gall_j_z } }
+let stair_gallery   = difference { union { stair_gall_slab stair_brg_slab }
+                                   union { stair_gall_j_x stair_gall_j_z } }
 
 # ================================================================================================
 # THE PIERS — what carries the landing and the gallery over the passage
@@ -566,12 +663,42 @@ let stair_bal_b = union { stair_rb_4  translate { stair_rb_2 } 1.28 0.72 0 }
 # against walls now, which is the whole reason this stair is wide enough to walk on.
 let stair_bal_lw    = translate { repeat { translate { stair_baluster } 6.39 5.04 0 } z=0.32 nz=5 } 0 0 4.77
 let stair_bal_lwell = translate { stair_baluster } 8.01 5.04 4.725
-let stair_bal_gs    = translate { repeat { translate { stair_baluster } 0 6.30 4.59 } x=0.32 nx=7 } 12.56 0 0
+
+# THE GALLERY'S SOUTH RUN STOPS AT x = 13.50 NOW, because that is where the bridge goes through it.
+# The repeat is left exactly as it was and CLIPPED, rather than re-counted: `repeat` gives an odd
+# number of copies about its centre, so a run of the ten balusters that survive cannot be written as
+# one, and re-centring it would move every baluster on the gallery to make room for the last three
+# leaving.
+#
+# THE CLIP EDGE IS IN AIR AND THAT IS THE WHOLE OF WHY 13.36. requests/library.md's second entry is
+# what happens otherwise — a zone edge falling inside a member leaves a sliver one or two voxels
+# wide, floating, invisible and counted. The balusters stand on 0.32 centres and each is 0.216 across
+# its bronze shoe, so there is a 0.104 gap between neighbours: the last one kept is at 13.20 and its
+# shoe ends at 13.308, the first one dropped is at 13.52 and its shoe begins at 13.412, and 13.36 is
+# the middle of that gap. Nothing is cut.
+let stair_bal_gs    = intersection {
+    translate { repeat { translate { stair_baluster } 0 6.30 4.59 } x=0.32 nx=7 } 12.56 0 0
+    box 10.00 6.00 4.00   13.36 8.00 5.00
+}
 let stair_bal_gwell = translate { stair_baluster } 10.11 6.30 4.725
+
+# THE BRIDGE'S WEST GUARD — four balusters on the same 0.32 pitch, on the line x = 13.59, which is
+# 0.09 in from the slab edge at 13.50: the same setback the gallery's own run has from its edge at
+# z = 4.50, so the two rails meet in one plane at the corner newel and neither overhangs more than
+# the other. Placed by DOUBLING and not by `repeat`, which is this file's idiom for a run that is
+# not an odd count, and which is what the raking runs above are placed by.
+#
+# FOUR AND NOT FIVE. z 3.36 to 4.32 covers the run from enfilade.clip's wall face at 3.115 to the
+# corner newel at 4.4775: a fifth at 3.04 would stand with its shoe 0.045 off the south end of my own
+# slab and on enfilade.clip's, which would be a floating member in `--part part_stair` and a piece of
+# my stone resting on somebody else's in the assembled building.
+let stair_bg_1   = translate { stair_baluster } 13.59 6.30 3.36
+let stair_bg_2   = union { stair_bg_1  translate { stair_bg_1 } 0 0 0.32 }
+let stair_bal_bw = union { stair_bg_2  translate { stair_bg_2 } 0 0 0.64 }
 
 let stair_balusters = union {
     stair_bal_a stair_bal_b
-    stair_bal_lw stair_bal_lwell stair_bal_gs stair_bal_gwell
+    stair_bal_lw stair_bal_lwell stair_bal_gs stair_bal_gwell stair_bal_bw
 }
 
 # ================================================================================================
@@ -721,11 +848,16 @@ let stair_rail_lwell = union {
     ovolo  8.01  5.875 4.41   8.1225 5.965 5.04
     ovolo  8.01  5.875 4.41   7.8975 5.965 5.04
 }
+# THE GALLERY'S SOUTH RAIL ENDS AT 13.65 AND NOT AT 15.10, and the 0.06 past the corner newel's own
+# centre line at 13.59 is the same idiom the raking rails use at both ends: run it INTO the newel
+# that terminates it and no further, so it dies inside rather than showing an end grain. It used to
+# run to 15.10 and finish against a newel at 15.01 standing in the east wall; that newel is gone with
+# it, because the 1.60 m of edge it guarded is the bridge now.
 let stair_rail_gs = union {
-    fillet 10.02 7.000 4.515  15.10 7.045 4.665 run=x
-    box    10.02 7.045 4.53   15.10 7.135 4.65  round=0.012
-    ovolo  10.02 7.135 4.59   15.10 7.225 4.7025 run=x
-    ovolo  10.02 7.135 4.59   15.10 7.225 4.4775 run=x
+    fillet 10.02 7.000 4.515  13.65 7.045 4.665 run=x
+    box    10.02 7.045 4.53   13.65 7.135 4.65  round=0.012
+    ovolo  10.02 7.135 4.59   13.65 7.225 4.7025 run=x
+    ovolo  10.02 7.135 4.59   13.65 7.225 4.4775 run=x
 }
 let stair_rail_gwell = union {
     fillet 10.035 7.000 4.59   10.185 7.045 5.04
@@ -734,9 +866,22 @@ let stair_rail_gwell = union {
     ovolo  10.11  7.135 4.59    9.9975 7.225 5.04
 }
 
+# THE BRIDGE'S RAIL, the same section standing still and running along z instead of along x, 0.925
+# over the floor it guards exactly as every other level rail in this file is. Its NORTH end runs to
+# 4.53, which is 0.0525 inside the corner newel; its SOUTH end runs to 3.05, which is 0.065 inside
+# enfilade.clip's own west wall (that block reaches z 3.115 over x 13.585..13.95, and this rail
+# occupies 13.4775..13.7025) — so it dies into stone at one end and into a newel at the other, and
+# there is no free end on it anywhere.
+let stair_rail_bw = union {
+    fillet 13.515 7.000 3.05   13.665 7.045 4.53
+    box    13.530 7.045 3.05   13.650 7.135 4.53 round=0.012
+    ovolo  13.590 7.135 3.05   13.7025 7.225 4.53
+    ovolo  13.590 7.135 3.05   13.4775 7.225 4.53
+}
+
 let stair_rails = union {
     stair_rail_a stair_rail_b
-    stair_rail_lw stair_rail_lwell stair_rail_gs stair_rail_gwell
+    stair_rail_lw stair_rail_lwell stair_rail_gs stair_rail_gwell stair_rail_bw
 }
 
 # THE NEWELS. 0.225 square (M/2), from the surface they stand on to the rail top and NOT ONE
@@ -761,6 +906,12 @@ let stair_newel_foot = box -0.1005 -0.018 -0.1005   0.1005 1.093 0.1005 round=0.
 # in reverse: the raking rail leaves the landing 0.18 higher than the level rail arrives at it,
 # because a rail is a fixed height over its own nosing and the first nosing is one riser up. The
 # newel is what absorbs that, which is what a newel is for.
+#
+# AND THE ONE AT (13.59, 6.30, 4.59) IS THE CORNER, which is the other thing a newel is for. It
+# stands where the gallery's south rail turns south onto the bridge's west rail, both of them level
+# and both 0.925 over the same floor, so it absorbs no height at all — it is 0.225 square exactly on
+# the two rails' centre lines, so each dies inside it and neither shows an end. The newel at 15.01
+# that used to close the gallery's run against the east wall is gone with the run.
 let stair_newels = union {
     translate { stair_newel_foot } 13.54 1.80 4.41
     translate { stair_newel }       8.01 5.04 4.41
@@ -769,7 +920,7 @@ let stair_newels = union {
     translate { stair_newel }       6.39 5.04 6.52
     translate { stair_newel }      10.11 6.30 4.59
     translate { stair_newel }      10.11 6.30 5.04
-    translate { stair_newel }      15.01 6.30 4.59
+    translate { stair_newel }      13.59 6.30 4.59
 }
 
 # ================================================================================================
@@ -806,7 +957,7 @@ let void_stair = mirror { stair_fl_joints } axis=x
 #
 #     --part stair_probe_head        -> "the clip is empty"
 #
-# Five volumes. Every one of them is 2.40 m tall — the circulation figure and not the 2.10 an
+# Six volumes. Every one of them is 2.40 m tall — the circulation figure and not the 2.10 an
 # opening is allowed — and every one of them is AT LEAST 1.20 m WIDE between the members that
 # stand beside it, which is the half of this check that did not exist before and the half that
 # found the real faults:
@@ -823,6 +974,13 @@ let void_stair = mirror { stair_fl_joints } axis=x
 #           where you step off the lower flight, past the guard over the well.
 #   gall    2.40 over the gallery, 1.79 wide, and 1.35 where you arrive off the upper flight past
 #           the newel at the head of the well.
+#   brg     2.40 over the bridge and over the east end of the gallery it turns off, 1.31 wide the
+#           whole way — from the bridge rail's face at 13.7025 to 0.04 short of the east wall — and
+#           running the full 3.39 m from enfilade.clip's archway to the north wall, so it crosses
+#           the line the gallery's south balustrade used to stand on. THAT CROSSING IS THE WHOLE
+#           POINT OF THE BOX: before the balustrade was cut back to x = 13.50 this volume caught the
+#           rail, the four balusters standing between 13.84 and 14.80 and the newel at 15.01, which
+#           is exactly what a person walking from the stair to the ballroom would have caught.
 #
 # WHAT THE PROBE CANNOT SEE, so that nobody trusts it further than it goes: it tests THIS part
 # against ITSELF. Something another fragment hangs over the passage later will not show up here,
@@ -877,15 +1035,39 @@ let stair_probe_gall = union {
     box 10.26 6.30 5.17   15.07 8.70 6.52
 }
 
+# THE BRIDGE AND THE TURN ONTO IT, in one box, because they are one piece of floor and the whole
+# point of it is that a person crosses from the gallery to the picture gallery without stopping.
+# x 13.75 .. 15.04 is 1.29 m wide — 0.0475 clear of the bridge rail's own face at 13.7025 and 7 mm
+# clear of enfilade.clip's east window architrave, which stands 0.045 proud of walls.clip's face at
+# 15.10 and reaches x = 15.047 — and it runs from z 3.13, which is 0.015 north of enfilade.clip's
+# west wall, to 6.52 at the north wall. 2.40 m tall over a floor whose top is 6.30.
+#
+# 15.04 AND NOT 15.06, AND THE 20 MM IS SOMEBODY ELSE'S MEMBER STANDING IN MY WELL. enfilade.clip's
+# architrave round the east light at z = 2.70 is drawn `mirror { } axis=z` about that axis and
+# translated, so its north jamb lands at z 3.3745..3.4805 and its head runs y 8.542..8.648 across
+# the whole bay — and enfilade.clip's own north face is z = 3.115, so both of them stand 0.27 m
+# outside the room they dress, in the stair well, in this bridge's air. They cost the route nothing
+# (the clear is still 1.3445 m) and they are written up in requests/stair.md so that the next person
+# who widens anything here knows they are there.
+#
+# THIS BOX IS ALSO BOUND IN clips/facility/requests/stair-route-probe.clip AS `sr_brg_e`, WHICH IS
+# THE SAME NUMBERS ASKED OF THE WHOLE BUILDING RATHER THAN OF THIS PART. Two questions, not one:
+# here it says nothing OF MINE stands in the way, there it says nothing of ANYBODY'S does. The
+# second is the one that matters on a bridge, because the bridge is the only member in this file
+# that has another fragment's stone at both ends of it.
+let stair_probe_brg = box 13.75 6.30 3.13   15.04 8.70 6.52
+
 # The five, each on its own so a failure can be found rather than only seen.
 let stair_probe_p_pass = intersection { stair_east stair_probe_pass }
 let stair_probe_p_ra   = intersection { stair_east stair_probe_ra }
 let stair_probe_p_rb   = intersection { stair_east stair_probe_rb }
 let stair_probe_p_land = intersection { stair_east stair_probe_land }
 let stair_probe_p_gall = intersection { stair_east stair_probe_gall }
+let stair_probe_p_brg  = intersection { stair_east stair_probe_brg }
 
 let stair_probe_all = union {
     stair_probe_pass stair_probe_ra stair_probe_rb stair_probe_land stair_probe_gall
+    stair_probe_brg
 }
 let stair_probe_head = intersection { stair_east stair_probe_all }
 
@@ -953,12 +1135,9 @@ let stair_rig = union {
 # the sunk panels of the piers, which is the only saturated colour down in the passage.
 #
 # Every rule keys on one of this file's own shapes, folded to both wings so the west stair is
-# painted by the same rules as the east and cannot drift, and every one says below=0.02: the
-# manifest displaces the whole building by 12 mm of grain at the end, and a test at zero misses
-# the voxels the displacement made and leaves a rind of limestone over the part that painted it.
-# The rule keyed on a shape a `rotate` put where it is says 0.035, which is BRIEF.md rule 5:
-# a rotated surface lies nowhere near a voxel boundary, so between 3 and 16 per cent of its own
-# solid voxels fall outside its own test at 0.02 and come back wearing the base coat.
+# painted by the same rules as the east and cannot drift. Four of the five say below=0.035 and the
+# fifth says 0.02, and which is which is BRIEF.md rule 5 rather than taste — see the note over the
+# rules themselves for the measurement that moved three of them.
 #
 # NO WEATHERING, and that is a decision. `weather` displaces a surface, and the two surfaces this
 # fragment is judged on are the treads, which carry the facility's worst-rise number, and the
@@ -966,16 +1145,61 @@ let stair_rig = union {
 # would tell you about. The wear in the treads is geometry, written down, and repeatable; noise
 # would be neither. Inside stone stays clean.
 
+# AND THE THREE SOLID RULES SAY 0.035 NOW, NOT 0.02, AND THAT IS A MEASURED FIX AND NOT A TIDY-UP.
+#
+# The paragraph above is what this file used to say and it is out of date: the manifest's 12 mm of
+# grain is DROPPED by the sampler (BRIEF.md rule 5 records the correction), so the number was never
+# sized against the thing it named. What actually pushes a voxel outside its own rule is coverage
+# against centre — a voxel is solid if ANY of it is in the shape and painted by a rule tested at its
+# CENTRE — and for a shape a `translate`, `rotate`, `around` or `repeat` put where it stands, 3 to
+# 16 per cent of its own solid voxels fall outside its own test at 0.02.
+#
+# ALMOST NOTHING IN THIS FILE IS DRAWN WHERE IT STANDS. The nosings of both flights are chains of
+# translates, the wear ellipsoids are, the second pier is, every one of the fifty-one balusters and
+# every newel is, and the two raking plinths, the two wall strings and the upper flight's own waist
+# are `translate { rotate { } }`. So the granite, the marble and the bronze all needed the larger
+# number.
+#
+# MEASURED, TWO ARMS, AND THE ONLY INSTRUMENT THAT ANSWERS IT IS A BASE COAT OF SOMETHING ABSURD.
+# This stair on its own — the contract, the order, windows.clip and this file, nothing else — over
+# `paint lawn`, in a box narrowed to the stair. Any `lawn` voxel inside `part_stair` is a voxel of
+# this fragment's own geometry that no rule of this fragment reached. The two arms differ only in
+# whether these three lines say 0.02 or 0.035:
+#
+#     --part part_stair --metre 32     0.02:  1,653,274 voxels, 5 materials, lawn   824
+#                                      0.035: 1,714,196 voxels, 4 materials, lawn  NONE
+#     --part part_stair --metre 16     0.02:    211,514 voxels,             lawn 3,294  (1.56%)
+#                                      0.035:   219,164 voxels,             lawn 1,680  (0.77%)
+#
+# AT THE CONTRACT'S OWN METRE THE RIND IS GONE — `lawn` is not a material record at all — and at
+# metre 16 it halves and does not, which is the arithmetic working rather than a residue: 0.035 is
+# 1.1 voxels at metre 32 and 0.56 of one at metre 16, so it clears the half-voxel of
+# coverage-against-centre error at the metre this building is sampled at and not at half of it.
+#
+# `--part part_stair` ON THE ASSEMBLED FACILITY IS NOT THAT INSTRUMENT, and reading it that way cost
+# an hour: it reports two limestone records, 838 and 394 at metre 8, and the 838 does not move when
+# these rules change, because where this stair beds 0.15 into walls.clip and 0.05 into podium.clip
+# its voxels are in range of THEIR rules too. See clips/facility/requests/stair.md section 9.
+#
+# 0.035 costs nothing but a halo of the same width, and every rule here is keyed on one of this
+# file's own shapes, so the halo lands on this file's own neighbours.
+#
+# THE PORPHYRY RULE STAYS AT 0.02 AND MUST. It is the one rule here that is a STENCIL rather than a
+# solid — a zone got by shrinking the pier by 0.06 — and BRIEF.md says in as many words that a
+# stencil with no solid of its own should not have the larger number, because it cannot leave a rind
+# and a bigger `below` only widens the line. It has 0.06 of margin to work in and 0.035 plus the
+# half-voxel of centre error at metre 32 is 0.051 of it; the note at that rule records what happened
+# the first time that margin was cut too fine.
 let stair_granite = mirror { union { stair_flight_a stair_piers } } axis=x
-paint granite where=stair_granite below=0.02
+paint granite where=stair_granite below=0.035
 
 let stair_marble = mirror { union { stair_landing stair_flight_b stair_gallery
                                     stair_plinths stair_strings
                                     stair_balusters stair_newels } } axis=x
-paint marble where=stair_marble below=0.02
+paint marble where=stair_marble below=0.035
 
 let stair_bronze = mirror { stair_rails } axis=x
-paint bronze where=stair_bronze below=0.02
+paint bronze where=stair_bronze below=0.035
 
 # THE SHOES AND COLLARS, which are the one place in this file a rule has to find a band of a shape
 # rather than a shape. They are unioned into `stair_baluster` itself so that the doubling carries
@@ -1004,6 +1228,8 @@ let stair_fix_zone = union {
     box 10.02 6.962 4.45  15.10 7.002 4.73
     box  9.97 6.298 4.59  10.25 6.338 5.04
     box  9.97 6.962 4.59  10.25 7.002 5.04
+    box 13.45 6.298 3.20  13.73 6.338 4.45
+    box 13.45 6.962 3.20  13.73 7.002 4.45
 }
 let stair_fixings = mirror { intersection { stair_balusters stair_fix_zone } } axis=x
 paint bronze where=stair_fixings below=0.035

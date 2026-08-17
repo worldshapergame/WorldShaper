@@ -1,0 +1,95 @@
+# floors-probe — the ONE VOXEL LAYER anybody standing in the rotunda actually sees, in the WHOLE
+# building, so a floor that has been painted over by a later fragment is caught in seconds.
+#
+#   bash tools/clipcheck.sh clips/facility/requests/floors-probe.clip --metre 32
+#
+# ================================================================================================
+# WHY IT IS WRITTEN THIS WAY AND NOT THE OBVIOUS WAY
+# ================================================================================================
+#
+# On 2026-08-17 the owner looked at the build and said "the halls and rotunda floor are white and
+# dont show their patterns". They were. The rotunda's pavement measured 101,605 voxels of visible
+# face, 100.00% LIMESTONE — the manifest's base coat, i.e. white — with every one of its nine
+# stones painting nothing anybody could see.
+#
+# THE FIRST VERSION OF THIS PROBE INCLUDED ONLY rotunda.clip AND halls.clip AND IT PASSED. That is
+# the whole lesson and it is why this file is shaped the way it is. Sampled on their own the two
+# rooms paint perfectly: terracotta 32,166 voxels, lapis 13,952, every rule alive, no limestone
+# anywhere. The fault only exists when the REST OF THE MANIFEST IS PRESENT, because it is not a
+# fault of theirs at all — it is crypt.clip, included after them, painting its own ceiling slab,
+# whose top face IS their floor.
+#
+# So a probe that isolates a room cannot see this class of fault by construction, and an isolating
+# probe that passes is worse than no probe: it is a green light on a broken floor. THIS FILE
+# THEREFORE INCLUDES THE WHOLE BUILDING and narrows only the BOX.
+#
+# ================================================================================================
+# WHAT `clipcheck` CANNOT TELL YOU, WHICH IS WHY THE NUMBERS BELOW ARE WRITTEN OUT
+# ================================================================================================
+#
+# `never asked` / `never matched` / `too coarse` are all about whether a rule MATCHED. Not one of
+# the floor rules was in any of them. Every rule matched, and every rule then LOST to a later coat.
+# There is no line in the report for that, and there cannot be one from rule bookkeeping alone —
+# the only thing that shows it is the finished material shares on the surface a player sees.
+#
+# So read `materials`, and read it against these:
+#
+#   ROTUNDA, bounds as written below, metre 32          101,605 voxels of visible pavement
+#     14 records: marble 29.48  marble_hot 24.02  slate 12.76  porphyry 11.81  marble 9.58
+#     verde 3.48  lapis 2.31  travertine 2.31  plaster 1.70  onyx 0.95  granite 0.73
+#     plaster 0.46  porphyry 0.32  marble 0.08 — and NO LIMESTONE IN ANY OF THEM.
+#     (Before: ONE record, limestone, 100.00%.)
+#
+#   HALLS, with the bounds line swapped for the one commented out below
+#                                                        33,746 voxels of visible pavement
+#     8 records: terracotta 45.43  lapis 17.34  marble 14.83  marble 12.21  porphyry 6.03
+#     granite 2.47  plaster 1.10  granite 0.59 — and NO LIMESTONE IN ANY OF THEM.
+#     (Before: limestone 69.06%, terracotta 5.89%.)
+#
+# `clipcheck` prints only the twelve largest records and summarises the rest, so on the rotunda two
+# of the fourteen are below the fold. The full list above was read off a local build with that cap
+# raised to sixty; if you need to do the same, `constexpr usize kShown` is in src/forge/measure.cpp.
+#
+# ANY LIMESTONE IN EITHER IS THE FAULT. It is the base coat and nothing in either room paints it.
+# One per cent is a rind; seventy is a floor that has been painted over; a hundred is what this
+# probe was written the day after.
+#
+# IGNORE `components`. It says 46 on the rotunda and 7 on the halls and both are correct: this box
+# is one voxel thick, so it cuts the building into as many islands as the floor has thresholds,
+# column feet and bay recesses standing in it. `volume` is the number to watch instead — 101,605
+# and 33,746 — because a floor that has LOST stone is a different fault from one that has lost
+# paint, and this probe should be able to tell you which you are looking at.
+#
+# ================================================================================================
+# THE BOX, AND WHY IT IS ONE VOXEL TALL
+# ================================================================================================
+#
+# The floor is at y = 1.80. At metre 32 a voxel is 0.03125, so the cell carrying the visible floor
+# face spans 1.78125..1.8125 and its centre is 1.796875. `bounds` below is exactly that layer: 1.7813
+# to 1.8125. Everything under it is buried stone that no one will ever see and that every fragment
+# in the building is entitled to paint however it likes, and including it only dilutes the answer.
+#
+# It is one layer AT METRE 32 AND ONLY AT METRE 32. That is the metre the site bakes at and the
+# metre the contract names; at any other the layer is somewhere else and this box is wrong. Run it
+# at 32.
+#
+# It costs about a minute against the whole building. `--part` is NOT used, deliberately: `--part`
+# swaps one binding into `solid` and the point here is the finished building with every void cut
+# and every coat laid, which is the only thing that can show a fragment losing to another one.
+#
+# THE `bounds` LINE COMES AFTER THE INCLUDE. facility.clip states the building's own box and would
+# quietly undo a narrower one written above it. facility.clip also ends with `origin 0 -3.50 0`,
+# which is applied after the whole file is parsed and shifts the solid, every paint rule AND these
+# bounds together — so the numbers here are written in the model space the two rooms are drawn in,
+# and the report's `worldbox` comes back at y -1.719..-1.688. That is correct and not a fault.
+
+include "../../facility.clip"
+
+metre 32
+
+# The rotunda's pavement: r <= 5.10, so a square of 5.15 takes all of it and nothing else's.
+bounds -5.15 1.7813 -5.15   5.15 1.8125 5.15
+
+# The halls, east and west — swap for the line above. x 5.40..13.50 is the room, z +-2.025 its
+# width; 5.30 and 13.60 clear the reveal at one end and the wall at the other.
+# bounds 5.30 1.7813 -2.10   13.60 1.8125 2.10

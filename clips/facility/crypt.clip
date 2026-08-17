@@ -949,7 +949,53 @@ let crypt_walk = intersection { part_crypt  union { crypt_walk_x crypt_walk_z cr
 # limestone vault at 205, and water at 24. That is a five-stop roughness ladder inside one room lit
 # by one kind of light.
 
-let crypt_zone_shell = union { crypt_shell crypt_slot_shells crypt_archivolts }
+# ------------------------------------------------------------------------------------------------
+# AND EVERY ZONE BELOW STOPS AT 1.74375, BECAUSE ABOVE THAT MY STONE IS SOMEBODY ELSE'S FLOOR.
+#
+# This file's own note twenty pages up says it: "My ceiling slab runs 1.6875..1.80 and meets all of
+# them" — the vestibule's floor, the rotunda's, the halls', the stair's, all at 1.80. What that
+# note did not carry through to the paint section is that MEETING THEM MEANS SHARING A VOXEL WITH
+# THEM. At metre 32 the cell that carries the visible floor face spans 1.78125..1.8125 and its
+# centre is 1.796875, which is inside `crypt_block` (top 1.80). So my rules match it, they are
+# included AFTER rotunda.clip and halls.clip, and a later coat covers an earlier one.
+#
+# Measured on 2026-08-17, whole building, metre 32, the top voxel layer of each pavement:
+#
+#   the rotunda   101,605 voxels, 100.00% LIMESTONE — nine floor stones painting nothing visible
+#   the halls      33,746 voxels,  69.06% limestone, terracotta 1,986 — only the strip past
+#                  x = 12.00, which is outside my own footprint, survived
+#
+# The owner's words were "the halls and rotunda floor are white and dont show their patterns", and
+# white is the manifest's base coat showing through. Not one of their rules was dead: every one
+# matched and every one then LOST, which is the failure `clipcheck` has no line for — `never
+# matched` is about matching, and this is about being painted over afterwards.
+#
+# 1.74375 is 1.80 − M/8. It clears the web crown at 1.725 by 0.019 so the vault I actually own is
+# still painted, and it stands below the lowest voxel centre the floor above can have at any metre
+# this building is sampled at (1.796875 at 32, 1.78125 at 16) by more than the 0.02 band. IT MOVES
+# NO STONE: `crypt_block` is untouched and both pavements measured the identical 101,605 and 33,746
+# voxels before and after. Only which rule wins the top cell changes.
+#
+# After, with rotunda.clip's and halls.clip's own `below=` audit of the same day in place: the
+# rotunda's top layer carries NO LIMESTONE IN ANY OF ITS FOURTEEN RECORDS and reads marble 29.48,
+# marble_hot 24.02, slate 12.76, porphyry 11.81, marble 9.58, verde 3.48, lapis 2.31, travertine
+# 2.31, plaster 1.70, onyx 0.95, granite 0.73 per cent and a tail of four hundred voxels; the
+# halls' carries none in any of its eight and reads terracotta 45.43, lapis 17.34, marble 14.83
+# and 12.21, porphyry 6.03.
+#
+# The whole building at metre 8 across this change: volume 1,840,191 voxels and surface 779,152
+# faces both IDENTICAL, components 660 both sides, materials 224 -> 231. Seven material records
+# came back and not one voxel of stone moved.
+#
+# `clips/facility/requests/floors-probe.clip` measures that one cell in seconds. If you ever need
+# this lid raised, run it first.
+let crypt_paint_lid  = box -12.10 -1.20 -9.40   12.10 1.74375 6.20
+# ------------------------------------------------------------------------------------------------
+
+let crypt_zone_shell = intersection {
+    union { crypt_shell crypt_slot_shells crypt_archivolts }
+    crypt_paint_lid
+}
 paint tuff where=crypt_zone_shell below=0.02
 
 let crypt_zone_floor = intersection {
@@ -980,9 +1026,11 @@ let crypt_zone_wear = intersection {
 }
 paint onyx where=crypt_zone_wear below=0.035
 
+# 1.85 was 0.05 ABOVE the top of the slab this zone is meant to paint the underside of, so it took
+# the floor of every room above with it. 1.74375 is the lid argued at `crypt_paint_lid`.
 let crypt_zone_ceiling = intersection {
     union { crypt_shell crypt_slot_shells }
-    box -12.00 1.55 -9.20   12.00 1.85 5.90
+    box -12.00 1.55 -9.20   12.00 1.74375 5.90
 }
 paint limestone where=crypt_zone_ceiling below=0.02
 

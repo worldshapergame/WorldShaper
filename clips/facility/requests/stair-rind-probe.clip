@@ -1,0 +1,66 @@
+# stair-rind-probe — IS ANY OF THIS STAIR WEARING THE BASE COAT?
+#
+# BRIEF.md rule 5 says a shape a `translate`, `rotate`, `around` or `repeat` put where it stands owns
+# voxels whose CENTRES are outside it, so a rule tested at the centre misses them and they fall
+# through to whatever coat is underneath. `clipcheck` cannot see it: the rule fired, so `never fired`
+# is empty; the geometry is joined, so `components` is unaffected; and a thousand voxels do not move
+# a material share to four decimal places.
+#
+# requests/ballroom.md sets out the only test anybody has found for it — paint the base coat
+# something absurd in a throwaway copy and look for what is still wearing it — and describes it as a
+# `sed`. This is that test as a file, so it can be run again rather than reconstructed.
+#
+# HOW IT WORKS. `paint lawn` is the base coat, exactly where the manifest puts `paint limestone`.
+# Nothing in this stair is green. So every `lawn` voxel that `--part part_stair` reports is a voxel
+# of stair.clip's own geometry that no rule of stair.clip reached.
+#
+#     bash tools/clipcheck.sh clips/facility/requests/stair-rind-probe.clip --metre 32 --part part_stair
+#     bash tools/clipcheck.sh clips/facility/requests/stair-rind-probe.clip --metre 16 --part part_stair
+#
+# WHAT IT SAID, 2026-08-17, two arms differing only in whether stair.clip's three solid paint rules
+# say `below=0.02` or `below=0.035`:
+#
+#                          voxels      material records      lawn
+#   metre 32   0.02      1,653,274            5               824
+#   metre 32   0.035     1,714,196            4              NONE
+#   metre 16   0.02        211,514                          3,294   (1.56%)
+#   metre 16   0.035       219,164                          1,680   (0.77%)
+#   metre  8   0.035        28,170            5             1,162   (4.12%)
+#
+# At the contract's own metre the rind is gone and `lawn` is not a record at all. At metre 16 it
+# halves, and at metre 8 it is worse than either — and that ORDER is the whole explanation. The
+# error a rule has to clear is half a voxel of coverage-against-centre, which is 0.0156 at metre 32,
+# 0.031 at metre 16 and 0.0625 at metre 8; `below=0.035` is 1.1 voxels of margin at the first, 0.56
+# of one at the second and 0.28 at the third. It clears the error at the metre this building is
+# sampled at and at no coarser one, which is why the contract's metre is 32 and why a rind measured
+# at metre 8 says nothing about what ships.
+#
+# WHY windows.clip IS HERE AND NOTHING ELSE IS. stair.clip names `void_windows` — deliberately, in
+# its own words, because a fragment standing inside somebody else's cutter has no other way to find
+# out — so that file has to be parsed for this one to. Its own paint rules key on its own shapes and
+# none of them reaches the stair; it contributes no `lawn` and no geometry to `part_stair`.
+#
+# WHY NOT THE WHOLE FACILITY. Because `--part part_stair` on the assembled building answers a
+# DIFFERENT QUESTION and looks like this one. It reports two limestone records, 838 and 394 at
+# metre 8, and the 838 does not move when stair.clip's rules change: where this stair beds 0.15 into
+# walls.clip and 0.05 into podium.clip, its voxels are in range of THEIR rules as well, and what
+# comes back is their paint on my stone rather than my paint failing. An hour went into reading it
+# the other way. The narrow arm above is the one that answers the question asked.
+#
+# `metre` and `bounds` come AFTER EVERY include: every fragment includes _contract.clip again and the
+# contract re-states the building's own 34 x 21 x 25 m box. The box below is the stair plus a margin
+# — x +-15.25, y 1.75..7.225, z 2.875..6.875 — and it CLIPS NOTHING, which matters because the
+# component count is read from the same runs.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+paint lawn
+
+include "../windows.clip"
+include "../stair.clip"
+
+metre 32
+bounds -15.40 1.70 2.80   15.40 7.30 6.95
+
+solid part_stair

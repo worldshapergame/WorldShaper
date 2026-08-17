@@ -790,17 +790,53 @@ let void_rotunda = union { rotunda_coffers rotunda_oculus rotunda_floor_cuts }
 # ================================================================================================
 #
 # Every rule keys on a shape bound in this file and every one tests below=0.02 and not below=0,
-# because the manifest displaces the whole building by 12 mm of grain at the end and a voxel that
-# exists only because the grain pushed the surface out lies OUTSIDE the shape that made it. At
-# below=0 those voxels match nothing, fall back to the base coat, and leave a pale limestone rind
-# over a marble room.
+# because a voxel is decided SOLID by coverage and PAINTED by a rule tested at its centre: a voxel
+# that exists only because part of the cell was inside can have its centre OUTSIDE the shape that
+# made it. At below=0 those voxels match nothing, fall back to the base coat, and leave a pale
+# limestone rind over a marble room.
+#
+# AND `below=0.035` WHERE A TRANSFORM PUT THE SHAPE, which is BRIEF.md rule 5's second number and
+# the larger half of the same mechanism: for a shape a `rotate`, `translate`, `around`, `repeat` or
+# `displace` moved, the surface no longer lies anywhere near a voxel boundary and 3 to 16 per cent
+# of its own solid voxels fall outside its own test. This file had it on two rules — the threshold
+# stones — and wanted it on nine more; they are marked `# 0.035:` where they stand. `mirror` alone
+# is NOT one of them and none of the plain rules were touched, because folding x -> |x| leaves a
+# surface exactly where it was relative to the grid.
+#
+# THE SEVEN RADII ARE THE REASON THIS MATTERED. Thirteen boxes turned by `rotate` make the
+# radiating pavement, and at 0.02 a share of every spoke's own voxels was painting nothing and
+# showing the base coat through the figure.
 #
 # Order matters — a later coat covers an earlier one — and the order here is: the room, then the
 # floor from the rim inwards, then the hollows, then what stands in them.
+#
+# ------------------------------------------------------------------------------------------------
+# AND THE ORDER THAT IS NOT THIS FILE'S TO SET, WRITTEN HERE BECAUSE IT COST THE WHOLE PAVEMENT.
+#
+# THE TOP VOXEL OF THIS PAVEMENT IS NOT ONLY MINE. `rotunda_floor` runs 1.665..1.80. The podium is
+# solid under it. crypt.clip's ceiling slab runs 1.6875..1.80 and its own notes say it "meets all
+# of them". At metre 32 the cell carrying the visible floor face spans 1.78125..1.8125 with its
+# centre at 1.796875 — inside all three at once, so all three fragments' rules match it and the
+# LAST ONE IN THE MANIFEST WINS.
+#
+# crypt.clip is included after this file. On 2026-08-17 its `crypt_zone_shell` (tuff) and
+# `crypt_zone_ceiling` (limestone, box top 1.85) both reached that cell and this pavement's visible
+# layer measured 101,605 voxels, 100.00% LIMESTONE — every one of the nine stones below painting
+# nothing anybody can see. Not one rule was dead: each matched, and each then lost. `clipcheck`
+# cannot report that, because `never matched` is about matching and this is about losing.
+#
+# NOTHING IN THIS FILE CAN FIX IT. Paint order is include order and no key changes it. What this
+# file can do is say it: a fragment that paints its own mass up to y = 1.80 under this room takes
+# this floor with it. `clips/facility/requests/floors-probe.clip` measures that one cell in seconds.
+# ------------------------------------------------------------------------------------------------
 
-paint marble where=rotunda_cut below=0.02
-paint marble where=rotunda_entab below=0.02
-paint marble where=rotunda_columns below=0.02
+# 0.035: the room's cut face carries the 0.030 displacement on `rotunda_wall_t` and the bays are
+# put where they are by `rotate` and `translate`.
+paint marble where=rotunda_cut below=0.035
+# 0.035: the entablature and the giant order are placed round the room by `rotate`/`translate`, so
+# a shaft's flute and a dentil's arris stand nowhere near a voxel boundary.
+paint marble where=rotunda_entab below=0.035
+paint marble where=rotunda_columns below=0.035
 paint limestone where=rotunda_attic below=0.02
 
 # THE FRIEZE, IN PORPHYRY, AND IT IS THERE FOR THE VAULT AND NOT FOR ITSELF.
@@ -885,12 +921,16 @@ let rotunda_spokes_b = intersection {
     rotunda_fl_outer
 }
 
+# The rings and the disc are cylinders drawn about the axis they stand on, so they keep 0.02. THE
+# TWO SPOKE ZONES DO NOT: thirteen boxes turned by `rotate` to seven radii is exactly the shape
+# BRIEF.md rule 5's second number was written for, and a spoke is 0.135 and 0.090 across — two and
+# three voxels — so a rind is a broken line rather than a soft edge.
 paint slate      where=rotunda_fl_border   below=0.02
 paint marble     where=rotunda_fl_outer    below=0.02
-paint verde      where=rotunda_spokes_b    below=0.02
+paint verde      where=rotunda_spokes_b    below=0.035
 paint lapis      where=rotunda_fl_ring_out below=0.02
 paint marble_hot where=rotunda_fl_field    below=0.02
-paint porphyry   where=rotunda_spokes_a    below=0.02
+paint porphyry   where=rotunda_spokes_a    below=0.035
 paint porphyry   where=rotunda_fl_star     below=0.02
 paint verde      where=rotunda_fl_ring_in  below=0.02
 paint marble     where=rotunda_fl_disc     below=0.02
@@ -979,13 +1019,19 @@ let rotunda_niche_zone = intersection {
     box -5.60 2.35 -5.60   5.60 6.40 5.60
 }
 
+# The coffer zone is two ellipsoids about the dome's own axis and keeps 0.02. The niche zone is a
+# `rotate` of the niche cutter folded twice, so it takes 0.035 — and the argument three paragraphs
+# up, that the lining came back grey with a green ring round the mouth, is the SAME mechanism
+# arriving from the other side: a subtraction and a transform both put a voxel's centre outside the
+# shape its rule names.
 paint plaster where=rotunda_cof_zone   below=0.02
-paint verde   where=rotunda_niche_zone below=0.02
+paint verde   where=rotunda_niche_zone below=0.035
 
-# WHAT STANDS IN THEM. Last, so nothing above reaches them.
-paint marble   where=rotunda_dressings below=0.02
-paint porphyry where=rotunda_pedestals below=0.02
-paint gilt     where=rotunda_urns      below=0.02
+# WHAT STANDS IN THEM. Last, so nothing above reaches them — and all three are `rotate`d and
+# `translate`d into their four bays, so all three take 0.035.
+paint marble   where=rotunda_dressings below=0.035
+paint porphyry where=rotunda_pedestals below=0.035
+paint gilt     where=rotunda_urns      below=0.035
 
 # GILT AND NOT BRONZE, and the reason is the light and not the taste. Bronze is 112,88,52 at
 # roughness 110; against a verde lining at 62,92,74 in a room with no direct light in it, the urn
