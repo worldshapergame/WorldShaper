@@ -9003,3 +9003,40 @@ intersection**, asked 862 times, matching none.
 | D669 | **An unbounded cut is measured against the clip's own box, not refused** | decision | Matter exists only inside that box and it is always finite, so the answer is exact rather than a bound. Clamped to sampled voxel CENTRES: clamping to the author's bounds silently drops the outermost layer |
 | D669 | **A zero carries its verdict in the headline** | decision | A verdict at the end of a line gets quoted from the beginning. Four distinct outcomes now, and "NOT MEASURED ... this is not a clean bill" is one of them |
 | D669 | **A flaky test is fixed rather than re-run** | decision | `submitter_collisions() > 0` needs a race to occur; five seconds was not enough under load. Passes 8 of 8 now, but the load dropped too, so the evidence is not yet clean |
+
+### D670 — the site's guard against going backwards refused every full deploy there has ever been
+
+`pages.yml` had two publishing paths and one counter. `early` restores twelve per-shard caches and
+puts a PARTIAL site up in about two minutes; `index` waits out twelve bakes and then indexes, which
+is an hour and three quarters. Both wrote the bare run number to `web/data/run.txt`, and both
+refused to publish when the number already on the site was higher than their own.
+
+Every push starts a run, and that run's `early` bumps the published number inside two minutes. So by
+the time ANY full deploy reached its gate, a newer run had always published. Not sometimes — every
+time, for the life of the guard.
+
+Run 60 at `06fe7d2` is the record of it. Twelve shards green, then
+
+    82 clips baked, 2 could not be, in 3785.4 s -> web/data
+    facility.clip  32/m  1088 x 669 x 800  2024749 quads  ... 55.9 MB
+    543M  web/data
+    run 64 has already published; this one is 60 and stops here
+
+and `deploy` skipped. That single line is both faults the owner kept reporting: the facility was not
+on the list because the only list that had it on it was never published, and the clips looked like
+16 voxels to the metre because what WAS on the site was an early page assembled from caches baked
+before the resolution fix. Neither was a baker fault and neither was a viewer fault; the data was
+correct and complete on the runner and then thrown away.
+
+`run.txt` now carries `<run> <level>`, and a run stands down only when a newer run has published at
+the SAME level or better. Ordering between two full deploys is unchanged, which is what the guard
+was added for. A newer partial page no longer stands in the way of an older complete one, and an
+`early` still stands down for any higher number, because a partial page has nothing to win by
+racing.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D670 | **A monotonic publish guard needs a LEVEL as well as a number** | fault | Two publish paths, one counter, and wildly different durations: the fast partial path always won, so the complete site never published once |
+| D670 | **The site was right and the deploy was wrong** | honesty | Two faults were reported against the baker and the viewer for a day. The bake had been producing `facility.clip` at 32/m, 2,024,749 quads, all along |
+| D670 | **`tr -dc '0-9'` is the wrong reader for a published counter** | fault | A 404 HTML body concatenates into a huge number and refuses every deploy. `awk 'NR==1{print $1+0}'` reads one field of one line |
+| D670 | **The index job re-bakes what the shards already baked** | fault | `facility/rotunda.clip` took 289.6 s in shard 1 and 289.7 s again in `index` — 63 minutes of duplicated sampling per run. Cause not yet established; recorded here rather than guessed at |

@@ -319,18 +319,21 @@ jobs:
       # Three ways this deploy is not worth making, and every one of them is a way it would LOSE
       # something: an index with nothing in it, a real bake that finished while this job was
       # fetching, and a run newer than this one having already published.
+      #
+      # `run.txt` CARRIES A LEVEL AS WELL AS A NUMBER, and the reason is in `index`'s gate below.
+      # This is the partial publish, so it writes `early`.
       - name: Is this deploy still worth making
         id: gate
         run: |
           set -uo pipefail
-          echo "${{ github.run_number }}" > web/data/run.txt
+          echo "${{ github.run_number }} early" > web/data/run.txt
           n=$(python3 -c 'import json;print(len(json.load(open("web/data/index.json"))["clips"]))' 2>/dev/null || echo 0)
           now="$(curl -fsS --max-time 20 \
             "https://worldshapergame.github.io/WorldShaper/data/index.json?ci=$GITHUB_RUN_ID-b" \
             | python3 -c 'import json,sys;print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)"
           ahead="$(curl -fsS --max-time 20 \
             "https://worldshapergame.github.io/WorldShaper/data/run.txt?ci=$GITHUB_RUN_ID-b" \
-            2>/dev/null | tr -dc '0-9' || true)"
+            2>/dev/null | awk 'NR==1{print $1+0}' || true)"
           if [ "$n" -eq 0 ]; then
             echo "have=false" >> "$GITHUB_OUTPUT"; echo "no clips to show yet"
           elif [ -n "$now" ] && [ "$now" != "${{ steps.live.outputs.commit }}" ]; then
@@ -524,19 +527,53 @@ jobs:
       #
       # So the site carries the number of the run that made it, and no run publishes over a number
       # higher than its own. Cheap, and it does not serialise anything.
+      #
+      # ----------------------------------------------------------------------------------------
+      # AND A NUMBER ALONE MADE THIS GATE REFUSE EVERY FULL DEPLOY THERE HAS EVER BEEN.
+      #
+      # `early` and `index` were both writing the bare run number, and both refusing when the
+      # published number was higher. But the two are not the same kind of publish and they do not
+      # take the same time: `early` restores twelve caches and deploys a PARTIAL site in about two
+      # minutes, `index` waits out twelve bakes and then indexes, which is an hour and three
+      # quarters. Every push starts a run, and that run's `early` bumps the published number inside
+      # two minutes -- so by the time ANY full deploy reached this gate, a newer run had always
+      # published, and it always stopped here. Not sometimes. Every time.
+      #
+      # Measured, run 60, `06fe7d2`: all twelve shards green, `82 clips baked ... 543M web/data`,
+      # `facility.clip 32/m 1088 x 669 x 800 2024749 quads 55.9 MB` -- the whole building, at the
+      # contract's metre, indexed and compressed and ready. Then:
+      #
+      #   run 64 has already published; this one is 60 and stops here
+      #
+      # and `deploy` was skipped. That is both of the faults the person this is for kept reporting,
+      # from one line of shell: the facility was not on the list because the list that had it on it
+      # was never published, and the clips looked like 16/m because what WAS on the site was an
+      # early deploy assembled out of caches baked before the resolution fix.
+      #
+      # So the number is not enough. The site carries `<run> <level>`, and a run refuses only when
+      # a newer run has published at the SAME level or better -- a newer PARTIAL page must never
+      # stand in the way of an older COMPLETE one. Ordering between two full deploys is unchanged,
+      # which is the thing the guard was added for. An `early` that reads a higher number still
+      # stands down whatever level it was, because a partial page has nothing to win by racing.
+      # ----------------------------------------------------------------------------------------
       - name: Would this put the site backwards
         id: gate
         run: |
           set -uo pipefail
-          echo "${{ github.run_number }}" > web/data/run.txt
-          ahead="$(curl -fsS --max-time 20 \
+          echo "${{ github.run_number }} full" > web/data/run.txt
+          published="$(curl -fsS --max-time 20 \
             "https://worldshapergame.github.io/WorldShaper/data/run.txt?ci=$GITHUB_RUN_ID" \
-            2>/dev/null | tr -dc '0-9' || true)"
-          if [ -n "$ahead" ] && [ "$ahead" -gt "${{ github.run_number }}" ]; then
+            2>/dev/null || true)"
+          ahead="$(printf '%s' "$published" | awk 'NR==1{print $1+0}')"
+          level="$(printf '%s' "$published" | awk 'NR==1{print ($2=="full")?"full":"early"}')"
+          if [ -n "$ahead" ] && [ "$ahead" -gt "${{ github.run_number }}" ] && [ "$level" = "full" ]; then
             echo "fresh=false" >> "$GITHUB_OUTPUT"
-            echo "run $ahead has already published; this one is ${{ github.run_number }} and stops here"
+            echo "run $ahead has published a FULL site; this one is ${{ github.run_number }} and stops here"
           else
             echo "fresh=true" >> "$GITHUB_OUTPUT"
+            if [ -n "$ahead" ] && [ "$ahead" -gt "${{ github.run_number }}" ]; then
+              echo "run $ahead is newer but published only an EARLY page; a full site goes over it"
+            fi
           fi
 
       # Kept whole whatever the gate said, because the clips are good even when the deploy is not
