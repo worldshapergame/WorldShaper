@@ -48,12 +48,53 @@
 #    same frame to show whether the bounce is coloured or merely bright. If the vault comes back
 #    neutral grey, the indirect path is not carrying colour.
 #
-# 4. WALKABLE, which is the other half of what the brief asked for. Head height is 2.25 m under the
-#    soffit of the impost cornice — the lowest thing in the room, and the number the whole section
-#    was re-cut for — 2.70 at the wall face, 4.725 at the crown, and 2.70 through the arch: the
-#    brief's 2.10 and 2.40 with room to spare, everywhere, including hard against a wall. There is
-#    a continuous 3.69 m wide floor from the rotunda to the far wall with nothing to step over.
-#    These rooms are what make the rotunda a place rather than a facade.
+# 4. WALKABLE, which is the other half of what the brief asked for. THESE ROOMS WERE MEASURED
+#    AGAINST THE 2026-08-16 FLOOR — 2.40 m of head height and 1.20 m of clear width over anything
+#    a person walks, 2.10 by 1.00 for a mere opening — AND NOTHING HAD TO MOVE. They were already
+#    bigger than it by a wide margin, and a room enlarged for no reason is a room whose proportions
+#    were decided by a checklist. Measured at metre 8, every one of them closed at both ends, the
+#    first four on `halls_rig` (see its note below) and the fifth on the whole building:
+#
+#      4.750 m over the middle of a bay        --part halls_rig --gap y@10.50,0     (4.725 built)
+#      4.625 m under the transverse rib        --part halls_rig --gap y@9.45,0      (4.578 built)
+#      3.750 m across the room at the dado cap --part halls_rig --gap z@10.50,2.68  (3.780 built)
+#      2.500 m hard against a side wall        --part halls_rig --gap y@10.50,1.78  (2.430 built)
+#      4.000 m through the arch, on its axis   --gap y@4.90,0                       (3.825 built)
+#
+#    The lowest thing in either room is the impost cornice's own bed at 4.05, which is 2.25 above
+#    the floor and stands in a 0.27 m strip against the wall. The middle 3.51 m of the room, which
+#    is what anybody walks down, clears 4.725. Raising that cornice would cost a module and buy
+#    nothing: 4.05 is 1.80 + 5 M and the vault springs off it.
+#
+#    There is a continuous 3.69 m wide floor from the rotunda to the far wall with nothing to step
+#    over. These rooms are what make the rotunda a place rather than a facade.
+#
+# 5. A FLOOR THAT IS A PAVEMENT AND A WALL THAT IS NOT A PLANE — added 2026-08-16.
+#
+#    Two kinds of detail, and each is MATTER rather than paint because at 36 mm and 22 mm they are
+#    both bigger than a voxel at the contract's metre 32.
+#
+#    The floor is LAID IN FLAGS, 0.675 (1.5 M) square in the field and coursed along the marble
+#    border and the lapis fillet, with joints 36 mm wide cut 42 mm into it. They go through
+#    `void_halls` and not through my own block, because the podium is solid to 1.80 under the whole
+#    building and a groove cut only out of my 50 mm of foot would be filled by the podium behind it
+#    and would not exist. And the granite threshold under the arch — the one piece of floor in
+#    these rooms a foot lands on every single time — is WORN HOLLOW, 36 mm deep and dished across
+#    the doorway, which is the shape four hundred years of one doorway makes.
+#
+#    The plaster is NOT FLAT. `halls_air` is displaced by 0.0225 (M/20) of `grain_stone` before it
+#    is cut out of the block, so every wall face and the whole of the groin vault undulate. 0.0225
+#    is 0.72 of a voxel at metre 32 and is KEPT; it is 0.36 at metre 16 and 0.18 at metre 8 and
+#    `usable_displacement` drops it at both, so this is a feature that only exists at the metre the
+#    contract names — which is the right answer and not a compromise: below half a voxel a
+#    displacement cannot move a surface, only dither it.
+#
+#    THE FLOOR PLANE IS CUT BACK OUT OF THE DISPLACEMENT. The displaced air is intersected with a
+#    box whose bottom is at 1.80, so the walls and the vault wander and the floor stays dead level.
+#    A displaced floor is 22 mm of rise between neighbouring columns, everywhere, and the facility
+#    reports its worst rise from the whole building. The panels — the lunettes, the tympanum and
+#    the blind panel — are cut separately and stay crisp, which is the comparison: a sharp arris
+#    and a soft one in the same wall, in the same light.
 # ================================================================================================
 #
 # THE MODULE. D = 0.90, M = 0.45, and every number below is a multiple of M or of M/2, M/4, M/10.
@@ -75,13 +116,35 @@
 #           both barrels the same radius, what puts both crowns on one level, and what makes the
 #           groins straight in plan. Change the width or the bay and you lose all four together.
 #
-# WHY THE HALL STOPS AT 13.95 AND NOT AT THE BRIEF'S 15.10. Because windows.clip cuts the ground
-# storey of the end wall at z = 0 and +-2.70 and its openings are punched 1.80 m in from x = 16.00
-# — to x = 14.20, which is 0.90 PAST the inner face of a 0.90 wall. A hall reaching 15.10 has three
-# windows in its east end and cannot be the closed room the load above is made of. So the hall ends
-# at 13.95, clear of that cut by 0.25, and the strip x 13.95 .. 15.10 is left empty and lit by those
-# three windows — which is a 1.15 x 5.85 m room-shaped hole with daylight in it, ready for whoever
-# adds the next fragment. Checked against windows.clip's `windows_gs_cut` rather than assumed.
+# WHY THE HALL STOPS AT 13.95 AND NOT AT THE BRIEF'S 15.10 — RE-ARGUED 2026-08-16 AGAINST
+# clips/facility/requests/walls-thickness.md, WHICH ASKS FOR THE 1.15 m STRIP BACK. It does not
+# come back yet, and there are three reasons standing between it and this room. Only the first of
+# them is the one that request is about.
+#
+#   1. THE CUTTER IS STILL 1.80. walls-thickness.md says in bold: fix windows.clip and doors.clip
+#      first, because "a room moved out to 15.10 while a 1.80 cutter is still in flight is a room
+#      with a metre-deep slot cut along its wall — worse than the strip it replaces". Measured on
+#      origin/main at metre 8, `--part windows_cuts --gap x@3.60,0`: 28.500 m of clear air between
+#      the east and west end-wall cuts, so each cut's inner face stands at x = +-14.25. A 1.00 m
+#      cutter would have left 30.00. windows.clip's own `windows_gs_cut` still reads
+#      `box -0.675 2.70 -0.18  0.675 4.50 1.80`. The first condition is not met.
+#
+#   2. A HALL REACHING 15.10 HAS A WINDOW IN ITS EAST END, and that is true at any cutter depth.
+#      The end-wall openings stand at z = 0 and +-2.70, each 1.35 wide; this room is 4.05 wide, so
+#      the one at z = 0 lands squarely in it. "Neither hall has a window" is load 2 at the top of
+#      this file — the building's only interior lit by emissives alone — and one window ends it.
+#
+#   3. 9.70 IS NOT TWO BAYS OR THREE. The room is 8.10 = 2 x 4.05, and 4.05 is at once the bay, the
+#      width and twice the vault's radius; that single equality is what makes both barrels the same
+#      radius, both crowns one level and the groins straight in plan. 15.10 - 5.40 = 9.70 divides
+#      by neither 4.05 nor anything else on the module, so the groin vault — load 1 — cannot
+#      survive the move without the room being re-proportioned as well.
+#
+# So the hall ends at 13.95, clear of the 1.80 cut by 0.25, and the strip x 13.95 .. 15.10 is left
+# empty and lit by those three windows — a 1.15 x 5.85 m room-shaped hole with daylight in it,
+# ready for whoever adds the next fragment. When the cutters are 1.00, taking the strip is still a
+# decision about what these two rooms are FOR, and not a mechanical one; it belongs to whoever owns
+# that decision, and this note is here so they can make it with the numbers in front of them.
 #
 # WHY BOTH HALLS ARE CLOSED AND NOT ONE OF THEM. The brief asks for one hall lit only by sconces;
 # the BRIEF's rule 3 asks for symmetry about x = 0 and does not qualify it. A window on one side
@@ -154,7 +217,7 @@ let halls_block = box 4.95 1.75 -2.925   13.95 6.975 2.925 round=0.015
 # intersection gives min, which is zero along all four SIDES of the bay: that is a cloister vault,
 # it springs from four lines instead of four points, and it has no groins in it at all. The first
 # pass here was the intersection and the contact sheet showed a room with no arches in it.
-let halls_room     = box 5.40 1.80 -2.025   13.50 4.50 2.025
+let halls_room     = box 5.40 1.74 -2.025   13.50 4.50 2.025
 
 let halls_barrel   = cylinder  9.450 4.50 0  r=2.025 h=8.10 axis=x
 let halls_cross_w  = cylinder  7.425 4.50 0  r=2.025 h=4.05 axis=z
@@ -169,7 +232,54 @@ let halls_vault_box = box 5.40 4.05 -2.025   13.50 6.60 2.025
 let halls_webs  = union smooth=0.02 { halls_barrel halls_cross_w halls_cross_e }
 let halls_vault = intersection { halls_webs halls_vault_box }
 
-let halls_air = union { halls_room halls_vault }
+# AND THE WHOLE OF IT IS PUSHED ABOUT BY 0.0225 OF GRAIN, which is what makes it plaster on stone
+# rather than a mathematical solid. `grain_stone` is the contract's own 0.35 m fbm, so the wall
+# undulates on the scale of a hand's span and not of a fingernail, and the vault's webs breathe
+# with it — including along the sixteen groins, where the two surfaces meeting at a nearly tangent
+# crease now meet at a nearly tangent crease that is also moving.
+#
+# THE FLOOR IS TAKEN BACK OUT OF IT. `halls_room` is drawn from 1.74 so that the displacement has
+# something to bite on below the floor line, and the whole displaced air is then intersected with a
+# box whose floor is at 1.80 — so every face except the floor wobbles. A displaced floor is 22 mm
+# of rise between neighbouring columns over 32 m2, and the facility reports its worst rise from the
+# whole building; the clipping box's other five faces stand 0.075 or more outside the room and the
+# displacement never reaches them, so they cut nothing else.
+let halls_air_raw = union { halls_room halls_vault }
+let halls_air_wob = displace { halls_air_raw grain_stone } amount=0.0225
+let halls_air_box = box 5.30 1.80 -2.10   13.60 6.60 2.10
+
+# --- and the floor is a pavement, which is a void and not a shape --------------------------------
+#
+# Joints 36 mm wide, cut 42 mm down from 1.800 to 1.758. Eleven across the hall on the field's own
+# 0.675 (1.5 M) grid, five along it on the same, and four more on the lines where the terracotta
+# field gives way to the lapis fillet and the fillet to the marble border — so the pattern the
+# paint draws and the pattern the stone is cut to are the same pattern.
+#
+# THEY REACH THE WALL AND THEY DO NOT CUT THE DADO. `void_halls` is written as my air LESS MY OWN
+# MASS, so a joint that runs under the dado's foot is subtracted from the void by the dado itself
+# and stops dead at its face. That is the same property the file already relies on to stop another
+# fragment leaving a wall in my room, used the other way round.
+let halls_fl_j_x = repeat { box  9.432 1.758 -2.025    9.468 1.815 2.025 } x=0.675 nx=5
+let halls_fl_j_z = repeat { box  5.400 1.758 -0.018   13.500 1.815 0.018 } z=0.675 nz=2
+let halls_fl_j_b = union {
+    box  5.832 1.758 -2.025    5.868 1.815  2.025
+    box 13.032 1.758 -2.025   13.068 1.815  2.025
+    box  5.400 1.758  1.557   13.500 1.815  1.593
+    box  5.400 1.758 -1.593   13.500 1.815 -1.557
+}
+
+# The threshold, worn. A dished ellipsoid 36 mm deep and 1.80 across, sunk into the one piece of
+# floor in these rooms that every foot lands on, on the axis of the only door. It is 0.56 along the
+# way you walk and 1.80 across it, which is the shape a doorway wears rather than the shape a room
+# does, and it stops 0.22 short of the reveal at each side so the arris of the opening stays sharp.
+let halls_fl_wear = ellipsoid 5.20 1.845 0 rx=0.28 ry=0.081 rz=0.90
+
+let halls_floor_cut = union { halls_fl_j_x halls_fl_j_z halls_fl_j_b halls_fl_wear }
+
+let halls_air = union {
+    intersection { halls_air_wob halls_air_box }
+    halls_floor_cut
+}
 
 # ================================================================================================
 # THE ARCH INTO THE ROTUNDA — the only opening in either hall
@@ -401,6 +511,29 @@ let halls_trim = difference {
 }
 
 let halls_mass = union { halls_shell halls_trim halls_archivolt }
+
+# --- the measuring rig, which is a ruler and not a room ------------------------------------------
+#
+# `--gap y@x,z` on the whole facility reports the LONGEST unbroken run of air down a column, and
+# over the middle of this floor the longest run of air is not this room: it is the five metres
+# between the top of my block at 6.975 and the underside of the roof. BRIEF.md says to use a probe
+# whose box is one storey tall and a fragment's box is the whole building's, so the rig is this
+# hall with the two surfaces that close it put back — the floor at 1.80 and a lid on the block's
+# own top at 6.975 — both run to the ends of the clip so no run outside the storey can win:
+#
+#     bash tools/clipcheck.sh clips/facility.clip --part halls_rig --metre 8 --gap y@10.50,0
+#
+# Nothing here is part of the building. It is east-hall only, unmirrored, because a ruler does not
+# need two ends.
+# EVERY ONE OF THESE RUNS TO THE END OF THE SAMPLED ARRAY. The sampler settles the box to the
+# SHAPE and not to the `bounds` line, so a floor drawn to y = -1.00 leaves metres of array under it
+# and `longest_clear` finds that instead of the room. A ruler has to be longer than the thing it
+# measures in every direction it does not measure.
+let halls_rig_floor = box 4.95 -12.00 -16.500   13.95  1.80  8.500
+let halls_rig_lid   = box 4.95  6.975  -2.925   13.95 25.00  2.925
+let halls_rig_n     = box 4.95 -12.00   2.940   13.95 25.00  8.500
+let halls_rig_s     = box 4.95 -12.00 -16.500   13.95 25.00 -2.940
+let halls_rig = union { halls_mass halls_rig_floor halls_rig_lid halls_rig_n halls_rig_s }
 
 let part_halls = mirror { halls_mass } axis=x
 

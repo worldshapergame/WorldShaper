@@ -1,5 +1,5 @@
 # stair — the interior grand stair, 1.80 to 6.30, twenty-five risers in two flights round a half
-#         landing, with a turned balustrade and a moulded handrail.
+#         landing, with a turned balustrade, a moulded handrail and worn treads.
 #
 # ================================================================================================
 # WHAT THIS PART PUTS UNDER LOAD — read this before you move a single number.
@@ -11,322 +11,488 @@
 # matter in its column, so it is not a surface, so it is never tested. Stand under this stair and
 # `walkable` has nothing to say about you. Written up in clips/facility/requests/stair.md.
 #
-# So this file measures it itself, and the measurement is a binding you can run:
+# So this file measures it itself, and the measurement is two bindings you can run:
 #
-#     .\build\bin\WorldShaper.exe --clip-file clips\facility.clip --clip-metre 32 ^
-#         --clip-part stair_probe_head
+#     bash tools/clipcheck.sh clips/facility.clip --part stair_probe_head --metre 8   -> EMPTY
+#     bash tools/clipcheck.sh clips/facility.clip --part stair_rig --metre 8 --gap y@7.40,5.50
 #
-# `stair_probe_head` is the volume a person's head sweeps through every part of this stair —
-# 2.10 m above every floor, every tread and every landing, between the balustrades — INTERSECTED
-# with the stair itself. IT MUST REPORT AN EMPTY CLIP. Anything it reports is a place somebody
-# hits their head. It measured empty at metre 32 with the numbers below, and two of those numbers
-# exist for no other reason:
+# `stair_probe_head` is the volume a person sweeps through every part of this stair — 2.40 m of
+# head height over every floor, tread and landing, and never less than 1.20 m of width between the
+# things standing beside them — INTERSECTED with the stair. IT MUST REPORT AN EMPTY CLIP. Anything
+# it reports is a place somebody hits their head or their shoulder. `stair_rig` is the same stair
+# with the floor, the two walls and a lid put back, so that `--gap` reports the storey rather than
+# the seven metres of air between the gallery and the roof; see its own note at the bottom.
 #
-#   THIRTEEN RISERS TO THE HALF LANDING AND TWELVE ABOVE IT, and not twelve then thirteen.
-#   Twelve first puts the landing at 3.96; less the thinnest slab the module allows it gives
-#   1.935 m under it, and the passage under this stair fails by 165 mm. Thirteen first puts it
-#   at 4.14 and the same slab gives 2.115. The split is decided by the head height and by
-#   nothing else, and it is the first thing anybody "tidying" this file will reverse.
+# ================================================================================================
+# WHAT CHANGED, AND WHY THE RISER SPLIT AND THE PLAN BOTH MOVED
 #
-#   THE WAIST OF A FLIGHT IS 0.405 (0.9 M) AND NOT 0.45 (M). The upper flight's soffit leaves
-#   the half landing at the same level the landing's own soffit is at; a whole module of waist
-#   puts that at 3.87 and the head height at 2.07, and it fails by 30 mm. 0.9 M puts it at 3.915.
+# The stair that stood here cleared 2.115 m under its half landing and was 0.945 m wide between
+# its handrails, and it had a 0.68 x 1.05 m HOLE IN THE HALF LANDING that nothing in this file
+# could see. Three things moved, and every one of them is forced by a measurement rather than by
+# taste.
 #
-# The tightest clearance in the finished stair is therefore 2.115 m, under the half landing and
-# under the first metre of the upper flight. FIFTEEN MILLIMETRES. Half a voxel at the contract's
-# metre 32. Move the landing slab, the waist, the riser count or the floor and it goes negative,
-# and no render will tell you: a soffit 65 mm too low looks exactly like a soffit 65 mm too high.
+#   EIGHTEEN RISERS TO THE HALF LANDING AND SEVEN ABOVE IT, and it used to be thirteen and twelve.
+#   Two constraints set this, and the second is the one nobody had found:
+#
+#     head height.  The landing carries the passage's ceiling on its back. Thirteen risers put its
+#     top at 4.14, and less the thinnest slab the module allows that leaves 2.115 m under it —
+#     285 mm short of the 2.40 this building is now held to.
+#
+#     THE ARCHED NORTH WINDOW AT x = +-8.10 WAS EATING THE LANDING. windows.clip cuts its openings
+#     1.80 m in from the outer face (`windows_ga_cut`, a box to y 4.05 and a cylinder of r 0.675
+#     on top of it, so the opening's head is at 4.725 and the cut reaches z 5.70). The half landing
+#     is 1.80 m deep and the north openings stand on the 2.70 bay with 1.35 m of clear wall between
+#     them, so NO x POSITION EXISTS where a landing this deep misses one. The only way out is
+#     upwards: the landing's soffit has to clear 4.725. Sixteen risers gives 4.455 and is eaten;
+#     seventeen with a 0.225 slab gives 4.635 and is eaten; EIGHTEEN gives 4.815 and is clear by
+#     0.09. That is the whole of why this flight is eighteen risers long.
+#
+#     EIGHTEEN RISERS IN ONE FLIGHT IS MORE THAN A PUBLIC STAIR SHOULD HAVE and it is the price of
+#     somebody else's cutter. clips/facility/requests/walls-thickness.md asks windows.clip to cut
+#     `wall_cut` = 1.00 instead of 1.80; when it does, a sixteen-riser landing is still nibbled
+#     0.10 m at its north edge, because the opening's HEAD at 4.725 is the opening's own dimension
+#     and not the cut's depth. Eighteen is clear either way, which is why it is written this way
+#     rather than as a workaround with a date on it.
+#
+#   THE FLIGHTS STAND AGAINST THE WALLS, one each, and the well between them is M and not 2 M.
+#   The band this stair has is z 2.925 (halls.clip's block face) to 6.60 (the north wall), which
+#   is 3.675 m and cannot grow: the halls' side wall is a whole diameter thick because it carries
+#   a groin vault, and the north wall is the outside of the building. Two flights with a
+#   balustrade on both sides and a 0.90 well spends 1.4175 of that on handrails and air and
+#   leaves 0.945 a flight. Two flights with a wall on one side and a 0.45 well spends 0.855 and
+#   leaves 1.3575 and 1.4475. So the lower flight is bedded 0.065 into the halls block and takes
+#   its south side off it, the upper flight takes its north side off the north wall, and each
+#   carries ONE balustrade, on the well.
+#
+#   THE HALF LANDING IS 1.80 DEEP AND NOT 1.35. You cross a half landing between its outer
+#   balustrade and the guard over the well, and those two eat 0.405 of it between them. At 1.35
+#   the crossing was 0.945 m — the same failure as the flights, in the one place on a stair where
+#   somebody is turning round. At 1.80 (4 M) it is 1.395.
+#
+# The tightest clearance in the finished stair is 3.015 m under the half landing and 1.3575 m
+# across the lower flight. Both have a whole voxel of margin at metre 8 and four at metre 32,
+# which is the point of moving them: the old 15 mm was half a voxel at the contract's own metre
+# and could not be measured, only asserted.
+#
+# MEASURED, at metre 8, every reading closed at both ends, on `stair_rig` — this stair with its
+# floor, its two walls and a lid, because `--gap` down a column of the whole building measures the
+# sky over the parapet and not the room (see the rig's own note at the bottom of this file). The
+# `was` column is the same query on the stair this replaced, with a rig of the same shape:
+#
+#   --gap y@7.40,5.50    3.125 m  under the half landing            was 2.125   (3.015 built)
+#   --gap y@8.60,6.00    3.375 m  under the upper flight's foot                 (3.296 built)
+#   --gap y@9.60,6.00    3.875 m  under the upper flight, mid-span              (3.859 built)
+#   --gap y@13.50,5.50   4.125 m  under the gallery                 was 4.125   (4.095 built)
+#   --gap z@8.20,4.939   1.375 m  across the lower flight           was 1.000   (1.3575 built)
+#   --gap z@9.00,3.00    2.125 m  of passage beside the spandrel                (2.100 built)
+#   --gap z@11.80,2.00   1.500 m  between the gallery's two piers                (1.350 built)
+#   --gap z@6.50,3.00    3.125 m  between the landing's two piers               (2.910 built)
+#
+# and the head height OVER the flights is `stair_probe_ra` and `stair_probe_rb`, which stand a
+# 2.40 m box on every one of the twenty-three treads and come back EMPTY. The stair this replaced
+# could not carry a 1.20 m path at all: the same 1.20 m box over its half landing catches 138
+# voxels of its own well guard, and between its two lower balustrades 28 voxels of the south one.
 #
 # Secondary loads, all of them free riders on geometry that had to exist anyway:
 #
-#   THE BALUSTERS. Sixty-two of the order's `ionic_baluster` to a stair, a hundred and twenty-four
-#   in the building, each with a 0.063 m neck — two voxels at metre 32, the second-thinnest matter
-#   in the building — and THIRTY-FIVE OF THEM ARE ON A RAKE, so no two are at the same height and
-#   none shares a voxel row with its neighbour. The parapet's balusters all repeat off one plane
-#   and a sampler can settle one box round the lot; these cannot, and they are placed by doubling
-#   rather than by `repeat` for exactly that reason.
+#   THE BALUSTERS. Fifty-one of the order's `ionic_baluster` to a stair, a hundred and two in the
+#   building, each with a 0.063 m neck — two voxels at metre 32, the second-thinnest matter in the
+#   building — and TWENTY-THREE OF THEM ARE ON A RAKE, so no two are at the same height and none
+#   shares a voxel row with its neighbour. Each now carries a bronze SHOE and COLLAR as well, one
+#   voxel deep and standing proud of a turned member: a metal fixing against a stone one, in the
+#   same voxel column, which is a harder question for the material sampler than either alone.
 #
-#   THE ROTATED FRAME, three times: each raking handrail is one straight moulded section built
-#   about the origin and turned by atan(0.18/0.32) about z, and the upper flight's soffit is a
-#   rotated half-space. Rotations are isometries so the field stays exact and keeps a box. The
-#   great steps do the same thing about x; this is the only mass in the building rotated about z,
-#   so between the two of them a regression in rotated bounds has nowhere to hide.
+#   THE WORN TREADS. Twenty-three dished hollows to a stair, each a flattened ellipsoid 36 mm deep
+#   sunk into a face the walkability check measures its worst rise on. A dish is a curved surface
+#   whose gradient turns over inside one voxel at its rim, on the one surface in this building
+#   whose height is a reported number, and it must not move that number: the dish is inset 0.06
+#   from the nosing at both ends so the rise from tread to tread is still exactly 0.18.
 #
-#   A ROOM ONLY LIGHT CAN GET INTO SIDEWAYS. The passage under the stair is 2.115 m high, 22 m2,
+#   THE ROTATED FRAME, six times: each raking handrail, each raking plinth, each raking wall
+#   string and the upper flight's soffit are straight sections built about the origin and turned
+#   by atan(0.18/0.32) about z. Rotations are isometries so the field stays exact and keeps a box.
+#
+#   A ROOM ONLY LIGHT CAN GET INTO SIDEWAYS. The passage under the stair is 3.015 m high, 24 m2,
 #   and its only daylight is the two ground-storey north windows at x = 10.80 and 13.50, whose
-#   heads are at 4.50 — level with the middle of the upper flight, so everything under the half
-#   landing is lit by bounce off a floor. Polished marble treads over a granite floor with a
-#   bronze handrail above them, all of it in shadow.
+#   heads are at 4.50 — under the whole of the upper flight, so everything below the half landing
+#   is lit by bounce off a floor. That floor is now LAID IN FLAGS: `void_stair` is a grid of 36 mm
+#   joints on the 0.90 (D) square cut into the podium, which is the only matter this part removes
+#   from the building and the only reason it needs a void at all.
 # ================================================================================================
 #
 # WHERE IT IS, AND WHY IT IS THERE
 #
 # The north strip of the east wing, mirrored to the west. halls.clip has the middle of both wings
-# (x 4.95..13.95, z +-2.925, up to 6.525) and says in writing that the strips z 2.925..6.60 are
+# (x 4.95..13.95, z +-2.925, up to 6.975) and says in writing that the strips z 2.925..6.60 are
 # left for somebody else. This is that strip: 3.675 m deep, which is why the stair runs east-west
-# and not north-south — a flight is 3.84 m long and would not fit across it.
+# and not north-south — a flight is 5.44 m long and would not fit across it.
 #
 # TWO STAIRS AND NOT ONE. The brief says "in one wing"; BRIEF.md rule 3 says symmetric about x = 0
-# and does not qualify it. One stair in the east wing and none in the west is the one thing that
-# would read as a mistake from the plan, so the whole part is `mirror { } axis=x` and there is a
-# matching stair in each wing. Everything below is built on POSITIVE x, because mirror folds the
-# coordinate to its absolute value and a shape drawn on -x simply disappears.
+# and does not qualify it for the shell. One stair in the east wing and none in the west is the one
+# thing that would read as a mistake from the plan, so the whole part is `mirror { } axis=x` and
+# there is a matching stair in each wing. Everything below is built on POSITIVE x, because mirror
+# folds the coordinate to its absolute value and a shape drawn on -x simply disappears.
 #
-# WHAT IT KEEPS OUT OF. windows.clip punches its openings 1.80 m in from the outer wall faces:
-# ground storey y 2.70..4.50, piano nobile y 6.30..8.55, at x = 10.80 and 13.50 on the north wall
-# and at z = 0, +-2.70, +-5.40 on the east wall, each 1.35 wide. Anything of mine inside one of
-# those is deleted by the manifest's `hollowed` difference, silently. So:
+# WHAT IT KEEPS OUT OF, and this is now a list of measured clearances rather than an assumption.
+# windows.clip cuts 1.80 m in from the outer faces at x = +-16.00 and z = +-7.50, so its openings
+# reach x = +-14.20 and z = +-5.70. On the north wall they stand at x = +-2.70, +-5.40, +-8.10
+# (arched, y 2.70..4.725), and at +-10.80, +-13.50 (square, y 2.70..4.50); on the end walls at
+# z = 0, +-2.70, +-5.40 (y 2.70..4.50 and 6.30..8.55). Each is 1.35 wide. So:
 #
-#   - every horizontal slab here has its TOP at 4.14 or at 6.30 and its underside above 3.90 or
-#     above 5.89, which puts every one of them in the 4.50..6.30 band that has no opening in it.
-#     The gallery slab can therefore run right into both walls and be bedded in them.
-#   - every BALUSTRADE stands clear: none is nearer than 0.90 m to the limit of any opening.
-#     The gallery's rails are at z = 4.59 and x = 11.71, the openings begin at z = 5.70 and
-#     x = 14.20. Checked against windows.clip's own `windows_cuts`, not assumed.
-#   - the upper flight passes the two north windows at y 5.05..6.16 — over their heads at 4.50
-#     and under their piano-nobile sills at 6.30 — which is the only band it could pass them in.
+#   - the half landing's soffit is at 4.815, which is 0.09 OVER the head of the arched opening it
+#     stands across. That single number is why this flight has eighteen risers in it.
+#   - the lower flight is entirely south of z = 4.50 and west of x = 13.54, so no north opening and
+#     no end-wall opening can reach it at all.
+#   - the upper flight ends at x = 10.07, west of the square opening at 10.80 whose reveal begins
+#     at 10.125, and its soffit never falls below 4.815.
+#   - THE TALL PIERS STAND AT x 11.61..12.06, in the 1.35 m of solid wall between the openings at
+#     10.80 and 13.50, and NOT under the gallery edge they look as though they carry. A pier under
+#     that edge would be inside the opening at 10.80 and would be cut off at the knees by
+#     `void_windows` without a word. The gallery is carried by the upper flight along z 4.95..6.75
+#     and cantilevers only the 0.45 of the well.
+#   - the gallery slab is y 5.895..6.30 and every opening's band is 2.70..4.50 or 6.30..8.55, so it
+#     lies in the 1.80 m of blind wall between them.
+#   - THE ONE THING THAT IS CLOSE: the gallery's south handrail, at z 4.4775..4.7025, passes the
+#     end-wall opening at z = 5.40 whose reveal begins at 4.725. That is 22 mm — 0.7 of a voxel at
+#     metre 32. It is clear, it was clear before, and it is the only member in this file with less
+#     than 0.09 to give. Do not move that rail north.
 #
 # WHERE IT MEETS ITS NEIGHBOURS
 #
-#   podium.clip      the floor at 1.80. Everything that stands is founded at 1.75.
-#   walls.clip       north inner face z = 6.60, east inner face x = 15.10 (block_z - D and
-#                    block_x - D, both contract numbers). The half landing, the upper flight and
-#                    the gallery are bedded 0.15 into them.
-#   halls.clip       its block face is z = 2.925 and its top is 6.525. Nothing here comes nearer
-#                    than z = 3.15, and the nearest thing of mine at that height is 3.45 m away
-#                    in plan, so the 0.225 difference between its 6.525 and this stair's 6.30
-#                    can never be a step anybody walks. See requests/stair.md: 6.30 is 1.80 plus
-#                    twenty-five risers and is also the piano nobile's window sill, so it is the
-#                    upper floor and halls is 0.225 proud of it.
+#   podium.clip      the floor at 1.80. Everything that stands is founded at 1.75, and the flag
+#                    joints of `void_stair` are cut 42 mm into its top.
+#   walls.clip       north inner face z = 6.60, east inner face x = 15.10 — `wall_thick` 0.90 off
+#                    the contract's block outline, stated at the top of that file since 2026-08-16.
+#                    The half landing, the upper flight and the gallery are bedded 0.15 into them.
+#   halls.clip       its block face is z = 2.925, grown to 2.940 by its own round, and its top is
+#                    6.975. The lower flight and the half landing are bedded 0.065 into it, which
+#                    is what lets them take a wall on that side instead of a balustrade. NOTHING
+#                    OF MINE NEEDS THAT BLOCK CUT: it is solid to 6.975 there, and the 65 mm I
+#                    stand in is 65 mm of a 900 mm wall.
 #
 # THE MODULE. D = 0.90, M = 0.45. Every number below is a multiple or simple fraction of one of
 # those, or of the stair's own two contract numbers, the riser 0.18 (0.4 M) and the run 0.32.
 # The ones that are neither are constructions and not dimensions, and each is named where it
-# occurs: the rake 0.08154932 turns (atan(0.5625)/tau), the flight ends at 11.62 and 11.94 (the
-# foot plus eleven and twelve runs), and the clipping frames, which are only knives.
+# occurs: the rake 0.08154932 turns (atan(0.5625)/tau), the flight ends at 10.02 and 13.54 (the
+# foot plus six and seventeen runs), and the clipping frames, which are only knives.
 #
-#   6.75 = 15 M   half landing west face      1.80  floor              podium_top
+#   6.30 = 14 M   half landing west face      1.80  floor              podium_top
 #   8.10 = 18 M   half landing east face      1.75  founding, 0.05 into the podium
-#  11.62         upper flight head            3.915 landing soffit     4.14 - M/2
-#  11.94         lower flight foot            4.14  half landing       1.80 + 13 x 0.18
+#  10.02         upper flight head            4.815 landing soffit     5.04 - M/2
+#  13.54         lower flight foot            5.04  half landing       1.80 + 18 x 0.18
 #  15.10         east wall inner face         5.895 gallery soffit     6.30 - 0.9 M
 #  15.25         0.15 into that wall          6.30  upper floor        1.80 + 25 x 0.18
-#   3.15 = 7 M   south face of the stair      0.925 handrail crown over the surface a baluster
-#                                                   stands on: 0.70 + M/2
-#   4.50 = 10 M  lower flight / well
-#   5.40 = 12 M  well / upper flight
+#   2.875        south face, 0.065 into halls 0.925 handrail crown over the surface a baluster
+#   2.940        the halls block's own face                            stands on: 0.70 + M/2
+#   4.50 = 10 M  lower flight / well          4.725 the arched opening's head — the number the
+#   4.95 = 11 M  well / upper flight                riser split is decided by
 #   6.60         north wall inner face
 #   6.75 = 15 M  0.15 into that wall
 
 include "_contract.clip"
 
 # ================================================================================================
-# THE LOWER FLIGHT — thirteen risers, 1.80 to 4.14, ascending WEST, on a solid spandrel
+# THE LOWER FLIGHT — eighteen risers, 1.80 to 5.04, ascending WEST, on a solid spandrel
 # ================================================================================================
 #
-# Twelve treads of 0.32 from x = 11.94 back to 8.10, the thirteenth riser being the half landing
-# itself. Twelve nested boxes, each set back one run and raised one riser from the one below and
+# Seventeen treads of 0.32 from x = 13.54 back to 8.10, the eighteenth riser being the half landing
+# itself. Seventeen nested boxes, each set back one run and raised one riser from the one below and
 # each running west to x = 8.00 so that it is buried in the landing — the same construction the
 # great steps use, and for the same reason: the whole value of a stair is that its treads are
 # IDENTICAL, and a box is the only thing in this language that cannot drift.
 #
+#   tread  1   x 13.54   top 1.98        tread 10   x 10.66   top 3.60
+#   tread  2   x 13.22   top 2.16        tread 11   x 10.34   top 3.78
+#   tread  3   x 12.90   top 2.34        tread 12   x 10.02   top 3.96
+#   tread  4   x 12.58   top 2.52        tread 13   x  9.70   top 4.14
+#   tread  5   x 12.26   top 2.70        tread 14   x  9.38   top 4.32
+#   tread  6   x 11.94   top 2.88        tread 15   x  9.06   top 4.50
+#   tread  7   x 11.62   top 3.06        tread 16   x  8.74   top 4.68
+#   tread  8   x 11.30   top 3.24        tread 17   x  8.42   top 4.86
+#   tread  9   x 10.98   top 3.42        landing    x  8.10   top 5.04
+#
+# RISER 0.18 AND GOING 0.32, WHICH IS BRIEF.md RULE 6 AND NOT A CHOICE. 2R + G = 0.68 m and the
+# pitch is atan(0.18/0.32) = 29.36 degrees — a shallow public-building stair that a person walks
+# rather than climbs, and a riser a third of the 0.55 the player can step up. The nosing below adds
+# 0.045 of overhang, so the tread a foot actually lands on is 0.365 deep against a 0.30 m body
+# radius.
+#
 # They all reach down to 1.75, which makes the flight a SOLID SPANDREL rather than a raking slab.
-# That is not laziness. The wedge under a flight is between zero and 2.1 m of head height and
-# there is no honest way to let anybody in there; filling it is what a stone stair on a spandrel
-# actually is, it carries the west end of the half landing, and it takes that whole volume out of
-# the head-height probe by making it not a place.
+# That is not laziness. The wedge under a flight is between zero and 3 m of head height and there
+# is no honest way to let anybody in there; filling it is what a stone stair on a spandrel actually
+# is, it carries the west end of the half landing, and it takes that whole volume out of the
+# head-height probe by making it not a place.
 #
-#   tread  1   x 11.94   top 1.98        tread  7   x 10.02   top 3.06
-#   tread  2   x 11.62   top 2.16        tread  8   x  9.70   top 3.24
-#   tread  3   x 11.30   top 2.34        tread  9   x  9.38   top 3.42
-#   tread  4   x 10.98   top 2.52        tread 10   x  9.06   top 3.60
-#   tread  5   x 10.66   top 2.70        tread 11   x  8.74   top 3.78
-#   tread  6   x 10.34   top 2.88        tread 12   x  8.42   top 3.96
-#
-# The nosing round is 0.015 (M/30), the great steps' own, chosen against the voxel grid rather
-# than by eye: at metre 32 it pulls a tread top down by at most a tenth of a voxel at a sample,
-# which is never enough to move a tread into the voxel below and report a seven-voxel rise.
-
 # EVERY NUMBER BELOW IS 0.015 INSIDE THE FACE IT MAKES, and that is not a typo. `round=r` on a
 # box GROWS it: the flat faces move out by r and the arris is turned with radius r through the
-# corner you wrote, so a box written to a tread top of 1.98 has its tread at 1.995. Harmless on
-# its own — but the half landing is written the same way, and 15 mm off its soffit is 15 mm off
-# the only clearance in this building that has 15 mm to give. The head-height probe caught it as
-# 86 voxels of landing hanging into the passage. So the numbers are written short and the round
-# puts them back, which is the idiom halls.clip uses on its transverse arch for the same reason.
-#
-# Riser 0.18 and run 0.32 are UNAFFECTED either way, because every box is shifted the same; what
-# is affected is where the flight sits against the floor and the landing, which is everything.
-let stair_a_01 = box 8.015 1.765 3.165   11.925 1.965 4.485 round=0.015
-let stair_a_02 = box 8.015 1.765 3.165   11.605 2.145 4.485 round=0.015
-let stair_a_03 = box 8.015 1.765 3.165   11.285 2.325 4.485 round=0.015
-let stair_a_04 = box 8.015 1.765 3.165   10.965 2.505 4.485 round=0.015
-let stair_a_05 = box 8.015 1.765 3.165   10.645 2.685 4.485 round=0.015
-let stair_a_06 = box 8.015 1.765 3.165   10.325 2.865 4.485 round=0.015
-let stair_a_07 = box 8.015 1.765 3.165   10.005 3.045 4.485 round=0.015
-let stair_a_08 = box 8.015 1.765 3.165    9.685 3.225 4.485 round=0.015
-let stair_a_09 = box 8.015 1.765 3.165    9.365 3.405 4.485 round=0.015
-let stair_a_10 = box 8.015 1.765 3.165    9.045 3.585 4.485 round=0.015
-let stair_a_11 = box 8.015 1.765 3.165    8.725 3.765 4.485 round=0.015
-let stair_a_12 = box 8.015 1.765 3.165    8.405 3.945 4.485 round=0.015
+# corner you wrote, so a box written to a tread top of 1.98 has its tread at 1.995. The half
+# landing is written the same way, and 15 mm off its soffit used to be 15 mm off the only
+# clearance in this building that had 15 mm to give. It has 615 mm now, and the idiom stays
+# because the treads are what the facility's worst-rise number is measured on.
+let stair_a_01 = box 8.015 1.765 2.890   13.525 1.965 4.485 round=0.015
+let stair_a_02 = box 8.015 1.765 2.890   13.205 2.145 4.485 round=0.015
+let stair_a_03 = box 8.015 1.765 2.890   12.885 2.325 4.485 round=0.015
+let stair_a_04 = box 8.015 1.765 2.890   12.565 2.505 4.485 round=0.015
+let stair_a_05 = box 8.015 1.765 2.890   12.245 2.685 4.485 round=0.015
+let stair_a_06 = box 8.015 1.765 2.890   11.925 2.865 4.485 round=0.015
+let stair_a_07 = box 8.015 1.765 2.890   11.605 3.045 4.485 round=0.015
+let stair_a_08 = box 8.015 1.765 2.890   11.285 3.225 4.485 round=0.015
+let stair_a_09 = box 8.015 1.765 2.890   10.965 3.405 4.485 round=0.015
+let stair_a_10 = box 8.015 1.765 2.890   10.645 3.585 4.485 round=0.015
+let stair_a_11 = box 8.015 1.765 2.890   10.325 3.765 4.485 round=0.015
+let stair_a_12 = box 8.015 1.765 2.890   10.005 3.945 4.485 round=0.015
+let stair_a_13 = box 8.015 1.765 2.890    9.685 4.125 4.485 round=0.015
+let stair_a_14 = box 8.015 1.765 2.890    9.365 4.305 4.485 round=0.015
+let stair_a_15 = box 8.015 1.765 2.890    9.045 4.485 4.485 round=0.015
+let stair_a_16 = box 8.015 1.765 2.890    8.725 4.665 4.485 round=0.015
+let stair_a_17 = box 8.015 1.765 2.890    8.405 4.845 4.485 round=0.015
 
-let stair_flight_a = union {
-    stair_a_01 stair_a_02 stair_a_03 stair_a_04 stair_a_05 stair_a_06
-    stair_a_07 stair_a_08 stair_a_09 stair_a_10 stair_a_11 stair_a_12
+let stair_a_steps = union {
+    stair_a_01 stair_a_02 stair_a_03 stair_a_04 stair_a_05 stair_a_06 stair_a_07 stair_a_08
+    stair_a_09 stair_a_10 stair_a_11 stair_a_12 stair_a_13 stair_a_14 stair_a_15 stair_a_16
+    stair_a_17
+}
+
+# --- the nosing, which is a section and not an arris --------------------------------------------
+#
+# A tread that stops dead on its riser is a slab. A real one overhangs the riser below it by about
+# a nosing's own thickness and is coved back to the riser under the overhang, and both of those are
+# matter at this metre: the overhang is 0.045 (M/10) and the bar is 0.048 tall with a 0.015 bullnose
+# turned on it, so the deepest shadow on the whole flight is one and a half voxels wide and there
+# are seventeen of them in a line.
+#
+# The bar is written 0.015 inside its own faces for the same reason the treads are, so its top face
+# lands exactly on the tread it belongs to and adds nothing to the rise. The cove under it is a
+# `cavetto` — build_moulding centres the hollow on the SECOND corner, so the first is written at
+# the riser face where the stone is and the second at the outer bottom of the overhang where it
+# is not.
+let stair_nose_a_bar  = box 13.495 1.917 2.890   13.570 1.965 4.485 round=0.015
+let stair_nose_a_cove = cavetto 13.540 1.902 2.875   13.585 1.845 4.500 run=z
+let stair_nose_a_1    = union { stair_nose_a_bar stair_nose_a_cove }
+let stair_nose_a_2    = union { stair_nose_a_1  translate { stair_nose_a_1 } -0.32 0.18 0 }
+let stair_nose_a_4    = union { stair_nose_a_2  translate { stair_nose_a_2 } -0.64 0.36 0 }
+let stair_nose_a_8    = union { stair_nose_a_4  translate { stair_nose_a_4 } -1.28 0.72 0 }
+let stair_nose_a_16   = union { stair_nose_a_8  translate { stair_nose_a_8 } -2.56 1.44 0 }
+let stair_nose_a = union { stair_nose_a_16  translate { stair_nose_a_1 } -5.12 2.88 0 }
+
+# --- and the hollow four hundred years of feet have worn in the middle of each one ---------------
+#
+# A flattened ellipsoid sunk 36 mm into the centre of every tread, 0.20 along the going and 1.00
+# across the width — which is where feet actually fall, and it is not the whole tread: a stair worn
+# corner to corner is a ramp, and the worn part of a real one stops short of both the nosing and the
+# wall. Inset 0.06 from the nosing at both ends ON PURPOSE. The heightfield the walkability check
+# builds reads the top of each column, and if the dish reached the nosing the step from one tread to
+# the next would read 0.18 plus the dish's depth and the facility's worst rise would become this
+# stair rather than the great south steps.
+let stair_wear_a_1  = ellipsoid 13.38 2.025 3.65 rx=0.10 ry=0.081 rz=0.50
+let stair_wear_a_2  = union { stair_wear_a_1  translate { stair_wear_a_1 } -0.32 0.18 0 }
+let stair_wear_a_4  = union { stair_wear_a_2  translate { stair_wear_a_2 } -0.64 0.36 0 }
+let stair_wear_a_8  = union { stair_wear_a_4  translate { stair_wear_a_4 } -1.28 0.72 0 }
+let stair_wear_a_16 = union { stair_wear_a_8  translate { stair_wear_a_8 } -2.56 1.44 0 }
+let stair_wear_a = union { stair_wear_a_16  translate { stair_wear_a_1 } -5.12 2.88 0 }
+
+# --- the spandrel is coursed stone, not one block -----------------------------------------------
+#
+# Joints 36 mm wide and 36 mm deep on the module's own 0.45, cut into the one face of the spandrel
+# anybody can see: the north face, over the well and along the passage. A groove is the hardest
+# thin matter there is — it is a feature made entirely of the absence of one voxel — and there are
+# seven courses of it running the whole 5.5 m length, each stopping of its own accord where the
+# raking face it is cut into runs out from under the flight.
+#
+# ONLY THAT FACE. The south face is 65 mm inside the halls block and the east face is not a face at
+# all — it is the seventeen risers themselves, and a horizontal joint across them would be a joint
+# in thin air for all but the bottom 0.18 of its length.
+let stair_courses_a = repeat { box 7.95 3.132 4.464   13.60 3.168 4.560 } y=0.45 ny=3
+
+let stair_flight_a = difference {
+    union { stair_a_steps stair_nose_a }
+    stair_wear_a stair_courses_a
 }
 
 # ================================================================================================
-# THE HALF LANDING — 1.35 deep (3 M), top 4.14, soffit 3.915
+# THE HALF LANDING — 1.80 deep (4 M), top 5.04, soffit 4.815
 # ================================================================================================
 #
-# x 6.75 .. 8.20 and the full width of the stair, z 3.15 .. 6.75, bedded 0.15 into the north wall.
-# It runs 0.10 east of its own face at 8.10 so that the upper flight, which starts there, is
-# certainly one solid with it rather than two shapes touching on a plane.
+# x 6.30 .. 8.20 and the full width of the stair, z 2.875 .. 6.75, bedded 0.15 into the north wall
+# and 0.065 into the halls block. It runs 0.10 east of its own face at 8.10 so that the upper
+# flight, which starts there, is certainly one solid with it rather than two shapes touching on a
+# plane.
 #
-# 0.225 THICK, WHICH IS M/2, AND IT IS THE THICKEST THING THAT FITS. 4.14 less the brief's 2.10
-# less the floor's 1.80 leaves 0.24. A whole module of slab misses by 210 mm and a third of one
-# (0.15) would have been thin enough — but M/2 is a module fraction, it is what the order uses
-# for a fascia, and it leaves the margin at fifteen millimetres rather than at ninety, which is
-# the honest place to leave it: this is a constraint, and a constraint you have cleared by 90 mm
-# is a constraint you have stopped measuring.
+# 0.225 THICK, WHICH IS M/2 AND WHAT THE ORDER USES FOR A FASCIA, and its soffit at 4.815 is the
+# most important number in this file. It clears the arched north window's head at 4.725 by 0.09,
+# and it gives the passage below 3.015 m. Both of those are the same decision: the landing had to
+# rise until it was out of the window, and once it had, the head height came free.
+#
+# 1.80 DEEP AND NOT 1.35, and that is the change nobody would have found by looking. You cross a
+# half landing between its outer balustrade and the guard over the well. Each of those stands
+# 0.2025 in from its own edge — 0.09 of baluster and 0.1125 of handrail — so a 1.35 landing leaves
+# 0.945 m to turn round in, which is under a metre in the one place on a stair where somebody is
+# carrying something and changing direction. 1.80 leaves 1.395.
+#
 # THE FACE IS AT 8.10 OVER THE LOWER FLIGHT AND AT 8.20 UNDER THE UPPER ONE. The 0.10 is the
 # overlap the upper flight needs so the two are one solid rather than two shapes touching on a
 # plane — but carried right across it would stand 0.10 of landing on top of the lower flight's
-# twelfth tread and leave that tread 0.22 deep instead of 0.32, which is a 0.18 step in the middle
-# of a stair. So the lip is only where the upper flight buries it. The probe found this too.
-let stair_land_slab = box 6.765 3.930 3.165   8.085 4.125 6.735 round=0.015
-let stair_land_lip  = box 8.015 3.930 5.415   8.185 4.125 6.735 round=0.015
-let stair_landing = union { stair_land_slab stair_land_lip }
+# seventeenth tread and leave that tread 0.22 deep instead of 0.32, which is a 0.18 step in the
+# middle of a stair. So the lip is only where the upper flight buries it.
+let stair_land_slab = box 6.315 4.830 2.890   8.085 5.025 6.735 round=0.015
+let stair_land_lip  = box 8.015 4.830 4.965   8.185 5.025 6.735 round=0.015
+
+# The landing is PAVED, not cast: joints 36 mm wide and 36 mm deep on the 0.90 (D) square, which is
+# the same grid, on the same lines, that the flags of the passage floor below are laid to — so the
+# pattern under your feet at 1.80 and the one at 5.04 are one pavement seen twice. A joint in the
+# top of a 0.225 slab is a sixth of its depth and takes nothing off what it carries.
+let stair_land_j_z = repeat { box 6.30 5.004 4.932   8.20 5.060 4.968 } z=0.90 nz=2
+let stair_land_j_x = repeat { box 7.182 5.004 2.87   7.218 5.060 6.75 } x=0.90 nx=1
+let stair_landing  = difference {
+    union { stair_land_slab stair_land_lip }
+    union { stair_land_j_z stair_land_j_x }
+}
 
 # ================================================================================================
-# THE UPPER FLIGHT — twelve risers, 4.14 to 6.30, ascending EAST, a raking slab
+# THE UPPER FLIGHT — seven risers, 5.04 to 6.30, ascending EAST, a raking slab
 # ================================================================================================
 #
-# Eleven treads of 0.32 from x = 8.10 to 11.62, the twelfth riser being the gallery. This one is
+# Six treads of 0.32 from x = 8.10 to 9.70, the seventh riser being the gallery. This one is
 # NOT filled underneath: the passage under it is the point, and its soffit is the surface the
 # head-height probe measures against.
 #
 # The soffit is a plane parallel to the nosing line and 0.405 (0.9 M) below it — a rotated box,
 # which is exact and keeps a bounding box where a `plane` written by hand would be neither. Its
-# local frame stands on the first nosing at (8.10, 4.32) with local +x running up the rake, and
+# local frame stands on the first nosing at (8.10, 5.22) with local +x running up the rake, and
 # it is turned by 0.08154932 turns about z, which is atan(0.18/0.32) / tau. A third box gives the
-# flight a VERTICAL west face at x = 8.10; without it the rotated box's own end cuts the first
-# riser on the slant and the stair starts with a wedge.
+# flight a VERTICAL west face at x = 8.04 — 0.06 west of the first riser, so that the first tread
+# keeps the nosing it overhangs the landing with; without it the rotated box's own end cuts the
+# first riser on the slant and the stair starts with a wedge.
 #
-#   tread  1   x  8.42   top 4.32        tread  7   x 10.34   top 5.40
-#   tread  2   x  8.74   top 4.50        tread  8   x 10.66   top 5.58
-#   tread  3   x  9.06   top 4.68        tread  9   x 10.98   top 5.76
-#   tread  4   x  9.38   top 4.86        tread 10   x 11.30   top 5.94
-#   tread  5   x  9.70   top 5.04        tread 11   x 11.62   top 6.12
-#   tread  6   x 10.02   top 5.22
+#   tread  1   x  8.10   top 5.22        tread  4   x  9.06   top 5.76
+#   tread  2   x  8.42   top 5.40        tread  5   x  9.38   top 5.94
+#   tread  3   x  8.74   top 5.58        tread  6   x  9.70   top 6.12
+#                                        gallery    x 10.02   top 6.30
 #
-# Tread eleven runs on to 11.67 so that it is buried in the gallery, whose face at 11.62 is the
-# twelfth riser.
-
+# Tread six runs on to 10.07 so that it is buried in the gallery, whose face at 10.02 is the
+# seventh riser.
+#
 # THE NESTING GOES THE OTHER WAY ROUND FROM THE LOWER FLIGHT, and getting that wrong is silent.
 # A nested-box stair is a stack of boxes each of which runs from its own riser AWAY IN THE
 # DIRECTION OF DESCENT, so that every box below is buried in the ones above. The lower flight
 # climbs west, so its boxes all end at the same eastern edge; this one climbs east, so its boxes
-# all start at the same western edge. Written the lower flight's way — every box from x = 8.10 out
-# to its own riser — the tallest box covers all the others and the flight comes back as a SOLID
-# BLOCK 2.16 m high with a flat top. One component, no floating voxels, no error, and it measured
-# 25,124 voxels, which is a plausible number for a flight of stairs. The head-height probe over
-# the treads is what found it.
-let stair_b_01 = box  8.115 3.215 5.415   11.655 4.305 6.735 round=0.015
-let stair_b_02 = box  8.435 3.215 5.415   11.655 4.485 6.735 round=0.015
-let stair_b_03 = box  8.755 3.215 5.415   11.655 4.665 6.735 round=0.015
-let stair_b_04 = box  9.075 3.215 5.415   11.655 4.845 6.735 round=0.015
-let stair_b_05 = box  9.395 3.215 5.415   11.655 5.025 6.735 round=0.015
-let stair_b_06 = box  9.715 3.215 5.415   11.655 5.205 6.735 round=0.015
-let stair_b_07 = box 10.035 3.215 5.415   11.655 5.385 6.735 round=0.015
-let stair_b_08 = box 10.355 3.215 5.415   11.655 5.565 6.735 round=0.015
-let stair_b_09 = box 10.675 3.215 5.415   11.655 5.745 6.735 round=0.015
-let stair_b_10 = box 10.995 3.215 5.415   11.655 5.925 6.735 round=0.015
-let stair_b_11 = box 11.315 3.215 5.415   11.655 6.105 6.735 round=0.015
+# all start at the same western edge. Written the lower flight's way the tallest box covers all
+# the others and the flight comes back as a SOLID BLOCK with a flat top. One component, no
+# floating voxels, no error, and a plausible voxel count. The head-height probe is what found it.
+let stair_b_01 = box  8.115 4.200 4.965   10.055 5.205 6.735 round=0.015
+let stair_b_02 = box  8.435 4.200 4.965   10.055 5.385 6.735 round=0.015
+let stair_b_03 = box  8.755 4.200 4.965   10.055 5.565 6.735 round=0.015
+let stair_b_04 = box  9.075 4.200 4.965   10.055 5.745 6.735 round=0.015
+let stair_b_05 = box  9.395 4.200 4.965   10.055 5.925 6.735 round=0.015
+let stair_b_06 = box  9.715 4.200 4.965   10.055 6.105 6.735 round=0.015
 
 let stair_b_steps = union {
     stair_b_01 stair_b_02 stair_b_03 stair_b_04 stair_b_05 stair_b_06
-    stair_b_07 stair_b_08 stair_b_09 stair_b_10 stair_b_11
 }
+
+# The nosings of this flight overhang WESTWARD, because this flight climbs east — the overhang is
+# always over the riser you have just come up. The first one hangs 0.045 over the half landing,
+# which is what a nosing at the foot of a flight does.
+let stair_nose_b_bar  = box  8.070 5.157 4.965    8.145 5.205 6.735 round=0.015
+let stair_nose_b_cove = cavetto 8.100 5.142 4.950   8.055 5.085 6.750 run=z
+let stair_nose_b_1    = union { stair_nose_b_bar stair_nose_b_cove }
+let stair_nose_b_2    = union { stair_nose_b_1  translate { stair_nose_b_1 } 0.32 0.18 0 }
+let stair_nose_b_4    = union { stair_nose_b_2  translate { stair_nose_b_2 } 0.64 0.36 0 }
+let stair_nose_b      = union { stair_nose_b_4  translate { stair_nose_b_2 } 1.28 0.72 0 }
+
+let stair_wear_b_1 = ellipsoid 8.26 5.265 5.85 rx=0.10 ry=0.081 rz=0.52
+let stair_wear_b_2 = union { stair_wear_b_1  translate { stair_wear_b_1 } 0.32 0.18 0 }
+let stair_wear_b_4 = union { stair_wear_b_2  translate { stair_wear_b_2 } 0.64 0.36 0 }
+let stair_wear_b   = union { stair_wear_b_4  translate { stair_wear_b_2 } 1.28 0.72 0 }
 
 # THE SOFFIT PLANE IS PLACED BY A POINT ON IT, not by an offset below the nosing line, and the
 # difference is 60 mm of head height. `rotate` turns the box about the origin, so a box whose
 # bottom face sits 0.405 BELOW the local origin has that face 0.405 away PERPENDICULAR to the
-# rake — which is 0.405 / cos(29.4 degrees) = 0.465 straight down. Written that way the soffit
-# left the landing at 3.855 and the passage was 2.055 m high. Written this way — the box's bottom
-# face ON the local origin, and the origin carried to the soffit's own corner at (8.10, 3.915) —
-# the waist is 0.405 VERTICALLY at every point of the flight, because the soffit and the nosing
-# line are parallel and 0.405 apart in y by construction rather than by trigonometry.
-let stair_b_waist_sec = box -1.00 0.00 5.415   4.30 3.00 6.735
-let stair_b_waist = translate { rotate { stair_b_waist_sec } z=0.08154932 } 8.10 3.915 0
-let stair_b_face  = box 8.10 3.00 5.40   12.00 7.00 6.75
+# rake — which is 0.405 / cos(29.4 degrees) = 0.465 straight down. Written this way — the box's
+# bottom face ON the local origin, and the origin carried to the soffit's own corner at
+# (8.10, 4.815) — the waist is 0.405 VERTICALLY at every point of the flight, because the soffit
+# and the nosing line are parallel and 0.405 apart in y by construction rather than by trigonometry.
+#
+# THE WAIST BOX IS 15 mm WIDER THAN THE FLIGHT IN z ON PURPOSE. Written to the flight's own
+# 4.965..6.735 it clips the treads back to those numbers instead of to the 4.95..6.75 their own
+# `round` gives them, and the flight comes out 30 mm narrower than every number in this file says.
+let stair_b_waist_sec = box -1.00 0.00 4.940   4.30 3.00 6.760
+let stair_b_waist = translate { rotate { stair_b_waist_sec } z=0.08154932 } 8.10 4.815 0
+let stair_b_face  = box 8.04 3.00 4.95   10.10 7.00 6.75
 
-let stair_flight_b = intersection { stair_b_steps stair_b_waist stair_b_face }
+let stair_flight_b = difference {
+    intersection { union { stair_b_steps stair_nose_b } stair_b_waist stair_b_face }
+    stair_wear_b
+}
 
 # ================================================================================================
 # THE GALLERY — the upper floor this stair arrives at, top 6.30, soffit 5.895
 # ================================================================================================
 #
-# x 11.62 .. 15.25 by z 4.50 .. 6.75: 3.48 by 2.10 of walkable upper floor, bedded 0.15 into the
+# x 10.02 .. 15.25 by z 4.50 .. 6.75: 5.08 by 2.10 of walkable upper floor, bedded 0.15 into the
 # east wall and 0.15 into the north wall. Its top is the piano nobile's own window sill, which is
 # how you know 6.30 is right: 1.80 plus twenty-five risers of 0.18 lands on the level windows.clip
 # already put its upper sills at.
 #
 # It is 0.405 thick, the flight's own waist, so the two soffits are one continuous plane and the
-# joint between them at x = 11.62 has no step in it at all.
+# joint between them at x = 10.02 has no step in it at all. Paved to the same 0.90 (D) grid as the
+# half landing and the floor below, on the same lines.
 #
 # WHEN SOMEBODY BUILDS THE REST OF THE UPPER FLOOR it butts this: the open edges are z = 4.50
-# from x 11.62 to 15.10, and x = 11.62 from z 4.50 to 5.40. Both carry a balustrade now because
-# a landing over a 4.5 m drop has to; take either of them out when there is a floor on the other
-# side of it, and leave the one over the well.
-let stair_gallery = box 11.635 5.910 4.515   15.235 6.285 6.735 round=0.015
+# from x 10.02 to 15.10, and x = 10.02 from z 4.50 to 4.95. Both carry a balustrade now because
+# a landing over a 4.5 m drop has to; take the first out when there is a floor on the other side
+# of it, and LEAVE THE SECOND — it is over the open well.
+let stair_gall_slab = box 10.035 5.910 4.515   15.235 6.285 6.735 round=0.015
+let stair_gall_j_x  = repeat { box 13.332 6.264 4.50   13.368 6.320 6.75 } x=0.90 nx=4
+let stair_gall_j_z  = repeat { box 10.02 6.264 4.932   15.25 6.320 4.968 } z=0.90 nz=2
+let stair_gallery   = difference { stair_gall_slab  union { stair_gall_j_x stair_gall_j_z } }
 
 # ================================================================================================
 # THE PIERS — what carries the landing and the gallery over the passage
 # ================================================================================================
 #
-# Square, 0.45 (M), founded at 1.75 and running up 0.015 into the slab above so nothing is left
-# resting on a plane. Two under the west edge of the half landing, two under the west edge of the
-# gallery, all four on the same 0.45 grid.
+# Square, 0.45 (M), founded at 1.75 and running up 0.03 into the slab above so nothing is left
+# resting on a plane. Two under the west edge of the half landing, two under the gallery, all four
+# on the same 0.45 grid, and NONE OF THEM LESS THAN 1.20 m FROM ITS NEIGHBOUR: you walk between
+# these, and a pair 0.93 apart is a pair you turn sideways for. The landing's two stand 2.91 apart
+# and the gallery's 1.35, and each pair is set against a wall at one end — the halls block at 2.940
+# and the north wall at 6.60 — so the gaps are where a person is rather than beside them.
 #
 # THEY HAVE NO PLINTH AND NO CAP AND THAT IS DELIBERATE, TWICE OVER. A cap projecting 0.045 under
-# a 3.915 soffit is a 45 mm ring of stone at 1.935 m over a floor people walk on — it fails the
-# head height that this whole file exists to hold. And a plinth 0.225 tall beside a floor is a
-# 0.225 rise in a building whose worst rise is supposed to be the steps' 0.18; measure.cpp counts
-# any rise up to 0.75 m as a step somebody meant to take. So the ornament is SUNK instead: a panel
-# 0.045 deep (M/10) in each face, which costs nothing in either check and gives the passage
+# a soffit is a ring of stone at head height over a floor people walk on; and a plinth 0.225 tall
+# beside a floor is a 0.225 rise in a building whose worst rise is supposed to be the steps' 0.18,
+# and measure.cpp counts any rise up to 0.75 m as a step somebody meant to take. So the ornament is
+# SUNK instead: a panel in each face, which costs nothing in either check and gives the passage
 # something to be lit by.
-# FOUR CUTTERS AND NOT TWO, ONE TO A FACE, EACH 0.045 DEEP. Two cutters — one across x and one
+#
+# FOUR CUTTERS AND NOT TWO, ONE TO A FACE, EACH 0.09 DEEP. Two cutters — one across x and one
 # across z, each run past both faces — is the obvious way to sink a panel on all four sides of a
 # pier and it does not sink anything: each one goes straight THROUGH, and their union takes the
-# whole middle out and leaves four corner posts. It reads as a pier from a metre away, it costs no
-# components and no floating voxels, and the only way to see it is to stand under the stair, which
-# is where the first path-traced view of this passage was taken from.
+# whole middle out and leaves four corner posts.
 #
 # 0.09 (M/5) DEEP AND NOT 0.045, and the reason is paint rather than shadow. A rule keyed on a
 # recess has to name a zone that holds the recess floor and excludes the face 45 mm outside it,
 # and the rules' own `below=0.02` reaches 20 mm each way off a voxel centre that is itself up to
 # 16 mm off the surface. There is no room in 45 mm; there is in 90. halls.clip found the same
-# thing from the other side — at 45 mm its sunk panels did not read at all — so this is the
-# building's second vote for the same number. Inset 0.09 from every arris, so the corner is whole.
-let stair_pier_body = box  6.765 1.765 4.515    7.185 3.930 4.935 round=0.015
-let stair_pier_pan_s = box 6.840 2.25 4.410    7.110 3.45 4.590
-let stair_pier_pan_n = box 6.840 2.25 4.860    7.110 3.45 5.040
-let stair_pier_pan_w = box 6.660 2.25 4.590    6.840 3.45 4.860
-let stair_pier_pan_e = box 7.110 2.25 4.590    7.290 3.45 4.860
+# thing from the other side, so this is the building's second vote for the same number.
+let stair_pier_body = box  6.315 1.765 2.955    6.735 4.830 3.375 round=0.015
+let stair_pier_pan_s = box 6.390 2.25 2.850    6.660 4.35 3.030
+let stair_pier_pan_n = box 6.390 2.25 3.300    6.660 4.35 3.480
+let stair_pier_pan_w = box 6.210 2.25 3.030    6.390 4.35 3.300
+let stair_pier_pan_e = box 6.660 2.25 3.030    6.840 4.35 3.300
 let stair_pier_one = difference {
     stair_pier_body
     union { stair_pier_pan_s stair_pier_pan_n stair_pier_pan_w stair_pier_pan_e }
 }
 
 let stair_pier_a = stair_pier_one
-let stair_pier_b = translate { stair_pier_one } 0 0 1.35
+let stair_pier_b = translate { stair_pier_one } 0 0 3.36
 
-let stair_tpier_body  = box 11.715 1.765 4.515   12.135 5.925 4.935 round=0.015
-let stair_tpier_pan_s = box 11.790 2.25 4.410   12.060 5.40 4.590
-let stair_tpier_pan_n = box 11.790 2.25 4.860   12.060 5.40 5.040
-let stair_tpier_pan_w = box 11.610 2.25 4.590   11.790 5.40 4.860
-let stair_tpier_pan_e = box 12.060 2.25 4.590   12.240 5.40 4.860
+let stair_tpier_body  = box 11.625 1.765 4.515   12.045 5.910 4.935 round=0.015
+let stair_tpier_pan_s = box 11.700 2.25 4.410   11.970 5.40 4.590
+let stair_tpier_pan_n = box 11.700 2.25 4.860   11.970 5.40 5.040
+let stair_tpier_pan_w = box 11.520 2.25 4.590   11.700 5.40 4.860
+let stair_tpier_pan_e = box 11.970 2.25 4.590   12.150 5.40 4.860
 let stair_tpier_one = difference {
     stair_tpier_body
     union { stair_tpier_pan_s stair_tpier_pan_n stair_tpier_pan_w stair_tpier_pan_e }
@@ -338,12 +504,25 @@ let stair_pier_d = translate { stair_tpier_one } 0 0 1.80
 let stair_piers = union { stair_pier_a stair_pier_b stair_pier_c stair_pier_d }
 
 # ================================================================================================
-# THE BALUSTRADE — the order's turned baluster, one to a tread
+# THE BALUSTRADE — the order's turned baluster, one to a tread, on a bronze shoe
 # ================================================================================================
 #
 # `ionic_baluster` is 0.70 tall on a plinth 0.18 square, which is exactly one run less 0.14, so
 # one to a tread at 0.32 centres leaves a 0.14 gap and a 0.063 neck. The handrail over it is
 # 0.225 tall, so the rail crown stands 0.925 above the surface a baluster stands on.
+#
+# THE SHOE AND THE COLLAR ARE THE FIXINGS, and they are matter rather than paint because at 36 mm
+# and 18 mm proud they are both bigger than a voxel at the contract's metre. A stone baluster is
+# not glued to its string: it is doweled, and the dowel is hidden under a metal shoe that spreads
+# the load and keeps the water out of the joint, with a matching collar where the neck enters the
+# rail. The shoe stands 0.018 proud of the plinth it wraps and the collar 0.024 proud of the rail's
+# own fillet, and BOTH STAY INSIDE THE 0.1125 HALF-WIDTH OF THE HANDRAIL ABOVE THEM — 0.108 and
+# 0.099 — so neither adds a millimetre to what the flight costs in width and neither can be the
+# topmost matter in its own column, which is what would have made either of them a rise. At 0.216
+# across on 0.32 centres the shoes leave a 0.104 gap between neighbours and do not run together.
+let stair_bal_shoe   = box -0.098 0.010 -0.098   0.098 0.026 0.098 round=0.010
+let stair_bal_collar = box -0.089 0.674 -0.089   0.089 0.690 0.089 round=0.010
+let stair_baluster   = union { ionic_baluster stair_bal_shoe stair_bal_collar }
 #
 # 0.925 IS NOT A COMFORT DECISION. measure.cpp reports the worst rise between neighbouring columns
 # and treats anything over 0.75 m as a wall rather than as a bad step. A rail 0.70 above its tread
@@ -358,64 +537,56 @@ let stair_piers = union { stair_pier_a stair_pier_b stair_pier_c stair_pier_d }
 # THE RAKING RUNS ARE PLACED BY DOUBLING. `repeat` steps along one axis; a stair balustrade steps
 # along two at once, and the balusters must stay upright, so a rotated repeat is no use either.
 # One baluster, unioned with itself carried one tread up the rake, gives two; that with itself
-# carried two treads gives four, then eight. Twelve is eight and four; eleven is eight, two and
-# one. Four lines for twelve balusters, and every one of them is a translate of the same shape.
-
+# carried two treads gives four, then eight, then sixteen. Seventeen is sixteen and one; six is
+# four and two. Five lines for seventeen balusters, and every one of them is a translate of the
+# same shape.
+#
 # AND THEY STAND ON THE NOSING LINE, NOT ON THE TREADS. A rail is a fixed height over the line
 # the nosings make; a tread is level and the line is not, so a baluster standing on the middle of
 # a tread is 0.09 short of a rail that is straight, and there is a 90 mm slot the length of the
-# balustrade. The first version of this file had exactly that, in both flights, and it is invisible
-# on a contact sheet because a baluster and its rail are 0.18 apart in a picture. What fixes it is
-# the RAKING PLINTH below: a band 0.09 (M/5) deep whose top face IS the nosing line, filling the
-# saw-tooth between the line and the treads, so every baluster stands on one plane and the
-# doubling's own step of one tread up and one run along is exactly the plinth's own slope.
-#
-# The plinth top is between 0 and one riser above the tread beside it, which is 0.18 — the
-# building's own riser and inside the walkability check's own step. Anything taller there is a
-# rise the facility would report instead of the great steps'.
-let stair_ra_1  = translate { ionic_baluster } 11.94 1.98 3.24
+# balustrade. What fixes it is the RAKING PLINTH below: a band 0.09 (M/5) deep whose top face IS
+# the nosing line, filling the saw-tooth between the line and the treads, so every baluster stands
+# on one plane and the doubling's own step of one tread up and one run along is exactly the
+# plinth's own slope.
+let stair_ra_1  = translate { stair_baluster } 13.54 1.98 4.41
 let stair_ra_2  = union { stair_ra_1  translate { stair_ra_1 } -0.32 0.18 0 }
 let stair_ra_4  = union { stair_ra_2  translate { stair_ra_2 } -0.64 0.36 0 }
 let stair_ra_8  = union { stair_ra_4  translate { stair_ra_4 } -1.28 0.72 0 }
-let stair_ra_12 = union { stair_ra_8  translate { stair_ra_4 } -2.56 1.44 0 }
+let stair_ra_16 = union { stair_ra_8  translate { stair_ra_8 } -2.56 1.44 0 }
+let stair_bal_a = union { stair_ra_16 translate { stair_ra_1 } -5.12 2.88 0 }
 
-let stair_bal_a_s = stair_ra_12
-let stair_bal_a_n = translate { stair_ra_12 } 0 0 1.17
-
-let stair_rb_1  = translate { ionic_baluster } 8.10 4.32 5.49
+let stair_rb_1  = translate { stair_baluster } 8.10 5.22 5.04
 let stair_rb_2  = union { stair_rb_1  translate { stair_rb_1 } 0.32 0.18 0 }
 let stair_rb_4  = union { stair_rb_2  translate { stair_rb_2 } 0.64 0.36 0 }
-let stair_rb_8  = union { stair_rb_4  translate { stair_rb_4 } 1.28 0.72 0 }
-let stair_bal_b = union { stair_rb_8  translate { stair_rb_2 } 2.56 1.44 0
-                                      translate { stair_rb_1 } 3.20 1.80 0 }
+let stair_bal_b = union { stair_rb_4  translate { stair_rb_2 } 1.28 0.72 0 }
 
-# The level runs: the landing's west and south edges, both ends of the well, and the gallery's
-# south and west edges. Same 0.32 pitch as the flights, so the whole balustrade is one rhythm.
-let stair_bal_lw = translate { repeat { translate { ionic_baluster } 6.84 4.14 0 } z=0.32 nz=4 } 0 0 4.86
-let stair_bal_ls = translate { repeat { translate { ionic_baluster } 0 4.14 3.24 } x=0.32 nx=1 } 7.55 0 0
-let stair_bal_lwell = translate { repeat { translate { ionic_baluster } 8.01 4.14 0 } z=0.32 nz=1 } 0 0 4.95
-let stair_bal_gs = translate { repeat { translate { ionic_baluster } 0 6.30 4.59 } x=0.32 nx=4 } 13.36 0 0
-let stair_bal_gwell = translate { repeat { translate { ionic_baluster } 11.71 6.30 0 } z=0.32 nz=1 } 0 0 4.95
+# The level runs: the landing's west edge, both ends of the well, and the gallery's south and west
+# edges. Same 0.32 pitch as the flights, so the whole balustrade is one rhythm. THE LANDING'S
+# SOUTH EDGE HAS NONE, and neither has the upper flight's north side or the gallery's: those are
+# against walls now, which is the whole reason this stair is wide enough to walk on.
+let stair_bal_lw    = translate { repeat { translate { stair_baluster } 6.39 5.04 0 } z=0.32 nz=5 } 0 0 4.77
+let stair_bal_lwell = translate { stair_baluster } 8.01 5.04 4.725
+let stair_bal_gs    = translate { repeat { translate { stair_baluster } 0 6.30 4.59 } x=0.32 nx=7 } 12.56 0 0
+let stair_bal_gwell = translate { stair_baluster } 10.11 6.30 4.725
 
 let stair_balusters = union {
-    stair_bal_a_s stair_bal_a_n stair_bal_b
-    stair_bal_lw stair_bal_ls stair_bal_lwell stair_bal_gs stair_bal_gwell
+    stair_bal_a stair_bal_b
+    stair_bal_lw stair_bal_lwell stair_bal_gs stair_bal_gwell
 }
 
 # ================================================================================================
-# THE HANDRAIL — a moulded section, 0.18 wide (0.4 M) and 0.225 tall (M/2)
+# THE HANDRAIL — a moulded section, 0.225 wide (M/2) and 0.225 tall (M/2)
 # ================================================================================================
 #
 #   -0.225 .. -0.180   fillet   M/10 tall, 0.15 wide, the band the balusters die into
 #   -0.180 .. -0.090   core     M/5 tall, 0.12 wide, the plain neck
-#   -0.090 ..  0.000   ovolo    M/5, a quarter round of 0.09 either side — THE WIDEST MEMBER, and
-#                               the only one 0.18 across, so it is what every column finds
+#   -0.090 ..  0.000   ovolo    M/5, a quarter round of 0.1125 either side — THE WIDEST MEMBER,
+#                               and the only one 0.225 across, so it is what every column finds
 #
 # measured DOWN from the rail top, because that is the surface a hand takes and the only one that
 # has to be a fixed height over a tread. Two ovolos rather than a `mirror`: mirror folds to the
 # absolute value of a coordinate, so a mirrored section has to be built at zero and carried, and
-# three of these five rails are already being built at zero for the rotation. Two lines is cheaper
-# than two frames.
+# both of these rails are already being built at zero for the rotation.
 #
 # BOTH OF THOSE NUMBERS ARE SET BY THE WALKABILITY CHECK AND NOT BY A HAND. measure.cpp looks down
 # EVERY COLUMN of voxels; the column that grazes the very edge of a rail does not find the crown,
@@ -424,38 +595,40 @@ let stair_balusters = union {
 # somebody meant to take, so this handrail, and not the great south steps, was the worst rise in
 # the entire facility. It reported as "0.75 m" and it took decoding a voxel index to find.
 #
-# So the rail is M/2 tall and THE OVOLO IS THE WIDEST MEMBER — 0.18 across against the fillet's
+# So the rail is M/2 tall and THE OVOLO IS THE WIDEST MEMBER — 0.225 across against the fillet's
 # 0.15 and the core's 0.12. Widening the fillet to match was tried first and is not enough: the
-# ovolo is a quarter round, so at the very edge of its 0.09 it has no height at all, and the
+# ovolo is a quarter round, so at the very edge of its 0.1125 it has no height at all, and the
 # outermost sampled column found the fillet under it again at 0.77. With the fillet pulled in,
 # the shallowest top any column under this rail can have is the ovolo's own springing,
 # 0.925 - 0.09 = 0.835 above the surface, clear of the cutoff by 0.085 — nearly three voxels at
-# metre 32. A domed rail always has a thin edge where the crown has run out; what decides whether
-# it is a bad step is what is UNDER that edge, and the answer has to be nothing.
+# metre 32.
 #
-# THE THREE RAKING RAILS are one straight section built about the origin and turned about z by the
+# THE TWO RAKING RAILS are one straight section built about the origin and turned about z by the
 # stair's own slope. The lower flight descends toward +x and the upper one climbs toward +x, so
 # they are the SAME section turned opposite ways, which is the check that the angle is right: if
 # one of them is parallel to its nosings the other is not.
-
-# Two lengths, both starting at local x = 0, which is the HEAD of the lower flight and the FOOT of
-# the upper one. Both ends of every rail die inside a newel: 4.45 along the rake from (8.10, 5.02)
-# arrives at (11.98, 2.84) and 4.20 from (8.10, 5.20) at (11.76, 7.26), which are the middles of
-# the newels at 12.03 and 11.71. A rail that stops short of its newel leaves a slot; one that runs
-# past it leaves a spike over the gallery, which is what the first pass did and what the gallery's
-# own head-height probe found.
-let stair_rail_a_fil = fillet 0.00 -0.225 -0.075  4.60 -0.18  0.075 run=x
-let stair_rail_a_cor = box    0.00 -0.18  -0.06   4.60 -0.09  0.06  round=0.012
-let stair_rail_a_ovl = ovolo  0.00 -0.09   0.00   4.60  0.00  0.1125 run=x
-let stair_rail_a_ovr = ovolo  0.00 -0.09   0.00   4.60  0.00 -0.1125 run=x
+#
+# Both lengths start at local x = 0, which is the HEAD of the lower flight and the FOOT of the
+# upper one, and both run INTO the newel that terminates them and no further: 6.25 along the rake
+# from (8.10, 5.965) arrives at (13.548, 2.901) against a newel top of 2.905, and 2.21 from
+# (8.10, 6.145) arrives at (10.026, 7.229) against a newel top of 7.225. Both are inside the
+# newel's own 0.2010, and neither is measured to the newel's CENTRE — that is the mistake the old
+# file made at both ends. A rail is 0.925 over its own nosing line and the nosing line keeps
+# climbing past the last riser, so a rail run to the middle of a newel standing on the floor above
+# arrives 0.08 higher than the newel does and leaves a spike. Run it to where the two heights
+# agree, which is the edge the newel stands 0.09 inside of, and it dies inside the newel instead.
+let stair_rail_a_fil = fillet 0.00 -0.225 -0.075  6.25 -0.18  0.075 run=x
+let stair_rail_a_cor = box    0.00 -0.18  -0.06   6.25 -0.09  0.06  round=0.012
+let stair_rail_a_ovl = ovolo  0.00 -0.09   0.00   6.25  0.00  0.1125 run=x
+let stair_rail_a_ovr = ovolo  0.00 -0.09   0.00   6.25  0.00 -0.1125 run=x
 let stair_rail_a_sec = union {
     stair_rail_a_fil stair_rail_a_cor stair_rail_a_ovl stair_rail_a_ovr
 }
 
-let stair_rail_b_fil = fillet 0.00 -0.225 -0.075  4.20 -0.18  0.075 run=x
-let stair_rail_b_cor = box    0.00 -0.18  -0.06   4.20 -0.09  0.06  round=0.012
-let stair_rail_b_ovl = ovolo  0.00 -0.09   0.00   4.20  0.00  0.1125 run=x
-let stair_rail_b_ovr = ovolo  0.00 -0.09   0.00   4.20  0.00 -0.1125 run=x
+let stair_rail_b_fil = fillet 0.00 -0.225 -0.075  2.21 -0.18  0.075 run=x
+let stair_rail_b_cor = box    0.00 -0.18  -0.06   2.21 -0.09  0.06  round=0.012
+let stair_rail_b_ovl = ovolo  0.00 -0.09   0.00   2.21  0.00  0.1125 run=x
+let stair_rail_b_ovr = ovolo  0.00 -0.09   0.00   2.21  0.00 -0.1125 run=x
 let stair_rail_b_sec = union {
     stair_rail_b_fil stair_rail_b_cor stair_rail_b_ovl stair_rail_b_ovr
 }
@@ -463,59 +636,107 @@ let stair_rail_b_sec = union {
 let stair_rail_down = rotate { stair_rail_a_sec } z=-0.08154932
 let stair_rail_up   = rotate { stair_rail_b_sec } z=0.08154932
 
-let stair_rail_a_s = translate { stair_rail_down } 8.10 5.065 3.24
-let stair_rail_a_n = translate { stair_rail_down } 8.10 5.065 4.41
-let stair_rail_b   = translate { stair_rail_up }   8.10 5.245 5.49
+let stair_rail_a = translate { stair_rail_down } 8.10 5.965 4.41
+let stair_rail_b = translate { stair_rail_up }   8.10 6.145 5.04
 
 # The raking plinths, in the same two frames but with local y = 0 on the NOSING LINE rather than
 # on the rail top, which is the only datum a balustrade on a stair has.
-let stair_plin_a_sec = fillet 0.00 -0.09 -0.09   4.60 0.00 0.09 run=x
-let stair_plin_b_sec = fillet 0.00 -0.09 -0.09   4.20 0.00 0.09 run=x
+let stair_plin_a_sec = fillet 0.00 -0.09 -0.09   6.25 0.00 0.09 run=x
+let stair_plin_b_sec = fillet 0.00 -0.09 -0.09   2.21 0.00 0.09 run=x
 let stair_plin_down = rotate { stair_plin_a_sec } z=-0.08154932
 let stair_plin_up   = rotate { stair_plin_b_sec } z=0.08154932
 
 let stair_plinths = union {
-    translate { stair_plin_down } 8.10 4.14 3.24
-    translate { stair_plin_down } 8.10 4.14 4.41
-    translate { stair_plin_up }   8.10 4.32 5.49
+    translate { stair_plin_down } 8.10 5.04 4.41
+    translate { stair_plin_up }   8.10 5.22 5.04
 }
+
+# ================================================================================================
+# THE WALL STRINGS — the raking skirting on the side of each flight that is a wall
+# ================================================================================================
+#
+# The two sides of this stair that used to carry a balustrade and now carry a wall still have to be
+# finished, and a flight dying into bare plaster is the one thing that tells you a stair was drawn
+# rather than built. A close string is a raking skirting: a band whose top runs 0.225 (M/2) above
+# the nosing line and whose foot dies 0.09 below it, standing 0.045 (M/10) proud of the wall, with
+# a quarter round rolling its top back into the plaster.
+#
+# 0.045 AND NOT 0.09, AND THE REASON IS THE WIDTH RATHER THAN THE LOOK. Everything that stands on
+# a wall along a walking route is subtracted from the route. 0.045 is inside the same voxel as the
+# wall face it stands on at metre 8 and at metre 16, so this member costs the flight NOTHING that
+# any resolution can measure, where a hand-height rail at 0.09 would have cost 90 mm of a clearance
+# with 157 mm to give. There is a handrail on this stair and it is on the well, where a hand can
+# reach it without standing in the way.
+#
+# The section is read in (z, y) because these run along x. The ovolo's first corner is the one the
+# curve is FULL at — build_moulding centres its quarter disc there — so it is written at the bottom
+# of the capping against the wall and the second corner out at the string's own face.
+#
+# BOTH ARE CLIPPED, and both clips are load-bearing. A rotated box does not end where its length
+# says it does: the end face is perpendicular to the rake, so a section 0.315 tall turned 29.36
+# degrees reaches 0.154 further along x than the axis does. Unclipped, the lower string put a 45 mm
+# tail of skirting through the floor and past the foot of the stair, and the probe found it as a
+# single voxel. The upper one is capped at 6.28 because a skirting 0.225 over its nosing line
+# reaches 6.525 by the time it arrives at the gallery, and the piano nobile's north windows are cut
+# y 6.30..8.55 at x 10.125..11.475 — capped, it dies flat into the underside of the floor above,
+# which is what a skirting does at the head of a flight anyway.
+let stair_string_a_sec = union {
+    fillet 0.00 -0.090 0.000   6.45 0.180 0.045 run=x
+    ovolo  0.00  0.180 0.000   6.45 0.225 0.045 run=x
+}
+let stair_string_b_sec = union {
+    fillet 0.00 -0.090 0.000   2.21 0.180 -0.045 run=x
+    ovolo  0.00  0.180 0.000   2.21 0.225 -0.045 run=x
+}
+let stair_string_a = intersection {
+    translate { rotate { stair_string_a_sec } z=-0.08154932 } 8.10 5.04 2.940
+    box 8.00 1.80 2.90   13.72 5.60 3.00
+}
+let stair_string_b = intersection {
+    translate { rotate { stair_string_b_sec } z=0.08154932 } 8.10 5.22 6.600
+    box 8.00 3.00 6.50   10.15 6.28 6.66
+}
+
+# The level length of it round the half landing, which is the same section standing still. It stops
+# at 8.10 rather than running on under the upper flight, because past there the wall is behind a
+# flight and not beside a floor.
+let stair_string_land = union {
+    fillet 6.30 4.950 2.940   8.10 5.220 2.985 run=x
+    ovolo  6.30 5.220 2.940   8.10 5.265 2.985 run=x
+}
+let stair_strings = union { stair_string_a stair_string_b stair_string_land }
 
 # The level rails. Built where they stand, so the two ovolos are written either side of the run
 # rather than folded. `run=x` reads the section in (z, y); the default `run=z` reads it in (x, y).
+# The landing's rails are 0.925 over 5.04 and the gallery's 0.925 over 6.30.
 let stair_rail_lw = union {
-    fillet 6.765 4.840 3.15   6.915 4.885 6.60
-    box    6.78  4.885 3.15   6.90  4.975 6.60 round=0.012
-    ovolo  6.84  4.975 3.15   6.9525 5.065 6.60
-    ovolo  6.84  4.975 3.15   6.7275 5.065 6.60
-}
-let stair_rail_ls = union {
-    fillet 6.75 4.840 3.165   8.10 4.885 3.315 run=x
-    box    6.75 4.885 3.18    8.10 4.975 3.30  round=0.012
-    ovolo  6.75 4.975 3.24    8.10 5.065 3.3525 run=x
-    ovolo  6.75 4.975 3.24    8.10 5.065 3.1275 run=x
+    fillet 6.315 5.740 2.94   6.465 5.785 6.60
+    box    6.33  5.785 2.94   6.45  5.875 6.60 round=0.012
+    ovolo  6.39  5.875 2.94   6.5025 5.965 6.60
+    ovolo  6.39  5.875 2.94   6.2775 5.965 6.60
 }
 let stair_rail_lwell = union {
-    fillet 7.935 4.840 4.41   8.085 4.885 5.49
-    box    7.95  4.885 4.41   8.07  4.975 5.49 round=0.012
-    ovolo  8.01  4.975 4.41   8.1225 5.065 5.49
-    ovolo  8.01  4.975 4.41   7.8975 5.065 5.49
+    fillet 7.935 5.740 4.41   8.085 5.785 5.04
+    box    7.95  5.785 4.41   8.07  5.875 5.04 round=0.012
+    ovolo  8.01  5.875 4.41   8.1225 5.965 5.04
+    ovolo  8.01  5.875 4.41   7.8975 5.965 5.04
 }
 let stair_rail_gs = union {
-    fillet 11.62 7.000 4.515  15.10 7.045 4.665 run=x
-    box    11.62 7.045 4.53   15.10 7.135 4.65  round=0.012
-    ovolo  11.62 7.135 4.59   15.10 7.225 4.7025 run=x
-    ovolo  11.62 7.135 4.59   15.10 7.225 4.4775 run=x
+    fillet 10.02 7.000 4.515  15.10 7.045 4.665 run=x
+    box    10.02 7.045 4.53   15.10 7.135 4.65  round=0.012
+    ovolo  10.02 7.135 4.59   15.10 7.225 4.7025 run=x
+    ovolo  10.02 7.135 4.59   15.10 7.225 4.4775 run=x
 }
 let stair_rail_gwell = union {
-    fillet 11.635 7.000 4.59   11.785 7.045 5.49
-    box    11.65  7.045 4.59   11.77  7.135 5.49 round=0.012
-    ovolo  11.71  7.135 4.59   11.8225 7.225 5.49
-    ovolo  11.71  7.135 4.59   11.5975 7.225 5.49
+    fillet 10.035 7.000 4.59   10.185 7.045 5.04
+    box    10.05  7.045 4.59   10.17  7.135 5.04 round=0.012
+    ovolo  10.11  7.135 4.59   10.2225 7.225 5.04
+    ovolo  10.11  7.135 4.59    9.9975 7.225 5.04
 }
 
 let stair_rails = union {
-    stair_rail_a_s stair_rail_a_n stair_rail_b
-    stair_rail_lw stair_rail_ls stair_rail_lwell stair_rail_gs stair_rail_gwell
+    stair_rail_a stair_rail_b
+    stair_rail_lw stair_rail_lwell stair_rail_gs stair_rail_gwell
 }
 
 # THE NEWELS. 0.225 square (M/2), from the surface they stand on to the rail top and NOT ONE
@@ -527,26 +748,28 @@ let stair_rails = union {
 # building whose worst step is meant to be 6. 0.225 square is exactly the rail's own widest member.
 let stair_newel = box -0.1005 -0.018 -0.1005   0.1005 0.913 0.1005 round=0.012
 
-# The two at the foot stand on the FLOOR and not on a tread, and the floor is one riser below the
-# first nosing, so they are one riser taller. Both numbers are the rail's: 0.925 over the surface
-# the rail is 0.925 over, 1.105 over the one it is 1.105 over. A newel that stops short of its rail
-# is a 0.18 rise beside the rail, which is the thing this whole balustrade is arranged to avoid.
+# The one at the foot stands on the FLOOR and not on a tread, and the floor is one riser below the
+# first nosing, so it is one riser taller. Both numbers are the rail's: 0.925 over the surface the
+# rail is 0.925 over, 1.105 over the one it is 1.105 over. A newel that stops short of its rail is
+# a 0.18 rise beside the rail, which is the thing this whole balustrade is arranged to avoid. IT
+# STANDS ON THE FIRST RISER'S OWN LINE at x = 13.54, and the old one did not: it stood 0.18 further
+# out, where the rail it was meant to finish had already descended another 0.10, and it was 0.10
+# proud of it for the whole life of the file.
 let stair_newel_foot = box -0.1005 -0.018 -0.1005   0.1005 1.093 0.1005 round=0.012
 
-# The one at the head of the well, at (8.01, 5.49), is the tall one too, and for the same reason
+# The one at the head of the well, at (8.01, 5.04), is the tall one too, and for the same reason
 # in reverse: the raking rail leaves the landing 0.18 higher than the level rail arrives at it,
 # because a rail is a fixed height over its own nosing and the first nosing is one riser up. The
 # newel is what absorbs that, which is what a newel is for.
 let stair_newels = union {
-    translate { stair_newel_foot } 12.12 1.80 3.24
-    translate { stair_newel_foot } 12.12 1.80 4.41
-    translate { stair_newel }  6.84 4.14 3.24
-    translate { stair_newel }  6.84 4.14 6.51
-    translate { stair_newel }  8.01 4.14 4.41
-    translate { stair_newel_foot } 8.01 4.14 5.49
-    translate { stair_newel } 11.71 6.30 4.59
-    translate { stair_newel } 11.71 6.30 5.49
-    translate { stair_newel } 15.01 6.30 4.59
+    translate { stair_newel_foot } 13.54 1.80 4.41
+    translate { stair_newel }       8.01 5.04 4.41
+    translate { stair_newel_foot }  8.01 5.04 5.04
+    translate { stair_newel }       6.39 5.04 3.02
+    translate { stair_newel }       6.39 5.04 6.52
+    translate { stair_newel }      10.11 6.30 4.59
+    translate { stair_newel }      10.11 6.30 5.04
+    translate { stair_newel }      15.01 6.30 4.59
 }
 
 # ================================================================================================
@@ -555,84 +778,104 @@ let stair_newels = union {
 
 let stair_east = union {
     stair_flight_a stair_landing stair_flight_b stair_gallery
-    stair_piers stair_plinths stair_balusters stair_rails stair_newels
+    stair_piers stair_plinths stair_strings stair_balusters stair_rails stair_newels
 }
 
 let part_stair = mirror { stair_east } axis=x
 
-# This part removes nothing. It stands in air the walls and the podium already leave, and it is
-# bedded INTO its neighbours rather than cut out of them. Bound anyway, as a point buried in the
-# podium's plinth where it can never be seen, because the manifest's `hollowed` difference asks
-# for `void_stair` by name and must not have to know whether this fragment needed one.
-let void_stair = sphere 0 -0.30 3.30 r=0.02
+# What this part removes from the building: the joints between the flags of the floor it stands on,
+# and nothing else. It is bedded INTO its neighbours rather than cut out of them, so it needs no
+# room made for it — but the passage under this stair is 24 m2 of floor lit only by bounce, and a
+# floor with no joints in it is one surface pretending to be a pavement. The grid is 0.90 (D)
+# square, the joints are 36 mm wide and cut 42 mm into the podium, and the whole thing is caught in
+# a box so a `repeat` cannot wander into the rotunda's wall.
+let stair_fl_j_x = repeat { box 6.15 1.758 4.932   15.30 1.815 4.968 } z=0.90 nz=2
+let stair_fl_j_z = repeat { box 10.632 1.758 2.94   10.668 1.815 6.75 } x=0.90 nx=5
+let stair_fl_joints = intersection {
+    union { stair_fl_j_x stair_fl_j_z }
+    box 6.15 1.70 2.955   15.30 1.90 6.735
+}
+let void_stair = mirror { stair_fl_joints } axis=x
 
 # ================================================================================================
 # THE HEAD-HEIGHT PROBE — the measurement this part exists to make
 # ================================================================================================
 #
-# Not part of the building. `stair_probe_head` is the volume a person's head sweeps through every
-# place this stair lets them stand, INTERSECTED with the stair. Run it and it must be empty:
+# Not part of the building. `stair_probe_head` is the volume a person sweeps through every place
+# this stair lets them stand, INTERSECTED with the stair. Run it and it must be empty:
 #
-#     --clip-part stair_probe_head        -> "the clip is empty"
+#     --part stair_probe_head        -> "the clip is empty"
 #
-# Six volumes, each 2.10 m over a surface and each pulled 0.03 in from the balustrades so it is
-# the walking width and not the handrail it tests:
+# Five volumes. Every one of them is 2.40 m tall — the circulation figure and not the 2.10 an
+# opening is allowed — and every one of them is AT LEAST 1.20 m WIDE between the members that
+# stand beside it, which is the half of this check that did not exist before and the half that
+# found the real faults:
 #
-#   pass    the passage under the stair: 1.80 to 3.90 over the whole footprint. This is the one
-#           that matters. The lower flight's spandrel and the four piers are solid from the floor
-#           and are taken out of it, because you walk round a pier and under a soffit.
-#   rake_a  2.10 over the lower flight's nosing line, between its two balustrades
-#   rake_b  2.10 over the upper flight's nosing line, between its balustrade and the wall
-#   land    2.10 over the half landing
-#   gall    2.10 over the gallery
-#
-# The two raking volumes are rotated boxes in the flights' own frames, which is how a stair is
-# checked on paper: a box standing on the nosing line, turned by the pitch.
+#   pass    the passage under the stair: 1.80 to 4.20 over the whole footprint. This is the one
+#           that matters. The lower flight's spandrel, its wall string and the four piers are solid
+#           from the floor and are taken out of it, because you walk round a pier and under a
+#           soffit.
+#   rake_a  2.40 over each of the seventeen lower treads, 1.20 wide between the wall string and the
+#           balustrade, and inset 0.06 from the nosing above so that a nosing at ankle height is
+#           not reported as a low ceiling.
+#   rake_b  2.40 over each of the six upper treads, 1.30 wide.
+#   land    2.40 over the half landing, in two boxes: 1.34 wide the length of it and 1.57 wide
+#           where you step off the lower flight, past the guard over the well.
+#   gall    2.40 over the gallery, 1.79 wide, and 1.35 where you arrive off the upper flight past
+#           the newel at the head of the well.
 #
 # WHAT THE PROBE CANNOT SEE, so that nobody trusts it further than it goes: it tests THIS part
-# against ITSELF. Something another fragment hangs over the passage later will not show up here.
+# against ITSELF. Something another fragment hangs over the passage later will not show up here,
+# and neither will a window cutter — the arched opening that set this stair's riser split was found
+# by reading windows.clip's own numbers and checking them against every member in this file by
+# hand, not by any probe.
 
 # WHAT COMES OUT OF THE PASSAGE VOLUME, and why it is a plan footprint and not the shapes. You
 # walk ROUND a pier and UNDER a soffit, so a pier is not a head-height failure — but nor is the
 # handrail two metres up in the air over the lower flight, and that stands inside the passage's
 # box just as much as the pier does. So what is subtracted is the GROUND PLAN of everything that
-# rises off the floor: the lower flight with its balustrade and its two foot newels, and the four
-# piers. A shape would have left the balusters standing in the probe and reported them as low
-# ceilings, which is exactly what the first version of this file did.
-let stair_probe_box   = box 6.30 1.80 3.15   15.30 3.90 6.75
-let stair_probe_pl_a  = box 7.95 1.70 3.10   12.30 4.00 4.55
-let stair_probe_pl_p1 = box 6.65 1.70 4.40    7.30 4.00 5.05
-let stair_probe_pl_p2 = box 6.65 1.70 5.75    7.30 4.00 6.40
-let stair_probe_pl_p3 = box 11.60 1.70 4.40  12.25 4.00 5.05
-let stair_probe_pl_p4 = box 11.60 1.70 6.20  12.25 4.00 6.85
+# rises off the floor: the lower flight with its balustrade, its skirting and its foot newel, and
+# the four piers. A shape would have left the balusters standing in the probe and reported them as
+# low ceilings, which is exactly what the first version of this file did.
+let stair_probe_box   = box 6.15 1.80 2.955   15.30 4.20 6.585
+let stair_probe_pl_a  = box 7.95 1.70 2.85   13.75 4.30 4.56
+let stair_probe_pl_p1 = box 6.25 1.70 2.89    6.80 4.30 3.44
+let stair_probe_pl_p2 = box 6.25 1.70 6.25    6.80 4.30 6.80
+let stair_probe_pl_p3 = box 11.56 1.70 4.45  12.11 4.30 5.00
+let stair_probe_pl_p4 = box 11.56 1.70 6.25  12.11 4.30 6.80
 let stair_probe_stand = union {
     stair_probe_pl_a stair_probe_pl_p1 stair_probe_pl_p2 stair_probe_pl_p3 stair_probe_pl_p4
 }
 let stair_probe_pass = difference { stair_probe_box stair_probe_stand }
 
-# THE VOLUME OVER A FLIGHT IS ELEVEN AND TWELVE UPRIGHT BOXES, ONE TO A TREAD, and not one box
+# THE VOLUME OVER A FLIGHT IS SEVENTEEN AND SIX UPRIGHT BOXES, ONE TO A TREAD, and not one box
 # turned by the pitch. A turned box was the first thing tried, because that is how a stair is
 # drawn on paper: a rectangle standing on the nosing line. It is the wrong instrument. Head height
 # is measured VERTICALLY from the tread you are standing on; the rotated box measures it
 # perpendicular to the pitch, which is 13% short, and its lower face lies exactly along the
 # nosings, so every nosing in the flight pokes into it and it reports a failure the whole length
-# of a stair that has nothing over it at all. One box per tread, from the tread top to 2.10 above
+# of a stair that has nothing over it at all. One box per tread, from the tread top to 2.40 above
 # it, is the thing the rule actually says, and it is placed by the same doubling the balusters are.
-let stair_pra_1  = box 11.62 1.98 3.36   11.94 4.08 4.29
+let stair_pra_1  = box 13.265 1.98 3.045   13.54 4.38 4.245
 let stair_pra_2  = union { stair_pra_1  translate { stair_pra_1 } -0.32 0.18 0 }
 let stair_pra_4  = union { stair_pra_2  translate { stair_pra_2 } -0.64 0.36 0 }
 let stair_pra_8  = union { stair_pra_4  translate { stair_pra_4 } -1.28 0.72 0 }
-let stair_probe_ra = union { stair_pra_8  translate { stair_pra_4 } -2.56 1.44 0 }
+let stair_pra_16 = union { stair_pra_8  translate { stair_pra_8 } -2.56 1.44 0 }
+let stair_probe_ra = union { stair_pra_16  translate { stair_pra_1 } -5.12 2.88 0 }
 
-let stair_prb_1  = box 8.10 4.32 5.61   8.42 6.42 6.57
+let stair_prb_1  = box 8.10 5.22 5.20   8.36 7.62 6.50
 let stair_prb_2  = union { stair_prb_1  translate { stair_prb_1 } 0.32 0.18 0 }
 let stair_prb_4  = union { stair_prb_2  translate { stair_prb_2 } 0.64 0.36 0 }
-let stair_prb_8  = union { stair_prb_4  translate { stair_prb_4 } 1.28 0.72 0 }
-let stair_probe_rb = union { stair_prb_8  translate { stair_prb_2 } 2.56 1.44 0
-                                          translate { stair_prb_1 } 3.20 1.80 0 }
+let stair_probe_rb = union { stair_prb_4  translate { stair_prb_2 } 1.28 0.72 0 }
 
-let stair_probe_land = box 6.96 4.14 3.36    7.89 6.24 6.57
-let stair_probe_gall = box 11.86 6.30 4.74   15.07 8.40 6.57
+let stair_probe_land = union {
+    box 6.53 5.04 3.045   7.87 7.44 6.50
+    box 6.53 5.04 3.045   8.10 7.44 4.28
+}
+let stair_probe_gall = union {
+    box 11.10 6.30 4.73   15.07 8.70 6.52
+    box 10.26 6.30 5.17   15.07 8.70 6.52
+}
 
 # The five, each on its own so a failure can be found rather than only seen.
 let stair_probe_p_pass = intersection { stair_east stair_probe_pass }
@@ -646,38 +889,124 @@ let stair_probe_all = union {
 }
 let stair_probe_head = intersection { stair_east stair_probe_all }
 
+# AND THE ONE PROBE THAT LOOKS OUTSIDE THIS FILE, because the fault it catches cannot be seen from
+# inside it. `void_windows` is what the manifest subtracts from the whole building, and anything of
+# mine inside it is deleted silently — no error, no floating voxels, no change in the component
+# count, just a hole. The arched north opening at x = +-8.10 was taking a 0.68 x 1.05 m bite out of
+# the half landing, in both wings, for the whole life of this file, and nothing in it could tell.
+#
+#     --part stair_probe_cut        -> "the clip is empty"
+#
+# It names a binding another fragment owns, which BRIEF.md rule 2 is against and which is the right
+# trade here twice over: `void_windows` is already named by the manifest, so it cannot be renamed
+# without breaking that first and loudly; and a fragment that stands inside somebody else's cutter
+# has no other way to find out.
+let stair_probe_cut = intersection { stair_east void_windows }
+
+# ================================================================================================
+# THE MEASURING RIG — how the head heights in this file's notes were actually taken
+# ================================================================================================
+#
+# `--gap y@x,z` on the whole facility answers a different question from the one it looks like it
+# answers. It reports the LONGEST unbroken run of air down a column, and over any point in this
+# passage the longest run of air is not the passage: it is the metres between the gallery and the
+# roof, or the open sky above the parapet. BRIEF.md says to use a probe clip whose box is one
+# storey tall, and a fragment cannot — its box is the whole building's.
+#
+# So the rig is this stair with the four surfaces that bound it put back and nothing else: the
+# floor at 1.80 (podium_top), the halls block's face at 2.940, the north wall's inner face at 6.60,
+# and a lid at 7.50. The floor, the walls and the lid all run to the ends of the clip so that no
+# run outside this storey can ever be the longest one, and the numbers then mean what they say:
+#
+#     bash tools/clipcheck.sh clips/facility.clip --part stair_rig --metre 8 --gap y@7.40,5.50
+#
+# NOTHING HERE IS PART OF THE BUILDING and the lid is not a ceiling — it is the far end of a ruler.
+# A run that touches it is a reading of the rig; only the runs under a slab of this stair are
+# readings of the stair.
+# EVERY ONE OF THESE RUNS TO THE END OF THE SAMPLED ARRAY and that is not belt and braces. The
+# sampler settles the box to the SHAPE and not to the `bounds` line, so a floor drawn to y = -1.00
+# leaves 3.50 m of array under it, and `longest_clear` finds that instead — it reported "3.500 m,
+# OPEN at the near end" on a passage 3.015 m high, which is a plausible number and the wrong one.
+# A ruler has to be longer than the thing it measures in every direction it does not measure.
+# IT DOES NOT BOUND x, so `--gap x@...` on it measures the box and not the stair. That is on
+# purpose: the walls it would need reach across most of the clip, and a ruler that takes minutes to
+# sample is a ruler nobody picks up. The one dimension that runs along x — how wide the half
+# landing is to cross — is measured by `stair_probe_land` instead, which is a 1.34 m box standing
+# on it that has to come back empty.
+let stair_rig_floor = box 6.15 -12.00 -16.50   15.30  1.80  8.50
+let stair_rig_south = box 6.15 -12.00 -16.50   15.30 25.00  2.940
+let stair_rig_north = box 6.15 -12.00   6.600  15.30 25.00  8.50
+let stair_rig_lid   = box 6.15   7.50   2.940  15.30 25.00  6.600
+let stair_rig = union {
+    stair_east stair_rig_floor stair_rig_south stair_rig_north stair_rig_lid
+}
+
 # ================================================================================================
 # PAINT
 # ================================================================================================
 #
 # A grand stair is not one stone. Granite where it is founded and where a foot lands hardest,
-# marble for everything the eye follows up — treads, landings, balusters, newels — and BRONZE on
-# the handrail, because the contract says metal where the hand touches it and because a brushed
-# metal rail 22 m long, raking through a room lit only by bounce, is a fairer question for a path
-# tracer than any flat panel of it. Porphyry in the sunk panels of the piers, which is the only
-# saturated colour down in the passage.
+# marble for everything the eye follows up — treads, landings, balusters, newels, strings — and
+# BRONZE on the handrail and on every baluster's shoe and collar, because the contract says metal
+# where the hand touches it and because a brushed metal rail 22 m long, raking through a room lit
+# only by bounce, is a fairer question for a path tracer than any flat panel of it. Porphyry in
+# the sunk panels of the piers, which is the only saturated colour down in the passage.
 #
 # Every rule keys on one of this file's own shapes, folded to both wings so the west stair is
 # painted by the same rules as the east and cannot drift, and every one says below=0.02: the
 # manifest displaces the whole building by 12 mm of grain at the end, and a test at zero misses
 # the voxels the displacement made and leaves a rind of limestone over the part that painted it.
+# The rule keyed on a shape a `rotate` put where it is says 0.035, which is BRIEF.md rule 5:
+# a rotated surface lies nowhere near a voxel boundary, so between 3 and 16 per cent of its own
+# solid voxels fall outside its own test at 0.02 and come back wearing the base coat.
 #
-# NO WEATHERING, and that is a decision. `weather` displaces a surface, and two surfaces in this
-# fragment are dimensioned to fifteen millimetres — the landing soffit and the flight waists —
-# while a third, the treads, is what the facility's worst-rise number is measured on. A 14 mm
-# desert coat would take the head height under the half landing to 2.101 or to 2.129 depending on
-# the noise, and neither the probe above nor any render would tell you which. Inside stone stays
-# clean.
+# NO WEATHERING, and that is a decision. `weather` displaces a surface, and the two surfaces this
+# fragment is judged on are the treads, which carry the facility's worst-rise number, and the
+# soffits, which carry its head height. A 14 mm desert coat moves both by an amount no render
+# would tell you about. The wear in the treads is geometry, written down, and repeatable; noise
+# would be neither. Inside stone stays clean.
 
 let stair_granite = mirror { union { stair_flight_a stair_piers } } axis=x
 paint granite where=stair_granite below=0.02
 
 let stair_marble = mirror { union { stair_landing stair_flight_b stair_gallery
-                                    stair_plinths stair_balusters stair_newels } } axis=x
+                                    stair_plinths stair_strings
+                                    stair_balusters stair_newels } } axis=x
 paint marble where=stair_marble below=0.02
 
 let stair_bronze = mirror { stair_rails } axis=x
 paint bronze where=stair_bronze below=0.02
+
+# THE SHOES AND COLLARS, which are the one place in this file a rule has to find a band of a shape
+# rather than a shape. They are unioned into `stair_baluster` itself so that the doubling carries
+# them — writing them as a second doubling would be forty more lines of the same arithmetic and a
+# second place to get it wrong — so what marks them out is WHERE they are: 0.000..0.036 and
+# 0.664..0.700 above the surface each baluster stands on. On the level runs that is a slab; on the
+# rakes it is the same slab in the flight's own rotated frame, which is exactly how the plinths
+# and the rails above them are placed. The band catches the foot of the plinth and the top of the
+# cap with them, which is what a metal shoe wrapping a stone one looks like.
+let stair_fix_a_sec = union {
+    box 0.00 -0.002 -0.12   6.45 0.038 0.12
+    box 0.00  0.662 -0.12   6.45 0.702 0.12
+}
+let stair_fix_b_sec = union {
+    box 0.00 -0.002 -0.12   2.30 0.038 0.12
+    box 0.00  0.662 -0.12   2.30 0.702 0.12
+}
+let stair_fix_zone = union {
+    translate { rotate { stair_fix_a_sec } z=-0.08154932 } 8.10 5.04 4.41
+    translate { rotate { stair_fix_b_sec } z=0.08154932 }  8.10 5.22 5.04
+    box 6.25 5.038 2.94    6.53 5.078 6.60
+    box 6.25 5.702 2.94    6.53 5.742 6.60
+    box 7.87 5.038 4.55    8.15 5.078 4.90
+    box 7.87 5.702 4.55    8.15 5.742 4.90
+    box 10.02 6.298 4.45  15.10 6.338 4.73
+    box 10.02 6.962 4.45  15.10 7.002 4.73
+    box  9.97 6.298 4.59  10.25 6.338 5.04
+    box  9.97 6.962 4.59  10.25 7.002 5.04
+}
+let stair_fixings = mirror { intersection { stair_balusters stair_fix_zone } } axis=x
+paint bronze where=stair_fixings below=0.035
 
 # The panel key is ONE SHAPE PER PIER and it is not a box: it is the pier's own block shrunk by
 # 0.06 on every face, caught in the panel's height band. Every surface inside a sunk panel — its
@@ -687,23 +1016,19 @@ paint bronze where=stair_bronze below=0.02
 # the first pass shrank by half the recess and painted every pier solid red from top to bottom,
 # because a voxel centre is up to half a voxel inside the face it belongs to and the 0.02 test
 # then reaches the rest of the way. The margin has to be bigger than the voxel, not than the
-# tolerance. Four boxes per pier would do the same and would have to be re-derived every time the
-# panel moved; `offset` on a box is exact and costs one node.
+# tolerance.
 #
 # THE SIGN IS POSITIVE AND THAT IS THE ONE THAT SHRINKS. `Op::Offset` evaluates as
 # `eval(child) + by`, so a POSITIVE `by` requires a point to be that much deeper inside before
-# it counts — it shrinks — and a NEGATIVE one grows. BRIEF.md's grammar line shows a negative
-# value and says "shrinks or grows" without saying which is which. Written `by=-0.06` this rule
-# painted a zone 0.06 BIGGER than the pier and every pier in the passage came back solid
-# porphyry from plinth to soffit. See clips/facility/requests/stair.md: two other fragments
-# appear to have the same sign the wrong way round, and in their case it deletes ornament
-# rather than adding it, which is far harder to notice.
+# it counts — it shrinks — and a NEGATIVE one grows. Written `by=-0.06` this rule painted a zone
+# 0.06 BIGGER than the pier and every pier in the passage came back solid porphyry from plinth to
+# soffit. See clips/facility/requests/stair.md; BRIEF.md's grammar line has been corrected since.
 let stair_inlay_low = intersection { offset { stair_pier_body } by=0.06
-                                     box  6.60 2.19 4.35    7.35 3.51 5.10 }
+                                     box  6.15 2.19 2.85    6.90 4.41 3.48 }
 let stair_inlay_up  = intersection { offset { stair_tpier_body } by=0.06
-                                     box 11.55 2.19 4.35   12.30 5.46 5.10 }
+                                     box 11.46 2.19 4.35   12.21 5.46 5.10 }
 let stair_inlays = mirror {
-    union { stair_inlay_low  translate { stair_inlay_low } 0 0 1.35
+    union { stair_inlay_low  translate { stair_inlay_low } 0 0 3.36
             stair_inlay_up   translate { stair_inlay_up }  0 0 1.80 }
 } axis=x
 paint porphyry where=stair_inlays below=0.02
