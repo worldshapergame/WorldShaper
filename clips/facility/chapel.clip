@@ -61,15 +61,25 @@
 # MEASURED, with `clips/facility/requests/chapel-probe.clip`, which restates `bounds` as this zone
 # plus a third of a metre (see that file — the contract's box will not fit at full detail):
 #
-#   metre 32   2,945,975 voxels   89.90 m3   348.06 m2 of surface   22 materials   ONE component
-#   metre 16     358,115 voxels                                                    ONE component
-#   metre  8      45,562 voxels                                                    ONE component
+#   metre 32   2,719,036 voxels   82.98 m3   352.46 m2 of surface   22 materials   ONE component
+#   metre 16     327,360 voxels                    THREE components, 56 floating -- read on
+#   metre  8      41,945 voxels                                                    ONE component
 #
-# It was 3,163,047 voxels and 318.87 m2 over 19 materials. The volume went down and the surface up
-# by the same change: the four embrasures now start 0.80 further out, which is 7 m3 of block that
-# the window cutter was taking anyway, and the stalls, the paving joints, the turned balusters, the
+# It was 3,163,047 voxels and 318.87 m2 over 19 materials. The volume went down and the surface up:
+# the room is 0.45 m deeper, the four embrasures start 0.80 further out — both of those are block
+# this file no longer occupies — and the stalls, the paving joints, the turned balusters, the
 # altar's sunk arcade and the wax are all surface rather than mass. `--part part_chapel --metre 8`
-# on the manifest reports ONE COMPONENT, 45,562 voxels and no rule that never fired.
+# on the manifest reports ONE COMPONENT, 41,945 voxels and no rule that never fired.
+#
+# THE 56 VOXELS AT METRE 16 ARE THE TWO RAIL BALUSTERS AND I COULD NOT MAKE THEM GO. The neck is
+# 0.06 and the belly 0.12; at metre 16 a voxel is 0.0625 and the four voxels round the axis stand
+# 0.0425 out from it, so the belly is sampled and the neck and the collar above it are not, and what
+# is left is the belly with nothing holding it — 28 voxels, twice. It is clean at metre 32 and clean
+# at metre 8, which is where a voxel is coarse enough that nothing of the baluster survives at all.
+# Thickening the neck to 0.09 would fix metre 16 and cost this file the thin-matter case its own
+# header lists; narrowing the belly to under 0.085 would fix it with a 0.5 mm margin, which is not a
+# fix. So it stands, measured and written down, at the one metre between the contract's and the
+# coarse one.
 #
 # ONE COMPONENT AT EVERY METRE, AND THAT TOOK FOUR SEPARATE FIXES, EVERY ONE OF THEM A JOINT THAT
 # TOUCHED WITHOUT LAPPING. Written down because each looked like a different bug and all four were
@@ -90,18 +100,27 @@
 # `clipcheck --gap`'s `clear` line — the longest unbroken run of AIR with stone at both ends — and
 # not `--span`, which reports matter and answers a different question:
 #
-#   the entrance passage, across   --gap z@-7.00,2.50      1.375      1.375
-#   the entrance passage, up       --gap y@-7.00,-4.50     2.688      2.688
-#   the rail at floor level        --gap z@-13.05,1.85     0.344  ->  1.562
-#   the gate                       --gap z@-12.375,1.85       —   ->  1.125
-#   the gate at rail height        --gap z@-12.375,2.20       —   ->  1.125
-#   the nave past the stalls       --gap z@-11.00,2.10     2.062  ->  1.688
-#   the nave at a stall arm        --gap z@-10.80,2.40     2.250  ->  1.438
-#   the nave at the bay end        --gap z@-11.90,2.10     1.938  ->  1.500
-#   altar to entrance, along       --gap x@2.20,-4.50      7.281  ->  7.750
-#   head over the stalls           --gap y@-10.80,-5.30    3.656  ->  3.000
-#   head in the nave               --gap y@-10.80,-4.10    3.781      3.781
-#   head in the apse               --gap y@-14.30,-4.50    2.469      2.469
+# The three columns are: as this room stood before any of this; with the stalls and the gate in it
+# at 2.25 deep; and now, at 2.70 deep with the cutters fixed.
+#
+#   the entrance passage, across   --gap z@-7.00,2.50      1.375   1.375   1.375
+#   the entrance passage, up       --gap y@-7.00,-4.50     2.688   2.688   2.688
+#   the rail at floor level        --gap z@-13.05,1.85     0.344   1.562   1.562
+#   the gate                       --gap z@-12.375,1.85      —     1.125   1.125
+#   the gate at rail height        --gap z@-12.375,2.20      —     1.125   1.125
+#   the nave past the stalls       --gap z@-11.00,2.10     2.062   1.688   2.062
+#   the nave at a stall arm        --gap z@-10.80,2.40     2.250   1.438   1.750
+#   the nave at the bay end        --gap z@-11.90,2.10     1.938   1.500   1.750
+#   the nave between the pilasters --gap z@-12.15,2.40     1.625   1.625   2.062
+#   the floor across the nave      --gap z@-10.80,1.85       —       —     1.750
+#   altar to entrance, along       --gap x@2.20,-4.50      7.281   7.750   7.750
+#   head over the stalls           --gap y@-10.80,-5.30    3.656   3.000   3.719
+#   head in the nave               --gap y@-10.80,-4.10    3.781   3.781   3.781
+#   head in the apse               --gap y@-14.30,-4.50    2.469   2.469   2.469
+#
+# The middle column is what four stalls cost a room 2.25 m deep: 1.438 at the tightest, which is
+# over the 1.20 a path owes and not by much. The right-hand column is the same four stalls in a room
+# 2.70 deep. Nothing in this room is now under 1.375 anywhere a person goes.
 #
 # THE 0.344 IS THE ONE THAT MATTERED AND IT IS NOT A NARROW GAP, IT IS NO GAP AT ALL: it is the air
 # OUTSIDE the building, reported OPEN at the near end, because at x = -13.05 the old rail ran from
@@ -109,20 +128,25 @@
 # take the nave from 2.062 to 1.438 at their tightest, which is what furniture in a room 2.25 deep
 # costs and is still 0.238 over the 1.20 a path owes.
 #
-# AND THE FOUR LIGHTS, measured the only way that can settle it — on a scratch probe carrying
-# walls.clip, windows.clip and this file together with `void_windows` applied, at the level of the
-# glass, along the axis the light comes in on:
+# AND THE FOUR LIGHTS. `clips/facility.clip` ITSELF CANNOT ANSWER THIS AND IT IS WORTH SAYING WHY,
+# because two hours went into finding it out: `--gap` reports the LONGEST run of air on its line, and
+# on the real building the longest run through a window is the sky. Along z at the level of the glass
+# it is the 9 m of outside air; along y it is everything above the cornice; along x it is another
+# room's floor — `--gap x@-0.20,-6.45` on the building reports 7.750 m, and that is somebody else's
+# room, not this one's embrasure. A question about one opening has to be asked in a box that holds
+# one opening. So: a scratch probe carrying walls.clip, windows.clip and this file with
+# `void_windows` applied, cut to the window, with the cutters the building actually has:
 #
-#                                      cutter 1.80    cutter 1.00
-#   this file's embrasures             1.500          1.500      the south light, --gap z@-13.50,3.30
-#   the embrasures as they were        1.500          0.688
-#   this file's embrasures             1.375          1.375      the west light,  --gap x@3.30,-5.40
-#   the embrasures as they were        1.375          0.625
+#   south light   --gap y@-13.50,-6.20   2.062  closed   the column of air inside my own embrasure,
+#                                                        0.30 north of where a 1.00 cutter stops
+#   south light   --gap z@-13.50,3.30    1.125  open     the depth of the opening, from windows.clip's
+#                                                        own sash to within 0.03 of my pane
+#   west light    --gap z@-14.95,3.30    1.812  closed   the splay, 0.05 east of the cutter's end
 #
-# The 0.688 and the 0.625 are the room going dark: 0.80 m of my own block standing between the
-# opening and the embrasure built to meet a cutter that no longer reaches. That is what would have
-# happened the day windows.clip honoured requests/walls-thickness.md, and it is why the embrasures
-# are cut to the wall's line and not to the cutter's.
+# and the same three, with the embrasures as they were before this pass — built to meet a 1.80
+# cutter that no longer reaches — read 0.688 and 0.625: 0.80 m of my own block standing between the
+# opening and the pane, which is the room going dark. That is why the embrasures are cut to the
+# wall's line and not to any cutter's.
 #
 # `void_chapel` reports nine components and that is CORRECT and must not be "fixed". Eight of them
 # are the 0.03 m air gaps between each stained light and the window cutter behind it — the cavity
@@ -137,11 +161,11 @@
 #   -10.80  oval centre in x       24 M       1.665  paving foot, bedded 0.135 into the podium
 #    -4.50  oval centre in z       10 M       1.800  FLOOR                    podium_top
 #     3.60  oval semi-axis in x     8 M       2.250  dado top                 1.80 + M
-#     1.125 oval semi-axis in z     2.5 M     2.700  window sills             windows.clip's
+#     1.350 oval semi-axis in z       3 M     2.700  window sills             windows.clip's
 #     0.675 apse and door radius  1.5 M       4.050  window springing         1.80 + 5 M
 #                                             4.500  square window heads      windows.clip's
-#   The room in the clear is 7.20 x 2.25 —    4.725  ARCHITRAVE BED           1.80 + 6.5 M
-#   16 M by 5 M — with the long axis east-    5.175  cornice top, springing   4.725 + M
+#   The room in the clear is 7.20 x 2.70 —    4.725  ARCHITRAVE BED           1.80 + 6.5 M
+#   16 M by 6 M — with the long axis east-    5.175  cornice top, springing   4.725 + M
 #   west, the altar in the west apse and      5.625  cupola crown             5.175 + M
 #   the door in the east.                     5.880  lantern crown            5.625 + 0.255
 #                                             6.000  the limit. 0.12 of stone over the lantern.
@@ -162,32 +186,35 @@
 # is not the section anybody would draw first; it is the section this corner of this building has
 # room for, and the flat cupola is the honest consequence rather than a mistake.
 #
-# WHY THE ROOM IS ONLY 2.25 DEEP WHEN THE ZONE IS 3.60, AND WHY IT IS STILL 2.25 TODAY.
+# WHY THE ROOM WAS 2.25 DEEP AND IS 2.70 NOW. THIS IS THE ENTRY WORTH READING.
 #
-# Same cutter, worse. Every ground-storey window in this building is punched 1.80 m in from the OUTER
-# wall face — 0.90 m PAST the inner face of a 0.90 m wall. halls.clip found the same thing from the
-# other side and ended its hall 1.15 m short because of it. So the strip z -6.65 .. -5.70 along my
-# whole south side is a hole I do not control, and anything I build in it is deleted. The oval's
-# south flank therefore stands at z = -5.625, three quarters of a voxel clear of that line, and the
-# 0.975 m between it and the wall face is SOLID — which is what makes the windows deep splayed
-# embrasures instead of holes, and what gives the stained lights something to be held by. The four
-# lights sit at z = -5.67 .. -5.58 and x = -14.175 .. -14.085, on the room side of the cutter,
-# supported on all four edges by stone the cutter cannot reach.
+# Every ground-storey window in this building used to be punched 1.80 m in from the OUTER wall face
+# — 0.90 m PAST the inner face of a 0.90 m wall — and that hole is subtracted from the whole
+# building after this file is assembled. So the strip z -6.65 .. -5.70 along my whole south side was
+# a hole I did not control, anything I built in it was deleted, and the oval's south flank stood at
+# z = -5.625, three quarters of a voxel clear of that line. halls.clip lost 1.15 m down each end of
+# the building to the same number. It was never a wall thickness anybody had measured; it was a
+# guess at what walls.clip might turn out to be.
 #
-# requests/walls-thickness.md ANSWERS THAT COMPLAINT AND THE ANSWER IS NOT YET IN THE BUILDING. The
-# wall is 0.90 and a cutter needs 1.00, so that file asks windows.clip and doors.clip for 1.00 and
-# then says, in bold and in this order: fix the cutters FIRST, and only then let the rooms move back
-# out — "a room moved out to 15.10 while a 1.80 cutter is still in flight is a room with a
-# metre-deep slot cut along its wall". As of this change `windows_pn_cut`, `windows_gs_cut`,
-# `windows_ga_cut`, `doors_gd_void` and `doors_sd_void_e` on origin/main all still read 1.80 and
-# -5.70. So the oval STAYS at -5.625 and the lights STAY at -5.67: moving either one today is moving
-# it into a live cutter, and the light is the only coloured-volume glass in the building.
+# walls.clip has now written it down — `wall_thick` 0.90, `wall_cut` 1.00, `wall_relief` 0.18, in
+# requests/walls-thickness.md — and windows.clip and doors.clip cut 1.00. Nothing reaches past
+# z = -6.50 any more. So:
 #
-# What could be done today without waiting for anybody is the embrasures, and they are done: they now
-# start on the wall's own line rather than on the cutter's, which is correct under a 1.00 cutter and
-# harmless under a 1.80 one. See the embrasure section. When the cutters do land, what is left for
-# this room is to bring the oval's south flank out toward -5.85 and the lights with it, and that is
-# one number in one place because of the way the ovals are written.
+#   the oval's z semi-axis   1.125 (2.5 M)  ->  1.350 (3 M)      the room 2.25 deep -> 2.70
+#   the south flank          -5.625         ->  -5.850
+#   the north flank          -3.375         ->  -3.150           0.20 of wall to my block's face
+#   the three south lights   -5.67 .. -5.58 ->  -6.03 .. -5.94
+#
+# THE LIGHTS HAD TO MOVE AND THAT IS NOT COSMETIC. The middle one stood at -5.67, which the oval now
+# reaches past: at x = -10.80 the flank is at -5.850, so the pane was left standing in mid-air INSIDE
+# the room. Measured, that is exactly what the report said — 1,396 voxels adrift at metre 16 whose
+# low corner was x = -11.50, the pane's own west edge. They sit at -6.03 .. -5.94 now: 0.09 south of
+# the oval's southernmost point, so they are inside the wall at every x across the opening, and 0.47
+# north of where a 1.00 cutter stops, so nothing outside this file can reach them.
+#
+# The embrasures did not have to change at all, because they were already cut to the wall's own line
+# rather than to any cutter's — see the embrasure section, and the table further down measuring the
+# four lights under both cutters.
 #
 # WHERE IT MEETS ITS NEIGHBOURS:
 #
@@ -230,28 +257,28 @@ include "_contract.clip"
 # k = 1.00 is the room. Each step of 0.04 takes 0.045 off the semi-axis in z and 0.144 in x.
 
 let chapel_ov_100 = intersection {
-    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.600 z=1.1250 } -10.80 0 -4.50
-    box -14.45 0.25 -5.68   -7.15 7.55 -3.32
+    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.600 z=1.3500 } -10.80 0 -4.50
+    box -14.45 0.25 -5.905   -7.15 7.55 -3.095
 }
 let chapel_ov_096 = intersection {
-    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.456 z=1.0800 } -10.80 0 -4.50
-    box -14.30 0.25 -5.64   -7.30 7.55 -3.36
+    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.456 z=1.2960 } -10.80 0 -4.50
+    box -14.30 0.25 -5.865   -7.30 7.55 -3.135
 }
 let chapel_ov_094 = intersection {
-    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.384 z=1.0575 } -10.80 0 -4.50
-    box -14.23 0.25 -5.62   -7.37 7.55 -3.38
+    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.384 z=1.2690 } -10.80 0 -4.50
+    box -14.23 0.25 -5.845   -7.37 7.55 -3.155
 }
 let chapel_ov_092 = intersection {
-    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.312 z=1.0350 } -10.80 0 -4.50
-    box -14.15 0.25 -5.60   -7.45 7.55 -3.40
+    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.312 z=1.2420 } -10.80 0 -4.50
+    box -14.15 0.25 -5.825   -7.45 7.55 -3.175
 }
 let chapel_ov_088 = intersection {
-    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.168 z=0.9900 } -10.80 0 -4.50
-    box -14.00 0.25 -5.55   -7.60 7.55 -3.45
+    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.168 z=1.1880 } -10.80 0 -4.50
+    box -14.00 0.25 -5.775   -7.60 7.55 -3.225
 }
 let chapel_ov_030 = intersection {
-    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=1.080 z=0.3375 } -10.80 0 -4.50
-    box -11.92 0.25 -4.87   -9.68 7.55 -4.13
+    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=1.080 z=0.4050 } -10.80 0 -4.50
+    box -11.92 0.25 -4.94   -9.68 7.55 -4.06
 }
 
 # THE FOUR THE STALLS ARE MADE OF, on the same family and the same rule. k = 0.76 is the ground a
@@ -259,20 +286,20 @@ let chapel_ov_030 = intersection {
 # Every one of them is boxed for the reason in the header: a non-uniform scale reports infinite
 # bounds and costs the whole clip its skip.
 let chapel_ov_076 = intersection {
-    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=2.736 z=0.8550 } -10.80 0 -4.50
-    box -13.60 0.25 -5.40   -8.00 7.55 -3.60
+    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=2.736 z=1.0260 } -10.80 0 -4.50
+    box -13.60 0.25 -5.625   -8.00 7.55 -3.375
 }
 let chapel_ov_072 = intersection {
-    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=2.592 z=0.8100 } -10.80 0 -4.50
-    box -13.45 0.25 -5.36   -8.15 7.55 -3.64
+    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=2.592 z=0.9720 } -10.80 0 -4.50
+    box -13.45 0.25 -5.585   -8.15 7.55 -3.415
 }
 let chapel_ov_068 = intersection {
-    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=2.448 z=0.7650 } -10.80 0 -4.50
-    box -13.30 0.25 -5.31   -8.30 7.55 -3.69
+    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=2.448 z=0.9180 } -10.80 0 -4.50
+    box -13.30 0.25 -5.535   -8.30 7.55 -3.465
 }
 let chapel_ov_064 = intersection {
-    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=2.304 z=0.7200 } -10.80 0 -4.50
-    box -13.15 0.25 -5.26   -8.45 7.55 -3.74
+    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=2.304 z=0.8640 } -10.80 0 -4.50
+    box -13.15 0.25 -5.485   -8.45 7.55 -3.515
 }
 
 # ================================================================================================
@@ -283,13 +310,13 @@ let chapel_ov_064 = intersection {
 # the east entrance passage, and the four window embrasures. It is one connected volume; every
 # piece below overlaps its neighbour.
 
-let chapel_nave_air = intersection { chapel_ov_100  box -14.45 1.80 -5.68   -7.15 5.175 -3.32 }
+let chapel_nave_air = intersection { chapel_ov_100  box -14.45 1.80 -5.905   -7.15 5.175 -3.095 }
 
 # THE CUPOLA. Semi-axes 3.168 x 0.99 in plan — the cornice's own inner face, k = 0.88 — and 0.45 of
 # rise. Springing 5.175, crown 5.625.
 let chapel_dome_air = intersection {
-    translate { scale { ellipsoid 0 0 0 rx=3.168 ry=0.450 rz=0.990 } x=1 z=1 } -10.80 5.175 -4.50
-    box -14.00 5.170 -5.50   -7.60 5.63 -3.50
+    translate { scale { ellipsoid 0 0 0 rx=3.168 ry=0.450 rz=1.188 } x=1 z=1 } -10.80 5.175 -4.50
+    box -14.00 5.170 -5.75   -7.60 5.63 -3.25
 }
 
 # THE EYE, 0.72 across (1.6 M), and the BLIND chamber over it. The bore runs from 5.40 to 5.775 and
@@ -426,11 +453,11 @@ let chapel_mass  = difference { chapel_block chapel_air }
 # the windows, and it is what the rail and the candelabra stand against.
 let chapel_dado_body = intersection {
     difference { chapel_ov_100 chapel_ov_092 }
-    box -14.45 1.80 -5.68   -7.15 2.160 -3.32
+    box -14.45 1.80 -5.905   -7.15 2.160 -3.095
 }
 let chapel_dado_cap = intersection {
     difference { chapel_ov_100 chapel_ov_088 }
-    box -14.45 2.160 -5.68   -7.15 2.250 -3.32
+    box -14.45 2.160 -5.905   -7.15 2.250 -3.095
 }
 # THE DADO STOPS AT x = -7.875 AND THAT IS NOT AN ARBITRARY TRIM. East of it the oval closes on its
 # own vertex at -7.20 and the entrance arch takes the whole width, so the band between k = 1.00 and
@@ -439,7 +466,7 @@ let chapel_dado_cap = intersection {
 # dado does at a doorway anyway.
 let chapel_dado = intersection {
     union { chapel_dado_body chapel_dado_cap }
-    box -14.45 1.79 -5.68   -7.875 2.26 -3.32
+    box -14.45 1.79 -5.905   -8.100 2.26 -3.095
 }
 
 # THE FOUR GIANT PILASTERS, of `alabaster`, at x = -12.15 and -9.45 on both flanks — the two lines
@@ -451,10 +478,10 @@ let chapel_dado = intersection {
 # The oval's flank at x = -12.15 and -9.45 stands at z = -5.543 and -3.457; the box faces at -5.408
 # and -3.592 are therefore 0.135 proud at the middle of each pilaster and 0.104 at its arrises,
 # which is the small entasis a flat pilaster on a curved wall has anyway.
-let chapel_pil_s_a = box -12.375 1.80 -5.600  -11.925 4.500 -5.408 round=0.010
-let chapel_pil_s_b = box  -9.675 1.80 -5.600   -9.225 4.500 -5.408 round=0.010
-let chapel_pil_n_a = box -12.375 1.80 -3.592  -11.925 4.500 -3.400 round=0.010
-let chapel_pil_n_b = box  -9.675 1.80 -3.592   -9.225 4.500 -3.400 round=0.010
+let chapel_pil_s_a = box -12.375 1.80 -5.8085  -11.925 4.500 -5.6165 round=0.010
+let chapel_pil_s_b = box  -9.675 1.80 -5.8085   -9.225 4.500 -5.6165 round=0.010
+let chapel_pil_n_a = box -12.375 1.80 -3.3835  -11.925 4.500 -3.1915 round=0.010
+let chapel_pil_n_b = box  -9.675 1.80 -3.3835   -9.225 4.500 -3.1915 round=0.010
 let chapel_pil_shafts = union {
     chapel_pil_s_a chapel_pil_s_b chapel_pil_n_a chapel_pil_n_b
 }
@@ -462,10 +489,10 @@ let chapel_pil_shafts = union {
 # The capitals: a plain abacus of M/2 with a fillet under it, 4.50 to 4.725, breaking forward 0.045
 # past the shaft on every side. Ionic volutes at this width would be 0.09 across and would not
 # survive the metre; a cushion capital is what a small oval chapel of this century has anyway.
-let chapel_cap_s_a = box -12.420 4.500 -5.645  -11.880 4.725 -5.408 round=0.008
-let chapel_cap_s_b = box  -9.720 4.500 -5.645   -9.180 4.725 -5.408 round=0.008
-let chapel_cap_n_a = box -12.420 4.500 -3.592  -11.880 4.725 -3.355 round=0.008
-let chapel_cap_n_b = box  -9.720 4.500 -3.592   -9.180 4.725 -3.355 round=0.008
+let chapel_cap_s_a = box -12.420 4.500 -5.8535  -11.880 4.725 -5.6165 round=0.008
+let chapel_cap_s_b = box  -9.720 4.500 -5.8535   -9.180 4.725 -5.6165 round=0.008
+let chapel_cap_n_a = box -12.420 4.500 -3.3835  -11.880 4.725 -3.1465 round=0.008
+let chapel_cap_n_b = box  -9.720 4.500 -3.3835   -9.180 4.725 -3.1465 round=0.008
 let chapel_capitals = union {
     chapel_cap_s_a chapel_cap_s_b chapel_cap_n_a chapel_cap_n_b
 }
@@ -477,15 +504,15 @@ let chapel_pilasters = union { chapel_pil_shafts chapel_capitals }
 # in z — sub-voxel at metre 32, exactly as the rotunda's coffer lips are, and for the same reason.
 let chapel_arch_band = intersection {
     difference { chapel_ov_100 chapel_ov_096 }
-    box -14.45 4.725 -5.68   -7.15 4.905 -3.32
+    box -14.45 4.725 -5.905   -7.15 4.905 -3.095
 }
 let chapel_frieze_band = intersection {
     difference { chapel_ov_100 chapel_ov_094 }
-    box -14.45 4.905 -5.68   -7.15 5.040 -3.32
+    box -14.45 4.905 -5.905   -7.15 5.040 -3.095
 }
 let chapel_cornice_band = intersection {
     difference { chapel_ov_100 chapel_ov_088 }
-    box -14.45 5.040 -5.68   -7.15 5.175 -3.32
+    box -14.45 5.040 -5.905   -7.15 5.175 -3.095
 }
 let chapel_entab = union { chapel_arch_band chapel_frieze_band chapel_cornice_band }
 
@@ -493,7 +520,7 @@ let chapel_entab = union { chapel_arch_band chapel_frieze_band chapel_cornice_ba
 # voxel and a half of metal running right round an oval, on the line the eye follows.
 let chapel_fillet = intersection {
     difference { chapel_ov_100 chapel_ov_092 }
-    box -14.45 4.995 -5.68   -7.15 5.040 -3.32
+    box -14.45 4.995 -5.905   -7.15 5.040 -3.095
 }
 
 # ================================================================================================
@@ -519,7 +546,7 @@ let chapel_fillet = intersection {
 #   2.295  the seat              k = 0.68   0.045 of nosing over the panel below it
 #   2.475  the arms              k = 0.64   0.045 again, and they stand 0.18 over the seat
 #   2.700  the back              k = 0.94   dying on windows.clip's own sill line
-let chapel_stall_zone = box -11.925 1.755 -5.68   -9.675 2.205 -3.32
+let chapel_stall_zone = box -11.925 1.755 -5.905   -9.675 2.205 -3.095
 
 # The front, and the four sunk panels in it. A panel is cut from the k = 0.72 face back to k = 0.76
 # — 0.045 on the flanks, which is a voxel and a half at the contract's metre and the same depth the
@@ -539,7 +566,7 @@ let chapel_stall_front = difference {
 
 let chapel_stall_seat = intersection {
     difference { chapel_ov_100 chapel_ov_068 }
-    box -11.925 2.205 -5.68   -9.675 2.295 -3.32
+    box -11.925 2.205 -5.905   -9.675 2.295 -3.095
 }
 
 # The arms. Three slabs 0.09 thick on the bay's own module — the two ends and the middle — each one
@@ -558,7 +585,7 @@ let chapel_stall_arms = intersection {
 # window sills. It is behind the dado cap's own 0.135, so the cap reads as a shelf over it.
 let chapel_stall_back = intersection {
     difference { chapel_ov_100 chapel_ov_094 }
-    box -11.925 2.205 -5.68   -9.675 2.700 -3.32
+    box -11.925 2.205 -5.905   -9.675 2.700 -3.095
 }
 
 let chapel_stalls = union {
@@ -593,15 +620,15 @@ let chapel_rib_c   = rotate { chapel_rib_bar } y=-0.1250
 let chapel_rib_d   = rotate { chapel_rib_bar } y=-0.1875
 let chapel_rib_fan = intersection {
     translate { union { chapel_rib_bar chapel_rib_b chapel_rib_c chapel_rib_d } } -10.80 0 -4.50
-    box -14.10 5.10 -5.60   -7.50 5.70 -3.40
+    box -14.10 5.10 -5.75   -7.50 5.70 -3.25
 }
 # The ribs are trimmed 0.12 short of the springing on the k = 0.86 line: at the springing the
 # intrados turns vertical, the shell between it and its lowered copy runs to nothing, and what comes
 # out is single voxels with no neighbours (one, at metre 24, measured). A rib that dies just above
 # the cornice is what a rib does in any case.
 let chapel_ov_086 = intersection {
-    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.096 z=0.9675 } -10.80 0 -4.50
-    box -13.95 0.25 -5.52   -7.65 7.55 -3.48
+    translate { scale { cylinder 0 3.90 0 r=1.0 h=7.20 axis=y } x=3.096 z=1.1610 } -10.80 0 -4.50
+    box -13.95 0.25 -5.745   -7.65 7.55 -3.255
 }
 let chapel_ribs = intersection { chapel_rib_shell chapel_rib_fan chapel_ov_086 }
 
@@ -682,11 +709,11 @@ let chapel_altar = union { chapel_alt_body chapel_alt_mensa chapel_alt_front }
 let chapel_gate = box -13.20 1.60 -5.0625   -12.20 2.40 -3.9375
 
 let chapel_rail_base = difference {
-    box -12.420 1.700 -5.480  -12.330 1.890 -3.520 round=0.008
+    box -12.420 1.700 -5.667  -12.330 1.890 -3.333 round=0.008
     chapel_gate
 }
 let chapel_rail_top  = difference {
-    box -12.435 2.160 -5.480  -12.315 2.250 -3.520 round=0.008
+    box -12.435 2.160 -5.667  -12.315 2.250 -3.333 round=0.008
     chapel_gate
 }
 
@@ -764,16 +791,16 @@ let chapel_tapers_altar = union {
 let chapel_brk_s = box -0.135 2.160 -0.045   0.135 2.250 0.135  round=0.006
 let chapel_brk_n = box -0.135 2.160 -0.135   0.135 2.250 0.045  round=0.006
 let chapel_brackets = union {
-    translate { chapel_brk_s } -12.15 0 -5.408
-    translate { chapel_brk_s }  -9.45 0 -5.408
-    translate { chapel_brk_n } -12.15 0 -3.592
-    translate { chapel_brk_n }  -9.45 0 -3.592
+    translate { chapel_brk_s } -12.15 0 -5.6165
+    translate { chapel_brk_s }  -9.45 0 -5.6165
+    translate { chapel_brk_n } -12.15 0 -3.3835
+    translate { chapel_brk_n }  -9.45 0 -3.3835
 }
 let chapel_tapers_brk = union {
-    translate { chapel_taper_one } -12.15 2.250 -5.3405
-    translate { chapel_taper_one }  -9.45 2.250 -5.3405
-    translate { chapel_taper_one } -12.15 2.250 -3.6595
-    translate { chapel_taper_one }  -9.45 2.250 -3.6595
+    translate { chapel_taper_one } -12.15 2.250 -5.5490
+    translate { chapel_taper_one }  -9.45 2.250 -5.5490
+    translate { chapel_taper_one } -12.15 2.250 -3.4510
+    translate { chapel_taper_one }  -9.45 2.250 -3.4510
 }
 
 # THE TWO STANDING CANDELABRA, flanking the altar inside the rail. Base bedded 0.09 into the paving,
@@ -828,10 +855,10 @@ let chapel_flames = union {
     translate { chapel_flame_one } -14.130 2.700 -4.320
     translate { chapel_flame_one } -14.130 2.700 -4.185
     translate { chapel_flame_one } -14.130 2.700 -4.050
-    translate { chapel_flame_one } -12.150 2.250 -5.3405
-    translate { chapel_flame_one }  -9.450 2.250 -5.3405
-    translate { chapel_flame_one } -12.150 2.250 -3.6595
-    translate { chapel_flame_one }  -9.450 2.250 -3.6595
+    translate { chapel_flame_one } -12.150 2.250 -5.5490
+    translate { chapel_flame_one }  -9.450 2.250 -5.5490
+    translate { chapel_flame_one } -12.150 2.250 -3.4510
+    translate { chapel_flame_one }  -9.450 2.250 -3.4510
     translate { chapel_flame_one } -13.590 2.940 -5.130
     translate { chapel_flame_one } -13.590 2.940 -3.870
 }
@@ -840,19 +867,19 @@ let chapel_flames = union {
 # THE FOUR STAINED LIGHTS
 # ================================================================================================
 #
-# 0.09 m of coloured glass, standing at z = -5.67 .. -5.58 on the south and x = -14.175 .. -14.085
-# on the west. Every one of those faces is on the ROOM side of `windows_gs_cut` / `windows_ga_cut`,
-# whose inner faces are at z = -5.70 and x = -14.20 — 0.03 and 0.025 of clearance, one voxel at the
-# contract's metre. That clearance is the only reason these survive; there is nowhere else in this
-# corner of the building a pane of mine can stand while the cutter is 1.80 deep.
+# 0.09 m of coloured glass, standing at z = -6.03 .. -5.94 on the south and x = -14.175 .. -14.085
+# on the west. They used to stand at -5.67, which was 0.03 — one voxel — clear of a cutter that
+# reached -5.70, and that clearance was the only thing keeping them in the building. It is not what
+# holds them now and it never should have been: what holds each light is THIS FILE'S OWN EMBRASURE,
+# whose jambs lap it by 0.0225 on each side, whose sill is 0.045 under it and whose arch is 0.0225
+# over it. That is true at any cutter depth, which is why the embrasures could be cut to the wall's
+# line before the cutters were fixed and why the lights could then follow the room out.
 #
-# THEY DO NOT MOVE WITH THE EMBRASURES AND THAT IS DELIBERATE. The embrasures now begin at -6.50 and
-# -15.00, which is where a 1.00 cutter ends; a light set into that line today would be standing 0.80
-# INSIDE a cutter that still reaches -5.70, and `void_windows` is `windows_cuts` less
-# `part_windows` — my glass is in neither, so it would simply be deleted. What holds each light is
-# not the cutter's end in any case: it is this file's own embrasure jambs, sill and head, which lap
-# it by 0.0225 on both jambs, 0.045 under the sill and 0.0225 over the head. That is true at both
-# cutter depths, which is why extending the embrasure outward costs the glass nothing.
+# WHERE THEY ARE NOW IS SET BY TWO NUMBERS AND BOTH ARE MEASURED. -5.94 is 0.09 south of the oval's
+# southernmost point (-5.850), so no pane is inside the room at any x across its 1.395 of width —
+# the middle one WAS, by 0.18, the moment the room moved, and came back as 1,396 floating voxels.
+# -6.03 is 0.47 north of where a 1.00 cutter stops (-6.50), so no pane is inside a hole this file
+# does not own.
 #
 # Each light is held on all four edges by stone the window cutter cannot reach: 0.045 below the
 # 2.70 sill, 0.0225 above the 4.725 head, and 0.0225 into each jamb past the cutter's 1.35.
@@ -860,21 +887,21 @@ let chapel_flames = union {
 # The glazing bars are `lead`, 0.045 wide and standing 0.0225 proud of the glass — 1.4 voxels each
 # way at metre 32 and under a voxel at metre 16, where they should go and the glass should not.
 let chapel_lt_s_glass = union {
-    box       -0.6975 2.655 -5.670   0.6975 4.050 -5.580 round=0.006
-    cylinder   0.0000 4.050 -5.625  r=0.6975 h=0.090 axis=z
+    box       -0.6975 2.655 -6.030   0.6975 4.050 -5.940 round=0.006
+    cylinder   0.0000 4.050 -5.985  r=0.6975 h=0.090 axis=z
 }
 let chapel_lt_s_hold = union {
-    box       -0.7000 2.650 -5.690   0.7000 4.050 -5.550
-    cylinder   0.0000 4.050 -5.620  r=0.7000 h=0.140 axis=z
+    box       -0.7000 2.650 -6.050   0.7000 4.050 -5.910
+    cylinder   0.0000 4.050 -5.980  r=0.7000 h=0.140 axis=z
 }
 let chapel_lt_s_bars = intersection {
     union {
-        box -0.2475 2.655 -5.670  -0.2025 4.740 -5.5575
-        box  0.2025 2.655 -5.670   0.2475 4.740 -5.5575
-        box -0.7000 3.015 -5.670   0.7000 3.060 -5.5575
-        box -0.7000 3.375 -5.670   0.7000 3.420 -5.5575
-        box -0.7000 3.735 -5.670   0.7000 3.780 -5.5575
-        box -0.7000 4.050 -5.670   0.7000 4.095 -5.5575
+        box -0.2475 2.655 -6.030  -0.2025 4.740 -5.9175
+        box  0.2025 2.655 -6.030   0.2475 4.740 -5.9175
+        box -0.7000 3.015 -6.030   0.7000 3.060 -5.9175
+        box -0.7000 3.375 -6.030   0.7000 3.420 -5.9175
+        box -0.7000 3.735 -6.030   0.7000 3.780 -5.9175
+        box -0.7000 4.050 -6.030   0.7000 4.095 -5.9175
     }
     chapel_lt_s_hold
 }
@@ -1021,8 +1048,8 @@ paint walnut     where=chapel_stalls    below=0.02
 let chapel_stall_pan_zone = round { chapel_stall_sink } by=0.030
 paint gold_leaf  where=chapel_stall_pan_zone below=0.02
 let chapel_stall_wear = union {
-    intersection { chapel_stall_seat box -11.925 2.250 -5.68  -9.675 2.295 -3.32 }
-    intersection { chapel_stall_arms box -11.925 2.385 -5.68  -9.675 2.475 -3.32 }
+    intersection { chapel_stall_seat box -11.925 2.250 -5.905  -9.675 2.295 -3.095 }
+    intersection { chapel_stall_arms box -11.925 2.385 -5.905  -9.675 2.475 -3.095 }
 }
 paint ebony      where=chapel_stall_wear below=0.02
 

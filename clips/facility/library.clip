@@ -111,7 +111,13 @@
 # WHAT THE PROBE SAYS, at metre 32, on `requests/library-probe.clip`, before this pass and after.
 # Every one of these is `clipcheck --gap`'s `clear` line — the longest unbroken run of air with
 # stone at both ends of it — and NOT `--span`, which reports matter and is the wrong tool for a
-# question about where a person fits:
+# question about where a person fits.
+#
+# ON THE PROBE AND NOT THROUGH `--part`, WHICH IS NOT A STYLE CHOICE. Until 2026-08-17 `--part` on
+# `clips/facility.clip` sampled an UNMOVED part inside a box that `origin 0 -3.50 0` had already
+# dropped 3.50 m, and painted it with rules that had moved: see requests/origin-and-parts.md. This
+# probe has no `origin` in it and never had, so everything below was measured against the geometry
+# it names. Anything measured through `--part` before that date is worth taking again:
 #
 #   the doorway, across            --gap x@6.80,-3.42      0.594  ->  1.062
 #   the doorway, up                --gap y@-14.40,-3.20    2.375      2.375
