@@ -474,7 +474,7 @@ IrradianceVolume bake_irradiance(const ws::Clip& clip, const ws::VoxelTypeTable&
 
     const auto gather = [&](void) {
         std::fill(cube.begin(), cube.end(), 0.0f);
-        std::fill(known.begin(), known.end(), 0);
+        std::fill(known.begin(), known.end(), u8{0});
         jobs.parallel_for(static_cast<usize>(volume.dims[2]), 1, [&](usize begin, usize end) {
             for (usize slab = begin; slab < end; ++slab) {
                 const i32 z = static_cast<i32>(slab);
