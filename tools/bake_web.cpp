@@ -1663,7 +1663,19 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     const i32 cap = (is_part && options.part_metre > 0)
                         ? std::min(options.max_metre, options.part_metre)
                         : options.max_metre;
-    i32 metre = std::min(cap, settings.voxels_per_metre);
+    // THE SITE'S RESOLUTION, NOT THE CLIP'S. This was `std::min(cap, authored)`, so a clip that
+    // wrote `metre 16` was baked at 16 however high the cap went -- and raising the budget could
+    // not move it, because the authored value was the binding one. Three clips do that today
+    // (`estate/colonnade.clip` and two probe manifests) and the owner's answer is that the viewer
+    // shows one detail for everything: "all clips must be 32/m always".
+    //
+    // A clip's own `metre` is what the GAME builds it at and is still exactly right there. Here it
+    // is the wrong question: the site exists to compare fragments against each other, and a
+    // fragment sampled at half the pitch of its neighbour is not a coarser picture of the same
+    // thing, it is a different thing -- every one-voxel feature in it is gone.
+    //
+    // The budget below still halves, and that is the only thing that may now lower it.
+    i32 metre = cap;
     while (metre > 1) {
         const f64 cells = span[0] * span[1] * span[2] * static_cast<f64>(metre) *
                           static_cast<f64>(metre) * static_cast<f64>(metre);
