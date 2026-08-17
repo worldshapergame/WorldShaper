@@ -52,6 +52,42 @@ reach.
 
 I have not touched `clips/facility.clip`; it is not mine.
 
+## 0b. `--part part_podium` on the manifest reports materials that are not this part's
+
+Measured, `tools/clipcheck.sh clips/facility.clip --part part_podium --metre 8`:
+
+```
+materials     63 distinct records
+  64    limestone            534580    67.14%
+  317   sandstone             59366     7.46%
+  1122  plaster              41792     5.25%
+  ...
+  435   granite               6238     0.78%
+```
+
+The podium paints granite over 83% of itself and the report says 0.78%. **It is not a fault in
+this file.** `apply_origin` (`src/forge/clip_script.cpp:1149`) translates `script.solid`, every
+paint rule and the sampled bounds by the manifest's `origin 0 -3.50 0`, and does NOT translate
+`script.parts`. So `--part` substitutes an untranslated shape into a translated world, the geometry
+is sampled 3.50 m from the rules meant to paint it, and what survives is whatever other fragments'
+zones happen to overlap the shifted podium — plaster, gesso, verde, boiserie, none of which this
+part paints. The whole diagnosis and the one-line fix are in `requests/steps.md`, item 5.
+
+Until it lands, measure this part through `clips/facility/requests/podium-cuts-probe.clip`, which
+has no `origin` in it and reports what the file actually says:
+
+```
+materials     3 distinct records
+  125   granite             4949304    77.70%
+  126   limestone           1127522    17.70%
+  127   marble               292602     4.59%
+```
+
+That probe also carries a control arm for each of the two grooves — `probe_pod_rust_only` and
+`probe_pod_pave_only` — so the question "does this cut remove exactly what it should" is one
+subtraction. The answer today is yes, at metre 16 and metre 32, exactly additive; the numbers are
+in the header of `podium.clip`.
+
 ## 1. A bug in `_order.clip`'s `entab_run` — every curved member is silently a plain fillet
 
 Not mine to fix; I do not own that file. But whoever places `entab_run` should know.

@@ -75,7 +75,36 @@
 #
 # and the two courses that run right round between them: a sill course at 12.825 – 12.90 and an
 # impost course at 14.175 – 14.25, both projecting M/5, both cut through by the sixteen windows,
-# which is what turns a band into a set of imposts.
+# which is what turns a band into a set of imposts. Three channelled bed joints at 13.35, 13.80 and
+# 14.70 course the plain wall between them, and the corona is throated at 5.76 – 5.82.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART CUTS, AND IT IS ONE THING.
+#
+# `drum_windows` out of `drum_stone`, measured by building the part with the subtraction and again
+# without it: 16.615 m3 at metre 32, sixteen splayed openings at 1.04 m3 apiece, and nothing else
+# changes — same extent, same worldbox, same eleven materials.
+#
+# The two new joints are cut inside the member they belong to and nowhere else, and they were
+# weighed the same way: the three bed channels take 0.160 m3 out of the core, the corona's throat
+# 0.022 m3 out of the cornice, and the part goes from 90.571 to 90.411 m3 at 293 components either
+# way. Nothing in this file is subtracted from another fragment and the manifest names no
+# `void_drum`.
+#
+# 293 COMPONENTS IS THE BARS AND IT IS THE ANSWER, NOT A FAULT. 292 of them are specks of one and
+# two voxels, 356 voxels in all out of 2.96 million, and they are the ninety-six glazing bars: the
+# bar is 0.030 across, which is 0.96 of a voxel at the contract's metre, and a bar thinner than a
+# voxel does not thin out, it dissolves into a dotted line. That is what this part was built to
+# ask. Do not fatten them to make the number go away.
+#
+# AND DO NOT CHECK IT WITH `--part part_drum` AGAINST clips/facility.clip. The manifest ends with
+# `origin 0 -3.50 0`; `apply_origin` moves the solid, the paint rules and THE BOUNDS, but not the
+# name a fragment bound — so that command samples an unshifted drum in a box that has dropped
+# 3.50 m and paints it with rules that have dropped with the box. It reports the right extent here
+# only because the drum is low enough to survive the truncation; the eight materials it lists are
+# other people's coats landing on my stone. clips/facility/requests/cuts-probe-drum.clip is the
+# same fragment in a box that has not moved.
+# ------------------------------------------------------------------------------------------------
 #
 # A NOTE ON WHICH WAY A MOULDING FACES, because it cost me an afternoon and it is not written down
 # anywhere else. `cavetto p0 q0 p1 q1` scoops a disc centred on the SECOND corner out of the
@@ -102,8 +131,38 @@ include "_contract.clip"
 # copper.
 
 # The core: inner face 4.80, outer face 5.40, foot to springing. Everything else bites into it.
-let drum_s_core = box 4.80 11.25 -1   5.40 15.60 1  round=0.012
-let drum_core   = revolve { drum_s_core } axis=y
+#
+# AND IT IS COURSED. A drum is 34 m round and 4.35 m tall and it was one unbroken cylinder of
+# limestone — the largest single face of dead-flat stone anywhere on this building, and the one
+# place the eye has nothing to measure the thing against. It is ashlar, and ashlar has beds.
+#
+# So three channelled bed joints, at 13.35, 13.80 and 14.70: one module apart, set out from the
+# head of the order at 15.15 downward, skipping the two levels that are already a joint because a
+# band runs there — the sill at 12.90 and the impost at 14.25. That divides the plain wall between
+# sill and impost into three courses of 0.425 and the wall above the impost into two of 0.45, which
+# is a course a mason would cut for a drum this size.
+#
+# 0.045 (M/10) deep and 0.06 back into the stone — ONE voxel of depth at the contract's metre 32
+# and two of height. That is deliberate and it is the smallest joint that survives: a 0.03 groove
+# is 0.96 of a voxel and comes back as nothing at all, which is measured, not guessed —
+# pilasters.clip's flutes are 0.045 deep and the sampler keeps exactly one voxel of them.
+#
+# IT IS CUT OUT OF THE SECTION AND NOT OUT OF THE DRUM, which is what keeps it honest. The
+# subtrahend is three boxes 0.045 by 0.06; the minuend is the whole core. `paint limestone
+# where=drum_core` still reads a true distance everywhere outside the channels themselves, which
+# is the trap the apron below is a monument to — and it is only a trap when the subtrahend is
+# large.
+#
+# It also means the joints stop where they should without a single extra shape: the pilasters, the
+# window architraves and the two band courses are all unioned on AFTER this, so a channel runs
+# behind them and dies into them, which is what a bed joint does when it meets a dressing.
+let drum_s_core_raw = box 4.80 11.25 -1   5.40 15.60 1  round=0.012
+let drum_s_beds = union {
+    box 5.355 13.32 -1   5.40 13.38 1
+    box 5.355 13.77 -1   5.40 13.83 1
+    box 5.355 14.67 -1   5.40 14.73 1
+}
+let drum_core = revolve { difference { drum_s_core_raw drum_s_beds } } axis=y
 
 # The plinth and the socle. The plinth is 2 M tall and stands out to 5.85 (13 M) — the same line
 # the cornice corona comes out to, 3.45 m above it, which is what makes a drum look like one thing
@@ -132,14 +191,38 @@ let drum_bands = revolve {
 # The outermost 0.15 of it stays in daylight: dome.clip's shell is 5.70 at the springing, so the
 # corona's lip and the crowning cyma stand outside the dome and read against the sky. That is not
 # a coincidence, it is 13 M against 5.70, and neither file had to read the other to get it.
+#
+# AND THE CORONA IS THROATED. A corona is not a shelf, it is a water table: the whole reason it
+# oversails is to throw rain clear of the wall, and the only thing that makes it do that is a
+# groove cut in its soffit near the outer edge, so a drop running back along the underside meets a
+# corner it cannot follow and falls. Without it the water tracks back to the wall and the drum
+# grows a black stain under the cornice all the way round, which is what an unthroated corona
+# looks like on every real building that has one.
+#
+# 0.06 across (5.76 to 5.82) and 0.045 up into the stone — two voxels by one at metre 32, in the
+# blackest shadow on the outside of this building, so what it mostly does is deepen a line that is
+# already the strongest horizontal on the drum. Cut out of the section like the bed joints, and for
+# the same reason.
 let drum_s_bed    = cyma_reversa 5.40 15.225   5.625 15.3375
 let drum_s_fil    = box 5.34 15.3375 -1   5.625 15.375 1  round=0.008
 let drum_s_corona = box 5.34 15.375  -1   5.85  15.525 1  round=0.012
 let drum_s_crnbk  = box 5.34 15.515  -1   5.7375 15.60 1
 let drum_s_crown  = cyma_reversa 5.7375 15.525   5.85 15.60
-let drum_cornice = revolve {
+let drum_s_throat = box 5.76 15.375 -1   5.82 15.42 1
+let drum_cornice_raw = revolve {
     union { drum_s_bed drum_s_fil drum_s_corona drum_s_crnbk drum_s_crown }
 } axis=y
+let drum_throat_ring = revolve { drum_s_throat } axis=y
+let drum_cornice = difference { drum_cornice_raw drum_throat_ring }
+
+# AND THE PAINT KEYS ON `drum_cornice_raw`, NOT ON `drum_cornice`. Cut the throat out of the
+# section and revolve the result and the cornice's own distance goes soft along the groove's two
+# arrises — `difference` is `max(a, -b)` and near a 0.06 groove the `-b` term is what answers —
+# so 248 voxels of the soffit failed `below=0.02` and came back in the manifest's base limestone: a
+# pale hairline down the inside of the deepest shadow on the building, which is exactly the fault
+# this file's own note about the apron was written for and is exactly as hard to see. Revolving the
+# whole cornice first and taking the ring out afterwards leaves an EXACT shape to paint by, and the
+# subtrahend is a 0.06 by 0.045 ring, which is as small as a subtrahend gets.
 
 # The apron: the metal dressing over the joint between the roof and the drum. An apron flashing is
 # two pieces and it is worth building it as two, because that is what makes it read as metal and
@@ -390,7 +473,7 @@ let part_drum = union { drum_cut drum_metal drum_glass }
 paint limestone where=drum_core below=0.02
 paint granite   where=drum_socle below=0.02
 paint marble    where=drum_bands below=0.02
-paint marble    where=drum_cornice below=0.02
+paint marble    where=drum_cornice_raw below=0.02
 paint marble    where=drum_pilasters below=0.02
 paint marble    where=drum_dressings below=0.02
 paint copper    where=drum_apron below=0.02

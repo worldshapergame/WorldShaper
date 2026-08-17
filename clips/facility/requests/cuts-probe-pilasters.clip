@@ -1,0 +1,4 @@
+# cuts-probe.clip with the box cut to the minor order alone, for a metre 32 run. NOT the building.
+include "cuts-probe.clip"
+bounds -16.3 5.60 -7.8   16.3 10.00 7.8
+solid part_pilasters

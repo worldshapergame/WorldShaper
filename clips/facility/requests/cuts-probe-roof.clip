@@ -1,0 +1,4 @@
+# cuts-probe.clip with the box cut to the roof alone, for a metre 32 run. NOT part of the building.
+include "cuts-probe.clip"
+bounds -16.0 11.80 -7.5   16.0 12.30 7.5
+solid part_roof

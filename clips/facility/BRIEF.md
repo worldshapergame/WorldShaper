@@ -234,7 +234,7 @@ let name = repeat    { a } x=2.7 nx=3                 # every 2.7 m, 3 either si
 let name = around    { a } count=8 axis=y             # radial repeat
 let name = shell     { a } thickness=0.1
 let name = round     { a } by=0.05                    # grows the shape and rounds its arrises
-let name = offset    { a } by=-0.05                   # shrinks or grows without rounding
+let name = offset    { a } by=0.05                    # POSITIVE SHRINKS. See the note below
 let name = displace  { a pattern } amount=0.02
 let name = twist     { a } turns=0.25 axis=y
 let name = bend      { a } turns=0.1 axis=y
@@ -245,6 +245,24 @@ let name = revolve   { profile } axis=y               # also: revolve cx cy cz {
                                       # revolved about its own centre is a sphere to the last
                                       # decimal — so a base, a baluster, an urn or a dome is one
                                       # profile drawn once rather than a stack of cylinders.
+
+# `offset`, and the sign, which has already cost a whole set of joints.
+#
+# A POSITIVE `by` SHRINKS THE SHAPE. Negative grows it. That reads backwards and it is not a
+# choice: negative is matter, `offset` is `field + by`, so adding a positive number pushes the
+# surface inward. Every other key here that takes a size grows the thing it is given -- `round
+# by=`, `shell thickness=` -- which is exactly why this one gets written the same way and is wrong.
+#
+# The line above said `by=-0.05  # shrinks or grows` and taught the mistake. In steps.clip,
+# `offset { steps_mass } by=-0.045` was written to shrink the flight by 45 mm to make a core to cut
+# joints out of, and grew it by 45 mm instead. The core came out BIGGER than the mass, so
+# `difference { mass core }` was empty and every joint in the great stair simply did not exist.
+# It sampled to the voxel: steps_mass 2,423,674 and steps_flight 2,423,674, the same number. No
+# error, no floating component, no missing material, no effect -- a cut that removed nothing, which
+# is the failure that has no symptom at all.
+#
+# If you want a core to cut out of something, `by` is POSITIVE. Then check it: sample the two and
+# compare the counts before you believe the joints are there.
 
 # The mouldings. Sections, not solids of their own: put them inside a `revolve` for anything that
 # goes round a column, or give them six numbers to run one straight along a cornice.

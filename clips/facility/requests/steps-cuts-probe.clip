@@ -1,0 +1,53 @@
+# The great steps on their own, in a box cut to them, WITH A CONTROL ARM FOR EVERY CUT.
+# Not part of the building.
+#
+# Two reasons this file exists rather than `--part part_steps` on the manifest:
+#
+# 1. THE MANIFEST HAS AN `origin` AND `--part` DOES NOT SURVIVE ONE. `apply_origin`
+#    (src/forge/clip_script.cpp:1149) translates `script.solid`, every paint rule and the sampled
+#    bounds by the origin shift, and does NOT translate the entries in `script.parts`. So
+#    `--part <anything>` on clips/facility.clip substitutes an untranslated node into a translated
+#    world: the geometry is sampled 3.50 m away from the rules meant to paint it, not one rule
+#    matches, and the report says one hundred per cent of the base coat. `--part part_steps`
+#    on the manifest reads `materials 1 distinct records / limestone 39922 100.00%` for a stair
+#    that is granite, marble and porphyry. See requests/steps.md, item 5.
+#
+# 2. The contract's box is 582 million cells at metre 32, nearly all of it the air over a building
+#    this fragment is at the foot of. This one is 20.5 x 4.3 x 5.0 m — about 13 million — so the
+#    RISERS CAN BE MEASURED AT THE RESOLUTION THE GAME RUNS AT rather than at metre 8, where a
+#    0.18 riser is one and a half voxels and every reading is a rounding.
+#
+# THE CONTROL ARMS, one per cut:
+#
+#   --part steps_mass          the ten treads before the joints are cut
+#   --part steps_flight        after — the difference is what the joint cut removes
+#   --part steps_wall_cut      a cheek wall before its rustication is cut
+#   --part steps_wall_e        after
+#   --part probe_ped_plain     a pedestal before its sunk panels are cut
+#   --part steps_ped_east      after
+#
+#   tools/clipcheck.sh clips/facility/requests/steps-cuts-probe.clip --metre 32 --slice x@0
+#   tools/clipcheck.sh clips/facility/requests/steps-cuts-probe.clip --metre 32 --gap y@0,-15.0
+
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../steps.clip"
+
+# The pedestal before its panels are cut. It has to be carried to where the real one stands or it
+# falls outside this box and samples as nothing, which is what the first version of this line did.
+let probe_ped_plain = translate { union { steps_ped_body steps_ped_head } } 9.00 0 -15.77
+
+# The flight with one cut at a time, so the two can be told apart. `steps_flight` takes both.
+let probe_joints_only = difference { steps_mass steps_joints }
+let probe_wear_only   = difference { steps_mass steps_wear }
+
+# EVERY BOUND IS A MULTIPLE OF 0.125, so the sampling lattice is the same one the manifest's box
+# gives at metre 8, 16 and 32 and a coordinate read off a slice is the coordinate in the building.
+# Bounds that are not — the first version had -0.60 and -16.80 — shift the whole grid by a
+# fraction of a voxel and every height read out of a section comes back 25 mm out.
+bounds -10.25 -0.625 -16.875   10.25 3.75 -11.875
+
+solid part_steps

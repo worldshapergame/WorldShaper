@@ -1,0 +1,13 @@
+# The five upper parts as one solid, in an unshifted box. NOT part of the building.
+# Written so it names nothing but the five `part_` bindings, and therefore parses against any
+# version of the five fragments — which is what makes it usable as a before/after control.
+include "../_contract.clip"
+include "../_order.clip"
+paint limestone
+include "../pilasters.clip"
+include "../parapet.clip"
+include "../roof.clip"
+include "../drum.clip"
+include "../dome.clip"
+bounds -16.7 5.5 -8.2   16.7 20.0 8.2
+solid union { part_dome part_drum part_roof part_parapet part_pilasters }

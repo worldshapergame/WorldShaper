@@ -1,0 +1,34 @@
+# walls-probe — the outer wall ring on its own, for clipcheck. Not part of the building.
+#
+#   bash tools/clipcheck.sh clips/facility/requests/walls-probe.clip --metre 32 --gap z@0,3.0
+#   bash tools/clipcheck.sh clips/facility/requests/walls-probe.clip --metre 32 --slice y@3.0
+#
+# It exists so the wall can be MEASURED without the other twenty-odd fragments' paint rules being
+# asked about every voxel of it: `--part part_walls` on the manifest samples the same stone and
+# then evaluates every other fragment's coats over it, which is a three-and-a-half-minute run at
+# metre 8 where this is seconds. It also makes `never fired` mean something, which it cannot when
+# nineteen other files' rules are in the list.
+#
+# THE BOX IS PHASE-ALIGNED TO THE CONTRACT'S, which is the whole reason it is these numbers and not
+# round ones. The contract's box starts at (-17, -0.9, -16.5); this one starts at (-17, 1.6, -8.5),
+# which is 0.00, 2.50 and 8.00 m away — a whole number of voxels at metre 8, 16 and 32 alike. So
+# every voxel centre falls exactly where it falls in the building, and a 0.03 m feature that
+# survives here survives there. A box chosen for tidiness would shift the grid by a fraction of a
+# voxel and quietly change which one-voxel members exist.
+#
+# It holds the whole part with margin: the wall is x -16.135..16.135 (quoins), y 1.75..11.90,
+# z -7.68..7.68 (the string course mitre), so anything that had drifted would fall OUT of this box
+# and be seen rather than hidden.
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../walls.clip"
+
+metre 32
+bounds -17 1.6 -8.5   17 12.5 8.5
+
+variation colour=0.030 rough=0.070 seed=17
+
+solid part_walls

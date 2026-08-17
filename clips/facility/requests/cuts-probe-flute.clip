@@ -1,0 +1,7 @@
+# One east pilaster, at full resolution, so a 0.060 flute is 2 voxels and not a rounding error.
+# NOT part of the building.
+#
+#   bash tools/clipcheck.sh clips/facility/requests/cuts-probe-flute.clip --metre 32 --slice y@7.0
+include "cuts-probe.clip"
+bounds 15.60 5.70 0.90   16.30 10.00 1.80
+solid part_pilasters

@@ -1,0 +1,41 @@
+# The podium on its own, in a box cut to it, WITH A CONTROL ARM FOR EVERY CUT. Not the building.
+#
+# Two reasons this file exists rather than `--part podium_stone` on the manifest:
+#
+# 1. THE MANIFEST HAS AN `origin` AND `--part` DOES NOT SURVIVE ONE. `apply_origin`
+#    (src/forge/clip_script.cpp:1149) translates `script.solid`, every paint rule and the sampled
+#    bounds, and does NOT translate the entries in `script.parts`. So `--part <anything>` on
+#    clips/facility.clip substitutes an untranslated node into a translated world: the geometry is
+#    sampled 3.50 m away from the rules that paint it, no rule matches, and every part comes back
+#    as one hundred per cent of the base coat. It is written up in requests/steps.md. Nothing here
+#    says `origin`, so `--part` means what it says.
+#
+# 2. The manifest's box is 582 million cells at metre 32 and this one is 78 million.
+#
+# THE CONTROL ARMS. The decisive evidence about a cut is the same sample with the cut present and
+# with it absent, so each cut has a binding here that omits it:
+#
+#   --part podium_mass          the slab before anything is cut out of it
+#   --part probe_pod_pave_only  the paving joints cut, the rustication not
+#   --part probe_pod_rust_only  the rustication cut, the paving not
+#   --part podium_stone         both — what the building actually gets
+#
+# and the volume differences between those four are exactly what each cut removes.
+#
+#   tools/clipcheck.sh clips/facility/requests/podium-cuts-probe.clip --metre 16 --part podium_mass
+#   tools/clipcheck.sh clips/facility/requests/podium-cuts-probe.clip --metre 16 --slice z@-12.80
+#   tools/clipcheck.sh clips/facility/requests/podium-cuts-probe.clip --metre 32 --gap z@0.90,0
+
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../podium.clip"
+
+let probe_pod_rust_only = difference { podium_mass podium_rustication }
+let probe_pod_pave_only = difference { podium_mass podium_paving }
+
+bounds -17.00 -0.90 -13.50   17.00 2.20 8.60
+
+solid part_podium

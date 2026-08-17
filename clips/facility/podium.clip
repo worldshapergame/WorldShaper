@@ -61,6 +61,34 @@
 #    surface figures converge, the grooves have started dissolving, whatever the picture looks
 #    like.
 #
+#    AND EACH GROOVE TAKES OUT ITS OWN SHARE AND NOTHING ELSE, which is a different claim and is
+#    the one that had never been checked. `difference { podium_mass podium_rustication
+#    podium_paving }` has two cutters in it, and the way that goes wrong is not that a cut is
+#    missing — it is that a cut reaches somewhere it was not meant to and nothing in the report
+#    says so, because a report cannot tell 3.13 cubic metres taken from the right place from 3.13
+#    taken from the wrong one. So the two were sampled separately, in a box cut to this part
+#    (`clips/facility/requests/podium-cuts-probe.clip`, `--part probe_pod_pave_only` and
+#    `--part probe_pod_rust_only`), and the arithmetic checked:
+#
+#      metre 32     podium_mass                                  51,064,994 voxels
+#                   less the rustication only                    51,037,728     -27,266
+#                   less the paving only                         50,989,754     -75,240
+#                   less both                                    50,962,488    -102,506 = the sum
+#
+#      metre 16     podium_mass                                   6,383,040
+#                   less the rustication only                     6,379,496      -3,544
+#                   less the paving only                          6,372,972     -10,068
+#                   less both                                     6,369,428     -13,612 = the sum
+#
+#    The two cuts are EXACTLY additive at both resolutions — 27,266 + 75,240 = 102,506 and
+#    3,544 + 10,068 = 13,612, to the voxel — which is the evidence that they do not overlap and
+#    that neither has spilled into ground the other was holding. One component before, one after,
+#    in every arm.
+#
+#    (50,962,488 against the 50,962,476 above is twelve voxels, and it is the two boxes: the
+#    figures in the table at the top were taken through the manifest's own bounds and these through
+#    the probe's. A different box is a different lattice at the arrises.)
+#
 # The third load, which comes free with getting the corners right: the whole block is the
 # INTERSECTION of two extruded profiles, one drawn in (x, y) and run along z, one drawn in (z, y)
 # and run along x. That is what makes every moulding turn all four corners as a true mitre rather
@@ -89,12 +117,26 @@
 #   the east and west faces  x = +-16.65 / +-16.425
 #   the underside            y = -0.45, buried, for the site to bring its ground up to.
 #
-#   THE GREAT STEPS: the top tread must land flush at y = 1.80 on or north of z = -13.05. Ten
-#   risers of 0.18 and ten runs of 0.32 is 3.20 m, so the flight runs z = -16.25 (ground) to
+#   THE GREAT STEPS: the top tread lands flush at y = 1.80 with its top nosing ON z = -13.05.
+#   Ten risers of 0.18 and ten runs of 0.32 is 3.20 m, so the flight runs z = -16.25 (ground) to
 #   z = -13.05 (top nosing). That is 0.55 m further south than the contract's steps zone; the
 #   alternative is that the last two risers are buried in this slab and the stair arrives at a
 #   0.36 m wall. This slab is 0.55 m deeper than the contract's plan because the brief for this
 #   part says it must cover z = -13, and it does.
+#
+#   THAT PARAGRAPH USED TO BE A REQUEST AND IS NOW A FACT. steps.clip was built to the contract
+#   and ran -15.70..-12.50, so the corona above swallowed tread ten whole and all but 0.09 m of
+#   tread nine and the stair arrived at the terrace over a tread 0.09 deep. site.clip had already
+#   been laid out to this file's -13.05 — its gravel, its basins and its return plinths all end
+#   there — so two fragments of three agreed and the steps moved. Measured through the pair at
+#   metre 32 on the centre line, the top of the matter now runs 1.8125 from z = -13.31 all the
+#   way to the terrace with nothing between them but the paving joint at -11.925.
+#
+#   NOTHING IN THIS FILE CUTS ANYTHING IN THAT ONE, OR THE OTHER WAY ROUND. The only `difference`
+#   here takes the two groove unions out of `podium_mass` and out of nothing else, and steps.clip's
+#   four take matter out of its own shapes. Neither part exposes a `<part>_void`, so neither is in
+#   the manifest's `hollowed` difference at all — which is the one place in this building where a
+#   cut belonging to one part can reach another, and is what D608 was.
 
 include "_contract.clip"
 
@@ -253,6 +295,16 @@ let podium_rustication = union {
 # middle of a stone rather than astride a joint. In z the phase is picked to match, and both
 # leave a plain margin course 1.125 (2.5 M) wide the whole way round, over the cornice, which is
 # what the edge of a terrace wants.
+#
+# 1.755 IS THE FLOOR OF THE JOINT AND IT IS THE DEEPEST ANYTHING CUTS INTO THIS SLAB FROM ABOVE.
+# The podium is hollow after all — crypt.clip carves a room out of it in the manifest's `hollowed`
+# difference, and that room's soffit is at 1.6875 (1.80 less M/4, chosen to land on a voxel
+# boundary at metre 16 and 32 alike). So between the floor of a paving joint and the ceiling of the
+# crypt underneath it there is 0.0675 m of granite, two voxels at metre 32. A joint 0.1125 deep
+# instead of 0.045 would open the terrace into the crypt along every line of the paving grid, and
+# it would do it silently: the volume would move by three cubic metres out of fifteen hundred, the
+# component count would not change at all, and the only sign of it would be daylight in a room
+# whose whole brief is that light reaches it through two stair wells and nothing else.
 let podium_pave_x = box -0.01875 1.755 -20   0.01875 1.82 20
 let podium_pave_z = box -20 1.755 -0.01875   20 1.82 0.01875
 
