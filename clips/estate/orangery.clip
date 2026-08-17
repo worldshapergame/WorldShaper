@@ -71,7 +71,9 @@
 # the sample, the copy it despeckles and the connectivity map are all live at once. That is the same
 # order as the facility's 582 M and it is the price of the one thing this building is for.
 #
-# WHAT IT ACTUALLY MEASURES, at metre 32 and with the two bar decisions below in place:
+# WHAT IT ACTUALLY MEASURES, at metre 32 and with the two bar decisions below in place. THESE FOUR
+# LINES WERE TAKEN BEFORE THE TREES WERE REPLACED and are left standing because they are the only
+# metre 32 figures this building has, and a metre 32 run is eighteen minutes of a shared machine:
 #
 #     volume      65,408,402 voxels   1,996 m3   23.89% of the box
 #     surface     6,684,182 faces     6,527 m2
@@ -82,6 +84,20 @@
 # sampled on its own at metre 32 is one component with nothing floating, so they are the thin-feature
 # rescue meeting a revolved arris at this grid offset, not a fault in the pot. Every one of the
 # thousands of glazing bars is attached.
+#
+# WHAT THE TREES DID TO IT, at metre 8, interleaved four rounds either side so that a neighbouring
+# build cannot be mistaken for a result — minima, and CPU beside wall because the same command
+# measured 12 s and 60 s an hour apart on this machine:
+#
+#                        wall      cpu      volume       surface    components
+#     sphere trees       34.6 s    11.3 s   1,038,878    394,250    1, none floating
+#     citrus_a / _b      35.1 s    11.4 s   1,023,290    393,150    1, none floating
+#
+# One per cent of CPU for twenty-one trees that have branches. Neither arm has an idle paint rule
+# under `clipcheck`'s repaired diagnostic — which reports `never asked` and `never matched`
+# separately and had never printed once before it was fixed, so this is the first run of this
+# building where a rule that matched nothing would have said so. The tree costs are in
+# `clips/_trees.clip`; each tree alone is 1.7x the sphere it replaced, on CPU, at metre 32.
 #
 # A NUMBER TAKEN AT METRE 16 IS ABOUT A DIFFERENT BUILDING, because at metre 16 a bar 0.030 across
 # is under half a voxel and does not exist. The metre 16 figures quoted below the bars are quoted
@@ -113,6 +129,7 @@
 # ================================================================================================
 
 include "../facility/_contract.clip"
+include "../_trees.clip"
 
 metre 32
 bounds -29.70 -1.35 -6.75   29.70 10.50 5.10
@@ -526,17 +543,31 @@ let or_flue_grilles = repeat { or_fl_unit } x=5.40 nx=5
 #
 # Twenty-one trees on the bay: eleven in oak Versailles caisses with iron straps on the south side
 # of the rill at 5.40, and ten in terracotta pots on the north side, set between them.
+#
+# THEY USED TO BE A CYLINDER WITH A BALL ON IT, and the ball was `sphere 0 2.79 0 r=0.855`. One
+# perfect sphere of leaves per tree, twenty-one of them, every one identical and every one exactly
+# round — which at 3.1 cm voxels is a lollipop drawn at enough resolution to see that it is a
+# lollipop. The trees now come from `clips/_trees.clip`, which is where the construction and the
+# measurements that settled it are written; what matters here is only how they are placed.
+#
+# THE CAISSES CARRY `citrus_a` AND THE POTS CARRY `citrus_b`, which is the point of there being
+# two. Down the length of the hall the eye sees eleven of one tree alternating with ten of
+# another, at different heights, leaning different ways, with different numbers of oranges — so
+# the row reads as a row of trees. Twenty-one copies of one tree reads as wallpaper, and did.
+#
+# Both stand on their own y = 0 with the root 0.10 below it, so `0.675` is the one number needed:
+# it buries the foot in the solid of the tub and brings the stem out of the clay at 0.855 (the pot
+# rim) and out of the oak at 0.810 (the caisse lid), with about 0.9 m of clear stem above that.
 
-let or_tree_trunk = cylinder 0 1.35 0 r=0.09 h=1.35 axis=y
-let or_tree_leaf  = sphere 0 2.79 0 r=0.855
-let or_tree_fruit = intersection {
-    union {
-        around { sphere 0.81 2.70 0 r=0.09 } count=7 axis=y
-        around { sphere 0.72 3.15 0 r=0.09 } count=5 axis=y
-    }
-    box -0.90 2.58 -0.90   0.90 3.27 0.90
-}
-let or_tree = union { or_tree_trunk or_tree_leaf or_tree_fruit }
+let or_tree_a_wood  = translate { citrus_a_wood }  0 0.675 0
+let or_tree_a_leaf  = translate { citrus_a_leaf }  0 0.675 0
+let or_tree_a_fruit = translate { citrus_a_fruit } 0 0.675 0
+let or_tree_a = union { or_tree_a_wood or_tree_a_leaf or_tree_a_fruit }
+
+let or_tree_b_wood  = translate { citrus_b_wood }  0 0.675 0
+let or_tree_b_leaf  = translate { citrus_b_leaf }  0 0.675 0
+let or_tree_b_fruit = translate { citrus_b_fruit } 0 0.675 0
+let or_tree_b = union { or_tree_b_wood or_tree_b_leaf or_tree_b_fruit }
 
 let or_cs_body  = box -0.54 -0.05 -0.54   0.54 0.81 0.54 round=0.02
 let or_cs_post  = box  0.495 -0.05 0.495   0.63 1.035 0.63 round=0.015
@@ -553,7 +584,7 @@ let or_cs_strap_b = difference {
 }
 let or_cs_wood = union { or_cs_body or_cs_posts or_cs_balls }
 let or_cs_iron = union { or_cs_strap_a or_cs_strap_b }
-let or_cs_unit = union { or_cs_wood or_cs_iron or_tree }
+let or_cs_unit = union { or_cs_wood or_cs_iron or_tree_a }
 
 # The pot, drawn once as a section and turned: a foot, a core, a convex flare swelling out to the
 # rim, and the rim itself. Exact, and four lines rather than a stack of cylinders.
@@ -564,7 +595,7 @@ let or_pt_prof = union {
     box 0  0.72  -1   0.765 0.855 1
 }
 let or_pt_body = revolve 0 0 0 { or_pt_prof } axis=y
-let or_pt_unit = union { or_pt_body or_tree }
+let or_pt_unit = union { or_pt_body or_tree_b }
 
 let or_caisses = translate { repeat { or_cs_unit } x=5.40 nx=5 } 0 0 -1.80
 let or_pots    = mirror {
@@ -578,16 +609,16 @@ let or_pot_clay    = mirror {
 } axis=x
 
 let or_trunks = union {
-    translate { repeat { or_tree_trunk } x=5.40 nx=5 } 0 0 -1.80
-    mirror { translate { repeat { or_tree_trunk } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
+    translate { repeat { or_tree_a_wood } x=5.40 nx=5 } 0 0 -1.80
+    mirror { translate { repeat { or_tree_b_wood } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
 }
 let or_leaves = union {
-    translate { repeat { or_tree_leaf } x=5.40 nx=5 } 0 0 -1.80
-    mirror { translate { repeat { or_tree_leaf } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
+    translate { repeat { or_tree_a_leaf } x=5.40 nx=5 } 0 0 -1.80
+    mirror { translate { repeat { or_tree_b_leaf } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
 }
 let or_fruit = union {
-    translate { repeat { or_tree_fruit } x=5.40 nx=5 } 0 0 -1.80
-    mirror { translate { repeat { or_tree_fruit } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
+    translate { repeat { or_tree_a_fruit } x=5.40 nx=5 } 0 0 -1.80
+    mirror { translate { repeat { or_tree_b_fruit } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
 }
 let or_tubs = union { or_caisses or_pots }
 
