@@ -22,17 +22,50 @@ clips/*.clip  ->  ws_bake_web  ->  web/data/*.wsc  ->  web/js  ->  a page
 | | |
 |---|---|
 | `tools/bake_web.cpp` | samples every clip, meshes it, bakes its light, writes one file each |
-| `web/js/format.js` | reads that file — a header, four typed-array views, nothing decoded |
-| `web/js/gl.js` | the rasteriser: instanced quads, one Cook-Torrance lobe, a stencil cap |
-| `web/js/features/shapeshade.js` | what a shape in the ◉ view is made of, shaded as the voxels are | <!-- // >>> shapeshade // <<< shapeshade -->
-| `tools/bake/probes.hpp` | casts the reflection probes; `web/js/features/probes.js` samples them |
-<!-- >>> brdf -->
-| `web/js/gl.js` | the rasteriser: instanced quads, a stencil cap |
+| `tools/bake/irradiance.hpp` | the colour bounce, `GIRR` — §2b |
+| `tools/bake/occlusion.hpp` | the ambient-occlusion atlas, `AOCC` — §2c |
+| `tools/bake/probes.hpp` | the reflection probes, `RPRB` — §2d |
+| `tools/bake/lights.hpp` | the emissive light list, `LGTS` — §4d |
+| `tools/bake/matvol.hpp` | the material volume and its thickness, `MVOL` + `THCK` — §6 |
+| `tools/bake/paint.hpp` | the field graph and the paint stack, `FLDG` + `PANT` — §4a-i |
+| `web/js/format.js` | reads that file — a header, typed-array views, `clip.chunk()`, nothing decoded |
+| `web/js/gl.js` | the rasteriser: instanced quads, a stencil cap, and the texture-unit register |
 | `web/js/features/brdf.js` | the material model — every lobe a `VisualRecord` declares |
-<!-- <<< brdf -->
+| `web/js/features/shapeshade.js` | what a shape in the ◉ view is made of, shaded as the voxels are | <!-- // >>> shapeshade // <<< shapeshade -->
+| `web/js/features/paint.js` | the clip's paint rules, evaluated at a hit point — and `MATERIAL_AT_GLSL` |
+| `web/js/features/field.js` | the clip's own field graph, walked in GLSL |
+| `web/js/features/paintcost.js` | how much of that stack one pixel may walk — §4a-ii |
+| `web/js/features/gi.js`, `ao.js`, `probes.js`, `lights.js`, `matvol.js` | the browser half of each baked block |
+| `web/js/features/shadow.js` | the sun's cascades and the contact trace |
+| `web/js/features/ssr.js` | the offscreen capture, its mip chain, and the screen-space march |
+| `web/js/features/refract.js` | glass: what is behind a pane, bent and absorbed |
+| `web/js/features/post.js` | bloom, fog, the composite, and the one tone map |
+| `web/js/features/budget.js` | the frame-time ladder |
 | `web/js/controls.js` | orbit, and a body that walks, crouches, jumps and flies |
 | `web/js/app.js` | the page, and the loop that watches the index for changes |
 | `.github/workflows/pages.yml` | bakes on every push that can change a clip, and publishes |
+
+### Texture units are a register, and it is in `web/js/gl.js`
+
+A texture unit is the one thing in that file that cannot be decided locally, and the proof is that
+**three features independently chose unit 2 and every one of them chose correctly in isolation**.
+Two of them are 3D textures and one is a 2D atlas, and a `sampler3D` and a `sampler2D` on one unit
+is not a black texture and not a shader error — it is
+
+```
+GL_INVALID_OPERATION: glDrawArraysInstanced: Two textures of different types use the same
+sampler location
+```
+
+once per draw call, 263 of them in one screenshot, with whatever the driver felt like on screen
+after it. A fourth case was quieter still: `web/js/features/field.js` declares a `usampler2D` and
+nothing created a texture for it, so it defaulted to unit 0, where the cutter pool's `sampler2D`
+already was.
+
+So `UNIT` in `web/js/gl.js` is the table. **A feature takes a name from it, never a number**, and
+adding one is a line there rather than a guess at what is free. WebGL2 guarantees sixteen units to
+a fragment shader and the surface program now uses fifteen of them; the shapes program is a
+separate program and starts again at zero.
 
 ### It is the game's own sampler
 
@@ -53,58 +86,47 @@ A 208-byte header, then the blocks, in the layout the card wants so that loading
 and a handful of `subarray` views. Every offset is written down in both `tools/bake_web.cpp` and
 `web/js/format.js`, and the file carries a magic and a version so a mismatch says so.
 
-<!-- >>> ao -->
-**The version is 3, and the header's last eight bytes are a chunk directory.** Version 1's header
-was 192 bytes with nothing spare, so version 2 — which adds the cutter pool of §4a — moved every
-block offset; there is no reading one as the other. Version 3 does not move anything: bytes 200..207
-became `chunkOffset` and `chunkCount`, and each 16-byte entry is a four-character name, an offset, a
-size and a spare word. Everything in front of the directory is byte for byte what version 2 wrote,
-which is the point — the format is being added to by many hands at once, and doing the version 2
-move again for each of them is a chance to serve a file one reader agrees with and another does not.
-A reader that does not know a chunk simply never asks for it.
+**The version is 3, and the header's last eight bytes are a chunk directory.**
+
+Version 1's header was 192 bytes with nothing spare, so version 2 — which adds the cutter pool of
+§4a — moved every block offset; there is no reading one as the other. Version 3 moves nothing.
+Bytes 200..207 are `chunkOffset` and `chunkCount`, and each 16-byte entry is a four-character tag,
+an offset, a size and a spare word, pointing at a block appended after every block the fixed layout
+knows about. Payloads are padded to sixteen bytes so a reader may take a typed-array view straight
+onto one; the padding is not counted in `size`.
+
+```
+u32 at 200   chunkOffset        u32 at 204   chunkCount
+entry, 16 bytes:  char fourcc[4];  u32 offset;  u32 size;  u32 reserved
+```
+
+That exists because this format is being added to by many hands at once, and doing the version 2
+move again for each of them is a chance to serve a file one reader agrees with and another does
+not. A reader that does not know a tag never asks for it.
+
+**There is one writer and one reader, and getting there was the whole of the integration.** SEVEN
+independent implementations of this mechanism were written — four in `tools/bake_web.cpp` and three
+in `web/js/format.js` — because seven agents were each told to write it "as if you are the first,
+and it merges if another already added it". That was right about the intent and wrong about the
+mechanics: two implementations of one thing do not merge, they conflict, and the marked regions
+cannot help because both edits are *in* their own regions and both are correct alone. What survives
+is `append_chunks` and `struct Chunk` in the baker, and `clip.chunk('FOUR')` — a zero-copy
+`Uint8Array` view or null — in `format.js`. Adding a baked block is one `chunks.push_back` and one
+`clip.chunk()`, and nothing else.
+
+Two of the six duplicates did not conflict, which is worse than conflicting: a second `struct Chunk`
+compiled beside the first and was caught only because the two disagree about what the payload field
+is called, and a second reader in `format.js` merged in cleanly ahead of the point where
+`clip.chunks` is created and threw `Cannot read properties of undefined (reading 'set')` on every
+load.
+
+The chunks so far: `FLDG` and `PANT` (§4a-i, the field graph and the paint stack), `GIRR` (§2b, the
+colour bounce), `AOCC` (§2c, the occlusion atlas), `RPRB` (§2d, the reflection probes), `LGTS` (§4c,
+the emissive lights), and `MVOL` + `THCK` (§6, the material volume and its thickness).
 
 `reuse` in the baker refuses a file of the wrong version and rebakes it, and `parseClip` throws on
 one rather than drawing a wrong picture — a cached `web/data` from before a change is a real state
 and it has to say so.
-
-Chunks so far: `AOCC`, the ambient-occlusion atlas of §2a.
-<!-- <<< ao -->
-
-<!-- >>> gi -->
-**The version is 3, and the last eight bytes of the header are now a chunk directory.** Everything
-in front of byte 200 is exactly what version 2 held; 200 is `chunkOffset` and 204 is `chunkCount`,
-and a chunk is sixteen bytes of table — a four-character tag, an offset, a size and a spare word —
-pointing at a block appended after every block the fixed layout knows about. That exists because
-the viewer is being extended by many hands at once and the alternative is everybody needing the
-same spare word: a new baked block now costs a tag and no offset in front of it moves. A reader
-that does not know a tag skips it, and `clip.chunk('GIRR')` in `web/js/format.js` hands back a view
-of one without decoding anything — whoever bakes a chunk owns reading it.
-<!-- <<< gi -->
-
-<!-- >>> probes -->
-**The version is 3.** Version 1's header was 192 bytes with nothing spare, so adding the cutter pool
-of §4a moved every block offset; there is no reading one as the other. Version 3 spends the eight
-bytes version 2 left over on a chunk directory, so it is the last time an addition moves anything.
-`reuse` in the baker refuses an older file and rebakes it, and `parseClip` throws on one rather than
-drawing a wrong picture — a cached `web/data` from before the change is a real state and it has to
-say so.
-<!-- <<< probes -->
-**The version is 3.** Version 1's header was 192 bytes with nothing spare, so adding the cutter pool
-of §4a moved every block offset; there is no reading one as the other. `reuse` in the baker refuses
-an older file and rebakes it, and `parseClip` throws on one rather than drawing a wrong picture —
-a cached `web/data` from before the change is a real state and it has to say so.
-<!-- >>> lights -->
-Version 3 spends the header's last eight spare bytes on a **chunk directory**, so that everything
-added after it is found by a four-character code rather than by moving every offset again. §4c.
-<!-- <<< lights -->
-<!-- >>> matvol -->
-**The version is 3.** Version 1's header was 192 bytes with nothing spare, so adding the cutter pool
-of §4a moved every block offset; there is no reading one as the other. `reuse` in the baker refuses
-an older file and rebakes it, and `parseClip` throws on one rather than drawing a wrong picture —
-a cached `web/data` from before the change is a real state and it has to say so. Version 3 is the
-last version bump that kind of change needs: the header's final word is now a **chunk directory**,
-so a new block is appended and listed rather than inserted, and §6 is the first two entries in it.
-<!-- <<< matvol -->
 
 **Materials.** Every `VisualRecord` used, verbatim, sixteen bytes each. Colour, opacity,
 roughness, metallic, index of refraction, emission and its tint, Beer-Lambert absorption,
@@ -154,7 +176,7 @@ quarters first, and every soffit in the halls had a pale band across it where th
 roof reached through 0.45 m of masonry.
 
 <!-- >>> gi -->
-### The bounce is a second lattice, in colour, and it is an ambient cube
+## 2b. The bounce is a second lattice, in colour, and it is an ambient cube
 
 The grid above is a **visibility** term. Two bytes cannot carry a colour, so until this existed
 nothing in the viewer bounced light off a red floor onto a white vault — which is the single most
@@ -206,7 +228,7 @@ both. Removing it is a change to the look of every clip and belongs in its own p
 that adds the volume. Measured on `facility/rotunda` cut in half, the interior lifts by about 45 of
 255 and the sky is byte-identical.
 <!-- >>> ao -->
-## 2a. Ambient occlusion, which is neither of the two things that were called that
+## 2c. Ambient occlusion, which is neither of the two things that were called that
 
 Two terms already existed and neither of them is ambient occlusion:
 
@@ -306,7 +328,7 @@ another fixed offset every block below it has to move for. That is what made a v
 unreadable as version 2, and it was not worth arranging twice. A reader that does not know a fourcc
 skips it; two chunks added by two hands cannot collide.
 
-## 2a. Reflection probes
+## 2d. Reflection probes
 
 Nothing in the viewer reflected anything, and the clips were built to. `salon.clip` and
 `ballroom.clip` face walls of `mirror` (roughness 6, metal 252) at each other; `pavilion.clip`
@@ -1093,7 +1115,7 @@ Three things it got wrong first, all of them visible immediately and none of the
   screen. There are sixty-five planes in the facility.
 
 // >>> fieldeval
-## 4c. Running the clip's own fields in the browser
+## 4a-iv. Running the clip's own fields in the browser
 
 A shape has no material. Colour comes from a stack of paint rules, and a rule is a **field**, a range
 that field must fall in, and optionally a direction the surface must face. So the ◉ view can only
@@ -1308,7 +1330,7 @@ it is an hour, and that is why `bake` has three hours rather than ninety minutes
 runs even when a shard did not.
 
 <!-- >>> lights -->
-## 4c. Emissive geometry, as real lights
+## 4d. Emissive geometry, as real lights
 
 **The version is 3, and bytes 200..207 are now a chunk directory.** A `u32` offset at 200 and a
 `u32` count at 204 point at a table of 16-byte entries — four characters of code, an offset, a size
@@ -1455,7 +1477,7 @@ will not have that. The find needs to be `find src tools`.
 
 <!-- <<< lights -->
 <!-- >>> post -->
-## 4c. The end of the frame, and what the frame costs
+## 4e. The end of the frame, and what the frame costs
 
 `web/js/features/post.js` and `web/js/features/budget.js`.
 

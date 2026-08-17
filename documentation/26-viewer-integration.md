@@ -7,6 +7,76 @@ was NOT delegated, and it needs doing with a clear head rather than at the end o
 
 ---
 
+## 0. DONE. What the assembly actually cost, written after it
+
+*Added 2026-08-17, on branch `claude/facility-building-overhaul-deuuxo`. Everything below this
+section is the plan as it was written; this is the outcome, and where the two disagree this one is
+what happened.*
+
+**All thirteen merged. The viewer builds, bakes and loads with no console error, and the ◉ view's
+colours are the clip's own paint rules.** One piece of one branch was left out deliberately and is
+named below.
+
+| what | landed |
+|---|---|
+| colour irradiance volume `GIRR` | yes |
+| ambient occlusion `AOCC` | yes |
+| reflection probes `RPRB` | yes |
+| emissive light list `LGTS` | yes |
+| material + thickness volume `MVOL` `THCK` | yes |
+| sun shadow map + contact | yes |
+| screen-space reflections | yes |
+| refraction / glass / translucency | yes |
+| the full BRDF | yes |
+| post, bloom, fog, frame budget | yes, **except the lean build** |
+| GLSL field evaluator | yes |
+| paint stack evaluation | yes |
+| paint verification + cost | yes |
+
+**The lean build did not land.** `#define WS_LEAN` made the feature test a constant so the compiler
+could delete branches for lobes that `gl.js`'s own `main()` switched off. Those lobes are all in
+`web/js/features/brdf.js` now, behind its `#if WS_LOBE_*` defines, and rebuilding the lean arm
+against those is a piece of work rather than a merge. `withShared` still takes a `lean` flag and
+ignores it, and says so where it does. Every other rung of the ladder bites: resolution, the post
+chain, fog, the shape march's step count.
+
+**§2 was right and it was worth doing first.** The count was worse than four: SEVEN implementations
+of the chunk directory, four in `tools/bake_web.cpp` and three in `web/js/format.js`. Two of the
+duplicates did **not** conflict, which cost more than the five that did — a second `struct Chunk`
+compiled quietly beside the first, and a second `format.js` reader merged in cleanly ahead of the
+point where `clip.chunks` is created and threw on every load.
+
+**§5's two decisions went as it said**, and the evidence held: the capture is one full-resolution
+target with the mip chain on top, and there is one `ws_decode_capture`.
+
+**§3 is satisfied.** `web/js/features/paint.js` exports `MATERIAL_AT_GLSL`, `shapeshade.js` picks it
+up through the caught import it was written around, and the console says
+`material_at is the paint stack` where it said `STUBBED — a hash per shape`.
+
+### Two collisions the plan could not have known about, and both were silent
+
+**Texture units.** THREE branches bound a texture to unit 2 — the irradiance volume, the occlusion
+atlas and the light list — and each was correct in isolation. Two are 3D and one is 2D, and the
+symptom is `GL_INVALID_OPERATION: two textures of different types use the same sampler location`
+once per draw call, 263 in one screenshot, with whatever the driver felt like on screen. A fourth
+case was quieter: `features/field.js` declares a `usampler2D` that nothing ever created, so it
+defaulted to unit 0 where the cutter pool's `sampler2D` already was. `UNIT` in `web/js/gl.js` is now
+the register — a feature takes a NAME, never a number.
+
+**The default framebuffer.** The sun's shadow map and the offscreen scene capture each render to
+their own framebuffer and each restore the DEFAULT one when done, because when they were written
+that was where the frame went. After the post chain it is not. Between them they unbound the scene
+target right after the sky was drawn into it, so the whole frame went to the canvas and the
+composite then painted a nearly empty target over it — a page with a sky on it and no error
+anywhere. `Post.rebind` is the fix and the lesson is general: **a pass that binds a framebuffer must
+put back what was there, not what used to be there.**
+
+### The back-quote trap took five more, all at the merge
+
+Every one was a comment written *at* the merge, in a GLSL block, quoting an identifier in
+back-quotes. One reported itself as `Unexpected identifier 'ao'`. It has now caught everybody who
+has touched this viewer.
+
 ## 1. Where each agent's work is
 
 Every agent's tree is committed on its own branch, `worktree-agent-<id>`. Nothing is lost, and any

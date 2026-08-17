@@ -8928,3 +8928,31 @@ where a person has to walk.
 | D669 | **`offset by=` is positive to shrink, and the brief said otherwise** | fault | A whole staircase's joints did not exist and nothing said so |
 | D669 | **19 cuts under a `revolve` are "not audited" rather than estimated** | honesty | One world point maps to many local ones; a number that cannot be stood behind is worse than none |
 | D669 | **Agents were told the premise and said it was wrong** | honesty | Two worked from a `main` predating the cutter fix, checked rather than complied, and were right |
+
+## D670 — Assembling the fifteen: the viewer's features are one build
+
+Fifteen agents each ported one feature of the game's path tracer to the phone rasteriser, each in
+its own worktree. Every one was finished and verified alone; two were merged; **none of it was in a
+build anybody could open.** This is what the assembly cost and what it found, which is a different
+list from what any of the fifteen could report.
+
+**Thirteen of thirteen landed.** One of them, the frame budget, landed with a piece of itself left
+out and said so.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D670 | **One chunk directory, settled BEFORE anything else merged** | decision | Seven implementations of one mechanism, four in C++ and three in JS. §2 of `26-viewer-integration.md` chose which; doing it first made every later merge one `push_back` and one `clip.chunk()` |
+| D670 | **The branch that shipped first left the tree unable to read its own files** | fault | The paint export bumped `FORMAT_VERSION` to 3 in the baker and nothing taught `format.js` to read a 3. The branch as merged baked files its own viewer threw on |
+| D670 | **Two duplicate implementations did NOT conflict, and that is worse** | fault | A second `struct Chunk` compiled beside the first (caught only because the two disagree what the payload field is called); a second reader in `format.js` merged in clean, ahead of where `clip.chunks` is created, and threw on every load |
+| D670 | **Texture units are a register in `gl.js`, not a local choice** | decision | THREE features chose unit 2, every one correctly in isolation. A `sampler3D` and a `sampler2D` on one unit is `GL_INVALID_OPERATION: two textures of different types use the same sampler location`, once per draw, with whatever the driver felt like on screen |
+| D670 | **A declared sampler with no texture is not an unused uniform** | fault | `field.js` declares a `usampler2D` and nothing created one, so it defaulted to unit 0 where the cutter pool already was. 203 errors in one screenshot and nothing on the page to say so |
+| D670 | **One offscreen capture, FULL resolution, mip chain on top** | decision | Half was right for reflections and wrong for refraction: on `glass_test` a wall seen through a clear pane had staircased edges the wall beside it did not. SSR reads a mip, refraction reads level 0 |
+| D670 | **One closed-form ACES inverse, taking a colour rather than doing its own fetch** | decision | Two agents wrote it character for character alike. `ws_decode_capture` survives; the decode still happens before Beer-Lambert and the encode after |
+| D670 | **`ws_shade` takes four arguments it did not want** | decision | The BRDF branch replaces the whole lobe, and that lobe is where probes, SSR, lights, the bounce and the occlusion atlas had all landed. Taking it as written would have deleted five features and left five files loaded |
+| D670 | **`ws_reflected_radiance` reports total belief, not probe coverage** | fault | `1 - (1 - coverage) * (1 - weight)`. With coverage alone the screen-space march's answer was thrown away everywhere no probe had been baked |
+| D670 | **The SSR branch's `diffuse *= 1 - fresnel` was deleted, not dropped** | decision | `ws_shade` takes the same energy off inside the lobe, by the hemispherical average of Schlick rather than the view-angle one. Doing it twice is doing it twice |
+| D670 | **Two passes restored the DEFAULT framebuffer and one of them was right yesterday** | fault | The shadow map and the scene capture each bind their own and each put back `null`, because when they were written that was where the frame went. After post, it is not. The frame came back as a sky and nothing else, with no console error |
+| D670 | **An opaque fragment ends on `ws_output`; a pane cannot** | fault | The surface pass encoded regardless of `u_linearOut`, so the composite tone mapped an already tonemapped picture and the whole frame washed. A pane still has to encode — what is behind it came out of the capture — and is put back through the one inverse afterwards |
+| D670 | **The lean build did NOT land, and the ladder says so rather than pretending** | honesty | `#define WS_LEAN` deleted branches for lobes that `gl.js` main() owned; the BRDF branch moved every one of them into `features/brdf.js` behind its own defines. `withShared` takes `lean` and ignores it. Every other rung bites |
+| D670 | **The back-quote-in-GLSL trap caught FIVE more comments, all mine** | fault | One reported itself as `Unexpected identifier 'ao'`. It has now caught every person who has touched this viewer |
+| D670 | **The ◉ view's colours are the clip's rules** | decision | `paint.js` exports `MATERIAL_AT_GLSL`, `shapeshade.js` picks it up through the import it was written around, and the console says which is live. It was a hash of each shape's placement, and shipping arbitrary colours is a worse answer than shipping grey |
