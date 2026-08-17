@@ -209,6 +209,142 @@ try {
 }
 // <<< paintstack
 
+// >>> post
+import { Post, probeFloatTargets } from './features/post.js';
+import { Budget } from './features/budget.js';
+
+// The blocks every shading pass shares, injected rather than copied.
+//
+// # One tone map
+//
+// Four passes each ended with their own `pow(tonemap(colour * u_exposure), 1/2.2)`. Four copies of
+// one curve is four chances for one of them to drift, and where two of them meet — the horizon,
+// the edge of a cut — a drift is a seam. `ws_output` is now the only place any pass ends, and when
+// features/post.js has a floating-point target the passes do not tone map at all: they write
+// linear radiance and the composite applies the curve once, for the whole frame.
+//
+// # The air
+//
+// Clean air is not a vacuum, and src/app/main.cpp says by how much. Koschmieder's law puts
+// extinction at 3.912 / visibility; eight kilometres is the top of the WMO's haze band and the
+// bottom of its clear one, so 3.912 / 8000 per metre. A single-scattering albedo of 0.90 says how
+// much of what the air takes out of a beam it puts back rather than absorbing; g of 0.80 because
+// aerosol scatters strongly forward; a scale height of 400 m because haze sits in the boundary
+// layer. Over a two-hundred-metre courtyard that is about five per cent — a tint nobody would name
+// and everybody would notice the absence of.
+//
+// It is a fragment term and not a post pass on purpose: aerial perspective wants the distance to
+// the surface and the direction of the ray, and every one of these shaders is holding both. Doing
+// it afterwards would mean a depth texture, a world position reconstructed from it, and a second
+// read of the whole target, to arrive at what was already in a register.
+const POST_SHARED = `
+uniform bool u_linearOut;     // write linear radiance for the composite, or tone map here
+uniform vec4 u_fog;           // extinction per metre, single-scatter albedo, g, scale height (m)
+uniform bool u_fogOn;
+uniform int u_features;       // what the quality ladder has left switched on
+
+const int FEATURE_SKY_REFLECTION = 1;
+const int FEATURE_COAT = 2;
+const int FEATURE_BRUSHED = 4;
+const int FEATURE_TRANSLUCENCY = 8;
+const int FEATURE_CAP_LATTICE = 16;
+
+// A UNIFORM BRANCH IS NOT FREE, AND THAT IS WHY THE LADDER LINKS TWO OF THIS PROGRAM.
+//
+// Switching a lobe off with a uniform leaves its code in the shader. A compiler that allocates
+// registers for the whole function still allocates them for the branch nobody takes, and on a
+// hardware scheduler that is fewer threads in flight on EVERY pixel — including the pixels of a
+// plain stone clip with no glass, no mirror and no flame in it. So the lean build makes ws_has a
+// constant, which lets the compiler delete the branches rather than skip them, and the ladder
+// picks the program instead of setting a uniform.
+#ifdef WS_LEAN
+bool ws_has(int feature) { return false; }
+#else
+bool ws_has(int feature) { return (u_features & feature) != 0; }
+#endif
+
+vec3 ws_air(vec3 direction) {
+    return mix(u_skyDown, u_skyUp, clamp(direction.y * 0.5 + 0.5, 0.0, 1.0));
+}
+
+vec3 ws_fog(vec3 colour, vec3 world, vec3 eye) {
+    if (!u_fogOn) return colour;
+    vec3 ray = world - eye;
+    float reach = length(ray);
+    if (reach < 1e-3) return colour;
+    vec3 direction = ray / reach;
+
+    // The optical depth of an exponential atmosphere along a segment, integrated rather than
+    // marched: the density is exp(-y/H), so the integral along the ray has a closed form and costs
+    // two exponentials instead of a loop. The degenerate case is a level ray, where the height is
+    // constant and the closed form divides by nothing.
+    float h = max(u_fog.w, 1.0);
+    float y0 = max(eye.y, 0.0);
+    float y1 = max(world.y, 0.0);
+    float column = (abs(y1 - y0) < 0.05)
+        ? reach * exp(-y0 / h)
+        : reach * h / (y1 - y0) * (exp(-y0 / h) - exp(-y1 / h));
+    float transmittance = exp(-u_fog.x * max(column, 0.0));
+
+    // What the air puts back. Henyey-Greenstein at g, so the haze towards the sun is far brighter
+    // than the haze away from it — which is the whole visible difference between real air and a
+    // flat grey wash. The sky term needs no phase: a phase function integrates to one over the
+    // sphere, so a roughly uniform sky scatters roughly its own radiance whatever g is.
+    float cosine = dot(direction, u_sun);
+    float g = u_fog.z;
+    float phase = (1.0 - g * g) /
+                  (4.0 * 3.14159265 * pow(max(1.0 + g * g - 2.0 * g * cosine, 1e-4), 1.5));
+    vec3 inscatter = u_fog.y * (ws_air(direction) + u_sunColour * phase);
+    return colour * transmittance + inscatter * (1.0 - transmittance);
+}
+
+vec3 ws_tonemap(vec3 x) {
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+`;
+
+// The emissive attachment, and the one line every pass ends on. `emissive` is the light the
+// material makes, on its own and not mixed with what is reflecting off it — which is the whole
+// reason a three-voxel flame can bloom while a sunlit wall behind it cannot.
+const POST_OUTPUT_MRT = `
+layout(location = 1) out vec4 o_emissive;
+void ws_emissive(vec3 emissive, float alpha) { o_emissive = vec4(emissive, alpha); }
+void ws_output(vec3 colour, float alpha, vec3 emissive) {
+    ws_emissive(emissive, alpha);
+    o_colour = u_linearOut ? vec4(colour, alpha)
+                           : vec4(pow(ws_tonemap(colour * u_exposure), vec3(1.0 / 2.2)), alpha);
+}
+`;
+
+// ws_emissive on its own, for the ONE pass that cannot use ws_output: the surface shader ends on
+// the glass composite, which has already decided what o_colour is out of what is behind the pane.
+const POST_OUTPUT_SINGLE = `
+void ws_emissive(vec3 emissive, float alpha) { }
+void ws_output(vec3 colour, float alpha, vec3 emissive) {
+    o_colour = u_linearOut ? vec4(colour, alpha)
+                           : vec4(pow(ws_tonemap(colour * u_exposure), vec3(1.0 / 2.2)), alpha);
+}
+`;
+
+// The shared blocks go in after the declarations the shader makes for itself, because they read
+// its uniforms — `u_sun`, `u_skyUp`, `u_exposure` — and GLSL wants a name declared before it is
+// used. Every fragment source here marks the spot with `//@shared`.
+function withShared(source, wantsEmissive, lean) {
+    const at = source.indexOf('//@shared');
+    if (at < 0) throw new Error('a fragment shader has no //@shared line to inject into');
+    let head = source.slice(0, at);
+    const tail = source.slice(at + '//@shared'.length);
+    // The define has to be above everything, and #version has to be above the define.
+    if (lean) head = head.replace('#version 300 es', '#version 300 es\n#define WS_LEAN 1');
+    // GLSL ES 3.00 wants EVERY output located once there is more than one of them, and the error
+    // it gives — "must explicitly specify all locations when using multiple fragment outputs" —
+    // names the output that already had no location rather than the one just added.
+    if (wantsEmissive) head = head.replace('out vec4 o_colour;', 'layout(location = 0) out vec4 o_colour;');
+    return head + POST_SHARED + (wantsEmissive ? POST_OUTPUT_MRT : POST_OUTPUT_SINGLE) + tail;
+}
+// <<< post
+
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
 
@@ -291,6 +427,9 @@ out vec4 o_colour;
 // >>> probes
 ${PROBE_GLSL}
 // <<< probes
+// >>> post
+//@shared
+// <<< post
 
 vec4 material_row(int which) {
     int at = v_material * 4 + which;
@@ -334,12 +473,11 @@ vec3 sky_colour(vec3 direction) {
 ${BRDF_GLSL}
 // <<< brdf
 
-// ACES, in the fitted form. A path tracer's output needs a curve like this and so does anything
-// with a sun in it: without one every lit face of pale limestone is the same clipped white.
-vec3 tonemap(vec3 x) {
-    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-}
+// ACES, in the fitted form -- and there is now exactly ONE of it, ws_tonemap, injected above at
+// the //@shared line. This was four copies in four shaders, which is four chances for one to
+// drift, and where two of them meet -- the horizon, the edge of a cut -- a drift is a seam.
+// (No back-quotes in here: this is inside a template string.)
+vec3 tonemap(vec3 x) { return ws_tonemap(x); }
 
 // >>> lights
 // Below fresnel() and smith() on purpose: a highlight from a lamp is the same lobe as a highlight
@@ -511,9 +649,38 @@ ${GLSL_TRANSLUCENCY}
     // The surface is tonemapped and encoded BEFORE the composite rather than after, because the
     // picture behind it has already been through both and must not go through them twice.
     float alpha = (u_blended < 0.5) ? 1.0 : opacity;
+    // >>> post
+    // The air, before anything is encoded. It is a fragment term and not a post pass because
+    // aerial perspective wants the distance to the surface and the direction of the ray, and this
+    // shader is holding both -- doing it afterwards means a depth texture and a world position
+    // reconstructed from it to arrive at what is already in a register.
+    colour = ws_fog(colour, v_world, u_eye);
+    // <<< post
+    // >>> post
+    // The emissive attachment, which is the ONLY thing the bloom chain sees. A sunlit limestone
+    // wall is far brighter than a candle and must not spill; the candle is nothing but this term
+    // and must.
+    ws_emissive(mat.emission, alpha);
+
+    // An OPAQUE fragment goes straight out through ws_output, which is the one place any pass in
+    // this viewer ends and the one place the curve is applied -- or not applied, when the post
+    // chain owns it and these passes write linear radiance for the composite.
+    if (alpha >= 1.0) {
+        ws_output(colour, 1.0, mat.emission);
+        return;
+    }
+    // <<< post
+
+    // A PANE cannot. What is behind it came out of the scene capture, which is a tonemapped,
+    // encoded picture, so the pane's own colour has to be encoded to blend against it -- that is
+    // the refraction branch's constraint and it does not move. What DOES move is the last step:
+    // when the composite owns the curve, the encoded result is put back to radiance through the
+    // one closed-form inverse rather than being written as if it were light. Encoding twice is
+    // what made the whole frame come out washed at the merge, and it looked like an exposure bug.
     vec3 encoded = pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2));
-${GLSL_COMPOSITE}
-    o_colour = vec4(encoded, alpha);
+    vec4 composed = vec4(encoded, alpha);
+    composed = refract_composite(encoded, alpha, v_world, N, V, iorByte, depth.rgb, ndv);
+    o_colour = u_linearOut ? vec4(ws_decode_capture(composed.rgb), composed.a) : composed;
 // <<< refract
 }`;
 
@@ -538,18 +705,24 @@ uniform vec3 u_skyUp;
 uniform vec3 u_skyDown;
 uniform float u_exposure;
 out vec4 o_colour;
-vec3 tonemap(vec3 x) {
-    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-}
+// >>> post
+//@shared
+// <<< post
 void main() {
     vec3 direction = normalize(v_ray);
     float up = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
     vec3 colour = mix(u_skyDown, u_skyUp, up);
+    // >>> post: the disc and its glow are separated out, because the SUN IS AN EMITTER and the
+    // gradient it stands in is not. Written to the bloom target, it spills the way a light source
+    // spills; left in with the sky, either nothing blooms or the whole upper half of the frame
+    // does.
+    vec3 emitted = vec3(0.0);
     float towards = max(dot(direction, u_sun), 0.0);
-    colour += u_sunColour * pow(towards, 900.0) * 4.0;
-    colour += u_sunColour * pow(towards, 8.0) * 0.05;
-    o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), 1.0);
+    emitted += u_sunColour * pow(towards, 900.0) * 4.0;
+    emitted += u_sunColour * pow(towards, 8.0) * 0.05;
+    colour += emitted;
+    ws_output(colour, 1.0, emitted);
+    // <<< post
 }`;
 
 
@@ -592,9 +765,15 @@ uniform vec3 u_lightTexel;
 uniform sampler2D u_materials;
 ${MATVOL_GLSL}
 // <<< matvol
+uniform vec3 u_eye;           // >>> post: the air needs to know how far away the cut is <<< post
 out vec4 o_colour;
 
-vec3 tonemap(vec3 c) { return (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14); }
+// >>> post
+//@shared
+// The cap used to tone map with an UNCLAMPED copy of the curve — the only one of the four without
+// the clamp on the end. That is a fourth opinion about what bright means, on the one surface that
+// meets every other surface in the clip along an edge.
+// <<< post
 
 void main() {
     // The lattice. A cut through a voxel model is a grid of little square faces, and this is the
@@ -608,6 +787,11 @@ void main() {
     // so its fract() is a constant and would either darken the whole cap or none of it.
     vec3 keep = 1.0 - abs(u_capNormal);
     float line = 0.0;
+    // >>> post: the lattice is an fwidth and a smoothstep in a loop, on a surface that can cover
+    // the whole screen when the slider is near an end. On the bottom rungs the cap is a plain cut
+    // face — coarser, and still the clip's own stone.
+    if (ws_has(FEATURE_CAP_LATTICE))
+    // <<< post
     for (int i = 0; i < 3; ++i) {
         float k = keep[i];
         if (k < 0.5) continue;
@@ -661,7 +845,10 @@ void main() {
     // The lattice darkens rather than lightens: a joint between two voxels is a place light does
     // not reach, which is the same reason every other seam in this viewer is dark.
     colour *= mix(1.0, 0.72, line);
-    o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), 1.0);
+    // >>> post
+    colour = ws_fog(colour, v_world, u_eye);
+    ws_output(colour, 1.0, vec3(0.0));
+    // <<< post
 }`;
 
 // --- the clip before it was voxels ---------------------------------------------------------
@@ -817,6 +1004,7 @@ float paint_probe(vec3 at) {
     return acc;
 }
 // <<< paintcheck
+uniform int u_marchSteps;            // >>> post: how far the ladder lets a ray walk <<< post
 
 out vec4 o_colour;
 
@@ -911,10 +1099,8 @@ float resolved_distance(vec3 world) {
     return d;
 }
 
-vec3 tonemap(vec3 x) {
-    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-}
+// ACES used to be written out here as well, a fourth time. Nothing in this shader calls it now:
+// main() ends on ws_output like every other pass, and that is where the curve lives.
 // >>> paintstack
 // The field evaluator, then the paint stack that calls it. The stack needs two functions and does
 // not care which file wrote them: float field_eval(uint, vec3), and
@@ -945,6 +1131,13 @@ vec3 shape_albedo(int material) {
 // material, which BRDF, how far along the normal the light is fetched — is one file, and this view
 // agreeing with the voxel view depends on there being exactly one copy of it.
 ${SHAPE_SHADING_GLSL}
+// >>> post
+// AFTER the shading splice, not before it. The shared block reads u_sun, u_skyUp, u_skyDown and
+// u_sunColour, and in THIS shader those are declared by features/shapeshade.js rather than at the
+// top -- so injecting above it is four "undeclared identifier" errors naming the block's own
+// lines. The other three passes declare their own and take it earlier.
+//@shared
+// <<< post
 ${SHAPE_SHADE_HIT_GLSL}
 // <<< shapeshade
 
@@ -987,6 +1180,11 @@ void main() {
     bool hit = false;
     vec3 at = v_world;
     for (int i = 0; i < 96; ++i) {
+        // >>> post: a march is the most expensive thing this viewer can be asked to draw, and its
+        // step count is the one lever that is proportional to all of it. The constant bound stays
+        // because GLSL ES wants one; the ladder moves the real one.
+        if (i >= u_marchSteps) break;
+        // <<< post
         at = v_world + direction * travel;
         float d = resolved_distance(at);
         if (d < 0.0015) { hit = true; break; }
@@ -1062,7 +1260,12 @@ void main() {
 
     vec4 clipPos = u_viewProj * vec4(at, 1.0);
     gl_FragDepth = (clipPos.z / clipPos.w) * 0.5 + 0.5;
-    o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), 1.0);
+    // >>> post: the same air and the same curve as the voxel view, so switching between the two
+    // does not switch the atmosphere off and change the exposure at the same time. ws_output is
+    // the one place any pass in this viewer ends.
+    colour = ws_fog(colour, at, u_eye);
+    ws_output(colour, 1.0, vec3(0.0));
+    // <<< post
     // >>> paintstack
     if (u_paintDebug == 3) o_colour = vec4(float(g_paintEvals) / 255.0, 1.0, 0.0, 1.0);
     // <<< paintstack
@@ -1190,9 +1393,23 @@ const FACES = [
 
 export class Renderer {
     constructor(canvas) {
+        // >>> post
+        // Asked BEFORE the context exists, on a throwaway one, because the answer decides an
+        // attribute and a canvas keeps the attributes of the first context it is given. If there
+        // is a float target then everything is composited, the only thing ever drawn to the
+        // default framebuffer is one full-screen triangle, and multisampling it buys nothing while
+        // costing a resolve of the whole buffer every frame.
+        // `?post=0` turns the whole of it off, which is what a control arm is: the same page, the
+        // same clip, the same camera, with one thing different. Every number in
+        // documentation/24-clip-viewer.md §4b was taken by running both arms of this flag.
+        const support = (typeof window !== 'undefined' && window.__wsNoPost)
+            ? { full: false, half: false }
+            : probeFloatTargets();
+        const composited = support.full || support.half;
+        // <<< post
         const gl = canvas.getContext('webgl2', {
             alpha: false,
-            antialias: true,
+            antialias: !composited,   // >>> post <<< post
             depth: true,
             stencil: true,
             powerPreference: 'high-performance',
@@ -1202,10 +1419,46 @@ export class Renderer {
         this.canvas = canvas;
         this.gl = gl;
 
-        this.surface = link(gl, VERTEX_SOURCE, FRAGMENT_SOURCE, 'surface');
-        this.sky = link(gl, SKY_VERTEX, SKY_FRAGMENT, 'sky');
-        this.cap = link(gl, CAP_VERTEX, CAP_FRAGMENT, 'cap');
-        this.shapes = link(gl, SHAPE_VERTEX, SHAPE_FRAGMENT, 'shapes');
+        // >>> post
+        this.budget = new Budget(gl);
+        this.post = new Post(gl, support);
+        this.post.budget = this.budget;
+        // What the ladder has left on. gl.js reads it; features/budget.js decides it.
+        this.features = {
+            bloom: true, bloomMips: 6, bloomBase: 2, fxaa: true, fog: true,
+            skyReflection: true, coat: true, brushed: true, capLattice: true,
+            lightFilter: true, translucency: true, shapeSteps: 96,
+        };
+        // The atmosphere, in the shader's units: extinction per metre, single-scattering albedo,
+        // asymmetry, scale height in metres. src/app/main.cpp's own numbers — see POST_SHARED.
+        this.fog = [3.912 / 8000.0, 0.90, 0.80, 400.0];
+        const wantsEmissive = this.post.wantsEmissive;
+        this.emissiveCompiled = wantsEmissive;
+        // <<< post
+
+        this.surface = link(gl, VERTEX_SOURCE, withShared(FRAGMENT_SOURCE, wantsEmissive, false),
+                            'surface');
+        this.sky = link(gl, SKY_VERTEX, withShared(SKY_FRAGMENT, wantsEmissive, false), 'sky');
+        this.cap = link(gl, CAP_VERTEX, withShared(CAP_FRAGMENT, wantsEmissive, false), 'cap');
+        this.shapes = link(gl, SHAPE_VERTEX, withShared(SHAPE_FRAGMENT, wantsEmissive, false),
+                           'shapes');
+
+        // >>> post
+        // The second build of the two programs the ladder can trim, with the optional lobes
+        // COMPILED OUT rather than branched around. Linked lazily, on the first frame that asks
+        // for it, so a page that never goes below the middle of the ladder never pays to build it.
+        this.lean = null;
+        this.noVariants = typeof window !== 'undefined' && !!window.__wsNoVariants;
+        this.buildLean = () => {
+            if (this.lean || this.noVariants) return;
+            this.lean = {
+                surface: link(gl, VERTEX_SOURCE, withShared(FRAGMENT_SOURCE, wantsEmissive, true),
+                              'surface lean'),
+                cap: link(gl, CAP_VERTEX, withShared(CAP_FRAGMENT, wantsEmissive, true),
+                          'cap lean'),
+            };
+        };
+        // <<< post
 
         this.vao = gl.createVertexArray();
         this.buffer = gl.createBuffer();
@@ -1344,6 +1597,56 @@ export class Renderer {
         this.ssr.end(this.canvas.width, this.canvas.height);
     }
     // <<< ssr
+
+    // >>> post
+    // What the quality ladder decided. Everything that is a uniform is read at draw time; the two
+    // that are not — the bloom targets and the light grid's filter — are acted on here.
+    setQuality(flags) {
+        const gl = this.gl;
+        const wasFilter = this.features.lightFilter;
+        this.features = Object.assign({}, this.features, flags);
+        this.post.setQuality(this.features);
+
+        // The lean build of the surface and cap programs, when the rung has switched off every
+        // lobe they are allowed to switch off. Swapping the object rather than adding a branch at
+        // every use means nothing downstream of here knows there are two of them.
+        this.rich = this.rich || { surface: this.surface, cap: this.cap };
+        const wantsLean = !this.features.skyReflection && !this.features.coat &&
+                          !this.features.brushed && !this.features.translucency &&
+                          !this.features.capLattice;
+        if (wantsLean) this.buildLean();
+        const use = (wantsLean && this.lean) ? this.lean : this.rich;
+        this.surface = use.surface;
+        this.cap = use.cap;
+        if (this.clip && wasFilter !== this.features.lightFilter) {
+            // Trilinear across a light volume is eight fetches and a blend on every shaded pixel.
+            // Nearest costs one, and what it loses is the smooth gradient of sky visibility across
+            // a wall — which is the whole reason the grid is a volume. So it is the last thing to
+            // go and it goes only on the bottom rung.
+            const filter = this.features.lightFilter ? gl.LINEAR : gl.NEAREST;
+            gl.bindTexture(gl.TEXTURE_3D, this.light);
+            gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, filter);
+            gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, filter);
+        }
+    }
+
+    // The bitmask the shaders read. Named here and in POST_SHARED, and nowhere else.
+    featureBits() {
+        const f = this.features;
+        return (f.skyReflection ? 1 : 0) | (f.coat ? 2 : 0) | (f.brushed ? 4 : 0) |
+               (f.translucency ? 8 : 0) | (f.capLattice ? 16 : 0);
+    }
+
+    // The three uniforms every pass shares now: whether it tone maps or leaves that to the
+    // composite, what the air is, and what is switched on.
+    setPost(uniforms) {
+        const gl = this.gl;
+        gl.uniform1i(uniforms.u_linearOut, this.post.active ? 1 : 0);
+        gl.uniform4fv(uniforms.u_fog, this.fog);
+        gl.uniform1i(uniforms.u_fogOn, this.features.fog ? 1 : 0);
+        gl.uniform1i(uniforms.u_features, this.featureBits());
+    }
+    // <<< post
 
     // Everything that lands on the card for one clip: one vertex buffer, one material texture, one
     // light volume. Called again when the clip is rebuilt, so it frees before it allocates.
@@ -1505,8 +1808,12 @@ export class Renderer {
         gl.bindTexture(gl.TEXTURE_3D, this.light);
         gl.texImage3D(gl.TEXTURE_3D, 0, gl.RG8, clip.lightDims[0], clip.lightDims[1],
                       clip.lightDims[2], 0, gl.RG, gl.UNSIGNED_BYTE, clip.light);
-        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        // >>> post: the ladder can take this to NEAREST on the bottom rung, and a clip loaded
+        // while it is down there must not quietly put it back.
+        const lightFilter = this.features.lightFilter ? gl.LINEAR : gl.NEAREST;
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, lightFilter);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, lightFilter);
+        // <<< post
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
@@ -1690,6 +1997,7 @@ export class Renderer {
         // with nothing on its unit is undefined behaviour rather than an unused uniform.
         this.refraction.apply(uniforms, false, this.canvas.width, this.canvas.height);
         // <<< refract
+        this.setPost(uniforms);   // >>> post <<< post
     }
 
     // The clip as it was written, instead of as it came out. One instanced box per shape, each
@@ -1770,6 +2078,10 @@ export class Renderer {
         gl.uniform1i(u.u_paintMaxRules, this.paint ? this.paint.u_paintMaxRules : 4096);
         gl.uniform1i(u.u_paintProbe, this.paint ? (this.paint.u_paintProbe | 0) : 0);
         // <<< paintcheck
+        // >>> post
+        gl.uniform1i(u.u_marchSteps, this.features.shapeSteps);
+        this.setPost(u);
+        // <<< post
 
         gl.enable(gl.DEPTH_TEST);
         gl.depthMask(true);
@@ -1783,6 +2095,7 @@ export class Renderer {
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 14, this.shapeCount);
         gl.bindVertexArray(null);
         this.stats.draws += 1;
+        this.stats.shapes = this.shapeCount;   // >>> post <<< post
     }
 
     // `slice` is null, or { axis: 0..2, sign: +1 | -1, at: metres }. The plane keeps everything on
@@ -1797,6 +2110,15 @@ export class Renderer {
         const width = this.canvas.width;
         const height = this.canvas.height;
         gl.viewport(0, 0, width, height);
+
+        // >>> post
+        // Everything below draws into features/post.js's own target when there is one, and into
+        // the screen when there is not. `beginScene` sets the viewport and the draw buffers; it
+        // returns false on a browser with no floating-point colour buffer, and on that browser
+        // every pass tone maps in its own shader exactly as it always did.
+        this.post.beginScene(width, height);
+        if (!this.post.active) gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        // <<< post
 
         // `fovFor` and not `fov`: the vertical angle is derived from the shape of the window so
         // that the horizontal one clears a floor. On a phone held upright that is the difference
@@ -1814,6 +2136,7 @@ export class Renderer {
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
 
         // --- sky -------------------------------------------------------------------------------
+        this.budget.begin('sky');   // >>> post <<< post
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.CULL_FACE);
         gl.disable(gl.BLEND);
@@ -1826,6 +2149,7 @@ export class Renderer {
         gl.uniform3fv(this.sky.uniforms.u_skyUp, this.skyUp);
         gl.uniform3fv(this.sky.uniforms.u_skyDown, this.skyDown);
         gl.uniform1f(this.sky.uniforms.u_exposure, this.exposure);
+        this.setPost(this.sky.uniforms);   // >>> post <<< post
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
         // dot(world, xyz) + w > 0 is cut away. With no slice the plane is put where nothing can
@@ -1837,8 +2161,13 @@ export class Renderer {
         }
 
         if (showShapes) {
+            // >>> post
+            this.budget.begin('shapes');
             this.drawShapes(camera, plane);
+            this.budget.end();
+            this.post.endScene();
             return;
+            // <<< post
         }
 
         // >>> shadow
@@ -1854,6 +2183,11 @@ export class Renderer {
         // default framebuffer bound and the viewport where it found it.
         this.captureScene(camera, slice, plane);
         // <<< ssr
+        // >>> post
+        // ...and the scene target back, because both of those bound their own and both put the
+        // DEFAULT framebuffer back rather than this one. See Post.rebind.
+        if (!this.post.rebind(width, height)) gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        // <<< post
 
         gl.bindVertexArray(this.vao);
         gl.useProgram(this.surface.program);
@@ -1869,6 +2203,7 @@ export class Renderer {
         // <<< ssr
 
         // --- opaque ----------------------------------------------------------------------------
+        this.budget.begin('opaque');   // >>> post <<< post
         gl.enable(gl.DEPTH_TEST);
         gl.depthFunc(gl.LESS);
         gl.depthMask(true);
@@ -1909,6 +2244,7 @@ export class Renderer {
                plane[3])
             : -1;
         if (slice && eyeSide > 0 && clip.opaqueQuads > 0) {
+            this.budget.begin('parity');   // >>> post <<< post
             gl.enable(gl.STENCIL_TEST);
             gl.stencilMask(0xFF);
             gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
@@ -1921,6 +2257,7 @@ export class Renderer {
             this.drawFaces(this.surface.uniforms, clip.opaqueFace, 0, 0);
             gl.uniform1f(this.surface.uniforms.u_cutSide, 0);
             gl.colorMask(true, true, true, true);
+            this.budget.begin('cap');   // >>> post <<< post
 
             // ...and the quad, only where the parity came out odd.
             gl.stencilFunc(gl.EQUAL, 1, 1);
@@ -1960,6 +2297,10 @@ export class Renderer {
             gl.uniform3fv(u.u_lightScale, [1 / size[0], 1 / size[1], 1 / size[2]]);
             gl.uniform3fv(u.u_lightTexel, [0.5 / clip.lightDims[0], 0.5 / clip.lightDims[1],
                                            0.5 / clip.lightDims[2]]);
+            // >>> post
+            gl.uniform3fv(u.u_eye, camera.eye);
+            this.setPost(u);
+            // <<< post
             gl.activeTexture(gl.TEXTURE1);
             gl.bindTexture(gl.TEXTURE_3D, this.light);
             gl.uniform1i(u.u_light, 1);
@@ -1974,6 +2315,7 @@ export class Renderer {
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             gl.disable(gl.STENCIL_TEST);
             this.stats.draws += 1;
+            this.budget.end();   // >>> post <<< post
 
             gl.bindVertexArray(this.vao);
             gl.useProgram(this.surface.program);
@@ -2009,6 +2351,7 @@ export class Renderer {
                 if (!this.refraction.scene) this.stats.draws += 1;
             }
             // <<< refract
+            this.budget.begin('glass');   // >>> post <<< post
             gl.enable(gl.BLEND);
             gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE,
                                  gl.ONE_MINUS_SRC_ALPHA);
@@ -2021,8 +2364,16 @@ export class Renderer {
             this.drawFaces(this.surface.uniforms, clip.transparentFace, this.transparentBase, 1);
             gl.depthMask(true);
             gl.disable(gl.BLEND);
+            this.budget.end();   // >>> post <<< post
         }
 
         gl.bindVertexArray(null);
+        // >>> post
+        // The bloom chain, the one tone map, and the edges. Everything above this line wrote
+        // linear radiance into a target nobody has looked at yet.
+        this.budget.end();
+        this.post.exposure = this.exposure;
+        this.post.endScene();
+        // <<< post
     }
 }

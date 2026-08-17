@@ -12,6 +12,27 @@ import { Renderer } from './gl.js';
 import { Controls } from './controls.js';
 import * as format from './format.js';
 
+// >>> post
+import { Quality, LADDER } from './features/budget.js';
+
+// What the page was asked for on the way in. Three of these exist only so that a measurement can
+// have two arms and a name:
+//
+//   ?post=0        no HDR target, no bloom, no composite — every pass tone maps in its own shader
+//                  exactly as it did before features/post.js existed. This is the control.
+//   ?q=N           pin a rung of the quality ladder instead of letting the frame time pick one
+//   ?profile=X     'gpu' (the default where the browser has timer queries), 'cpu' (submission
+//                  time only), or 'sync' (a gl.finish() per pass — serialises the pipeline, and
+//                  is therefore the only honest per-pass number on a software rasteriser)
+//   ?stats=1       show the breakdown on screen without opening the panel
+const params = new URLSearchParams(location.search);
+if (params.get('post') === '0') window.__wsNoPost = true;
+// ?fat=1 keeps the FULL surface program on every rung, so the lean build can be measured against
+// the same shader with its lobes merely branched around. That difference is the answer to "does a
+// feature nobody switched on still cost something", and it is the reason the flag exists.
+if (params.get('fat') === '1') window.__wsNoVariants = true;
+// <<< post
+
 window.__format = format;
 const $ = (id) => document.getElementById(id);
 const aspect = () => canvas.clientWidth / Math.max(1, canvas.clientHeight);
@@ -34,6 +55,11 @@ const state = {
     fpsCount: 0,
     fpsSince: 0,
     loading: false,
+    // >>> post
+    quality: new Quality(Math.min(window.devicePixelRatio || 1, 2)),
+    budget: null,          // the renderer's, once it exists
+    showStats: params.get('stats') === '1',
+    // <<< post
 };
 
 // --- loading ---------------------------------------------------------------------------------
@@ -432,6 +458,24 @@ function setupInput() {
             setFlyLook();
         }
         if (event.code === 'KeyV') $('mode').click();
+        // >>> post
+        // G for the frame breakdown, and [ ] to walk the quality ladder by hand — which is the
+        // only way to see what a rung actually costs without waiting for a phone to find it.
+        if (event.code === 'KeyG') {
+            state.showStats = !state.showStats;
+            const box = $('stats');
+            if (box) box.remove();
+            if (state.showStats) updateStats();
+        }
+        if (event.code === 'BracketRight' || event.code === 'BracketLeft') {
+            const step = event.code === 'BracketRight' ? 1 : -1;
+            const level = Math.max(0, Math.min(LADDER.length - 1,
+                (state.quality.manual === null ? state.quality.level : state.quality.manual) + step));
+            state.quality.setManual(level);
+            state.renderer.setQuality(state.quality.flags);
+            toast('quality pinned: ' + state.quality.name);
+        }
+        // <<< post
     });
     window.addEventListener('keyup', (event) => {
         controls.keys.delete(event.code);
@@ -461,8 +505,19 @@ function setMode(mode) {
 
 function resize() {
     const scale = state.resolution;
-    const width = Math.max(1, Math.round(canvas.clientWidth * scale));
-    const height = Math.max(1, Math.round(canvas.clientHeight * scale));
+    // >>> post
+    // Quantised to eight pixels, and this is not tidiness.
+    //
+    // The scale creeps by a hundredth every frame while the frame time is under the floor, so an
+    // unquantised canvas is a NEW SIZE EVERY FRAME — and every size change now throws away and
+    // reallocates the HDR target, the emissive target, the depth-stencil buffer, the eight-bit
+    // copy and every mip of the bloom chain. That is a dozen textures a frame to gain four pixels
+    // of width. Rounding to a multiple of eight makes the reallocation happen when the resolution
+    // has actually moved, which is a few times a second at worst.
+    const grain = 8;
+    const width = Math.max(1, Math.round(canvas.clientWidth * scale / grain) * grain);
+    const height = Math.max(1, Math.round(canvas.clientHeight * scale / grain) * grain);
+    // <<< post
     if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
@@ -474,30 +529,83 @@ function frame(now) {
     const dt = state.lastFrame ? (now - state.lastFrame) / 1000 : 0;
     state.lastFrame = now;
 
+    state.budget.beginFrame(now);   // >>> post <<< post
+
     state.controls.plane = slicePlane();
     state.controls.update(state.clip, dt);
     resize();
     if (state.clip) state.renderer.render(state.controls, slicePlane(), state.shapes);
 
-    // Resolution follows the frame time. A phone that cannot hold sixty at its own pixel ratio
-    // gets fewer pixels rather than fewer frames, because a viewer you are steering has to answer
-    // the thumb and a slightly softer image is not something anybody notices while it is moving.
-    state.frameMs += ((dt * 1000) - state.frameMs) * 0.05;
-    const ceiling = Math.min(window.devicePixelRatio || 1, 2);
-    if (state.frameMs > 22 && state.resolution > 0.55) {
-        state.resolution = Math.max(0.55, state.resolution - 0.02);
-    } else if (state.frameMs < 13 && state.resolution < ceiling) {
-        state.resolution = Math.min(ceiling, state.resolution + 0.01);
+    // >>> post
+    // Resolution follows the frame time, and now so does everything else.
+    //
+    // This used to be one lever: over 22 ms, render fewer pixels, down to 55%. That is the crudest
+    // of the levers available and it was the only one, so a phone that could not hold the frame at
+    // 55% simply stuttered at 55%. It is now the FINE lever inside a rung of a ladder — see
+    // features/budget.js for the rungs and for why the two are cascaded rather than run side by
+    // side. The 22 ms rule is unchanged and is where it has always been: `CEILING_MS`.
+    //
+    // The number driving it is a MEDIAN of the last forty frames rather than an exponential
+    // average. A clip swapping in, or a collection, is one slow frame and not a regression, and it
+    // must not cost a quality level; the average lets it, the median does not.
+    state.frameMs = state.budget.frameMs;
+    state.quality.setCeiling(Math.min(window.devicePixelRatio || 1, 2));
+    if (state.quality.update(state.budget.median(), now)) {
+        state.renderer.setQuality(state.quality.flags);
+        if (!state.quality.manual) toast('quality: ' + state.quality.name);
     }
+    state.resolution = state.quality.pixelScale;
+    state.budget.endFrame();
+    // <<< post
 
     state.fpsCount += 1;
     if (now - state.fpsSince > 500) {
         state.fps = Math.round(state.fpsCount * 1000 / (now - state.fpsSince));
         state.fpsSince = now;
         state.fpsCount = 0;
-        $('fps').textContent = state.fps + ' fps · ' + Math.round(state.resolution * 100) + '%';
+        // >>> post
+        $('fps').textContent = state.fps + ' fps · ' + Math.round(state.resolution * 100) + '% · ' +
+                               state.quality.name;
+        if (state.showStats) updateStats();
+        // <<< post
     }
 }
+
+// >>> post
+// The breakdown, on screen. Nobody else in this viewer is measuring the whole frame, so this is
+// the one place that says where the time went — per pass, with the source of the numbers named,
+// because a GPU millisecond and a submission millisecond are not the same quantity.
+function updateStats() {
+    let box = $('stats');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'stats';
+        box.style.cssText =
+            'position:fixed;left:8px;bottom:8px;z-index:40;font:11px/1.5 ui-monospace,monospace;' +
+            'background:rgba(10,10,10,0.72);color:#d8d8d8;padding:6px 9px;border-radius:6px;' +
+            'pointer-events:none;white-space:pre;max-width:60vw';
+        document.body.appendChild(box);
+    }
+    const budget = state.budget;
+    const passes = budget.passes();
+    const lines = [
+        Math.round(state.fps) + ' fps · ' + budget.frameMs.toFixed(1) + ' ms wall · ' +
+        budget.cpuMs.toFixed(1) + ' ms js',
+        state.quality.name + ' (' + state.quality.level + '/' + (LADDER.length - 1) + ') · ' +
+        Math.round(state.resolution * 100) + '% · ' + canvas.width + '×' + canvas.height,
+        state.renderer.stats.draws + ' draws · ' +
+        state.renderer.stats.quads.toLocaleString() + ' quads',
+    ];
+    if (passes.length) {
+        lines.push('— ' + budget.lastSource + ' —');
+        for (const pass of passes) lines.push(pass.name.padEnd(14) + pass.ms.toFixed(2) + ' ms');
+        lines.push('total'.padEnd(14) + budget.gpuMs.toFixed(2) + ' ms');
+    } else {
+        lines.push('(no breakdown yet)');
+    }
+    box.textContent = lines.join('\n');
+}
+// <<< post
 
 // --- start ---------------------------------------------------------------------------------------
 
@@ -511,6 +619,16 @@ async function main() {
             'with.<br>' + error.message + '</div>';
         return;
     }
+
+    // >>> post
+    state.budget = state.renderer.budget;
+    const profile = params.get('profile');
+    if (profile) state.budget.setMode(profile);
+    const pinned = params.get('q');
+    if (pinned !== null) state.quality.setManual(Number(pinned));
+    state.renderer.setQuality(state.quality.flags);
+    state.resolution = state.quality.pixelScale;
+    // <<< post
 
     setupInput();
 
@@ -579,5 +697,10 @@ async function main() {
 
 // Handy from a console, and it is what the browser tests drive.
 window.__state = state;
+// >>> post: and what the frame-cost harness drives. Both are read from a rAF callback registered
+// after this one, so what they report is the frame that has just been drawn.
+window.__budget = () => state.budget;
+window.__quality = () => state.quality;
+// <<< post
 
 main();
