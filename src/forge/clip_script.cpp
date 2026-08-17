@@ -893,8 +893,8 @@ bool Parser::call(u32& out) {
     // --- one-child operations ------------------------------------------------------------------
     if (head == "translate" || head == "rotate" || head == "scale" || head == "mirror" ||
         head == "repeat" || head == "scatter" || head == "around" || head == "shell" ||
-        head == "round" ||
-        head == "revolve" || head == "offset" || head == "twist" || head == "bend" || head == "abs" ||
+        head == "round" || head == "revolve" || head == "offset" || head == "twist" ||
+        head == "bend" || head == "abs" ||
         head == "negate" || head == "step" || head == "smoothstep" || head == "clamp" ||
         head == "remap" || head == "power" || head == "displace" || head == "blend" ||
         head == "occlusion" || head == "curvature" || head == "facing") {
