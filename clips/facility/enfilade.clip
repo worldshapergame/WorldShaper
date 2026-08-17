@@ -8,18 +8,23 @@
 #
 # 1. THE NARROWEST WALKABLE SPACE IN THE BUILDING, WITH A MIRROR DOWN ONE SIDE OF IT.
 #
-#    0.90 m in the clear between a `mirror` wall at x = 14.05 and a window wall at x = 14.95, and
+#    1.15 m in the clear between a `mirror` wall at x = 13.95 and a window wall at x = 15.10, and
 #    6.05 m long, twice on each side of the building. `mirror` is rough=6, metal=252, and the whole
 #    west wall of the lower passage carries it from the dado cap at 2.70 to the cornice at 4.50 —
-#    10.9 m2 of it per passage, 21.8 m2 in the building, facing a wall of glass 0.90 m away.
+#    10.9 m2 of it per passage, 21.8 m2 in the building, facing a wall of glass 1.15 m away.
 #
 #    That is a different rig from the mirror salon below and from the ballroom above, and the
 #    difference is the whole point of building it. Those two put mirror opposite mirror across a
 #    room 3.15 m and 2.97 m wide; the path bounces at a steep angle and dies in a few hops. Here
-#    the facing surface is a WINDOW, the gap is 0.90 m, and every path that enters at anything but
+#    the facing surface is a WINDOW, the gap is 1.15 m, and every path that enters at anything but
 #    normal incidence bounces between the two at a SHALLOW ANGLE and keeps bouncing — which is the
 #    case where a bounce budget is spent fastest and where any error in the mirror's normal is
 #    multiplied by every bounce after it. A wide room hides that. This cannot.
+#
+#    IT WAS 0.90 AND IT IS NOW 1.15, WHICH IS EVERY MILLIMETRE THERE IS. See THE WIDTH below: the
+#    strip is what halls.clip's block face at 13.95 and walls.clip's inner face at 15.10 leave, and
+#    the two linings are now 0.15 of my own stone standing INSIDE those two neighbours rather than
+#    beside them. The shallow-angle rig is unchanged in kind and 28% wider in fact.
 #
 #    IT IS BROKEN BY THE SHELVES AND BY WHAT STANDS ON THEM, AND THAT IS DELIBERATE. Three shelf
 #    runs cross the mirror at 2.925, 3.375 and 3.825, four gilt strips divide it on the window jamb
@@ -36,7 +41,7 @@
 #    three shelf runs, six plates, four large jars on the pier brackets — 0.06 to 0.225 m across,
 #    three hundred and eight in the building.
 #
-#    IN A PASSAGE 0.90 m WIDE THE NEAREST OF THEM IS 0.35 m FROM THE CAMERA. That is where
+#    IN A PASSAGE 1.15 m WIDE THE NEAREST OF THEM IS 0.45 m FROM THE CAMERA. That is where
 #    subsurface and clearcoat are judged and where nothing can be hidden by distance. It is also
 #    why they are small: a big translucent body at arm's length is a lighting fixture, a small one
 #    is a test of whether the two lobes are separable. `faience` (lacquer=10, no translucency) is
@@ -73,24 +78,38 @@
 #
 # M = 0.45, D = 0.90.
 #
-# THE WIDTH OF THIS PART IS NOT A DECISION. The strip is what the built neighbours left: halls.clip
-# stops its block at x = 13.95 and walls.clip's inner face is at x = 15.10, so there are 1.15 m
-# between them and nothing can widen it. Everything else IS on the module, and the clear width is
-# the module twice over: the finished faces stand at 14.05 and 14.95, which is 0.90 = 2 M exactly
-# in the clear, and the leftovers are buried in the two linings where nobody can measure them.
+# THE WIDTH OF THIS PART IS NOT A DECISION AND IT IS NOW ALL OF IT. The strip is what the built
+# neighbours left: halls.clip stops its block at x = 13.95 and walls.clip's inner face is at
+# x = 15.10, so there are 1.15 m between them and nothing can widen it.
+#
+# IT USED TO SPEND 0.25 OF THAT ON ITS OWN LININGS AND NOW IT SPENDS NONE. The finished faces stood
+# at 14.05 and 14.95 — 0.90 = 2 M in the clear — with 0.15 of lining inside each neighbour's face.
+# They now stand ON those two faces, 13.95 and 15.10, and the linings have gone the other way: my
+# block runs 13.80 .. 15.20, which is 0.15 INTO halls.clip's block and 0.10 INTO walls.clip's ring,
+# both of which are solid stone there for the whole height of this part. So each lining is still
+# 0.15 thick — which is what keeps this part one solid on its own at any metre — and none of it is
+# in the room any more. Nothing is removed from either neighbour: `enf_air` stops at 13.95 and
+# 15.10, so the void the manifest subtracts never reaches their stone.
+#
+# 1.15 IS 0.05 SHORT OF THE 1.20 A CIRCULATION ROUTE WANTS AND THAT CANNOT BE FIXED FROM THIS FILE.
+# The two numbers that bound it are halls.clip's 13.95 and walls.clip's 15.10. Moving either is that
+# file's line and a request, not something to do quietly from here.
 #
 #   PLAN
 #    13.60   back of the upper west wall. See WHY THE UPPER WEST WALL IS THICKER, below.
-#    13.90   back of the lower west lining, 0.05 into halls.clip's block face at 13.95
-#    14.05   FINISHED WEST FACE, both floors
-#    14.1625 front of a shelf, M/4 proud
-#    14.20   windows.clip's reveal limit. THE LINE NOTHING OF MINE MAY CROSS inside a window's own
-#            y and z bands — see WHAT DELETES WORK IN THIS STRIP, below. It is the single hardest
-#            constraint on this part and it is the reason the shelves are M/4 deep and not M/2.
-#    14.50   centre line of the passage
-#    14.86   face of the east dado cap, cornice and impost, 0.09 (M/5) proud
-#    14.95   FINISHED EAST FACE, both floors
-#    15.15   0.05 into walls.clip's inner face at 15.10
+#    13.80   back of the lower west lining, 0.15 into halls.clip's block face at 13.95
+#    13.95   FINISHED WEST FACE, both floors — halls.clip's own block face
+#    13.995  face of the west dado cap, skirting, base course, strips and frames, 0.045 (M/10) proud
+#    14.0625 front of a shelf, M/4 proud
+#    14.10   front of a corbel under one
+#    15.00   windows.clip's `wall_cut` limit, and THE LINE NOTHING OF MINE MAY CROSS inside a
+#            window's own y and z bands — see WHAT DELETES WORK IN THIS STRIP, below. It was 14.20
+#            until the cutter was fixed to the thickness of the wall it cuts.
+#    14.525  centre line of the passage — the middle of what the neighbours left, and not a module
+#            number, for the reason THE WIDTH gives
+#    15.055  face of the east dado cap, skirting, base course, impost and architraves
+#    15.10   FINISHED EAST FACE, both floors — walls.clip's own inner face
+#    15.20   0.10 into walls.clip's ring, which is solid 15.10 .. 16.00
 #    -2.95   south face   salon.clip and chapel.clip below, ballroom.clip and library.clip above,
 #                         and all four of them stand their north face on -2.95 / -3.00
 #    -3.00   0.05 lap into them
@@ -113,12 +132,21 @@
 #    6.30   FLOOR   the piano nobile                7.875 niche crown           7.65 + M/2
 #    6.75   base course top / niche floor  + M      8.17  head of the tallest thing on the wall,
 #    7.20   socle top                     + 2 M           a sconce flame, whose centre is at 8.11
-#    7.65   niche springing               + 3 M     8.46  impost foot
-#                                                   8.55  VAULT SPRINGING = the window head
+#    7.65   niche springing               + 3 M     8.55  window head (windows.clip's own)
+#                                                   8.685 impost foot
+#                                                   8.775 VAULT SPRINGING       6.30 + 5.5 M
 #                                                   8.70  head of the south doorway, which is
 #                                                         ballroom.clip's and library.clip's own
-#                                                   9.00  vault crown           6.30 + 6 M
+#                                                   9.35  vault crown           8.775 + 1.15/2
 #                                                   9.90  top of the block      column_head
+#
+#   THE SPRINGING WENT UP FROM 8.55 TO 8.775 AND IT IS THE HEAD HEIGHT THAT PUT IT THERE. A barrel
+#   sprung on the window head gave 2.25 m at the wall face, which is over the brief's 2.10 and under
+#   the 2.40 a circulation route wants. Sprung at 8.775 — 5.5 M over the floor — the clear height at
+#   both wall faces is 2.475 and 3.05 on the centre line, and the whole vault is still ABOVE
+#   windows.clip's cut at 8.55, so the manifest takes nothing of it. The impost moved with it, to
+#   8.685 .. 8.775, which is 2.385 m over the floor and out of the head band; and because it is now
+#   entirely above 8.55 it no longer has to be cut back to the window jambs and runs straight.
 #
 #   TOLERANCES, never seen and never measured: the 0.05 laps (1.75, 13.90, 15.15, -3.00, 3.15,
 #   6.25), the 0.02 and 0.035 under a paint rule's `below`, and the small rounds on every arris.
@@ -126,10 +154,18 @@
 # ------------------------------------------------------------------------------------------------
 # WHAT DELETES WORK IN THIS STRIP, AND IT DOES IT SILENTLY
 #
-# windows.clip's east openings are cut 1.80 m in from x = 16.00, which lands at x = 14.20 — 0.15 m
-# from my west wall and 0.75 m INSIDE my room. `void_windows` is subtracted from the whole building
-# in the manifest, so ANY solid of mine standing at x > 14.20, inside a window's y band and inside
-# its z band, is deleted after assembly with no error, no warning and no change to any count.
+# windows.clip's east openings are cut `wall_cut` = 1.00 m in from x = 16.00, which lands at
+# x = 15.00 — 0.10 m INSIDE my finished east face. `void_windows` is subtracted from the whole
+# building in the manifest, so ANY solid of mine standing at x > 15.00, inside a window's y band and
+# inside its z band, is deleted after assembly with no error, no warning and no change to any count.
+#
+# IT USED TO BE 1.80 AND IT LANDED AT 14.20, WHICH IS 0.90 m INSIDE THIS ROOM. That is the number
+# this file was written round: the shelves were M/4 deep to clear it, the girandoles' branches were
+# short to clear it, and the east base course and impost were cut back to the window jambs by hand
+# because the manifest would otherwise have left them ragged. windows.clip's own wall is 0.90 thick
+# and its cutter is now 1.00 — 0.90 of wall plus walls.clip's own 0.10 of cutter slack — so the line
+# has moved 0.80 m east and every one of those constraints has slack in it that it did not have.
+# The members are left where they are: nothing above is wrong now, it is merely no longer forced.
 #
 #   the bands, measured off windows_gs_cut / windows_pn_cut and not assumed:
 #      y 2.70 .. 4.50   ground storey        y 6.30 .. 8.55   piano nobile
@@ -137,17 +173,20 @@
 #
 # Everything in this file is placed against those six numbers:
 #
-#   - THE SHELVES ARE M/4 DEEP AND NOT M/2. A shelf 0.225 deep would reach 14.275 and would be
-#     sawn back to 0.15 wherever a window stands behind it — which is 3.35 m of the passage's
-#     6.05 m, more than half, and it would look like a shelf that had been planed. At 0.1125 the
-#     front is 14.1625 and clears the line by 0.0375, better than a voxel at metre 32.
-#   - THE VESSELS ARE 0.10 AND 0.06 ACROSS for the same reason: the widest of them reaches 14.16.
-#   - THE GIRANDOLES AND SCONCES REACH 14.185 AND NO FURTHER, which is why their branches are
-#     short and their backplates thin.
-#   - THE ONLY THINGS THAT PROJECT FURTHER ARE ON THE TWO EAST PIERS at z +-1.35, between the
+#   - THE SHELVES ARE M/4 DEEP AND NOT M/2, and that is now a decision about a passage 1.15 m wide
+#     rather than about a cutter. At 0.1125 the front is 14.0625, which leaves 1.0375 m to walk in.
+#   - THE VESSELS ARE 0.10 AND 0.06 ACROSS, the widest of them reaching 14.065.
+#   - THE GIRANDOLES AND SCONCES REACH 14.045 AND NO FURTHER, which is now a walking clearance
+#     and not a cutter clearance: a sconce's flame is 1.81 m over the gallery floor, which is
+#     shoulder height in a passage 1.15 m wide, and it is what decides the width of `enf_walk_u`.
+#   - THE THINGS THAT PROJECT FROM THE EAST WALL are on the two piers at z +-1.35, between the
 #     windows, where no cut can reach at any x: the bracket jars stand out 0.225 there.
-#   - THE EAST BASE COURSE AND IMPOST ARE CUT BACK TO THE WINDOW JAMBS BY THIS FILE, so the
-#     interruption is a clean return and not a ragged end left by somebody else's difference.
+#   - THE EAST BASE COURSE IS CUT BACK TO THE WINDOW JAMBS BY THIS FILE, so the interruption is a
+#     clean return and not a ragged end left by somebody else's difference. The impost no longer
+#     needs it: at 8.685 it is above the cut altogether.
+#   - THE WINDOW ARCHITRAVES ARE SIZED BY THE SAME SIX NUMBERS. Their jambs stand at z 0.6825, which
+#     is 7.5 mm outside the opening; the upper head sits at 8.55, on the cut's own ceiling; the lower
+#     sill at 2.61 .. 2.70, under its floor. Not one voxel of them is inside the band.
 #
 # AND BOTH ENDS OF BOTH PASSAGES ARE OPEN FOR THE FULL SECTION, WHICH IS NOT A CHOICE EITHER.
 # The outer two lights at z = +-2.70 run z -3.375..-2.025 and 2.025..3.375, and my passage runs
@@ -196,9 +235,18 @@
 # MEASURED, with clips/facility/requests/enfilade-probe.clip, which restates `bounds` as the two
 # strips plus a margin so a metre 32 run is seven seconds rather than minutes.
 #
-#   metre 32   2,421,156 voxels, 73.89 m3, 447.0 m2 of surface, and TWO COMPONENTS
-#   metre 16   2 components
-#   metre  8   78 components
+#   metre 32   TWO COMPONENTS, which is the answer that matters, and the same answer as before
+#   metre 16   TWO, once the jar's neck and lid were thickened — see NOTHING FREE-STANDING, below
+#   metre  8   EIGHT: the two passages and six one- and two-voxel fragments of a bust's head and a
+#              girandole's flame, which are 0.19 and 0.06 across against a voxel of 0.125
+#
+# AND ONE THING THE WALKING BAND COST, SAID PLAINLY. On the whole building at metre 8, `enf_wax_face`
+# and `enf_fire_face` now report `never matched`: the forty tapers and flames are 0.052 and 0.06
+# across, and pulling them back from 14.085 to 14.045 to clear `enf_walk_u` moved them off the
+# sample column they used to happen to land on. They are there at metre 16 and at the contract's
+# metre 32 — the probe reports no unmatched rule at either — and at metre 8 a flame half a voxel
+# wide is sampled by luck rather than by geometry. Getting them back means letting something reach
+# past 14.05, which is the whole of the 1.00 m band. The band is worth more than the luck.
 #
 # TWO IS THE RIGHT ANSWER AND ONE IS NOT AVAILABLE. They are the two passages, east and west;
 # `--part enf_east` — one side, both floors, everything in them — reports ONE component with
@@ -210,20 +258,36 @@
 # and under half a voxel at 0.125 m. By metre 16 they have all knitted and the count is 2. Judge
 # this part at 32, which is the contract's own metre.
 #
-#   `--part enf_head_g`     EMPTY   2.10 m over the cabinet floor, 0.66 m of walking width
-#   `--part enf_head_u`     EMPTY   2.10 m over the gallery floor, 0.66 m of walking width
-#   `--part enf_door_g`     EMPTY   0.71 x 2.40 through the south end, ground
-#   `--part enf_door_u`     EMPTY   0.71 x 2.40 through the south end, piano nobile
-#   `--part enf_check_gs/gn/us/un`  EMPTY   no moulding of mine crosses any of the four openings
-#   `--part enf_win_g/u_check`      EMPTY   nothing of mine stands in windows.clip's reveal
+# THE PROBE'S OWN `enf_head_*`, `enf_door_*` AND `enf_check_*` BOXES ARE STALE. Every one of them
+# is written to the old faces at 14.05 and 14.85, so they now test a slice of open room rather than
+# the clearance they were built for. They are in requests/enfilade-probe.clip, which is not this
+# file; the boxes want moving to 13.95 / 14.95 and the head boxes want widening to 14.09 .. 15.06.
 #
-# Clear heights, from the sections above rather than from a gap probe — `--gap` measures ONE run of
-# air along a column and this part has two floors in every column, so it reports BROKEN on all of
-# them, which is true and useless:
+# CLEAR HEIGHT, `--gap y@x,z` on the probe at metre 8, which works here because the probe holds only
+# this part and each floor is closed by my own slab above and below it. The columns are named by the
+# voxel their x falls in, because that is what is actually sampled:
 #
-#   the cabinet   2.70 m at both wall faces, 3.15 at the crown of the cove
-#   the gallery   2.25 m at both wall faces, 2.70 at the crown of the vault
-#   the doorways  2.40 m, north and south, both floors
+#                                                    before   after
+#   14.0625, the first voxel inside the west wall     1.875    2.875
+#   14.1875, one further in                           3.125    3.125
+#   14.5625, the centre line                          3.125    3.125
+#   14.9375, the last voxel before the east trim      3.125    3.125
+#
+# The before reading at 14.0625 came back flagged `-- UNDER THE 2.10 m HEAD HEIGHT` by clipcheck
+# itself: that column is the gallery's vault haunch over its own base course, and it is exactly the
+# place a barrel vault fails and the middle of the room does not.
+#
+# CLEAR WIDTH is `enf_walk_g` and `enf_walk_u` above and not a `--gap`, for the reason written
+# there: 1.00 m by 2.10 m, the whole length, both floors, EMPTY at metre 32. What the passage is in
+# the clear is 1.15 m; 1.06 m past the dado cap and the base course cap, which stand 0.045 proud
+# either side; 1.033 m past the widest jar on the shelves.
+#
+#   the doorways  north, both floors: the whole clear section, 1.15 m — they are archways and their
+#                 heads are the cornice at 4.50 and the vault crown at 8.775
+#                 south, gallery: 0.90 m, which is ballroom.clip's and library.clip's own cut and
+#                 not mine, and was 0.80 before this room's west face moved on to 13.95
+#                 south, cabinet: 1.00 m in my own wall, and still blind — salon.clip and
+#                 chapel.clip have not opened their side of it
 #
 # Things I got wrong and the probe had to tell me, all of them written where they happened: every
 # moulding was drawn from inside the wall to its full projection and each left a strip one voxel
@@ -242,9 +306,9 @@ include "_contract.clip"
 # 0.05 into the podium at 1.75, 0.05 into halls.clip at 13.90 and 0.05 into walls.clip at 15.15.
 # The floor slab between them carries the piano nobile at 6.30 and is the cabinet's ceiling slab.
 
-let enf_block_g = box 13.90 1.75 -2.95   15.15 6.00 3.10 round=0.015
-let enf_slab    = box 13.60 6.00 -2.95   15.15 6.30 3.10 round=0.015
-let enf_block_u = box 13.60 6.25 -2.95   15.15 9.90 3.10 round=0.015
+let enf_block_g = box 13.80 1.75 -2.95   15.20 6.00 3.10 round=0.015
+let enf_slab    = box 13.60 6.00 -2.95   15.20 6.30 3.10 round=0.015
+let enf_block_u = box 13.60 6.25 -2.95   15.20 9.90 3.10 round=0.015
 
 # ================================================================================================
 # THE AIR OF THE CABINET — floor to cornice, then a cove to a flat ceiling
@@ -263,10 +327,10 @@ let enf_block_u = box 13.60 6.25 -2.95   15.15 9.90 3.10 round=0.015
 # well or into the salon's wall; the core box is run 0.15 long at each end so the clip lands well
 # inside the rounding and the cove does not pinch at the last 0.10 m.
 
-let enf_g_room = box 14.05 1.80 -2.95   14.95 4.50 3.10
+let enf_g_room = box 13.95 1.80 -2.95   15.10 4.50 3.10
 let enf_g_ceil = intersection {
-    round { box 14.365 4.50 -3.10   14.635 4.725 3.25 } by=0.225
-    box 14.05 4.50 -2.95   14.95 4.95 3.10
+    round { box 14.175 4.50 -3.10   14.875 4.725 3.25 } by=0.225
+    box 13.95 4.50 -2.95   15.10 4.95 3.10
 }
 
 # ================================================================================================
@@ -298,10 +362,10 @@ let enf_g_ceil = intersection {
 # library cut at the south end, head 8.70, passes under a soffit that is 8.82 at its west jamb and
 # 8.83 at its east. The lunettes are the price and they are written up in requests/enfilade.md.
 
-let enf_u_room  = box 14.05 6.30 -2.95   14.95 8.55 3.10
+let enf_u_room  = box 13.95 6.30 -2.95   15.10 8.775 3.10
 let enf_u_barrel = intersection {
-    cylinder 14.50 8.55 0.075  r=0.45 h=6.15 axis=z
-    box 14.05 8.55 -2.95   14.95 9.00 3.10
+    cylinder 14.525 8.775 0.075  r=0.575 h=6.15 axis=z
+    box 13.95 8.775 -2.95   15.10 9.35 3.10
 }
 let enf_u_vault = enf_u_barrel
 
@@ -321,10 +385,10 @@ let enf_u_vault = enf_u_barrel
 # level; salon.clip and chapel.clip have not opened their side of it, which is written up at the
 # head of this file and in requests/enfilade.md.
 
-let enf_dr_gs = box 14.05 1.80 -3.00   14.85 4.50 -2.90
-let enf_dr_gn = box 14.05 1.80  3.00   14.95 4.50  3.15
-let enf_dr_us = box 14.05 6.30 -3.00   14.85 8.70 -2.90
-let enf_dr_un = box 14.05 6.30  3.00   14.95 8.70  3.15
+let enf_dr_gs = box 13.95 1.80 -3.00   14.95 4.50 -2.90
+let enf_dr_gn = box 13.95 1.80  3.00   15.10 4.50  3.15
+let enf_dr_us = box 13.95 6.30 -3.00   14.85 8.70 -2.90
+let enf_dr_un = box 13.95 6.30  3.00   15.10 8.70  3.15
 
 # ================================================================================================
 # THE NICHES — five to a gallery, on 1.35 (3 M) centres, opposite the windows and the piers
@@ -339,12 +403,12 @@ let enf_dr_un = box 14.05 6.30  3.00   14.95 8.70  3.15
 # lights and the pictures are not: a bust wants the window and a hanging does not.
 
 let enf_niche_one = union {
-    cylinder 14.05 7.20 0  r=0.225 h=0.90 axis=y
-    sphere   14.05 7.65 0  r=0.225
+    cylinder 13.95 7.20 0  r=0.225 h=0.90 axis=y
+    sphere   13.95 7.65 0  r=0.225
 }
 let enf_niches = intersection {
     translate { repeat { enf_niche_one } z=1.35 nz=2 } 0 0 0
-    box 13.60 6.75 -2.95   14.05 7.90 3.10
+    box 13.60 6.75 -2.95   13.95 7.90 3.10
 }
 
 # ================================================================================================
@@ -358,7 +422,7 @@ let enf_niches = intersection {
 #
 # One more on each east pier, 0.90 wide, in the same band.
 
-let enf_pan_seed = box 14.02 6.975 -0.18   14.05 7.875 0.18
+let enf_pan_seed = box 13.92 6.975 -0.18   13.95 7.875 0.18
 let enf_pan_w = union {
     translate { enf_pan_seed } 0 0 -0.675
     translate { enf_pan_seed } 0 0  0.675
@@ -366,25 +430,49 @@ let enf_pan_w = union {
     translate { enf_pan_seed } 0 0  2.025
 }
 let enf_pan_e = union {
-    box 14.95 6.975 -1.80   14.98 7.875 -0.90
-    box 14.95 6.975  0.90   14.98 7.875  1.80
+    box 15.10 6.975 -1.80   15.13 7.875 -0.90
+    box 15.10 6.975  0.90   15.13 7.875  1.80
 }
 let enf_panels = union { enf_pan_w enf_pan_e }
 
-# The rebate round each light on my own side of it: 0.045 wider than windows.clip's opening all
-# round, so the finished face reads as a moulded surround with a small step back to the wall's own
-# reveal, rather than as a hole punched through a lining. It stops on the dado cap at 2.70 and on
-# the base course top at 6.75 so neither of those is broken by it.
-let enf_reb_g_seed = box 14.86 2.70 -0.72   15.15 4.545 0.72
-let enf_reb_u_seed = box 14.86 6.75 -0.72   15.15 8.595 0.72
-let enf_rebates = union {
-    translate { enf_reb_g_seed } 0 0 -2.70
-    enf_reb_g_seed
-    translate { enf_reb_g_seed } 0 0  2.70
-    translate { enf_reb_u_seed } 0 0 -2.70
-    enf_reb_u_seed
-    translate { enf_reb_u_seed } 0 0  2.70
+# A REBATE ROUND EACH LIGHT WAS THE OLD ANSWER AND IT DIED WITH THE WIDENING. It was a step cut
+# back into the east lining, and the east lining is now 0.05 thick: the finished face stands on
+# walls.clip's own inner plane at 15.10, so there is nothing left of mine to sink a rebate into.
+# What replaces it is the better member anyway — AN ARCHITRAVE, standing 0.045 proud of the face and
+# 0.09 wide, on the jambs of every light and across the head of the upper ones.
+#
+# EVERY PIECE OF IT IS OUTSIDE THE BAND windows.clip DELETES, and that is what decides its size.
+# The cut is z -0.675..0.675 about each axis and y 2.70..4.50 below, 6.30..8.55 above, from x = 14.20
+# eastward. So the jambs stand at z 0.6825..0.7725 — 7.5 mm clear of the opening — the upper head sits
+# at 8.55..8.64, on the cut's own ceiling, and the lower sill at 2.61..2.70, under its floor. The
+# lower light needs no head because the cornice at 4.50 already is one, which is the reason the
+# cornice is at 4.50.
+let enf_arc_g_jamb = mirror { box 15.055 2.61 0.6825   15.20 4.50 0.7725 round=0.008 } axis=z
+let enf_arc_g_sill = box 15.055 2.61 -0.7725   15.20 2.70 0.7725 round=0.008
+let enf_arc_g_seed = union { enf_arc_g_jamb enf_arc_g_sill }
+
+let enf_arc_u_jamb = mirror { box 15.055 6.75 0.6825   15.20 8.64 0.7725 round=0.008 } axis=z
+let enf_arc_u_head = box 15.055 8.55 -0.7725   15.20 8.64 0.7725 round=0.008
+let enf_arc_u_seed = union { enf_arc_u_jamb enf_arc_u_head }
+
+let enf_architraves = union {
+    translate { enf_arc_g_seed } 0 0 -2.70
+    enf_arc_g_seed
+    translate { enf_arc_g_seed } 0 0  2.70
+    translate { enf_arc_u_seed } 0 0 -2.70
+    enf_arc_u_seed
+    translate { enf_arc_u_seed } 0 0  2.70
 }
+
+# THERE IS NO DOORCASE ON EITHER SOUTH OPENING AND THERE CANNOT BE ONE FROM THIS FILE. It was built
+# and taken out again, which is worth writing down: a doorcase stands on the wall beside and over an
+# opening, and THIS PART HAS NO SOUTH WALL. My block's south face and my room's south face are both
+# at -2.95; what the hole is cut through is ballroom.clip's north wall on the piano nobile and
+# salon.clip's on the ground storey. A case drawn at z -2.995..-2.90 came out as a pilaster and a
+# lintel standing in mid-air 0.16 m clear of my own east wall, attached to nothing of mine —
+# invisible in the assembled building, where the neighbour's stone happens to be behind it, and
+# four floating components in `--part part_enfilade`. The south doorcases belong to the two files
+# that own the walls. The twelve window architraves above are this file's architraves.
 
 # ================================================================================================
 # THE SHELL
@@ -395,7 +483,7 @@ let enf_air = union {
     enf_dr_gs enf_dr_gn enf_dr_us enf_dr_un
     enf_niches
 }
-let enf_cuts  = union { enf_air enf_panels enf_rebates }
+let enf_cuts  = union { enf_air enf_panels }
 let enf_shell = difference { union { enf_block_g enf_slab enf_block_u } enf_cuts }
 
 # ================================================================================================
@@ -416,22 +504,22 @@ let enf_shell = difference { union { enf_block_g enf_slab enf_block_u } enf_cuts
 # moulding at metre 32 and got nought voxels back, because a moulding is only the swell in FRONT of
 # its core, so the two curved members here are given a plain box behind them.
 
-let enf_g_skirt_w = box 14.00 1.75 -2.85   14.14 1.98 2.95 round=0.010
-let enf_g_body_w  = box 14.00 1.98 -2.85   14.095 2.565 2.95
+let enf_g_skirt_w = box 13.90 1.75 -2.85   13.995 1.98 2.95 round=0.010
+let enf_g_body_w  = box 13.90 1.98 -2.85   13.9725 2.565 2.95
 # EVERY CURVED MEMBER IS GIVEN A CORE BOX BEHIND IT. salon.clip says why in one line — a moulding
 # is only the swell in FRONT of its core, so drawn bare it is a ribbon floating off the wall — and
 # this file measured it: with the four ovolos written bare, `--part enf_g_dado` at metre 32 came
 # back as FOUR components, two of them a strip one voxel square and 185 voxels long running the
 # whole length of the room at the outer arris. Nothing else in the report changed.
-let enf_g_ovolo_w = ovolo 14.095 2.565 -2.85   14.14 2.655 2.95
-let enf_g_ocore_w = box 14.00 2.565 -2.85   14.095 2.655 2.95
-let enf_g_cap_w   = box 14.00 2.655 -2.85   14.14 2.70 2.95 round=0.008
+let enf_g_ovolo_w = ovolo 13.95 2.565 -2.85   13.995 2.655 2.95
+let enf_g_ocore_w = box 13.90 2.565 -2.85   13.95 2.655 2.95
+let enf_g_cap_w   = box 13.90 2.655 -2.85   13.995 2.70 2.95 round=0.008
 
-let enf_g_skirt_e = box 14.86 1.75 -2.85   15.00 1.98 2.95 round=0.010
-let enf_g_body_e  = box 14.905 1.98 -2.85   15.00 2.565 2.95
-let enf_g_ovolo_e = ovolo 14.905 2.565 -2.85   14.86 2.655 2.95
-let enf_g_ocore_e = box 14.905 2.565 -2.85   15.00 2.655 2.95
-let enf_g_cap_e   = box 14.86 2.655 -2.85   15.00 2.70 2.95 round=0.008
+let enf_g_skirt_e = box 15.055 1.75 -2.85   15.20 1.98 2.95 round=0.010
+let enf_g_body_e  = box 15.0775 1.98 -2.85   15.20 2.565 2.95
+let enf_g_ovolo_e = ovolo 15.10 2.565 -2.85   15.055 2.655 2.95
+let enf_g_ocore_e = box 15.10 2.565 -2.85   15.20 2.655 2.95
+let enf_g_cap_e   = box 15.055 2.655 -2.85   15.20 2.70 2.95 round=0.008
 
 let enf_g_dado = union {
     enf_g_skirt_w enf_g_body_w enf_g_ovolo_w enf_g_ocore_w enf_g_cap_w
@@ -441,22 +529,22 @@ let enf_g_dado = union {
 # The cornice, 4.50 to 4.725, on the window head line so that no light is crossed by it and so
 # that it is the lintel of both archways at the same time.
 let enf_g_cor_bed_w = union {
-    cyma_reversa 14.05 4.50 -2.85   14.14 4.635 2.95
-    box 14.00 4.50 -2.85   14.05 4.635 2.95
+    cyma_reversa 13.95 4.50 -2.85   14.04 4.635 2.95
+    box 13.90 4.50 -2.85   13.95 4.635 2.95
 }
-let enf_g_cor_cor_w = box 14.005 4.635 -2.85   14.14 4.725 2.95 round=0.008
+let enf_g_cor_cor_w = box 13.905 4.635 -2.85   14.04 4.725 2.95 round=0.008
 let enf_g_cor_bed_e = union {
-    cyma_reversa 14.95 4.50 -2.85   14.86 4.635 2.95
-    box 14.95 4.50 -2.85   15.00 4.635 2.95
+    cyma_reversa 15.10 4.50 -2.85   15.01 4.635 2.95
+    box 15.10 4.50 -2.85   15.20 4.635 2.95
 }
-let enf_g_cor_cor_e = box 14.86 4.635 -2.85   14.995 4.725 2.95 round=0.008
+let enf_g_cor_cor_e = box 15.01 4.635 -2.85   15.145 4.725 2.95 round=0.008
 let enf_g_cornice = union {
     enf_g_cor_bed_w enf_g_cor_cor_w enf_g_cor_bed_e enf_g_cor_cor_e
 }
 
 # The four gilt strips that divide the mirror wall, on the window jamb lines. 0.09 wide, 0.045
 # proud, bedded 0.05 into the lining at 14.00 so that they are one solid with it.
-let enf_g_strip_seed = box 14.00 2.70 -0.045   14.095 4.50 0.045
+let enf_g_strip_seed = box 13.90 2.70 -0.045   13.995 4.50 0.045
 let enf_g_strips = union {
     translate { enf_g_strip_seed } 0 0 -0.675
     translate { enf_g_strip_seed } 0 0  0.675
@@ -468,15 +556,23 @@ let enf_g_strips = union {
 # THE SHELVES — three runs, on corbels every M, and why they are M/4 deep
 # ================================================================================================
 #
-# 0.09 thick and 0.1125 (M/4) deep, from 14.00 — 0.05 into the lining — out to 14.1625, which is
-# 0.0375 clear of windows.clip's reveal line at 14.20. See WHAT DELETES WORK IN THIS STRIP. A
-# corbel every 0.45 under each of them, 0.10 wide and 0.135 tall.
+# 0.09 thick and 0.09 (M/5) DEEP, from 13.90 — 0.05 into the lining — out to 13.99. A corbel every
+# 0.45 under each of them, 0.10 wide and 0.135 tall and 0.045 proud.
+#
+# THEY WERE M/4 DEEP AND THE REASON WAS windows.clip's CUTTER; THEY ARE M/5 AND THE REASON IS THE
+# WALKING BAND. The cutter has been fixed to 1.00 and lands at 15.00, so nothing on this wall is
+# near it at any depth. What binds now is a person: the passage is 1.15 m in the clear and a shelf
+# and a dado cap facing each other take a bite out of the middle of it at exactly the height a
+# shoulder is. At M/4, with the vessels standing on it, the widest thing on this wall reached 14.067
+# and the guaranteed clear band was 0.988 m — twelve millimetres under the brief's 1.00 for a
+# passage. At M/5 the shelf front is 13.99, the widest vessel reaches 14.022, and `enf_walk_g` — a
+# box 1.00 m wide and 2.10 m tall, run the whole length of the passage — measures EMPTY.
 
-let enf_shelf_seed  = box 14.00 -0.09 -2.85   14.1625 0 2.95 round=0.008
-let enf_corbel_seed = box 14.00 -0.225 -0.05   14.14 -0.09 0.05 round=0.010
+let enf_shelf_seed  = box 13.90 -0.09 -2.85   13.99 0 2.95 round=0.008
+let enf_corbel_seed = box 13.90 -0.225 -0.05   13.995 -0.09 0.05 round=0.010
 let enf_corbels_one = intersection {
     repeat { enf_corbel_seed } z=0.45 nz=6
-    box 13.95 -0.30 -2.85   14.20 0 2.95
+    box 13.80 -0.30 -2.85   14.05 0 2.95
 }
 let enf_tier_seed = union { enf_shelf_seed enf_corbels_one }
 
@@ -495,19 +591,24 @@ let enf_shelves = union { enf_tier_a enf_tier_b enf_tier_c }
 # 0.155..0.215 — because a union whose extents are contiguous is one solid whatever the voxel grid
 # does with it, and a union that merely touches on a plane is two.
 #
-# NOTHING FREE-STANDING HERE IS UNDER 0.048 ACROSS. That is ballroom.clip's rule, read properly:
-# thin matter is safe when it is knitted along its whole length to what it lies on and it comes
-# apart when it is a rod in mid air. The thinnest thing in this file is a jar's neck at 0.048 and a
-# taper at 0.052, and both stand on something.
+# NOTHING FREE-STANDING HERE IS UNDER 0.052 ACROSS, and the number went UP when the passage was
+# widened. That is ballroom.clip's rule read properly — thin matter is safe when it is knitted
+# along its whole length to what it lies on and it comes apart when it is a rod in mid air — plus
+# one thing that rule does not say: WHERE a thin thing stands decides whether it exists at all.
+# The vessel row moved 0.095 m west with the wall, and at metre 16 that put a 0.048 neck between
+# two sample columns instead of on one: `--metre 16` went from TWO components to TWENTY, eighteen
+# of them a one- or two-voxel neck or lid adrift over a belly that had survived. The neck is 0.072
+# now and the lid 0.076, which is what it takes for the whole jar to be sampled at every z the row
+# stands on; the thinnest free-standing thing left is a taper at 0.052.
 
-let enf_jar_foot  = cylinder 14.11 -0.010 0  r=0.030 h=0.070 axis=y
-let enf_jar_belly = sphere   14.11  0.065 0  r=0.050
-let enf_jar_neck  = cylinder 14.11  0.135 0  r=0.024 h=0.080 axis=y
-let enf_jar_lid   = sphere   14.11  0.185 0  r=0.030
+let enf_jar_foot  = cylinder 13.970 -0.010 0  r=0.030 h=0.070 axis=y
+let enf_jar_belly = sphere   13.970  0.065 0  r=0.052
+let enf_jar_neck  = cylinder 13.970  0.140 0  r=0.036 h=0.100 axis=y
+let enf_jar_lid   = sphere   13.970  0.195 0  r=0.038
 let enf_jar = union { enf_jar_foot enf_jar_belly enf_jar_neck enf_jar_lid }
 
-let enf_bkr_body = cylinder 14.10 0.030 0  r=0.030 h=0.150 axis=y
-let enf_bkr_lip  = cylinder 14.10 0.110 0  r=0.036 h=0.040 axis=y
+let enf_bkr_body = cylinder 13.975 0.030 0  r=0.030 h=0.150 axis=y
+let enf_bkr_lip  = cylinder 13.975 0.110 0  r=0.036 h=0.040 axis=y
 let enf_bkr = union { enf_bkr_body enf_bkr_lip }
 
 # The two rows. Each is caught in a box it already fits inside, for the reason windows.clip gives
@@ -515,11 +616,11 @@ let enf_bkr = union { enf_bkr_body enf_bkr_lip }
 # and no box in the clip can settle after it.
 let enf_jars_one = intersection {
     repeat { enf_jar } z=0.225 nz=12
-    box 14.05 -0.05 -2.80   14.17 0.23 2.80
+    box 13.90 -0.05 -2.80   14.03 0.25 2.80
 }
 let enf_bkrs_one = intersection {
     translate { repeat { enf_bkr } z=0.225 nz=11 } 0 0 0.1125
-    box 14.05 -0.05 -2.80   14.15 0.14 2.80
+    box 13.90 -0.05 -2.80   14.02 0.14 2.80
 }
 let enf_vessels_row = union { enf_jars_one enf_bkrs_one }
 
@@ -532,7 +633,7 @@ let enf_vessels = union { enf_vessels_a enf_vessels_b enf_vessels_c }
 # the one place a 0.225 piece — the big end of the brief's range — will go in 0.90 m of room. A
 # plate on edge needs 0.05 of depth and no more, so it can stand anywhere; these are on the two
 # pier bays at z = +-0.90, +-1.35, +-1.80.
-let enf_plate_seed = cylinder 14.04 3.450 0  r=0.1125 h=0.05 axis=x
+let enf_plate_seed = cylinder 13.935 3.450 0  r=0.1125 h=0.05 axis=x
 let enf_plates = union {
     translate { enf_plate_seed } 0 0 -1.80
     translate { enf_plate_seed } 0 0 -1.35
@@ -553,13 +654,13 @@ let enf_plates = union {
 # 0.045 of daylight under the cornice. The corbel that carries it is kept to the dado cap's own
 # 0.09 projection so that the part of the bracket inside the head band is no more proud than the
 # wall it is on.
-let enf_brk_shelf  = box 14.725 3.96 -0.18   15.00 4.05 0.18 round=0.010
-let enf_brk_corbel = box 14.86 3.78 -0.09   15.00 3.96 0.09 round=0.012
+let enf_brk_shelf  = box 14.875 3.96 -0.18   15.20 4.05 0.18 round=0.010
+let enf_brk_corbel = box 15.055 3.78 -0.09   15.20 3.96 0.09 round=0.012
 let enf_brk_jar    = union {
-    cylinder 14.84 4.08 0  r=0.055 h=0.12 axis=y
-    sphere   14.84 4.20 0  r=0.090
-    cylinder 14.84 4.32 0  r=0.042 h=0.12 axis=y
-    sphere   14.84 4.40 0  r=0.055
+    cylinder 14.99 4.08 0  r=0.055 h=0.12 axis=y
+    sphere   14.99 4.20 0  r=0.090
+    cylinder 14.99 4.32 0  r=0.042 h=0.12 axis=y
+    sphere   14.99 4.40 0  r=0.055
 }
 let enf_bracket_one = union { enf_brk_shelf enf_brk_corbel enf_brk_jar }
 let enf_brackets = union {
@@ -581,13 +682,13 @@ let enf_brackets = union {
 # Everything overlaps in range: backplate to 14.095, branch capsule from 14.06, taper from y 4.20,
 # flame from 4.34 against a taper head at 4.38.
 
-let enf_gir_plate = box 14.00 4.05 -0.1125   14.095 4.41 0.1125 round=0.010
-let enf_gir_arm_a = capsule 14.06 4.14 0   14.155 4.23 -0.16 r=0.026
-let enf_gir_arm_b = capsule 14.06 4.14 0   14.155 4.23  0.16 r=0.026
-let enf_gir_tap_a = cylinder 14.155 4.29 -0.16 r=0.026 h=0.18 axis=y
-let enf_gir_tap_b = cylinder 14.155 4.29  0.16 r=0.026 h=0.18 axis=y
-let enf_gir_fla_a = ellipsoid 14.155 4.40 -0.16 rx=0.030 ry=0.060 rz=0.030
-let enf_gir_fla_b = ellipsoid 14.155 4.40  0.16 rx=0.030 ry=0.060 rz=0.030
+let enf_gir_plate = box 13.90 4.05 -0.1125   13.995 4.41 0.1125 round=0.010
+let enf_gir_arm_a = capsule 13.96 4.14 0   14.015 4.23 -0.16 r=0.026
+let enf_gir_arm_b = capsule 13.96 4.14 0   14.015 4.23  0.16 r=0.026
+let enf_gir_tap_a = cylinder 14.015 4.29 -0.16 r=0.026 h=0.18 axis=y
+let enf_gir_tap_b = cylinder 14.015 4.29  0.16 r=0.026 h=0.18 axis=y
+let enf_gir_fla_a = ellipsoid 14.015 4.40 -0.16 rx=0.030 ry=0.060 rz=0.030
+let enf_gir_fla_b = ellipsoid 14.015 4.40  0.16 rx=0.030 ry=0.060 rz=0.030
 
 let enf_gir_metal = union { enf_gir_plate enf_gir_arm_a enf_gir_arm_b }
 let enf_gir_wax   = union { enf_gir_tap_a enf_gir_tap_b }
@@ -632,18 +733,22 @@ let enf_gir_fire_all = union {
 # run straight through would be taken out from 14.20 eastwards by the manifest and would end
 # wherever that difference happened to leave it. Cut here, it returns cleanly on each jamb.
 
-let enf_u_base_w  = box 14.00 6.30 -2.85   14.095 6.66 2.95 round=0.010
-let enf_u_bcap_w  = ovolo 14.095 6.66 -2.85   14.14 6.75 2.95
-let enf_u_bcore_w = box 14.00 6.66 -2.85   14.095 6.75 2.95
-let enf_u_base_e_mass = box 14.905 6.30 -2.85   15.00 6.66 2.95 round=0.010
+# 0.045 PROUD AND NOT 0.09, AND `enf_walk_u` IS WHY. At 0.09 the cap reached 15.01 and 14.04, and
+# the 1.00 m band came back with 200 voxels of the east cap in it — a moulding 0.36 m over the floor
+# standing in the middle of a passage 1.15 m wide. The body is flush with the wall now and the cap
+# is the only member that projects, which is what a base course is anyway.
+let enf_u_base_w  = box 13.90 6.30 -2.85   13.95 6.66 2.95 round=0.010
+let enf_u_bcap_w  = ovolo 13.95 6.66 -2.85   13.995 6.75 2.95
+let enf_u_bcore_w = box 13.90 6.66 -2.85   13.95 6.75 2.95
+let enf_u_base_e_mass = box 15.10 6.30 -2.85   15.20 6.66 2.95 round=0.010
 let enf_u_bcap_e_mass = union {
-    ovolo 14.905 6.66 -2.85   14.86 6.75 2.95
-    box 14.905 6.66 -2.85   15.00 6.75 2.95
+    ovolo 15.10 6.66 -2.85   15.055 6.75 2.95
+    box 15.10 6.66 -2.85   15.20 6.75 2.95
 }
 
 # The jamb cutter: windows.clip's three openings, 0.045 wider each side so the return stands clear
 # of the reveal rather than exactly on it.
-let enf_win_z_seed = box 14.80 6.20 -0.72   15.20 8.60 0.72
+let enf_win_z_seed = box 14.95 6.20 -0.72   15.35 8.60 0.72
 let enf_win_zone = union {
     translate { enf_win_z_seed } 0 0 -2.70
     enf_win_z_seed
@@ -655,8 +760,8 @@ let enf_u_base = union { enf_u_base_w enf_u_bcap_w enf_u_bcore_w enf_u_base_e }
 # The gilt fillet round every picture: a frame 0.09 wide standing 0.045 proud, drawn as the
 # difference of two boxes so all four mitres are free.
 let enf_frm_w_seed = difference {
-    box 14.00 6.885 -0.27   14.095 7.965 0.27
-    box 14.00 6.975 -0.18   14.20  7.875 0.18
+    box 13.90 6.885 -0.27   13.995 7.965 0.27
+    box 13.90 6.975 -0.18   14.10  7.875 0.18
 }
 let enf_frames_w = union {
     translate { enf_frm_w_seed } 0 0 -0.675
@@ -665,8 +770,8 @@ let enf_frames_w = union {
     translate { enf_frm_w_seed } 0 0  2.025
 }
 let enf_frm_e_seed = difference {
-    box 14.905 6.885 -0.54   15.00 7.965 0.54
-    box 14.80  6.975 -0.45   15.00 7.875 0.45
+    box 15.055 6.885 -0.54   15.20 7.965 0.54
+    box 14.95  6.975 -0.45   15.20 7.875 0.45
 }
 let enf_frames_e = union {
     translate { enf_frm_e_seed } 0 0 -1.35
@@ -680,15 +785,12 @@ let enf_frames = union { enf_frames_w enf_frames_e }
 # stand clear of the head band: a member 0.09 proud at 8.10 is 1.80 m over the floor, which is
 # halls.clip's exact mistake — "it was then at head height" — and `--part enf_head_u` finds it.
 let enf_imp_w = union {
-    ovolo 14.095 8.46 -2.85   14.14 8.55 2.95
-    box 14.00 8.46 -2.85   14.095 8.55 2.95
+    ovolo 13.95 8.685 -2.85   13.995 8.775 2.95
+    box 13.90 8.685 -2.85   13.95 8.775 2.95
 }
-let enf_imp_e = difference {
-    union {
-        ovolo 14.905 8.46 -2.85   14.86 8.55 2.95
-        box 14.905 8.46 -2.85   15.00 8.55 2.95
-    }
-    enf_win_zone
+let enf_imp_e = union {
+    ovolo 15.10 8.685 -2.85   15.055 8.775 2.95
+    box 15.10 8.685 -2.85   15.20 8.775 2.95
 }
 let enf_impost = union { enf_imp_w enf_imp_e }
 
@@ -706,11 +808,11 @@ let enf_impost = union { enf_imp_w enf_imp_e }
 # bust is bedded 0.035 into its socle and its head crowns at 7.64, a centimetre under the niche's
 # springing at 7.65.
 
-let enf_socle_seed = box 13.800 6.75 -0.135   14.05 7.20 0.135 round=0.010
+let enf_socle_seed = box 13.700 6.75 -0.135   13.95 7.20 0.135 round=0.010
 let enf_bust_seed = union {
-    ellipsoid 13.98 7.30 0  rx=0.085 ry=0.135 rz=0.115
-    cylinder  13.98 7.46 0  r=0.035 h=0.09 axis=y
-    sphere    13.98 7.565 0 r=0.075
+    ellipsoid 13.88 7.30 0  rx=0.085 ry=0.150 rz=0.115
+    cylinder  13.88 7.45 0  r=0.050 h=0.16 axis=y
+    sphere    13.88 7.52 0  r=0.095
 }
 
 let enf_socle_a = union {
@@ -747,10 +849,10 @@ let enf_sculpture = union { enf_socle_a enf_socle_b enf_bust_a enf_bust_b }
 # below, and for the same reason: at z = +-0.315 and +-2.385 a sconce stands squarely inside a
 # window's own z band and anything past 14.20 there is deleted by the manifest.
 
-let enf_scn_plate = box 14.00 7.65 -0.08   14.095 8.10 0.08 round=0.010
-let enf_scn_arm   = capsule 14.06 7.74 0   14.155 7.86 0 r=0.026
-let enf_scn_tap   = cylinder 14.155 7.96 0 r=0.026 h=0.22 axis=y
-let enf_scn_fla   = ellipsoid 14.155 8.11 0 rx=0.030 ry=0.060 rz=0.030
+let enf_scn_plate = box 13.90 7.65 -0.08   13.995 8.10 0.08 round=0.010
+let enf_scn_arm   = capsule 13.96 7.74 0   14.015 7.86 0 r=0.026
+let enf_scn_tap   = cylinder 14.015 7.96 0 r=0.026 h=0.22 axis=y
+let enf_scn_fla   = ellipsoid 14.015 8.11 0 rx=0.030 ry=0.060 rz=0.030
 
 let enf_scn_metal = union { enf_scn_plate enf_scn_arm }
 let enf_scn_wax   = enf_scn_tap
@@ -789,7 +891,7 @@ let enf_sconces = union { enf_scn_metal_all enf_scn_wax_all enf_scn_fire_all }
 let enf_trim = difference {
     union {
         enf_g_dado enf_g_cornice enf_g_strips enf_shelves
-        enf_u_base enf_frames enf_impost
+        enf_u_base enf_frames enf_impost enf_architraves
     }
     enf_dr_gs enf_dr_gn enf_dr_us enf_dr_un
 }
@@ -824,6 +926,32 @@ let part_enfilade = mirror { enf_east } axis=x
 let enfilade_air = mirror { enf_air } axis=x
 let void_enfilade = difference { enfilade_air part_enfilade }
 
+# ================================================================================================
+# THE WALKING BAND, AS A SHAPE, BECAUSE A WIDTH TAKEN AT ONE POINT IS NOT A WIDTH
+# ================================================================================================
+#
+# `--gap x@y,z` CANNOT MEASURE THIS PASSAGE ON THE ASSEMBLED BUILDING, and that is worth writing
+# down because it looks as if it should. `--gap` reports the LONGEST unbroken run of air on its
+# line; every line along x through this building at any height a person stands at crosses the
+# rotunda and the halls before it gets here, so the answer comes back 25.750 m and it is the
+# rotunda's. Asked on the fragment probe instead, the longest run is the 27 m of empty box between
+# the east passage and the west one. There is no line that answers the question.
+#
+# So the width is built as a SHAPE, which is what BRIEF.md rule 7 says to do for anything a
+# heightfield cannot walk: the volume a person sweeps, intersected with this part, WHICH MUST
+# MEASURE EMPTY. 1.00 m wide by 2.10 m tall, run the whole 6.05 m length of each passage, on both
+# floors:
+#
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 32 --part enf_walk_g
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 32 --part enf_walk_u
+#
+# 14.05 .. 15.05 IS WHERE THE 1.00 CAN GO AND THERE IS NOTHING SPARE AT EITHER END. On the west the
+# widest thing is a jar's belly at 14.022 and a sconce's flame at 14.045; on the east the dado cap,
+# the skirting, the base course, the architrave sill and the bracket corbel all stand at 15.055.
+# Move any one of them 6 mm and this stops being true.
+let enf_walk_g = intersection { part_enfilade  box 14.05 1.80 -2.90   15.05 3.90 3.05 }
+let enf_walk_u = intersection { part_enfilade  box 14.05 6.30 -2.90   15.05 8.40 3.05 }
+
 # The check that the fold actually happened. `--part enf_west_check` must report matter; if the
 # west copy were lost it would report an empty clip and nothing else in any measurement would
 # change.
@@ -857,12 +985,12 @@ paint plaster where=enf_face below=0.02
 # apart and thirty rougher — the difference between a panelled closet and a plastered gallery said
 # in material rather than in geometry, because there is no room in 0.90 m for geometry to say it.
 let enf_g_lining = mirror {
-    intersection { enf_shell  box 13.85 1.70 -3.00   15.20 4.50 3.15 }
+    intersection { enf_shell  box 13.75 1.70 -3.00   15.25 4.50 3.15 }
 } axis=x
 paint boiserie where=enf_g_lining below=0.02
 
 let enf_u_lining = mirror {
-    intersection { enf_shell  box 13.55 6.30 -3.00   15.20 8.55 3.15 }
+    intersection { enf_shell  box 13.55 6.30 -3.00   15.25 8.775 3.15 }
 } axis=x
 paint gesso where=enf_u_lining below=0.02
 
@@ -875,24 +1003,24 @@ paint gesso where=enf_u_lining below=0.02
 # whose extent is a union can come apart, and a zone that has to reach every voxel LINING a coved
 # surface is more certainly written as the solid itself over the band the surface runs in.
 let enf_cove_face = mirror {
-    intersection { enf_shell  box 14.00 4.50 -3.00   15.00 5.00 3.15 }
+    intersection { enf_shell  box 13.90 4.50 -3.00   15.25 5.00 3.15 }
 } axis=x
 paint plaster where=enf_cove_face below=0.02
 
 let enf_vault_face = mirror {
-    intersection { enf_shell  box 14.00 8.55 -3.00   15.00 9.05 3.15 }
+    intersection { enf_shell  box 13.90 8.775 -3.00   15.25 9.40 3.15 }
 } axis=x
 paint plaster where=enf_vault_face below=0.02
 
 # --- the cabinet floor: parquet with a walnut border ---------------------------------------------
 #
 # Thin slabs straddling the floor plane at 1.80 so they catch its surface and nothing under it.
-let enf_g_fl_zone = mirror { box 14.05 1.70 -2.95   14.95 1.86 3.10 } axis=x
+let enf_g_fl_zone = mirror { box 13.95 1.70 -2.95   15.10 1.86 3.10 } axis=x
 paint parquet where=enf_g_fl_zone below=0.02
 
-let enf_g_fl_field = box 14.185 1.60 -2.815   14.815 1.96 2.965
+let enf_g_fl_field = box 14.085 1.60 -2.815   14.965 1.96 2.965
 let enf_g_fl_bord  = mirror {
-    difference { box 14.05 1.70 -2.95   14.95 1.86 3.10   enf_g_fl_field }
+    difference { box 13.95 1.70 -2.95   15.10 1.86 3.10   enf_g_fl_field }
 } axis=x
 paint walnut where=enf_g_fl_bord below=0.02
 
@@ -902,7 +1030,7 @@ paint walnut where=enf_g_fl_bord below=0.02
 # of a turn and caught in a box it already fits inside — a rotate is deliberately given no bounding
 # box by the field, and a repeat over a child whose extent cannot be measured makes every box in
 # the clip unsettleable. halls.clip's floor lozenge is written exactly this way.
-let enf_u_fl_zone = mirror { box 14.05 6.20 -2.95   14.95 6.36 3.10 } axis=x
+let enf_u_fl_zone = mirror { box 13.95 6.20 -2.95   15.10 6.36 3.10 } axis=x
 paint travertine where=enf_u_fl_zone below=0.02
 
 let enf_loz_one = intersection {
@@ -911,8 +1039,8 @@ let enf_loz_one = intersection {
 }
 let enf_lozenges = mirror {
     intersection {
-        translate { repeat { enf_loz_one } z=0.45 nz=6 } 14.50 0 0
-        box 14.20 6.20 -2.80   14.80 6.36 2.80
+        translate { repeat { enf_loz_one } z=0.45 nz=6 } 14.525 0 0
+        box 14.225 6.20 -2.80   14.825 6.36 2.80
     }
 } axis=x
 paint granite where=enf_lozenges below=0.035
@@ -932,7 +1060,7 @@ paint lacquer_red where=enf_dado_face below=0.02
 # behind it — and it is `intersection`ed with the shell, so it cannot reach the east wall 0.90 m
 # away, which a bare box at this width very nearly would.
 let enf_mirror_face = mirror {
-    intersection { enf_shell  box 14.00 2.70 -2.95   14.09 4.50 3.10 }
+    intersection { enf_shell  box 13.90 2.70 -2.95   13.99 4.50 3.10 }
 } axis=x
 paint mirror where=enf_mirror_face below=0.02
 
@@ -991,6 +1119,12 @@ paint marble where=enf_base_face below=0.02
 
 let enf_imp_face = mirror { enf_impost } axis=x
 paint marble where=enf_imp_face below=0.02
+
+# The window architraves and the gallery doorcase. Marble, like every other dressed stone member in
+# this passage, and NOT gesso: an architrave is the piece of the window that is inside the room, and
+# it should read as the same stone the base course and the impost are.
+let enf_arc_face = mirror { enf_architraves } axis=x
+paint marble where=enf_arc_face below=0.035
 
 # The niches. The hollow itself is grown enough to catch the voxels that line it rather than the air
 # in it, and it is painted a stop warmer than the gallery wall so the bust in front of it has a

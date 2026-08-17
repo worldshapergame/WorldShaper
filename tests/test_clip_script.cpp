@@ -1034,3 +1034,275 @@ TEST_CASE("origin moves a bound part, not only the solid") {
     CHECK(f.eval(part, Vec3{0.0, -2.0, 0.0})
           == doctest::Approx(f.eval(script.solid, Vec3{0.0, -2.0, 0.0})));
 }
+
+// --- the words added for detail: branch, scatter, chamfer, the readers, the stretch -----------
+//
+// These are checked through the parser rather than against `Field` directly, because what is being
+// added is VOCABULARY: the arithmetic is tested in test_field.cpp, and what can go wrong here is a
+// key read under the wrong name, a default that is not the one documented, or a word that quietly
+// shadows one an existing clip already uses.
+
+TEST_CASE("branch grows a trunk that forks, and the same seed grows the same tree twice") {
+    // The generator exists because a tree is currently written a capsule at a time — four citrus in
+    // clips/facility/terrace.clip are one straight capsule and a lumpy ball each. So the two things
+    // that have to be true are that it makes MORE than one limb, and that it makes the SAME limbs
+    // every time, on every machine: a clip whose tree differs between two players is not a clip.
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const std::string body =
+        "material bark rgb=90,70,50\n"
+        "let tree = branch 0 0 0 h=1.2 r=0.05 levels=4 count=3 spread=0.11 seed=7\n"
+        "paint bark\nsolid tree\n";
+    const Script one = parse_clip_script(body, types, tags);
+    REQUIRE(one.errors.empty());
+    u32 tree = 0;
+    REQUIRE(one.part("tree", tree));
+
+    // 2 segments x (1 + 3 + 9 + 27) limbs of capsule, plus the unions over them.
+    CHECK(one.field.size() > 80);
+
+    // The base of the trunk is inside the wood, and a metre out to the side is not.
+    CHECK(one.field.eval(tree, Vec3{0, 0.05, 0}) < 0.0);
+    CHECK(one.field.eval(tree, Vec3{1.5, 0.6, 0}) > 0.0);
+
+    // It reaches UP: the trunk plus four levels of shrinking limbs stands taller than the trunk.
+    bool above_the_trunk = false;
+    for (int i = -20; i <= 20 && !above_the_trunk; ++i) {
+        for (int k = -20; k <= 20; ++k) {
+            if (one.field.eval(tree, Vec3{i * 0.05, 1.45, k * 0.05}) < 0.0) {
+                above_the_trunk = true;
+                break;
+            }
+        }
+    }
+    CHECK(above_the_trunk);
+
+    VoxelTypeTable types_again;
+    TagRegistry tags_again;
+    const Script twice = parse_clip_script(body, types_again, tags_again);
+    REQUIRE(twice.errors.empty());
+    u32 same = 0;
+    REQUIRE(twice.part("tree", same));
+    for (int i = -8; i <= 8; ++i) {
+        for (int j = 0; j <= 12; ++j) {
+            const Vec3 p{i * 0.13, j * 0.13, 0.07};
+            CHECK(one.field.eval(tree, p) == twice.field.eval(same, p));
+        }
+    }
+}
+
+TEST_CASE("a different seed grows a different tree, and a bigger plan is refused with its sums") {
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const Script script = parse_clip_script(
+        "material bark rgb=90,70,50\n"
+        "let a = branch 0 0 0 h=1.0 r=0.04 levels=4 count=3 seed=1\n"
+        "let b = branch 0 0 0 h=1.0 r=0.04 levels=4 count=3 seed=2\n"
+        "paint bark\nsolid a\n",
+        types, tags);
+    REQUIRE(script.errors.empty());
+    u32 a = 0, b = 0;
+    REQUIRE(script.part("a", a));
+    REQUIRE(script.part("b", b));
+    usize differing = 0;
+    for (int i = -8; i <= 8; ++i) {
+        for (int j = 0; j <= 10; ++j) {
+            const Vec3 p{i * 0.11, j * 0.14, 0.05};
+            if (script.field.eval(a, p) != script.field.eval(b, p)) ++differing;
+        }
+    }
+    CHECK(differing > 40);
+
+    // A plan that would cost thousands of nodes is refused BEFORE any of it is pushed, and the
+    // message carries the arithmetic — "too complex" tells an author nothing they can act on.
+    VoxelTypeTable big_types;
+    TagRegistry big_tags;
+    const Script too_big = parse_clip_script(
+        "material bark rgb=90,70,50\n"
+        "let huge = branch 0 0 0 levels=9 count=6 segments=8\n"
+        "paint bark\nsolid huge\n",
+        big_types, big_tags);
+    REQUIRE(!too_big.errors.empty());
+    CHECK(too_big.errors.front().message.find("capsules") != std::string::npos);
+}
+
+TEST_CASE("scatter reads repeat's keys and adds the two that break the lattice") {
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const Script script = parse_clip_script(
+        "material gravel rgb=140,134,120\n"
+        "let pebble = sphere 0 0 0 r=0.02\n"
+        "let grid = repeat { pebble } x=0.1 z=0.1 nx=6 nz=6\n"
+        "let bed  = scatter { pebble } x=0.1 z=0.1 nx=6 nz=6 jitter=0.45 turn=0.5\n"
+        "let flat = scatter { pebble } x=0.1 z=0.1 nx=6 nz=6 jitter=0 turn=0\n"
+        "paint gravel\nsolid bed\n",
+        types, tags);
+    REQUIRE(script.errors.empty());
+    u32 grid = 0, bed = 0, flat = 0;
+    REQUIRE(script.part("grid", grid));
+    REQUIRE(script.part("bed", bed));
+    REQUIRE(script.part("flat", flat));
+
+    usize differing = 0;
+    for (int i = -14; i <= 14; ++i) {
+        for (int k = -14; k <= 14; ++k) {
+            const Vec3 p{i * 0.033, 0.0, k * 0.041};
+            if (script.field.eval(bed, p) != script.field.eval(grid, p)) ++differing;
+            // ...and with both dials at nought it is the grid, exactly.
+            CHECK(script.field.eval(flat, p) == script.field.eval(grid, p));
+        }
+    }
+    CHECK(differing > 200);
+}
+
+TEST_CASE("chamfer= cuts a seam flat and changes nothing about the shapes it joins") {
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const Script script = parse_clip_script(
+        "material stone rgb=120,120,116\n"
+        "let plinth = box -1 0 -1  1 0.4 1\n"
+        "let die    = box -0.8 0.4 -0.8  0.8 1.2 0.8\n"
+        "let plain  = union { plinth die }\n"
+        "let cut    = union { plinth die } chamfer=0.06\n"
+        "paint stone\nsolid cut\n",
+        types, tags);
+    REQUIRE(script.errors.empty());
+    u32 plain = 0, cut = 0;
+    REQUIRE(script.part("plain", plain));
+    REQUIRE(script.part("cut", cut));
+
+    // In the re-entrant angle where the die stands on the plinth the chamfer has added stone.
+    CHECK(script.field.eval(plain, Vec3{0.83, 0.43, 0.0}) > 0.0);
+    CHECK(script.field.eval(cut, Vec3{0.83, 0.43, 0.0}) < 0.0);
+    // Half a metre from the seam nothing has moved.
+    CHECK(script.field.eval(cut, Vec3{0.0, 0.9, 0.0}) ==
+          doctest::Approx(script.field.eval(plain, Vec3{0.0, 0.9, 0.0})));
+    CHECK(script.field.eval(cut, Vec3{0.0, 0.1, 0.0}) ==
+          doctest::Approx(script.field.eval(plain, Vec3{0.0, 0.1, 0.0})));
+}
+
+TEST_CASE("occlusion, curvature, facing and cell_edge are askable from a clip at last") {
+    // `Field` has answered all four since the weathering was written and the language could not
+    // ask any of them, so `weather sea 0.5` could put salt in a hollow and an author could not put
+    // moss in one. What is checked is the SIGN of each, at a place whose answer is not in doubt.
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const Script script = parse_clip_script(
+        "material stone rgb=120,120,116\n"
+        "material moss  rgb=60,90,50\n"
+        "let block  = box -1 0 -1  1 1 1\n"
+        "let notch  = box  0.4 0.4 -2   2 2 2\n"
+        "let carved = difference { block notch }\n"
+        "let cavity = occlusion { carved } r=0.25\n"
+        "let arris  = curvature { carved } r=0.10\n"
+        "let up     = facing { carved } axis=y\n"
+        "let craze  = cell_edge size=0.2 seed=3\n"
+        "paint stone\n"
+        "paint moss where=cavity above=0.55\n"
+        "solid carved\n",
+        types, tags);
+    REQUIRE(script.errors.empty());
+    u32 cavity = 0, arris = 0, up = 0, craze = 0;
+    REQUIRE(script.part("cavity", cavity));
+    REQUIRE(script.part("arris", arris));
+    REQUIRE(script.part("up", up));
+    REQUIRE(script.part("craze", craze));
+
+    // Buried in the middle of the block, everything around is stone.
+    CHECK(script.field.eval(cavity, Vec3{-0.5, 0.5, 0.0}) == doctest::Approx(1.0));
+    // Out in the open beside it, nothing is.
+    CHECK(script.field.eval(cavity, Vec3{-2.0, 0.5, 0.0}) == doctest::Approx(0.0));
+    // The re-entrant corner the notch cut is concave, and the block's own top arris is convex.
+    CHECK(script.field.eval(arris, Vec3{0.4, 0.4, 0.0}) < 0.0);
+    CHECK(script.field.eval(arris, Vec3{-1.0, 1.0, 0.0}) > 0.0);
+    // The top of the block faces up and the underside faces down.
+    CHECK(script.field.eval(up, Vec3{-0.5, 1.0, 0.0}) > 0.5);
+    CHECK(script.field.eval(up, Vec3{-0.5, 0.0, 0.0}) < -0.5);
+    // A seam field is nought on a seam and positive away from one, never negative.
+    CHECK(script.field.eval(craze, Vec3{0.13, 0.07, 0.21}) >= 0.0);
+
+    // And the rule keyed on the cavity actually fires, which is the failure that looks like
+    // success — a paint rule that never fires paints nothing and reports nothing.
+    CHECK(script.paint.size() == 2);
+}
+
+TEST_CASE("stretch= runs a grain one way, and leaving it off is the grain that was there") {
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const Script script = parse_clip_script(
+        "material bark rgb=90,70,50\n"
+        "let plain   = fbm size=0.1 octaves=4 seed=11\n"
+        "let ones    = fbm size=0.1 octaves=4 seed=11 stretch=1,1,1\n"
+        "let running = fbm size=0.1 octaves=4 seed=11 stretch=1,8,1\n"
+        "let evenly  = fbm size=0.1 octaves=4 seed=11 stretch=3\n"
+        "let coarse  = fbm size=0.3 octaves=4 seed=11\n"
+        "let trunk   = cylinder 0 0 0 r=0.2 h=2 axis=y\n"
+        "paint bark\nsolid trunk\n",
+        types, tags);
+    REQUIRE(script.errors.empty());
+    u32 plain = 0, ones = 0, running = 0, evenly = 0, coarse = 0;
+    REQUIRE(script.part("plain", plain));
+    REQUIRE(script.part("ones", ones));
+    REQUIRE(script.part("running", running));
+    REQUIRE(script.part("evenly", evenly));
+    REQUIRE(script.part("coarse", coarse));
+
+    usize moved = 0;
+    for (int i = -10; i <= 10; ++i) {
+        for (int j = -10; j <= 10; ++j) {
+            const Vec3 p{i * 0.037, j * 0.041, 0.019};
+            CHECK(script.field.eval(ones, p) == script.field.eval(plain, p));
+            // One number is the same stretch on every axis, which is the same grain three times
+            // coarser — the shape `size=` already has. Approximately and not bit for bit: one
+            // divides the point by three and then by 0.1, the other divides it by 0.3, and those
+            // are the same number by every measure except the last bit of the mantissa.
+            CHECK(script.field.eval(evenly, p) ==
+                  doctest::Approx(script.field.eval(coarse, p)).epsilon(1e-9));
+            if (script.field.eval(running, p) != script.field.eval(plain, p)) ++moved;
+        }
+    }
+    CHECK(moved > 300);
+}
+
+TEST_CASE("fewer levels is the same tree with its outer limbs left off") {
+    // This is what makes the bark recipe work, so it is asserted rather than assumed.
+    //
+    // `clips/_trees.clip` found the trap the hard way: a displacement applies to everything under
+    // it, and 0.032 m of bark grain into a twig of radius 0.019 ERASES THE TWIG wherever the noise
+    // is negative -- silently, dropping lengths of tree and leaving whatever they carried floating.
+    // The cure is to displace the thick wood only, and the cheapest way to say that here is to
+    // grow the same tree twice at two depths and displace the shallow one.
+    //
+    // That only works if `levels` truncates rather than reshapes: the limbs a shallow tree grows
+    // must be exactly the limbs the deep one grows, in the same places, so the two union without a
+    // seam. They are -- a limb's direction, length and radius come from its own identity and the
+    // seed, and nothing in the walk consults how much deeper it is going to go.
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const Script script = parse_clip_script(
+        "material bark rgb=90,70,50\n"
+        "let bole = branch 0 0 0 h=1.2 r=0.05 levels=2 count=3 spread=0.11 seed=5\n"
+        "let full = branch 0 0 0 h=1.2 r=0.05 levels=5 count=3 spread=0.11 seed=5\n"
+        "paint bark\nsolid full\n",
+        types, tags);
+    REQUIRE(script.errors.empty());
+    u32 bole = 0, full = 0;
+    REQUIRE(script.part("bole", bole));
+    REQUIRE(script.part("full", full));
+
+    // Everywhere the shallow tree is matter, the deep one is matter too -- and nowhere is the
+    // shallow one nearer, because the deep one is the same wood plus more of it.
+    const Field& f = script.field;
+    usize inside = 0;
+    for (int i = -14; i <= 14; ++i) {
+        for (int j = 0; j <= 20; ++j) {
+            for (int k = -14; k <= 14; ++k) {
+                const Vec3 p{i * 0.06, j * 0.08, k * 0.06};
+                const f64 shallow = f.eval(bole, p);
+                REQUIRE(f.eval(full, p) <= shallow + 1e-9);
+                if (shallow < 0.0) ++inside;
+            }
+        }
+    }
+    CHECK(inside > 0);   // a tree that is nowhere would satisfy the above for nothing
+}

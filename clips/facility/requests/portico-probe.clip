@@ -1,0 +1,88 @@
+# portico-probe — the whole building, sampled only where the portico is, with the diagnostic
+# bindings the cut audit needs.
+#
+# It includes the MANIFEST and not the fragment, because the question this probe exists to answer
+# is not "is my part right on its own" — clipcheck answers that with --part — but "does anybody
+# else's cut reach into mine, and does mine reach into anybody else's". Both of those need every
+# void in the building in scope, and only facility.clip has them.
+#
+#   ./build/clipcheck clips/facility/requests/portico-probe.clip --part probe_bite_doors --metre 16
+#
+# `bounds` and `metre` come after the include, or the contract's own restate them (the ballroom
+# probe's note; it cost somebody twenty minutes).
+
+include "../../facility.clip"
+
+# --- what somebody else's cut takes out of mine -------------------------------------------------
+#
+# Each of these is the SET a void removes from my part. Empty is the pass. A worldbox is the fault,
+# and it is the fault said in metres and in the place it happens.
+let probe_bite_doors   = intersection { part_portico void_doors }
+let probe_bite_windows = intersection { part_portico void_windows }
+let probe_bite_rooms   = intersection {
+    part_portico
+    union { void_vestibule void_rotunda void_halls void_stair
+            void_crypt void_salon void_chapel void_ballroom void_library void_enfilade }
+}
+let probe_bite_all = union { probe_bite_doors probe_bite_windows probe_bite_rooms }
+
+# --- what my own cut takes out ------------------------------------------------------------------
+#
+# The coffers are cut out of my own slab. This is the set that disappears when the cut is present:
+# sample it, and sample the slab with and without, and the three numbers have to agree.
+let probe_soffit_cut   = portico_soffit
+let probe_soffit_uncut = portico_soffit_slab
+let probe_soffit_gone  = difference { portico_soffit_slab portico_soffit }
+
+# Does the cut reach anything that is not my slab? This is the coffer voids less my own slab: if
+# the coffers were laid out anywhere they could bite a neighbour, this is where it would show.
+let probe_coffer_stray = intersection {
+    portico_coffers
+    union { part_walls part_entablature part_doors part_windows part_pilasters }
+}
+
+# The part as it would be with no coffers cut at all, for the with/without arms.
+let probe_part_uncut = union { portico_soffit_slab portico_columns portico_antae }
+
+# --- the drum joints ----------------------------------------------------------------------------
+#
+# The cutter as it stands on the inner column. 0.036 m each way is 1.15 voxels at metre 32 and 0.58
+# of one at metre 16, so this is only a measurement at 32 — at 16 the whole cut is under a voxel and
+# the part's volume comes back identical, which is the right answer to the wrong question.
+let probe_drum_here  = translate { portico_drum_cut } 1.35 1.80 -11.15
+let probe_drum_stray = intersection {
+    probe_drum_here
+    union { part_entablature part_walls part_doors part_windows part_steps part_podium
+            part_pilasters part_pediment }
+}
+
+# --- who else is standing in my ceiling ---------------------------------------------------------
+let probe_ent_in_slab   = intersection { part_entablature portico_soffit_slab }
+let probe_ent_in_coffer = intersection { part_entablature portico_coffers }
+let probe_wall_in_slab  = intersection { part_walls portico_soffit_slab }
+
+# The ceiling as the FINISHED BUILDING has it, against the ceiling as my own part has it. If the
+# coffers are in the first as well as the second, they survive assembly; if they are only in the
+# second, somebody unions them shut and the twenty hollows this part exists for are a flat pan.
+let probe_ceil_box   = box -7.65 9.85 -11.15   7.65 10.85 -7.35
+let probe_ceil_mine  = intersection { part_portico probe_ceil_box }
+let probe_ceil_built = intersection { built probe_ceil_box }
+
+# THE ORIGIN IS CANCELLED, AND WITHOUT THIS LINE EVERY NUMBER BELOW IS 3.50 m WRONG.
+#
+# facility.clip ends `origin 0 -3.50 0`, and `apply_origin` translates the SOLID and shifts the
+# BOUNDS to match — but it runs at the end of loading, and `--part` replaces the solid afterwards.
+# So a part is sampled where its author drew it inside a box that has moved 3.50 m down, and
+# everything above y = 7.50 simply is not in the sample. It does not fail: `portico_soffit` came
+# back EMPTY, which reads exactly like a cut that removed the whole slab. Adding the opposite shift
+# here puts the box back where the geometry is, and `origin` accumulates, so the two cancel.
+origin 0 3.50 0
+
+# `solid all` and not `solid part_portico`, so that `--cuts` audits EVERY subtraction in the
+# building that reaches into this box — including the ones in other fragments' files, which is the
+# whole reason this probe includes the manifest. `--part part_portico` still narrows it when the
+# question is about my own geometry.
+metre 16
+bounds -8.2 1.5 -12.4   8.2 11.0 -7.0
+
+solid all

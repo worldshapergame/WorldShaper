@@ -229,6 +229,22 @@ let entablature_ew    = mirror { entablature_east } axis=x
 # this ring continues it: the entablature is the top 2.00 m of that wall plus everything the
 # mouldings hang outside it. It is drawn 0.05 taller than the ring at both ends so the cut is clean
 # through, and the two share the same volume from 9.90 to 11.90, which is the surest join there is.
+#
+# AUDITED, because a box 30 x 2.1 x 13 m standing inside the whole of the building's second storey
+# is exactly the kind of cut that ought to be checked rather than reasoned about:
+#
+#   clipcheck requests/entablature-probe.clip --metre 16 --cuts
+#   entablature_core  carves intersection#1697  removed 801.625 m3  only-it 801.625  (unnamed)
+#
+# `(unnamed)` is the answer that matters: the base it carves is the ring's own four-way intersection
+# inside this file, so every cubic metre it takes is mine and it charges nothing to any named part.
+# The removed set measures -15.125 9.875 -6.625 .. 15.125 11.875 6.625 — the core box and not a
+# voxel outside it.
+#
+# The traffic goes the other way once, and it is not mine to fix: `void_library` takes 0.186 m3 off
+# `entablature_ring`, a one-voxel skin at x -14.31 .. -7.31, y 10.38 .. 11.19, z -6.69 .. -6.63.
+# That is the library's room void reaching 0.06 m past the wall face at -6.60 that this ring
+# continues. Written up in requests/portico.md.
 let entablature_core = box -15.10 9.85 -6.60   15.10 11.95 6.60
 let entablature_ring = difference {
     intersection { entablature_south entablature_north entablature_ew }
@@ -262,13 +278,46 @@ let entablature_corners = mirror { mirror { entablature_corner } axis=x } axis=z
 # The result is solid, and that is deliberate. Between the portico's coffered ceiling at 10.80 and
 # the top of the cornice at 11.90 there is a metre of stone that nothing can see into and that the
 # pediment above has to stand on; hollowing it would buy a little memory and cost the pediment its
-# bearing. Below 10.80 it is the same volume portico.clip's soffit slab already occupies, which is
-# what makes the two certainly one piece.
+# bearing.
+#
+# BELOW 10.80 IT MUST NOT BE SOLID, AND FOR A YEAR IT WAS. This block said, in this comment, that
+# below 10.80 it occupies "the same volume portico.clip's soffit slab already occupies, which is
+# what makes the two certainly one piece". It does — and the slab has TWENTY COFFERS CUT OUT OF IT,
+# each 0.90 m square and 0.205 m deep with a gilt rosette hanging at the back of it, and this block
+# filled every one of them. Measured, in the finished building:
+#
+#   intersection { part_entablature portico_soffit_slab }   219600 voxels — the WHOLE slab
+#   intersection { part_entablature portico_coffers }        13216 voxels — the WHOLE cut
+#   the portico's own ceiling, intersection { part_portico <the slab's box> }   206456 voxels
+#   the same box out of the finished `built`                                    234240 voxels
+#
+# 13216 voxels is exactly what portico.clip's `difference` takes out and exactly what this block put
+# back. The ceiling in the built facility was a flat pan. Twenty coffers, twenty rosettes, the
+# `gilt` material's only appearance in the exterior and the whole of that fragment's second load
+# note — none of it was ever in the building, and nothing anywhere reported an error, because a cut
+# that is refilled by a later union is not a fault in either file. It is only a fault in the two of
+# them read together, and only measurement reads two files together.
+#
+# It was also a PAINT fault, silently: this part is painted marble and the frieze band marble_hot,
+# both after portico.clip's rules, so where the two shapes shared volume the limestone ceiling the
+# portico wants to compare against its marble columns came out marble too.
+#
+# So the block is cut off the ceiling. The box below is the soffit slab's own footprint, held 0.05
+# INSIDE it on the two edges that matter — x to +-7.60 rather than +-7.65, and the south face to
+# -11.10 rather than the column axis at -11.15 — so that this part keeps a 0.05 lap of stone inside
+# the slab's edge on both and the two are still one solid by sharing volume. It stops at 10.75, so
+# there is another 0.05 of lap under the slab's top at 10.80. Nothing of the cut reaches a coffer:
+# the outermost is at x 6.525, the southernmost at z -10.25, and the deepest reaches y 10.105.
+let entablature_pceiling = box -7.60 9.85 -11.10   7.60 10.75 -7.30
+
 let entablature_pfront  = translate { entablature_face } 0 9.90 -11.60
 let entablature_pflank  = translate { rotate { entablature_face } y=0.75 } 7.65 9.90 0
 let entablature_pback   = box -20 9.90 -20   20 11.90 -7.45
-let entablature_pbody   = intersection {
-    entablature_pfront  mirror { entablature_pflank } axis=x  entablature_pback
+let entablature_pbody   = difference {
+    intersection {
+        entablature_pfront  mirror { entablature_pflank } axis=x  entablature_pback
+    }
+    entablature_pceiling
 }
 
 let entablature_dn_pfront = translate { entablature_dent_pf } 0 9.90 -11.60

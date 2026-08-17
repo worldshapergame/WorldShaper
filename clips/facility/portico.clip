@@ -48,6 +48,13 @@
 # order of magnitude over the 0.0225 m step in a coffer moulding. Weathering the portico would
 # sand off precisely the features this part is here to test. The manifest's 12 mm of grain and the
 # `variation` line give it the no-two-voxels-alike surface without touching the thin matter.
+#
+# THE DRUM JOINTS ARE NOT AN EXCEPTION TO THAT AND IT IS WORTH BEING PRECISE ABOUT WHY. A coat
+# displaces the WHOLE surface by a fraction of a voxel — every fillet at once, everywhere, which is
+# the thing that turns a one-voxel feature into mud. A bed joint is a groove 0.045 m tall cut at
+# seven named heights and nowhere else: it is a whole voxel and a half deep, so it is matter rather
+# than dither, and between two of them 0.855 m of fillet and flute is untouched. The rule this file
+# is defending is "nothing may move the thin matter", not "nothing may be cut".
 # ------------------------------------------------------------------------------------------------
 #
 # THE MODULE. D = 0.90, M = 0.45. Every number below is one of those, a multiple, or a simple
@@ -91,7 +98,105 @@ let portico_col_shoe = box -0.675 -0.05 -0.675   0.675 0.05 0.675  round=0.015
 # used twice, on the only side both of them have in common.
 let portico_bed = box -0.15 8.05 0   0.15 8.15 0.15
 
-let portico_col_unit = union { ionic_column portico_col_shoe portico_bed }
+# ------------------------------------------------------------------------------------------------
+# THE FLUTES, WHICH WERE NOT IN THE BUILDING. Read this before touching anything below it.
+#
+# `_order.clip` cuts the twenty-four flutes by shrinking the shaft and putting the surface back on
+# twenty-four flat fins:
+#
+#     let shaft_floor = offset { shaft_solid } by=-0.0375
+#     let order_shaft = intersection { shaft_solid union { shaft_floor shaft_fins } }
+#
+# `offset` is `d + by` — the node's own comment in field.hpp says so — so `by=-0.0375` GROWS the
+# shaft by 0.0375 instead of shrinking it. The union of a grown shaft with anything contains the
+# shaft, so the intersection is the shaft, and `order_shaft` is a plain turned column. Sliced at
+# mid-height, at metre 32, it is a circle: thirty voxels across, not one notch in it. See
+# requests/portico-flute-probe.clip, which is four lines and answers it in two seconds.
+#
+# Nothing reported it. The clip parses, the part builds, the extent is right to the millimetre, the
+# component count is 1 and every paint rule fires. A cut that removes nothing is the silent half of
+# this failure mode and this is the largest instance of it in the building: the portico's first load
+# note is SIX FLUTED SHAFTS IN A ROW and the one-voxel fillet between two flutes repeated 144 times
+# across the elevation, and none of it existed. The eighteen pilasters and these two antae were
+# never affected — `ionic_pilaster` cuts its flutes with plain boxes and is correct — so the fault
+# had a fluted anta standing against an unfluted column at the end of the same colonnade.
+#
+# THE FIX HERE IS LOCAL AND IT IS DELIBERATELY NOT A NEW COLUMN. `_order.clip` is not this
+# fragment's to edit and the order is right about what happens to a column drawn twice. So the flute
+# floor is rebuilt from the order's OWN `shaft_band` and `shaft_arc`, and what that leaves standing
+# over the order's own `shaft_fins` is subtracted from `ionic_column` — the flutes it should have cut
+# and did not. No dimension is restated here; if `_order.clip` is fixed, this subtracts a set that is
+# already absent, which costs a max() and changes nothing. Written up in requests/portico.md.
+#
+# AND THE FLOOR IS THE PROFILE SHRUNK, NOT THE SOLID OFFSET, WHICH IS THE SECOND HALF OF THE TRAP.
+# `offset { shaft_solid } by=0.0375` — the corrected sign — still does not give a flute floor. A
+# `revolve` measures distance in the profile's own plane, and this profile's inner edge is the axis
+# itself, so on the axis the field reads 0 rather than -0.47; shrink the SOLID and the first 0.0375 m
+# of the axis is outside the result, so the shaft comes out with a 0.075 m bore drilled down the
+# middle of it. It is not visible from outside and it was in the first version of this line: a slice
+# at mid-height showed a two-voxel hole dead on centre, which is the only place it could be seen.
+#
+# Shrinking the ARC instead moves only the curve the surface is struck on. The band still reaches
+# r = 0, the axis stays solid, and the floor stays parallel to the entasis all the way up, which is
+# the whole reason the order used an offset rather than a straight cutter in the first place.
+let portico_shaft_floor = revolve {
+    intersection { shaft_band  offset { shaft_arc } by=0.0375 }
+} axis=y
+let portico_flute_gap = difference { shaft_solid  portico_shaft_floor  shaft_fins }
+let portico_flutes    = translate { portico_flute_gap } 0 0.45 0
+# ------------------------------------------------------------------------------------------------
+
+# THE DRUM JOINTS — seven bed joints up each shaft, one every diameter.
+#
+# A shaft 7.20 m tall is not one stone and never was: it is eight drums of 0.90 (D) each, hoisted
+# one on another, and the joint between two of them is the thing that tells a quarried column from
+# an extruded one at any distance where the flutes have gone. There are six shafts here at 2.70 m
+# centres in the deepest shadow in the building, and this is what the eye has left to read them by
+# when the 0.030 fillets have dissolved into the ambient.
+#
+# IT IS MATTER AND NOT A WEATHERING COAT, and that distinction is the whole reason this may be here
+# at all while the file's header still says NO WEATHERING. A weathering coat displaces the WHOLE
+# surface by a fraction of a voxel and sands the one-voxel fillets off everywhere at once. A bed
+# joint is a groove 0.045 (M/10) tall — the same number as the gap between two dentils, 1.44 voxels
+# at the contract's metre 32, so it genuinely relocates a surface rather than dithering one — cut at
+# seven heights and nowhere else. Between two of them 0.855 m of fillet and flute survives
+# untouched, which is twenty-seven voxels of the thin matter this part exists to measure, seven
+# times over per shaft.
+#
+# THE CUTTER FOLLOWS THE ENTASIS, and it has to: the shaft swells 0.050 over its taper at a third of
+# its height, so a groove cut by a cylinder of one radius misses the stone at the top and buries
+# itself at the middle — which is the trap `_order.clip` names for the flutes themselves. So the
+# cutter is the shaft's own arc struck 0.0675 (3M/20) smaller, revolved: parallel to the surface all
+# the way up, and shrunk in the PROFILE for the same reason the flute floor above is, or the groove
+# would be a bore down the axis instead of a ring round the outside.
+#
+# 0.0675 is the flute depth 0.0375 plus 0.030 (M/15, the fillet's own width). So the groove stands
+# 0.030 below the FLOOR OF A FLUTE and 0.0675 below a fillet, and it is therefore a continuous ring
+# rather than twenty-four dashes between the fillets — which is what a cutter shallower than the
+# flutes would have left, and is not a bed joint.
+#
+# It can reach nothing but my own shaft: the cutter is the shaft's own revolve intersected with
+# seven bands inside its height, so it is a subset of the shaft by construction, and the nearest
+# matter of anybody's to a portico shaft is 1.35 m away across the intercolumniation.
+#
+# The seed sits at y = 0 of its own repeat and the finished line is carried to 3.60 afterwards — the
+# rule `_order.clip` gives for `repeat`, and the reason is that a copy straddling a cell boundary
+# makes the whole expression infinitely slack. Seven copies at 0.90 land on 0.90 .. 6.30 of the
+# shaft's own 0 .. 7.20, which is eight drums of D.
+let portico_drum_floor = revolve {
+    intersection { shaft_band  offset { shaft_arc } by=0.0675 }
+} axis=y
+let portico_drum_skin  = difference { shaft_solid portico_drum_floor }
+let portico_drum_seed  = box -0.60 -0.0225 -0.60   0.60 0.0225 0.60
+let portico_drum_bands = translate { repeat { portico_drum_seed } y=0.90 ny=3 } 0 3.60 0
+let portico_drum_cut   = translate {
+    intersection { portico_drum_skin portico_drum_bands }
+} 0 0.45 0
+
+let portico_col_unit = difference {
+    union { ionic_column portico_col_shoe portico_bed }
+    portico_flutes portico_drum_cut
+}
 
 let portico_col_in  = translate { portico_col_unit } 1.35 1.80 -11.15
 let portico_col_mid = translate { portico_col_unit } 4.05 1.80 -11.15
@@ -190,8 +295,17 @@ let portico_rosettes  = mirror { union { portico_ros_row_s portico_ros_row_n } }
 
 let part_portico = union { portico_soffit portico_columns portico_antae }
 
-# This part removes nothing from anybody. The coffers are cut out of my own slab, above, so the
-# manifest never has to know they exist. Bound anyway, so it never has to ask.
+# This part removes nothing from anybody. Both cuts in this file — the coffers out of my own slab,
+# the flutes and drum joints out of my own shafts — are taken inside the expression that builds the
+# thing they are cut from, so neither can reach another fragment's stone by construction. The
+# manifest never has to know they exist and there is no `void_portico`.
+#
+# THAT IS NOT THE SAME AS SAYING THEY SURVIVE, and for a year the coffers did not. `difference` is
+# local; `union` is not. entablature.clip's portico block occupied the same volume as this slab
+# from 9.90 to 11.90 and was unioned over it in the manifest, so all twenty coffers were refilled
+# with its stone — measured at 13216 voxels, which is exactly what the cut below takes out. A cut
+# that cannot reach anybody is still only half the question; the other half is whether anybody
+# reaches back over it, and no single file can answer that about itself. See requests/portico.md.
 # let void_portico = <nothing>
 
 # --- paint ---------------------------------------------------------------------------------------

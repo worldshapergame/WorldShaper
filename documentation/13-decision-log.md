@@ -8956,3 +8956,50 @@ out and said so.
 | D670 | **The lean build did NOT land, and the ladder says so rather than pretending** | honesty | `#define WS_LEAN` deleted branches for lobes that `gl.js` main() owned; the BRDF branch moved every one of them into `features/brdf.js` behind its own defines. `withShared` takes `lean` and ignores it. Every other rung bites |
 | D670 | **The back-quote-in-GLSL trap caught FIVE more comments, all mine** | fault | One reported itself as `Unexpected identifier 'ao'`. It has now caught every person who has touched this viewer |
 | D670 | **The ◉ view's colours are the clip's rules** | decision | `paint.js` exports `MATERIAL_AT_GLSL`, `shapeshade.js` picks it up through the import it was written around, and the console says which is live. It was a hash of each shape's placement, and shipping arbitrary colours is a worse answer than shipping grey |
+### The second wave, and it is all one bug wearing four hats
+
+`offset by=` grows on a negative. Written down backwards in `BRIEF.md`'s own operator table, and by
+the time the audit finished it had silently destroyed **four separate features**, none of which
+reported anything at all:
+
+- every joint in the great stair (`difference { mass core }` empty, 2,423,674 voxels both sides)
+- **the flutes on all six portico columns** — `_order.clip:135`; a metre-32 slice at mid-height is a
+  thirty-voxel circle with no notch in it
+- the egg-and-dart on nineteen capitals (`_order.clip:181`, left as it needs the capital rebuilt)
+- the grotto's hollow, confirmed by the estate audit
+
+**And a second fold with the same shape.** `around { child } count=n` folds the ASKING POINT into one
+fundamental sector centred on +X — `mirror`'s trap in polar coordinates — so a child drawn on +Z is
+copied n times and every copy is empty. Four bindings in `campanile.clip` were written that way:
+**the eight biforate openings the tower exists for, its four colonnettes, its twenty louvres and its
+twelve clock marks were all EMPTY.** The belfry was a solid block with the bell sealed in the dark.
+It also hid a 503.6 m³ cut from the auditor, because the fold made the box unbounded.
+
+**Twenty coffers were filled back in by a neighbour.** `portico.clip` cuts them from its own soffit
+slab; `entablature.clip` unioned a solid block over the same plan from 9.90 to 11.90. The ceiling was
+a flat pan and the gilt rosettes were absent from the exterior entirely — a cut that was made
+correctly and then undone by a union, which no per-file check can see.
+
+### The paint diagnostic, sharpened, and one correction owed
+
+The corrected `never matched` first reported 30 of 364 rules. Twenty of those were real geometry
+thinner than a voxel at the metre asked — `windows_glass` among them, and it was relayed to the
+owner as a fault before being checked, which it was not: the pane is 0.045 m, 0.36 of a voxel at
+metre 8, and `--part part_windows --metre 32` reports **glass at 300,268 voxels, 15.02%**. Re-asking
+each non-matching rule at a finer metre over its own box takes the list to **2 that match nothing at
+any resolution**: `surface_datum`, reached independently from the paint side and agreeing with the
+manifest audit, and **`chapel_ribs`, which nobody had — the chapel's rib gilding is an empty
+intersection**, asked 862 times, matching none.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D669 | **`around` folds the asking point, so a child off the +X sector is copied empty** | fault | A belfry with no openings, and a 503.6 m³ cut hidden from the auditor behind an unbounded box |
+| D669 | **A cut can be made correctly and undone by a union** | fault | Twenty coffers filled in by the entablature; no per-file check can see it |
+| D669 | **`never matched` re-asks at a finer metre before calling a rule dead** | decision | 30 became 2; the other 20 were real geometry under a voxel, and one was reported to the owner as a fault first |
+| D669 | **`windows_glass` was called a fault on a coarse reading** | honesty | Corrected: 300,268 voxels at the resolution that ships. Check the resolution before believing the instrument |
+| D669 | **`displace` with a positive amount over a never-negative pattern EATS the shape** | fault | Distance is positive outside, so `amount x pattern` shrinks. It ate a pot's base disc and stood eight tubs free of their plinths. Third of the sign family, with `offset by=` and `around`'s fold |
+| D669 | **A `repeat` whose child is wider than its period returns infinite metric slack** | fault | Infinite slack anywhere stops the sampler skipping ANYWHERE: one sagging rail bay took the terrace from 2.4 s to 5.3 s, and until it was found every other cost measured was measuring it |
+| D669 | **`static_cast<i32>(1e30)` is undefined, and it made the auditor confidently silent** | fault | An unbounded operand's box went through box-to-voxel-index arithmetic as INT_MIN, so the high index fell below the low one and the group was **skipped without being scanned** -- every cut sharing that base reported zero, boxed or not. 381.91 m3 of real cutting that no instrument could see, including `colon_coffers`, which has a perfectly good box of its own |
+| D669 | **An unbounded cut is measured against the clip's own box, not refused** | decision | Matter exists only inside that box and it is always finite, so the answer is exact rather than a bound. Clamped to sampled voxel CENTRES: clamping to the author's bounds silently drops the outermost layer |
+| D669 | **A zero carries its verdict in the headline** | decision | A verdict at the end of a line gets quoted from the beginning. Four distinct outcomes now, and "NOT MEASURED ... this is not a clean bill" is one of them |
+| D669 | **A flaky test is fixed rather than re-run** | decision | `submitter_collisions() > 0` needs a race to occur; five seconds was not enough under load. Passes 8 of 8 now, but the load dropped too, so the evidence is not yet clean |

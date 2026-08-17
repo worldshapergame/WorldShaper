@@ -138,6 +138,47 @@ enum class Op : u8 {
     SmoothDifference,
     SmoothIntersection,
 
+    // --- the same three seams cut flat rather than blended -------------------------------
+    //
+    // A chamfer is not a rounding and a mason will tell you so. The arris of a plinth, the stop
+    // of a door jamb, the drip of a sill, the corner of a rusticated block: all of them are a
+    // FLAT cut at forty-five degrees, and every one of them is a straight line where a fillet
+    // would be a curve. Read off a photograph the difference is the whole character of the stone
+    // — a chamfer keeps a hard highlight along its two arrises where a round smears one soft one.
+    //
+    // **And it applies to a SEAM rather than to a shape, which is what `round=` cannot do.**
+    // `round { block } by=0.02` pulls every face of the block in by two centimetres and rounds all
+    // twelve edges; nobody ever wants that, and what authors do instead is carve the arris away
+    // with a rotated box per edge. `union { face_a face_b } chamfer=0.02` cuts exactly the one
+    // edge where those two meet and leaves the rest of both alone.
+    //
+    // # What it costs, and it is NOT the arithmetic
+    //
+    // The arithmetic is one add, one subtract, one multiply and a clamp on top of the min or max
+    // it replaces, which is nothing. Measured, a plinth and a die at metre 128, three interleaved
+    // rounds:
+    //
+    //   union                                    0.57 s of CPU
+    //   union chamfer=0.0005                     0.58 s        the same, to the noise
+    //   union chamfer=0.035                      0.87 s        1.5x
+    //
+    // The control arm is the middle row and it is what says where the cost is: the SAME op with a
+    // negligible width measures as the plain union, so the three operations really are free. What
+    // the width buys is `metric_slack` — 2/root2 times the width, 0.049 m at 35 mm — and slack is
+    // what stops a block settling. So a chamfer costs in proportion to how wide it is, through
+    // settling and not through arithmetic, and a 5 mm arris on a building costs almost nothing
+    // while a 50 mm one on every seam is a real bill.
+    //
+    // **The sign is the one every other size key here has**, which is worth saying out loud
+    // because `offset by=` is not: `offset` is `field + by`, so a POSITIVE `by` shrinks, which
+    // reads backwards, was documented backwards, and silently deleted every joint in the great
+    // stair. A chamfer's width is a positive number of metres and a bigger one is a bigger
+    // chamfer, exactly as `round by=` and `shell thickness=` are. There is no useful negative:
+    // nought is the plain join and the builders take the absolute value for the slack.
+    ChamferUnion,        // min(min(a,b), (a+b-a[0])/sqrt2): a flat fillet in the valley
+    ChamferDifference,
+    ChamferIntersection, // max(max(a,b), (a+b+a[0])/sqrt2): a flat cut off the arris
+
     // --- moving the point before asking -------------------------------------------------
     Translate,     // by a[0..2]
     Rotate,        // euler xyz, a[0..2] in turns
@@ -156,6 +197,72 @@ enum class Op : u8 {
     // column at the end an author can see.
     PolarRepeat,
 
+    // Tile like `repeat`, and then move, turn and resize every copy by a number drawn from the
+    // cell it stands in: period a[0..2], limit a[3..5], jitter a[6], turn a[7] in turns.
+    //
+    // **This is the one that stops a surface reading as computer graphics.** Gravel, cobbles,
+    // setts, shingle, leaf litter, tesserae, rubble fill, the bosses on a rusticated wall: all of
+    // them are one small shape repeated a few thousand times, and every one of them is ruined by
+    // being repeated EXACTLY. A grid of identical pebbles is instantly a grid, at any density, at
+    // any resolution, from any distance — the eye finds the lattice before it finds the stone.
+    // Authors know this, so what they write instead is the shape out longhand, one translate at a
+    // time, which is why a gravel bed in this repository is a flat box with a `cells` displacement
+    // standing in for one.
+    //
+    // Three numbers drawn per cell, all from the same hash of the cell's own index, so the scatter
+    // is identical on every machine and does not shimmer when the clip is re-sampled:
+    //
+    //   position   moved by up to `jitter` of the cell, on every axis that repeats
+    //   size       scaled by 1 - jitter*u for u in [0,1), which is the same dial: "how irregular"
+    //   turn       spun by up to `turn` turns about the axis that does NOT repeat
+    //
+    // The spin axis is chosen rather than given because there is only one sensible answer and it
+    // is different for each case: a bed of gravel repeats in x and z and its pebbles turn about y;
+    // ivy or barnacles on a wall repeat in x and y and turn about z. So it is the axis with no
+    // period, and y when all three have one. An author never writes it and never gets it wrong.
+    //
+    // **There is no seed, and there is no room for one** — the eight numbers are spent on the
+    // period, the limit, the jitter and the turn. The draw is keyed on the cell's index alone, so
+    // two scatters sharing a period AND an origin move in step. Offsetting one by anything that is
+    // not a whole number of cells decorrelates them completely, which is what an author putting
+    // two things in one bed does anyway.
+    //
+    // The scaling is exact — a uniform scale multiplies the distance back by the same factor — and
+    // the fold consults the leaning neighbours exactly as `repeat` does, so the answer is the true
+    // distance to the nearest copy and not to the copy in this cell. That is what lets a bed of
+    // gravel settle boxes rather than be asked about voxel by voxel.
+    //
+    // It holds only while a copy lies INSIDE its own cell, and that is a stricter demand than the
+    // one `repeat` makes. `repeat` needs only "narrower than a cell", because all its copies sit
+    // the same way in theirs and one that hangs over an edge hangs over every edge equally.
+    // A scatter's copies are placed independently, so one that hangs over can be beaten by a copy
+    // two cells away that jittered toward the point — which OVER-states the distance, and an
+    // over-stated distance is a sampler stepping through matter that is there. So `metric_slack`
+    // checks the position and not just the width, shrink and spin and jitter included, and refuses
+    // to promise anything when a copy does not fit. **Model the thing on its own origin** and it
+    // always does; a pebble modelled 0.06 m off to one side is what found this.
+    //
+    // # What it costs, measured rather than reasoned
+    //
+    // A bed of 625 ellipsoids over 3.6 m square, sampled at metre 128, three interleaved rounds
+    // against the same bed written as a `repeat`:
+    //
+    //   repeat                                   0.22 s of CPU
+    //   scatter, jitter 0.45, turn 0.5           0.32 s        1.4x
+    //
+    // That 1.4 is the whole of the arithmetic: one to eight evaluations of the child, as `repeat`,
+    // plus three hashes per candidate cell, one divide and one multiply for the size, and a sine
+    // and a cosine when `turn` is not nought.
+    //
+    // **And the same bed at a period of 0.09 instead of 0.15 costs 1.14 s — 2.6x — for identical
+    // stones.** Nothing about the arithmetic changed. What changed is that a spun pebble 0.077 m
+    // across, moved by up to 0.041 m, no longer fits in a 0.09 m cell, so `metric_slack` refuses
+    // to promise a distance, so nothing settles and every voxel of the bed is asked one at a time.
+    // The fit test above is therefore not a technicality an author can ignore — it is the
+    // difference between a gravel bed costing 1.4 repeats and costing 2.6 of them, and the lever
+    // is the period, which is free to change.
+    Scatter,
+
     // --- changing the answer --------------------------------------------------------------
     Shell,         // hollow: |d| - a[0]
     Round,         // d - a[0]
@@ -165,15 +272,45 @@ enum class Op : u8 {
     Bend,          // bend about axis a[1] by a[0] turns per metre
 
     // --- patterns: read for value, not sign -------------------------------------------------
+    //
+    // # Every grain below carries a STRETCH, and it is not a convenience
+    //
+    // Value noise, fbm and cells are all ISOTROPIC: their features are as long as they are wide,
+    // in every direction, which is the one thing almost no real surface is. Bark runs up a trunk.
+    // Wood grain runs along a board. Rain streaks run DOWN a wall and rust runs down with them.
+    // Tooling marks run across a stone the way the mason's arm swung. Riven slate splits in one
+    // plane. Every one of those is the same noise with its features ten or twenty times longer on
+    // one axis than the others, and none of them can be written with an isotropic grain — a
+    // vertical streak made of round lumps reads as lumps.
+    //
+    // It cannot be had from `scale` either, and that is worth saying because it looks as though it
+    // can. `scale` divides the point AND multiplies the answer by its smallest factor, which is
+    // exactly right for a solid and wrong for a pattern: stretching a noise eight times along y
+    // through `scale` also divides its amplitude by eight, so the displacement it drives quietly
+    // vanishes. So the stretch lives in the grain itself, where it costs three divides and cannot
+    // touch the value.
+    //
+    // Stored in whatever `a` slots each op has left, and a stored ZERO means one — so every node
+    // built before this existed, and every clip that never writes `stretch=`, is bit-identical.
+    //
+    // **A stretch MULTIPLIES the feature size, so bigger is coarser** — the same direction `size=`
+    // already runs in, and `stretch=8` on one axis is that axis's grain eight times longer. Said
+    // explicitly because the sign of a size in this language has cost real geometry once: `offset
+    // by=` shrinks when it is positive, which is the opposite of every other size key, and it
+    // emptied a whole set of joints in the great stair without producing an error.
     Sine,          // along axis a[0], period a[1] metres, phase a[2] turns
     Waves,         // two sines crossed, on the plane perpendicular to a[0]
-    Noise,         // value noise, feature size a[0], seed a[1]
-    Fbm,           // stacked noise: size a[0], octaves a[1], gain a[2], lacunarity a[3], seed a[4]
+    Noise,         // value noise, feature size a[0], seed a[1], stretch a[2..4]
+    Fbm,           // stacked noise: size a[0], octaves a[1], gain a[2], lacunarity a[3], seed a[4],
+                   // stretch a[5..7]
     Ridged,        // 1 - |fbm|, the sharp-crested one: same arguments
-    Rasp,          // high frequency ridges, for a filed or scratched surface
-    Cells,         // distance to the nearest of a scattered set of points: size a[0], seed a[1]
-    CellEdge,      // how near the boundary *between* two cells: size a[0], seed a[1]. This is
-                   // what a crack is — cells are not the pattern, the seams between them are
+    Rasp,          // high frequency ridges, for a filed or scratched surface: size a[0], depth
+                   // a[1], seed a[2], stretch a[3..5]
+    Cells,         // distance to the nearest of a scattered set of points: size a[0], seed a[1],
+                   // stretch a[2..4]
+    CellEdge,      // how near the boundary *between* two cells: size a[0], seed a[1], stretch
+                   // a[2..4]. This is what a crack is — cells are not the pattern, the seams
+                   // between them are
 
     // --- what the shape is doing here, rather than what is here -------------------------
     //
@@ -345,12 +482,23 @@ public:
     u32 smooth_subtract(const std::vector<u32>& parts, f64 blend);
     u32 smooth_intersect(const std::vector<u32>& parts, f64 blend);
 
+    // The same three with a FLAT cut of `width` metres across the seam instead of a blend — see
+    // Op::ChamferUnion. `chamfer_intersect` is the one an author reaches for most: it takes the
+    // arris off exactly where two faces meet and touches nothing else.
+    u32 chamfer_unite(const std::vector<u32>& parts, f64 width);
+    u32 chamfer_subtract(const std::vector<u32>& parts, f64 width);
+    u32 chamfer_intersect(const std::vector<u32>& parts, f64 width);
+
     // --- moving the point ----------------------------------------------------------------
     u32 translate(u32 child, Vec3 by);
     u32 rotate(u32 child, Vec3 turns);
     u32 scale(u32 child, Vec3 by);
     u32 mirror(u32 child, u32 axis);
     u32 repeat(u32 child, Vec3 period, Vec3 limit);
+    // `repeat` with every copy moved, resized and turned by its own cell's number — see
+    // Op::Scatter. `jitter` is a fraction of the cell and `turn` is in turns; both nought is
+    // `repeat` exactly, and costs the same.
+    u32 scatter(u32 child, Vec3 period, Vec3 limit, f64 jitter, f64 turn);
     // n copies about the axis. Over a whole turn — the default — n copies in n sectors, unchanged.
     // Over an arc, n copies with the first ON `from` and the last ON `to`; see Op::PolarRepeat.
     u32 polar_repeat(u32 child, u32 count, u32 axis, f64 from = 0.0, f64 to = 1.0);
@@ -366,12 +514,17 @@ public:
     // --- patterns ---------------------------------------------------------------------------
     u32 sine(u32 axis, f64 period, f64 phase = 0.0);
     u32 waves(u32 axis, f64 period_a, f64 period_b, f64 phase = 0.0);
-    u32 noise(f64 size, u32 seed);
-    u32 fbm(f64 size, u32 octaves, f64 gain, f64 lacunarity, u32 seed);
-    u32 ridged(f64 size, u32 octaves, f64 gain, f64 lacunarity, u32 seed);
-    u32 rasp(f64 size, f64 depth, u32 seed);
-    u32 cells(f64 size, u32 seed);
-    u32 cell_edge(f64 size, u32 seed);
+    // `stretch` multiplies the feature size along each axis — {1,1,1} is the isotropic grain these
+    // had before it existed, and is what a zero in any component means. See the block above
+    // Op::Sine for why a stretch cannot be had from `scale`.
+    static constexpr Vec3 kNoStretch{1.0, 1.0, 1.0};
+    u32 noise(f64 size, u32 seed, Vec3 stretch = kNoStretch);
+    u32 fbm(f64 size, u32 octaves, f64 gain, f64 lacunarity, u32 seed, Vec3 stretch = kNoStretch);
+    u32 ridged(f64 size, u32 octaves, f64 gain, f64 lacunarity, u32 seed,
+               Vec3 stretch = kNoStretch);
+    u32 rasp(f64 size, f64 depth, u32 seed, Vec3 stretch = kNoStretch);
+    u32 cells(f64 size, u32 seed, Vec3 stretch = kNoStretch);
+    u32 cell_edge(f64 size, u32 seed, Vec3 stretch = kNoStretch);
 
     // --- what the shape is doing, for weathering ------------------------------------------
     u32 curvature(u32 child, f64 radius);

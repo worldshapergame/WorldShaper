@@ -1,0 +1,41 @@
+# entablature-relief-probe — the portico frieze, and nothing else, at metre 32.
+#
+# `paint bronze where=entablature_relief` is one of the rules the fixed paint diagnostic reports as
+# ASKED AND MATCHED NO VOXEL, which means the swags and paterae are wearing the marble under them.
+# The band is 16 m by 0.75 m by 0.40 m, so a metre 32 run of it is instant and the question can be
+# asked as many times as it takes:
+#
+#   ./build/clipcheck clips/facility/requests/entablature-relief-probe.clip --metre 32
+#   ./build/clipcheck clips/facility/requests/entablature-relief-probe.clip --part relief_proud --metre 32
+
+include "../_contract.clip"
+include "../_order.clip"
+
+# The base coat goes BEFORE the fragment, exactly as the manifest has it. A later coat covers an
+# earlier one, so `paint limestone` written after the include paints the whole probe limestone and
+# every rule in the fragment silently loses — which is a probe that reports one material and proves
+# nothing. Cost me a reading of this file.
+paint limestone
+
+include "../entablature.clip"
+
+# The relief on its own, as a shape: 0.0225 m of tube standing out of the frieze face and 0.0225
+# buried in it.
+let relief_only = entablature_relief
+
+# What of it is actually PROUD — the half in front of the frieze face at z = -11.74 and, on the six
+# ressauts, in front of theirs at -11.875. If this is empty the relief is inside the stone and no
+# rule could ever match it.
+let relief_proud = intersection {
+    part_entablature  box -8.0 10.50 -11.99   8.0 11.25 -11.741
+}
+
+# And the band as built, for the material report.
+let relief_band = intersection {
+    part_entablature  box -8.0 10.50 -12.00   8.0 11.25 -11.60
+}
+
+metre 32
+bounds -8.00 10.50 -12.00   8.00 11.25 -11.60
+
+solid relief_band

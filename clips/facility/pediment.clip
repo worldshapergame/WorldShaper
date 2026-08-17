@@ -198,7 +198,81 @@ let pediment_rakes   = mirror { pediment_rake_e } axis=x
 let pediment_gable_e = rotate { box -30 -20 -30   30 0 30 } z=-0.0348020
 let pediment_gable   = mirror { translate { pediment_gable_e } 0 13.70 -11.60 } axis=x
 let pediment_tymp_bx = box -8.10 11.85 -11.60   8.10 13.80 -10.70  round=0.012
-let pediment_tympanum = intersection { pediment_gable pediment_tymp_bx }
+let pediment_tymp_solid = intersection { pediment_gable pediment_tymp_bx }
+
+# ================================================================================================
+# THE ASHLAR — the tympanum laid in courses, which is the only thing on it
+# ================================================================================================
+#
+# 16.20 m by 1.80 m of flat stone is the largest blank face on the south front and, until this, the
+# only one in the building with nothing cut into it at all. The header two hundred lines up says a
+# sculpture group belongs here and is its own fragment; that is still true and this does not
+# pre-empt it. What this is, is the thing that has to be true UNDER a sculpture group and is true
+# without one: a wall is laid in blocks, and at 3.1 cm a voxel the joints between them are matter.
+#
+# THE NUMBERS ARE THE BUILDING'S OWN. Courses of 0.45 (M), blocks of 0.90 (D) broken joint —
+# every other course shifted half a block, which is what running bond is and what stops the eye
+# reading a stack. The groove is 0.045 (M/10) wide and 0.045 deep, the same number as the gap
+# between two dentils, and it is 0.045 and not 0.036 because 0.036 was tried and measured first:
+# at 1.15 voxels it cut 570 voxels out of the finished building where the arithmetic says 1300, so
+# it came out a DOTTED line — a voxel centre has to fall inside the groove to be taken, and at 1.15
+# voxels' width the phase decides whether one does. At 1.44 voxels a centre always falls in, and
+# the joint is continuous everywhere along its length. That is the whole difference between matter
+# and dither and it is worth knowing in metres: 1.15 voxels is not enough for a LINE, whatever it
+# is enough for on a face.
+#
+# IT IS CUT FROM THE TYMPANUM AND THE RAKES TOGETHER, and that is not tidiness. The raking
+# cornice's backing occupies the same stone as the top 0.75 m of this triangle — the two are one
+# solid by sharing volume, which is what the note above says makes the joint between them
+# unopenable. Cut the groove out of only one of them and the other fills it straight back in, which
+# is precisely what entablature.clip was doing to the portico's twenty coffers. Measured both ways
+# before this line was written.
+#
+# The wreath is unioned in AFTER this, so the courses pass behind it and it stands whole on top of
+# them, which is what an applied bronze wreath on a coursed wall does.
+#
+# Nothing here can reach past the tympanum's own face: every cutter is a box 0.045 deep from
+# z = -11.60 inward, and the reference plane is where this part's stone begins. The raking cornice's
+# six mouldings all project SOUTH of -11.60, out to -12.32, so not one of them is touched. Audited:
+#
+#   clipcheck requests/pediment-probe.clip --metre 32 --cuts
+#   pediment_ashlar  carves union#1844  removed 0.066 m3  only-it 0.066
+#                    out of  pediment_tymp_solid 0.04   pediment_rakes 0.03
+#
+# and it is the ONLY cut in the whole building that reaches the gable at all.
+let pediment_ash_course = box -9 -0.0225 -11.61   9 0.0225 -11.555
+let pediment_ash_vert   = box -0.0225 -9 -11.61   0.0225 9 -11.555
+
+# Three course lines. The springing is 11.90 and the apex 13.70, so 0.45 gives four courses of
+# stone and three joints between them; the fourth line would be the apex itself and there is no
+# stone above it to bed.
+let pediment_ash_courses = union {
+    translate { pediment_ash_course } 0 12.35 0
+    translate { pediment_ash_course } 0 12.80 0
+    translate { pediment_ash_course } 0 13.25 0
+}
+
+# The vertical joints, 0.90 apart, and the seed sits at x = 0 of its own repeat for the reason
+# `_order.clip` gives: a copy straddling a cell boundary makes the whole expression infinitely
+# slack. nx=9 carries it to +-8.10, which is the span. The odd courses are the same line moved half
+# a block, and each set is taken with the two courses it belongs to.
+let pediment_ash_va = repeat { pediment_ash_vert } x=0.90 nx=9
+let pediment_ash_vb = translate { pediment_ash_va } 0.45 0 0
+let pediment_ash_ca = box -9 11.85 -12   9 12.35 -10
+let pediment_ash_cb = box -9 12.35 -12   9 12.80 -10
+let pediment_ash_cc = box -9 12.80 -12   9 13.25 -10
+let pediment_ash_cd = box -9 13.25 -12   9 13.80 -10
+
+let pediment_ashlar = union {
+    pediment_ash_courses
+    intersection { pediment_ash_va union { pediment_ash_ca pediment_ash_cc } }
+    intersection { pediment_ash_vb union { pediment_ash_cb pediment_ash_cd } }
+}
+
+let pediment_face = difference {
+    union { pediment_tymp_solid pediment_rakes }
+    pediment_ashlar
+}
 
 # ================================================================================================
 # THE ACROTERIA — apex and both lower corners
@@ -246,7 +320,7 @@ let pediment_wreath = torus 0 12.35 -11.60  ring=0.36 tube=0.045 axis=z
 # ================================================================================================
 
 let part_pediment = union {
-    pediment_tympanum pediment_rakes
+    pediment_face
     pediment_corners pediment_apex
     pediment_wreath
 }

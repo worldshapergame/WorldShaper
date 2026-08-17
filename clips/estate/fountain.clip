@@ -1036,6 +1036,19 @@ let fc_wz_basin = union {
         cylinder 0 0.40  0  r=4.90 h=0.40 axis=y
     }
 }
+# AND ONE OF THE THREE COATS `sea` ADDS CAN NEVER FIRE HERE, WHICH IS CORRECT AND IS WRITTEN DOWN
+# RATHER THAN CHASED. `clipcheck --metre 8` reports "1 of 26 rules was asked and MATCHED NO VOXEL",
+# and splitting the three weathering statements into separate arms puts it in this one. It is
+# BARNACLE. The coat's test is `below x smoothstep(cells)` against a threshold of 0.55 - 0.4a =
+# 0.454, and `below` is a smoothstep from the tide line DOWN over 0.9 x scale = 0.63 m — so it only
+# reaches 1 at 0.63 m under the water. This basin is 0.27 m deep and its floor is 0.135, which puts
+# `below` at 0.39 at the deepest point in the clip: under the threshold everywhere, always.
+#
+# The right answer is to leave it. Barnacles do not grow in a garden fountain, and `sea` is here for
+# the other two coats — the salt line above the water and the weed in the joints below it, both of
+# which fire. Raising the amount to 0.40 or dropping the scale to 0.35 would light the coat and put
+# shellfish in fresh water; the coat costs nothing but the evaluation, and the arithmetic is here so
+# that the next person meets it as a decision rather than as a mystery.
 weather sea 0.24 scale=0.7 seed=31 level=0.405 on=fc_wz_basin
 
 # THE GROTTO SCOPE IS A SKIN AND A HOLLOW, NOT THE WALL. Every weathering test reads `cavity`, and

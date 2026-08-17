@@ -21,6 +21,21 @@
 # against a 0.03125 m voxel, so whether it exists at all depends on a cell centre landing inside
 # it. It is written from 0.00 to 0.03 in z and not from -0.015 to +0.015 for exactly that reason.
 #
+# WHAT IT MEASURES AT THE METRE IT CLAIMS, which this file had never had written down:
+#
+#   ./build/clipcheck clips/estate/campanile.clip --metre 32
+#   volume        16,434,900 voxels     surface 2,365,714 faces, 2310.27 m2
+#   materials     17 distinct, and EVERY ONE OF THIS FILE'S NINETEEN PAINT RULES MATCHES A VOXEL
+#   components    499, largest 16,433,532, 544 floating voxels in all
+#   worldbox      -5.500 -0.625 -5.469   5.469 34.688 5.469 m
+#
+# 499 COMPONENTS AND 544 FLOATING VOXELS IS 1.1 VOXELS PER PIECE, and the largest component is
+# 99.9917 per cent of the matter: it is speckle and not structure. It is where this file says it
+# will be — the 0.03 louvres and the vane at one voxel, the crown of the roof, and chips knocked
+# off by `weather cracks`, which is what a 16 mm fissure does when it meets itself round a corner.
+# At metre 8 the same clip reports 91 and 283, and the difference between the two is the thin metal
+# existing at all. Nothing structural floats at either.
+#
 # ================================================================================================
 # WHAT THIS PART PUTS UNDER LOAD — this is the half of what it is FOR, and it comes first.
 # ================================================================================================
@@ -372,20 +387,77 @@ let camp_slits = union { camp_slit_s camp_slit_e camp_slit_n }
 # upstand, not a trip: measure.cpp reads any rise between 0.19 and 0.75 as a step somebody meant to
 # take, and 0.90 is a wall.
 #
-# Written for the +z face and turned by `around count=4`, which is sound here because the whole
-# void lies inside 40 degrees of that face's own 90 degree sector.
+# ================================================================================================
+# AND THEY ARE FOUR ROTATIONS AND NOT `around`, BECAUSE `around` BUILT NONE OF THEM AT ALL
+# ================================================================================================
+#
+# This was written `around { camp_belf_bay } count=4 axis=y` with a comment saying that was "sound
+# here because the whole void lies inside 40 degrees of that face's own 90 degree sector". It is
+# not, and the sector it has to lie inside is not the one that reads as its own.
+#
+# `Op::PolarRepeat` folds the ASKING POINT by angle into ONE fundamental sector and evaluates the
+# child there, exactly as `mirror` folds a coordinate and evaluates the child at |x|. For `axis=y`
+# the angle is `atan2(z, x)`, so with count=4 the fundamental sector is the 90 degrees CENTRED ON
+# +X — and the set it builds is four copies of `child INTERSECTED WITH THAT SECTOR`. This bay is
+# drawn on +Z, which is 90 degrees away: it has nothing at all inside the fundamental sector, so
+# `around` copied nothing four times. Not a thin result, not a misplaced one. EMPTY.
+#
+# It is `mirror`'s trap in polar coordinates — the one `pavilion.md` writes up at length for the
+# Cartesian case — and it is worse here, because the same three words were used four times in this
+# file and every one of them was drawn on +Z or on +Y:
+#
+#   camp_belf_voids   the eight biforate openings — THE MOTIF THIS TOWER EXISTS FOR — never cut,
+#                     so the belfry was a solid block of masonry with a sealed chamber inside it
+#   camp_colonnettes  the four marble colonnettes: absent
+#   camp_louvres      the twenty iron louvres: absent
+#   camp_clock_marks  the twelve gilt hour marks: absent
+#
+# Measured, each `--part` at metre 32 before the change: EMPTY, EMPTY, EMPTY, EMPTY. The building
+# sampled, measured, painted and reported one component throughout, and the clipcheck line that
+# would have said so — a paint rule that matches no voxel — could not print until today.
+#
+# Written as explicit rotations it is exact, it is four nodes rather than one, and it carries a
+# bounding box where a polar fold carries none and declares the whole clip's metric slack infinite
+# besides. Every other building on this estate already refuses `around` for that second reason;
+# this file now refuses it for the first.
 let camp_belf_light = box -1.575 25.20 1.90   1.575 27.675 2.80
 let camp_belf_head_a = cylinder -0.90 27.675 2.35 r=0.675 h=0.90 axis=z
 let camp_belf_head_b = cylinder  0.90 27.675 2.35 r=0.675 h=0.90 axis=z
 let camp_belf_bay = union { camp_belf_light camp_belf_head_a camp_belf_head_b }
-let camp_belf_voids = around { camp_belf_bay } count=4 axis=y
+let camp_belf_voids = union { camp_belf_bay
+                              rotate { camp_belf_bay } y=0.25
+                              rotate { camp_belf_bay } y=0.50
+                              rotate { camp_belf_bay } y=0.75 }
 
 # THE CLOCK'S RECESS is cut with the rest of the voids and so has to be bound here, above them;
 # everything else about the clock is built with the fittings further down.
 let camp_clock_recess = cylinder 0 22.05 -2.59 r=1.395 h=0.32 axis=z
 
+# AND THE STRIPS ARE CUT BACK TO A CIRCLE ROUND IT, WHICH THE HEADER'S CLAIM OF "BLIND WALL BY THE
+# METRE" DID NOT ALLOW FOR AND THE PROBE BELOW FOUND.
+#
+# The clock is 2.79 across the bezel. The panel it stands in is 1.80: the lesene strips run the
+# WHOLE height of the shaft at 0.90 .. 1.34 either side of the face centre, so a disc of radius
+# 1.395 crosses BOTH of them. The recess above is 0.32 deep from z = -2.75, and the strips stand
+# from -2.825 to -2.60 — so the recess bit 0.15 out of each strip and left the front 0.075 of it
+# standing: TWO VERTICAL SLIVERS OF LIMESTONE, 75 mm thick and two metres tall, across the face of
+# the clock, with the marble dial 0.14 behind them. Nothing in the extent, the components or the
+# materials says a word about it, and no elevation drawn on paper would either.
+#
+# Measured, `--part campanile_probe_clock` (the probe is at the foot of the head-height section):
+# 0.041 m3 of masonry standing in front of the dial before this cutter, an EMPTY clip after.
+#
+# So the strips die into a circle of radius 1.44 — 0.045 outside the bezel, which leaves a ring of
+# plain ashlar between the two rather than a butt joint — and the cutter runs from 0.20 in front of
+# the strips to 0.02 INSIDE the wall face. Not to the face itself: a cutter whose end lies exactly
+# on the plane it must not pass leaves the carved field at nought across that whole disc, and 16 mm
+# of grain on a field that touches nought is the one-voxel sheet the stair well's own note is
+# about. 0.02 is under a voxel at metre 32, so what it takes off the ashlar is one cell of the
+# 45 mm ring outside the bezel and nothing anybody can see.
+let camp_clock_field = cylinder 0 22.05 -2.79 r=1.44 h=0.22 axis=z
+
 let camp_voids = union { camp_well camp_chamber camp_cornice_eye camp_door
-                         camp_slits camp_belf_voids camp_clock_recess }
+                         camp_slits camp_belf_voids camp_clock_recess camp_clock_field }
 
 # ================================================================================================
 # THE CARVE — and everything that stands INSIDE the shaft goes back after it
@@ -485,8 +557,41 @@ let camp_spandrel_raw = union {
 # AND THE WHOLE HELIX IS TURNED BY -2/33 OF A TURN. That is the number worked out in the header:
 # it puts tread 134's front edge on the +x axis, so the belfry's well is the north half of the
 # chamber and its floor is the south half, and neither of them has to be a hand-cut sector.
-let camp_stair    = rotate { camp_tr_134 }       y=-0.06060606
-let camp_spandrel = rotate { camp_spandrel_raw } y=-0.06060606
+#
+# ================================================================================================
+# AND BOTH ARE CAUGHT IN THE WELL'S OWN BOX, WHICH IS THE CHEAPEST LINE IN THIS FILE
+# ================================================================================================
+#
+# `rotate` bounds a shape by the box round WHERE ITS CORNERS LAND. A tread is squared off to
+# +-2.065 so that it runs into all four walls; turned by 21.8 degrees, that square's corners reach
+# 2.68, and the union of a hundred and thirty-four of them reports a box of +-2.92 — which is past
+# the outer face of the tower at 2.70. So the stair's box contained the whole wall thickness and
+# the air outside it, and a union cannot skip a child whose box it is inside: EVERY evaluation
+# anywhere in the masonry, and every one of the hundred and forty the weathering takes for each of
+# them, walked the entire stair.
+#
+# The clip takes nothing. A tread's own square stops at 2.075 after its round, so everything this
+# box removes is the corner of a tread BURIED IN THE STONE at the four corners of the well, where
+# the wall is 0.675 thick. The spandrel is the same shape and the same argument.
+#
+# MEASURED, both arms, same command, twice each, two copies of this file differing in these three
+# lines and nothing else. CPU seconds, on a machine carrying a load average near forty, which is
+# why the slow arm's runs disagree with each other and the fast one's do not:
+#
+#            metre 4                    metre 8
+#   before   37.6   27.4                190.8   186.3
+#   after    13.1   13.1                 88.4    87.4
+#
+# 2.5 times at metre 4 and 2.15 at metre 8, for a box. AND THE CLIP IS THE SAME CLIP: 291,464
+# voxels against 291,460, 39 components against 39, 215 floating voxels against 215. The four are
+# at the well's corners, where clipping the stair changes the DISTANCE the field reports inside the
+# wall and therefore what the weathering's curvature reads there; no surface anybody can see moved.
+#
+# The number to watch is not the stair's own cost — sampled ALONE, as `--part camp_stair`, it is
+# 0.3 of a second — it is that the stair sat inside the weathering's multiplier and now does not.
+let camp_well_box = box -2.08 -0.65 -2.08   2.08 24.60 2.08
+let camp_stair    = intersection { rotate { camp_tr_134 } y=-0.06060606  camp_well_box }
+let camp_spandrel = intersection { rotate { camp_spandrel_raw } y=-0.06060606  camp_well_box }
 
 # ================================================================================================
 # THE BELFRY FLOOR AND ITS PARAPET
@@ -516,7 +621,12 @@ let camp_col_cush  = intersection { box -0.225 27.20 2.1375   0.225 27.585 2.587
                                     sphere 0 27.585 2.3625 r=0.42 }
 let camp_col_abacus = box -0.2475 27.575 2.115   0.2475 27.72 2.61
 let camp_col_one = union { camp_col_base camp_col_shaft camp_col_cush camp_col_abacus }
-let camp_colonnettes = around { camp_col_one } count=4 axis=y
+# Four rotations and not `around` — see the belfry openings above for what `around` did with a
+# child drawn on +Z, which is what this one is too.
+let camp_colonnettes = union { camp_col_one
+                               rotate { camp_col_one } y=0.25
+                               rotate { camp_col_one } y=0.50
+                               rotate { camp_col_one } y=0.75 }
 
 # THE LOUVRES — five iron slats to a head, 0.03 thick, tilted a sixteenth of a turn.
 #
@@ -535,7 +645,10 @@ let camp_louvre_stack = translate {
 # so this bites each slat 0.05 into the voussoirs at both ends.
 let camp_louvre_heads = offset { union { camp_belf_head_a camp_belf_head_b } } by=-0.05
 let camp_louvre_one = intersection { camp_louvre_stack camp_louvre_heads }
-let camp_louvres = around { camp_louvre_one } count=4 axis=y
+let camp_louvres = union { camp_louvre_one
+                           rotate { camp_louvre_one } y=0.25
+                           rotate { camp_louvre_one } y=0.50
+                           rotate { camp_louvre_one } y=0.75 }
 
 # ================================================================================================
 # THE BELL — bronze, 1.35 across the mouth, hollow, on an oak headstock
@@ -624,8 +737,19 @@ let camp_lanterns = union { camp_lanterns_frame camp_lanterns_glass }
 let camp_clock_disc   = cylinder 0 22.05 -2.495 r=1.35 h=0.23 axis=z
 let camp_clock_bezel  = difference { cylinder 0 22.05 -2.595 r=1.395 h=0.39 axis=z
                                      cylinder 0 22.05 -2.595 r=1.26 h=0.50 axis=z }
+# TWELVE MARKS AS THREE ROTATIONS TAKEN ROUND FOUR QUARTERS, and not `around count=12` — which
+# built none of them, for the reason set out at the belfry openings: the mark is drawn at TWELVE
+# O'CLOCK, straight up the +y axis, and a polar fold about z has its fundamental sector centred on
+# +x, thirty degrees away. Three at a twelfth of a turn make a quarter; four quarters make the
+# clock; and every one of them is an isometry carrying an honest box.
 let camp_clock_mark = box -0.045 1.035 -0.045   0.045 1.215 0.045
-let camp_clock_marks = translate { around { camp_clock_mark } count=12 axis=z } 0 22.05 -2.61
+let camp_clock_quarter = union { camp_clock_mark
+                                 rotate { camp_clock_mark } z=0.08333333
+                                 rotate { camp_clock_mark } z=0.16666667 }
+let camp_clock_marks = translate { union { camp_clock_quarter
+                                           rotate { camp_clock_quarter } z=0.25
+                                           rotate { camp_clock_quarter } z=0.50
+                                           rotate { camp_clock_quarter } z=0.75 } } 0 22.05 -2.61
 let camp_hand_hour = box -0.06 -0.12 -0.05   0.06 0.72 0.05
 let camp_hand_min  = box -0.045 -0.12 -0.05  0.045 1.08 0.05
 let camp_clock_hands = translate {
@@ -767,6 +891,17 @@ let camp_probe_door = box -3.60 0.00 -0.45   -1.90 2.40 0.45
 
 let camp_probe_all = union { camp_probe_rake camp_probe_floor
                              camp_probe_belf camp_probe_door }
+
+# THE SECOND PROBE, AND IT IS THE SAME KIND OF MEASUREMENT AIMED AT A CUT RATHER THAN AT A PERSON.
+#
+#     ./build/clipcheck clips/estate/campanile.clip --metre 32 --part campanile_probe_clock
+#
+# must report an EMPTY clip. It is the air in front of the clock's dial — the wall face out to the
+# disc's own radius — intersected with the CARVED masonry, so anything of the building standing
+# between a person on the ground and the clock face shows up as a volume. Before `camp_clock_field`
+# it held the two lesene strips the recess had sliced rather than cleared; see the note there.
+let campanile_probe_clock = intersection { camp_carved
+                                           cylinder 0 22.05 -2.775 r=1.35 h=0.15 axis=z }
 # AGAINST `camp_all_raw` AND NOT AGAINST `part_campanile`, which is the same choice stair.clip
 # makes: the grain displaces the masonry outward by up to 12 mm at the very end, and a probe whose
 # floor lies exactly on a tread top would then report every tread in the tower. The clearances this

@@ -123,7 +123,20 @@ TEST_CASE("a pool with two submitters says so, and two pools do not collide") {
     const auto hold = [&](usize, usize) {
         if (holding.exchange(true, std::memory_order_acq_rel)) return;
         JobSystem* const pool = watched.load(std::memory_order_acquire);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        // THIRTY SECONDS AND NOT FIVE, and the number is about the machine rather than the code.
+        //
+        // The collision is recorded when the second thread REACHES `parallel_for`, so all this wait
+        // has to do is hold the first pass open until that happens. Five seconds is forever on an
+        // idle box and not always enough on a busy one: with twenty other processes on four cores
+        // the second thread was not scheduled inside the deadline, the wait expired, the pass
+        // closed, and `submitter_collisions() > 0` failed on a build with nothing wrong with it.
+        // Measured here at load average 30: one run in three.
+        //
+        // A test that fails at random is worse than no test, because it teaches everybody to re-run
+        // it and then to disbelieve it. This costs nothing when the detector works -- the loop
+        // returns the instant the collision lands -- and only a broken detector ever pays the full
+        // wait, which is exactly the case that should be slow and loud.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         while (std::chrono::steady_clock::now() < deadline) {
             if (second_in.load(std::memory_order_acquire) &&
                 (pool == nullptr || pool->submitter_collisions() > 0)) {
