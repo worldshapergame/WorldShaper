@@ -602,7 +602,42 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### START HERE — where it stands on 2026-08-16, and the first three things to do
+#### START HERE — 2026-08-17: the fifteen are assembled, and what is left of them
+
+**The clip viewer's fifteen ported features are in ONE build on
+`claude/facility-building-overhaul-deuuxo`.** They were fifteen finished branches that nobody could
+open; thirteen of them merged today, on top of the two that were already in. What a player sees is
+in `documentation/24-clip-viewer.md`; what the merge cost and found is `26-viewer-integration.md`
+§0 and D670 in the decision log. The short version:
+
+- the sun casts shadows, surfaces reflect the room rather than the sky, glass has something behind
+  it, stone you can see into glows, and the ◉ shapes view is painted with **the clip's own rules**
+  rather than a hash of each shape's placement — which was the question that started the work;
+- **`UNIT` in `web/js/gl.js` is the texture-unit register.** A feature takes a name from it, never a
+  number. Three branches picked unit 2 and every one was right alone;
+- **one chunk directory**, `append_chunks` in the baker and `clip.chunk('FOUR')` in `format.js`.
+  Seven were written. Adding a baked block is one push and one read.
+
+**The three things to do next on the viewer, in this order:**
+
+1. **The lean build is the one piece that did not land.** `#define WS_LEAN` deleted the branches for
+   lobes `gl.js`'s `main()` used to own; those lobes are in `web/js/features/brdf.js` now, behind
+   its own `#if WS_LOBE_*` defines. `withShared` takes a `lean` flag and ignores it. Rebuilding that
+   arm means driving brdf.js's defines from `Renderer.setQuality`, which is a real change and not a
+   merge. **Nothing is measurably wrong without it** — §7 of `26-viewer-integration.md` took the
+   control and four branched-around lobes cost nothing on SwiftShader — but SwiftShader is not a
+   phone and that is exactly why the arm exists.
+2. **Bake the facility fragments and look at one.** Everything verified today is a small clip. §9
+   says a facility fragment asks for 338,060 field-node evaluations per pixel and the budget in
+   `paintcost.js` is what stands between that and a hung tab; the boundary where the ◉ view goes
+   grey has been reasoned about and not yet walked towards.
+3. **`apply_origin` is still translating a paint rule's `test` and not its `place`**, and
+   §8 confirmed it against `forge::sample` itself with a control: every placed weathering coat in
+   the facility and the estate paints nothing, silently, in the GAME. It is one shift in
+   `plan_sample`, `--place-check` in `tools/paintcheck.cpp` is its regression test, and `src/forge`
+   belongs to the other line of work.
+
+#### Where it stood on 2026-08-16, and the first three things to do then
 
 **What landed today, in the order a player would notice it:**
 

@@ -3327,3 +3327,50 @@ where you spawn is the middle of the rotunda floor; that line moved the building
 did not move the *names* of the parts. Nothing had ever asked for a part by name afterwards, so
 nothing had ever noticed. It is the kind of mistake that produces no error and no crash — just a
 wrong picture — and a picture is exactly what was missing until now.
+
+## The website now draws light the way the game does
+
+The paragraph above says the site does not do the light, and it is now half out of date, so here is
+what changed.
+
+Fifteen separate pieces of the game's own way of lighting a scene have been ported to the website
+and put into one build. What that means to look at:
+
+**The sun casts shadows.** Before, a wall was bright if it faced the sun and dark if it did not,
+whether or not the building was in the way. Now the portico throws its shadow across the steps and a
+column throws one across the wall behind it, with the soft edge a real shadow has — the sun is half
+a degree wide, so a shadow thrown three metres has a crisp edge and one thrown forty metres has a
+soft one, and both are drawn.
+
+**Corners are dark.** A coffer, a flute in a column, the back of a niche — every recess in the
+building is now darker than the flat wall beside it, which is what makes carved stone read as carved
+rather than as a photograph of stone.
+
+**Light bounces, and it carries colour.** A white vault over a porphyry floor now goes faintly warm,
+because the light that reached it came off the floor. That single effect is most of the difference
+between a room that looks lit and a room that looks painted.
+
+**A polished floor reflects the room.** Not a picture of the sky — the actual posts, walls and
+furniture standing around it. Two metals a polish apart now read as two different metals.
+
+**Glass has something behind it.** Look through a pane at an angle and what is behind it moves, the
+way it does through real glass, and a thick piece of coloured glass takes more colour out of what
+passes through it than a thin one does.
+
+**Lamps light the room they are in.** A sconce in one hall now lights that hall and not the one next
+door.
+
+**Cutting the building open shows the right stone.** Drag the slider through a wall and the cut face
+is the material actually there — porphyry where the bands are, limestone where the wall is — instead
+of one colour for the whole clip.
+
+**And the ◉ button's colours are the clip's own.** That button draws the building as it was written,
+with no voxels at all, at infinite sharpness. Until today its colours were made up: every shape got
+*a* material rather than *its* material. Now it runs the clip's real paint rules at the point you
+are looking at, so the moss is where the moss is. The two views will never agree pixel for pixel —
+one asks "what is at this exact point on the surface" and the other asks "what is at the centre of
+this voxel", and where a pattern is finer than a voxel those are honestly different questions — but
+both are now answering with the same rules.
+
+One piece was deliberately left out: a faster version of the shader for weak phones, which needs
+rebuilding against the new material model rather than merging. Nothing looks different without it.
