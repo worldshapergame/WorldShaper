@@ -909,15 +909,17 @@ let stair_probe_cut = intersection { stair_east void_windows }
 # leaves 3.50 m of array under it, and `longest_clear` finds that instead — it reported "3.500 m,
 # OPEN at the near end" on a passage 3.015 m high, which is a plausible number and the wrong one.
 # A ruler has to be longer than the thing it measures in every direction it does not measure.
-let stair_rig_floor = box   6.15 -12.00 -16.50   15.30  1.80  8.50
-let stair_rig_south = box   6.15 -12.00 -16.50   15.30 25.00  2.940
-let stair_rig_north = box   6.15 -12.00   6.600  15.30 25.00  8.50
-let stair_rig_lid   = box   6.15   7.50   2.940  15.30 25.00  6.600
-let stair_rig_west  = box -17.50 -12.00 -16.50    6.15 25.00  8.50
-let stair_rig_east  = box  15.30 -12.00 -16.50   17.50 25.00  8.50
+# IT DOES NOT BOUND x, so `--gap x@...` on it measures the box and not the stair. That is on
+# purpose: the walls it would need reach across most of the clip, and a ruler that takes minutes to
+# sample is a ruler nobody picks up. The one dimension that runs along x — how wide the half
+# landing is to cross — is measured by `stair_probe_land` instead, which is a 1.34 m box standing
+# on it that has to come back empty.
+let stair_rig_floor = box 6.15 -12.00 -16.50   15.30  1.80  8.50
+let stair_rig_south = box 6.15 -12.00 -16.50   15.30 25.00  2.940
+let stair_rig_north = box 6.15 -12.00   6.600  15.30 25.00  8.50
+let stair_rig_lid   = box 6.15   7.50   2.940  15.30 25.00  6.600
 let stair_rig = union {
     stair_east stair_rig_floor stair_rig_south stair_rig_north stair_rig_lid
-    stair_rig_west stair_rig_east
 }
 
 # ================================================================================================
