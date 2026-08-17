@@ -1,0 +1,45 @@
+# portico-flute-probe — one horizontal slice of one column shaft, at metre 32, and nothing else.
+#
+# The question is whether the twenty-four flutes are IN THE BUILDING. The portico's whole first load
+# claim rests on them and no report in this repository has ever counted one:
+#
+#   ./build/clipcheck clips/facility/requests/portico-flute-probe.clip --metre 32 --slice y@5.00
+#
+# The box is 1.4 m cubed and 0.2 m tall, so a metre 32 run is instantaneous and can be repeated
+# against any change to the order.
+
+include "../_contract.clip"
+include "../_order.clip"
+include "../portico.clip"
+
+paint limestone
+
+# The inner column of the portico, where portico.clip stands it: axis x = 1.35, z = -11.15, foot at
+# y = 1.80. Sliced at y = 5.00, which is mid-shaft, well clear of base and capital.
+let flute_column = translate { ionic_column } 1.35 1.80 -11.15
+
+# The shaft's own two halves, so the failure can be seen in the parts rather than only in the whole:
+# the plain revolved solid, and the shrunken copy the flutes are supposed to be cut down to.
+let flute_solid = translate { shaft_solid } 1.35 2.25 -11.15
+let flute_floor = translate { shaft_floor } 1.35 2.25 -11.15
+
+# What SHOULD be missing: the plain shaft less the fluted one. If the flutes are cut this is
+# twenty-four hollows; if they are not it is empty, and empty is the fault.
+let flute_gone = difference { flute_solid translate { order_shaft } 1.35 2.25 -11.15 }
+
+# The same shaft as the portico actually stands it, with the local flute cut in. This is the arm
+# that has to show twenty-four notches; `flute_column` above is the control and shows none.
+let flute_portico = intersection { part_portico box 0.75 5.20 -11.75  1.95 5.40 -10.55 }
+
+# The slab is 5.20 .. 5.40 and NOT 4.90 .. 5.10, because a drum joint stands at 4.95 and it removes
+# a 0.045 m ring 0.0675 deep — a quarter of the slab's height at a quarter of its area. Measuring
+# the flutes through it charges them with the joint as well, which is how the first reading of this
+# probe came out at 27% when the flutes are 11%.
+# The whole shaft, for a vertical section that shows the seven drum joints at once:
+#   --part flute_shaft --metre 32 --slice z@-11.15
+let flute_shaft = intersection { part_portico box 0.75 2.20 -11.75  1.95 8.60 -10.55 }
+
+metre 32
+bounds 0.75 2.20 -11.75   1.95 8.60 -10.55
+
+solid flute_portico

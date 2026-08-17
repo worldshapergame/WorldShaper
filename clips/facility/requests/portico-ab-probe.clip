@@ -1,0 +1,26 @@
+# portico-ab-probe — the control arm's probe: it names NOTHING that this change introduced.
+#
+# The other three probes bind `portico_flutes`, `portico_drum_cut` and the rest, so under a
+# `git stash` they do not parse and there is no before-arm to compare against. This one refers only
+# to `part_portico` and `built`, which both arms have, so the same two commands can be run either
+# side of the stash and the numbers put beside each other:
+#
+#   git stash push -- clips/facility/portico.clip clips/facility/entablature.clip clips/facility/pediment.clip
+#   ./build/clipcheck clips/facility/requests/portico-ab-probe.clip --part part_portico --metre 32
+#   ./build/clipcheck clips/facility/requests/portico-ab-probe.clip --part ab_ceiling   --metre 32
+#   git stash pop      and the same two again
+
+include "../../facility.clip"
+
+# The origin, cancelled — see portico-probe.clip for why every part is otherwise sampled 3.50 m
+# outside its own box.
+origin 0 3.50 0
+
+# The portico's ceiling as the FINISHED building has it. Twenty coffers 0.90 square by 0.205 deep
+# either are in this box or are not.
+let ab_ceiling = intersection { built  box -7.65 9.85 -11.15   7.65 10.85 -7.35 }
+
+metre 32
+bounds -8.2 1.5 -12.4   8.2 11.0 -7.0
+
+solid part_portico

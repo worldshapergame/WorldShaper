@@ -1,0 +1,72 @@
+# entablature-probe — the whole building, sampled only in the 2.00 m band the entablature occupies.
+#
+# Same shape of instrument as portico-probe.clip and for the same reason: the questions are about
+# what one part's cut does to another part, so every void in the building has to be in scope, and
+# only the manifest has them all.
+#
+#   ./build/clipcheck clips/facility/requests/entablature-probe.clip --part probe_bite_all --metre 16
+
+include "../../facility.clip"
+
+# The origin, cancelled. See the note in portico-probe.clip: `apply_origin` moves the bounds and the
+# solid together and `--part` replaces the solid afterwards, so without this every part is sampled
+# 3.50 m outside its own box.
+origin 0 3.50 0
+
+# --- what somebody else's cut takes out of mine -------------------------------------------------
+let probe_bite_doors   = intersection { part_entablature void_doors }
+let probe_bite_windows = intersection { part_entablature void_windows }
+let probe_bite_rooms   = intersection {
+    part_entablature
+    union { void_vestibule void_rotunda void_halls void_stair
+            void_crypt void_salon void_chapel void_ballroom void_library void_enfilade }
+}
+let probe_bite_all = union { probe_bite_doors probe_bite_windows probe_bite_rooms }
+
+# --- my own cut: the core taken out of the ring -------------------------------------------------
+#
+# The only `difference` in the file. These are its two arms and the set between them.
+let probe_ring_cut   = entablature_ring
+let probe_ring_uncut = intersection {
+    entablature_south entablature_north entablature_ew
+}
+let probe_ring_gone  = difference { probe_ring_uncut entablature_ring }
+
+# Does the core reach anything that is not the ring? It is a 30 x 2.1 x 13 m box and it sits inside
+# the whole of the building's second storey, so the answer is only "no" because it is subtracted
+# from one expression and not from the building. This measures what it WOULD take if it ever were.
+let probe_core_over = intersection {
+    entablature_core
+    union { part_walls part_portico part_pediment part_parapet part_roof part_drum }
+}
+
+# --- the dentil band, in the finished building against my own part ------------------------------
+#
+# 913 blocks with a 0.045 m hole between each pair. If anything unions the band shut the volume in
+# the box goes UP and the holes are gone; the two numbers being equal is the whole test.
+let probe_dent_box   = box -16.40 11.20 -8.30   16.40 11.42 -7.60
+let probe_dent_mine  = intersection { part_entablature probe_dent_box }
+let probe_dent_built = intersection { built probe_dent_box }
+
+# The same question at the portico front, where the ressauts stand 0.135 further out and the
+# recessed band runs on behind them.
+let probe_pdent_box   = box -8.30 11.20 -12.10   8.30 11.42 -11.50
+let probe_pdent_mine  = intersection { part_entablature probe_pdent_box }
+let probe_pdent_built = intersection { built probe_pdent_box }
+
+# --- the portico frieze relief, 0.0225 m proud --------------------------------------------------
+#
+# A cut that removed nothing is silent; so is a relief that stood nothing proud. This is the stone
+# in front of the frieze face across the portico: if the swags and paterae are there it is a few
+# hundred litres, and if they were flattened by whatever is unioned over them it is nothing.
+let probe_relief_box   = box -8.00 10.50 -11.95   8.00 11.20 -11.73
+let probe_relief_mine  = intersection { part_entablature probe_relief_box }
+let probe_relief_built = intersection { built probe_relief_box }
+
+# `solid all`, so `--cuts` audits every subtraction in the building that reaches the 2.00 m band
+# this part occupies, not only my own. `--part part_entablature` narrows it when the question is
+# about my own geometry.
+metre 16
+bounds -17.0 9.70 -13.0   17.0 12.10 8.5
+
+solid all
