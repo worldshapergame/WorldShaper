@@ -227,6 +227,7 @@ set(WS_TEST_SOURCES_HEADLESS
     tests/test_pass_ledger.cpp
     tests/test_node_pool.cpp
     tests/test_world_cache.cpp
+    tests/test_world_cache_edits.cpp
     tests/test_world_stipple.cpp
     tests/test_face_store.cpp
     tests/test_field_gpu.cpp)

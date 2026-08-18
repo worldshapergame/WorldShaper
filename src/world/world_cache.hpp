@@ -39,6 +39,34 @@
 //
 // The two formats do not compete. A save is what a world *is*; this is what a world *was*, when
 // re-deriving it would be slower than remembering it.
+//
+// # Why a world can be written as a clip plus its edits — R11f
+//
+// Everything above is about not paying twice for the same answer. What it does not answer is why
+// the answer has to be *written down* at all. A world built from a clip and never touched is
+// recoverable from the clip: the same source at the same resolution over the same leaf set gives
+// the same voxels back, and the file is then several hundred megabytes of something already on
+// disk in two hundred lines of script.
+//
+// What is NOT recoverable is the handful of things a clip does not say. Which boxes the ladder
+// sharpened and how far (`CachedRegion`), what the despeckler was allowed to touch
+// (`CachedStipple`), where the lamps are (`CachedEmitters`) — and, the one that matters most,
+// every voxel somebody changed. A clip has no idea a player cut a doorway through its wall.
+//
+// So a file may be written in `WorldCacheMode::EditOnly`, where the voxel payload is not the world
+// but the DIFFERENCE between the world and the one its clip builds. The reader is handed that
+// clip-built world — the `baseline` — and lays the difference over it. A brick nobody touched is
+// not in the file at all; a brick somebody carved is in the file whole.
+//
+// **This is the one thing here that can lose somebody's building, and every decision below is made
+// that way round.** A world that comes back slow is a nuisance; a world that comes back missing a
+// carving is the reason people stop trusting a save. Concretely that means: the mode is a byte in
+// the header and never inferred; an edit-only file read with no baseline is refused outright
+// rather than applied over nothing; the baseline is checked chunk by chunk against a fingerprint
+// written beside the difference; a brick that is *air* where the clip puts matter is written down
+// as an explicit clearing rather than left to be noticed; and a writer that knows which boxes were
+// edited may name them, so a brick that agrees with the clip today is still written if somebody's
+// hands were on it. When the two readings differ, the file carries the larger one.
 
 #include <string>
 #include <vector>
@@ -120,6 +148,39 @@ struct CachedEmitters {
     std::vector<EmissiveCell> cells;
 };
 
+// Which of the two things a file is: a whole world, or a world's difference from its clip.
+//
+// It is a byte in the header and it is never inferred, because the two have the same shape when
+// they are empty and opposite meanings — trap 7 in the one place here where it costs a building.
+// An edit-only file over a world nobody has touched holds NO voxels, and a whole-world file of an
+// empty world holds no voxels either. Read the first as the second and the building vanishes; read
+// the second as the first and whatever baseline happens to be in memory becomes the world.
+enum class WorldCacheMode : u8 {
+    Whole = 0,      // every voxel, as this file has always been written
+    EditOnly = 1,   // the difference from what the clip builds; needs a baseline to be read
+};
+
+// A box of voxels the writer states somebody edited — whether or not it still differs from what
+// the clip builds.
+//
+// The difference on its own is nearly enough, and the gap it leaves is the one that loses a
+// building. A brick is left out of an edit-only file when it matches the baseline, and a player
+// who carves a niche and fills it back in, or who places by hand the same stone the clip would
+// have placed, owns a brick that matches. Nothing is lost while the baseline stays the same one —
+// and the moment the clip or the sampler moves under the file, those bricks come back as whatever
+// the clip now says, with no record that a person ever chose them.
+//
+// So a writer that KNOWS what was edited — there is an op log, and it knows exactly — may say so.
+// Every brick a named box touches is written in full even where it agrees with the clip, including
+// written as an explicit clearing where it is now air: that is the carve that takes away matter
+// the clip would otherwise put back, and it is the case the difference alone cannot see.
+//
+// Voxel coordinates, inclusive of both corners.
+struct CachedEditBox {
+    i64 low[3]{};
+    i64 high[3]{};
+};
+
 // Everything a cached world needs to come back complete. The materials a clip declared are part
 // of it, because they are what the chisel is loaded with and there is nowhere else to get them
 // once the script is no longer being read.
@@ -149,6 +210,48 @@ struct WorldCache {
     // that had not scanned", and the reader treats that as "scan on demand" rather than as "there
     // are no lamps" -- which is trap 7, and here it would be a building with its lights off.
     std::vector<CachedEmitters> emitters;
+
+    // ---- R11f: a world as a clip plus its edits -------------------------------------------
+    //
+    // ON THE WAY OUT: the world this file's voxels are a difference FROM, and the switch that puts
+    // the write into edit-only mode. Null writes every voxel, exactly as before, and every file
+    // written before R11f is that. It must not be `world` itself: a world differenced against
+    // itself is empty by construction, so the file would say "this world is exactly what the clip
+    // builds" over a world somebody has spent an evening carving, and the writer refuses it.
+    //
+    // ON THE WAY IN: the world the difference is applied TO. It has to be the world the clip
+    // builds, resumed to the same leaf set the file carries, and the reader checks that chunk by
+    // chunk before it applies anything. Point it at `world` and the difference is laid down in
+    // place, which is the ordinary path and costs nothing; point it at a separate world and that
+    // world's chunks are copied across first.
+    //
+    // A null baseline against an edit-only file is refused, loudly. Applying a difference over
+    // nothing produces a world that is only the carvings — a building reduced to the holes cut in
+    // it — and that failure looks enough like a partly-loaded world to be argued about for an hour.
+    const World* baseline = nullptr;
+
+    // What was edited, as boxes. See CachedEditBox for why the difference alone is not enough.
+    //
+    // `edits_named` is separate from an empty list, and it is `stipple_taken`'s reason exactly:
+    // "the op log is empty, nobody has touched this world" and "nobody told the writer what was
+    // edited" are both an empty vector and mean opposite things. The first says the difference is
+    // the whole truth. The second says the difference is merely all anybody knows.
+    bool edits_named = false;
+    std::vector<CachedEditBox> edited;
+
+    // Filled in by the reader; ignored on the way out.
+    WorldCacheMode mode = WorldCacheMode::Whole;
+    // False when the baseline handed to the reader is not the one the file was written against.
+    //
+    // The edits are applied anyway and the read still succeeds. Every brick the file names is
+    // written in full, so nothing the file KNOWS about is lost by going ahead — what changes is
+    // that everything the file left to the clip comes back as the clip now builds it, which is not
+    // necessarily how it was saved. Refusing instead would hand the caller nothing at all, and a
+    // caller with nothing at all rebuilds from the clip, which loses the carvings outright. So the
+    // reader says what happened and lets the caller weigh it; it will not throw a building away
+    // over a disagreement it can survive.
+    bool baseline_agreed = true;
+    u32 baseline_chunks_differing = 0;
 };
 
 // A number that changes whenever anything that would change the world changes: the source text,
@@ -163,6 +266,9 @@ u64 world_cache_key(const std::string& source_text, i32 voxels_per_metre, u64 bu
 
 // Writes to a temporary beside the target and renames, so a run interrupted mid-write leaves the
 // old cache intact rather than a truncated one that looks valid.
+//
+// Writes every voxel when `cache.baseline` is null, and the difference from that baseline when it
+// is not. See WorldCache::baseline.
 bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache);
 
 // Returns false — quietly, and without touching anything — when the file is missing, is from
@@ -170,6 +276,16 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
 // Whether the cached world on disk was built for this key, read from its header alone.
 bool world_cache_matches(const std::string& path, u64 key);
 
+// Which mode the file on disk is in, from its header alone, and false if there is no readable
+// header of this version there.
+//
+// A caller needs this BEFORE it reads: an edit-only file cannot be opened without first building
+// the world its clip describes, and there is no way to discover that halfway through except by
+// failing after the expensive part. Seventeen bytes, so it costs nothing to ask first.
+bool world_cache_mode_of(const std::string& path, WorldCacheMode& out);
+
+// Reads it back. An edit-only file needs `cache.baseline` set to the world its clip builds, and is
+// refused without one; a whole-world file ignores the baseline entirely.
 bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSystem* jobs);
 
 }  // namespace ws

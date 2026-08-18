@@ -1,0 +1,823 @@
+// R11f — a world written as its clip plus what somebody changed.
+//
+// Every case here is about the same question: can a person's building come back out of a file that
+// does not contain it? The difference is what the clip does not say, and the whole of this file is
+// the list of ways "the clip does not say" can be got wrong.
+//
+// The one that matters most is the carve. Somebody cuts a doorway through a wall the clip builds:
+// the saved world holds AIR there, the clip holds stone, and "the file does not mention it" already
+// means "leave the clip's answer alone". A doorway is therefore the one edit that is invisible
+// unless the file goes out of its way to say so, and a format that forgets it comes back with the
+// wall healed and no error anywhere.
+
+#include <doctest/doctest.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
+
+#include "core/jobs.hpp"
+#include "core/time.hpp"
+#include "forge/clip_script.hpp"
+#include "forge/sample.hpp"
+#include "game/clip.hpp"
+#include "world/ledger.hpp"
+#include "world/op.hpp"
+#include "world/property.hpp"
+#include "world/tags.hpp"
+#include "world/voxel_type.hpp"
+#include "world/world.hpp"
+#include "world/world_cache.hpp"
+
+using namespace ws;
+
+namespace {
+
+VisualRecord colour(u8 r, u8 g, u8 b) {
+    VisualRecord v{};
+    v.red = r;
+    v.green = g;
+    v.blue = b;
+    v.opacity = 255;
+    return v;
+}
+
+// One end of a round trip: the registries, the world somebody has, and the world their clip
+// builds. Two of these per test, because reading back into the registries that wrote is how a
+// round trip passes without anything ever having been encoded.
+//
+// `clip_world` is what R11f calls the baseline. It is built by `build_clip_world` below, which
+// stands in for the sampler: a pure function of nothing, so both ends of the trip can build the
+// same one and the reading end genuinely re-derives what the writing end left out.
+struct Side {
+    TagRegistry tags;
+    PropertyRegistry properties;
+    VoxelTypeTable types;
+    World clip_world;
+    MatterLedger clip_ledger;
+    World world;
+    MatterLedger ledger;
+    VoxelTypeId stone = 0;
+    VoxelTypeId wood = 0;
+    VoxelTypeId marble = 0;
+
+    // Interned in a fixed order at both ends, which is what makes the type ids in one end's
+    // baseline mean the same thing as the ids in the other end's file. See the note at the top of
+    // "a baseline interned in another order" below: this is an assumption, not a guarantee.
+    void make_types() {
+        BehaviourRecord rock{};
+        rock.material = 1;
+        rock.tags.add(tags.find("stone"));
+        rock.properties.set(props::kDensity, PropertyValue::from_uint(2600));
+        BehaviourRecord timber{};
+        timber.material = 2;
+        timber.tags.add(tags.find("wood"));
+        BehaviourRecord cut{};
+        cut.material = 3;
+
+        stone = types.intern(colour(120, 120, 120), rock);
+        wood = types.intern(colour(90, 60, 30), timber);
+        marble = types.intern(colour(240, 240, 230), cut);
+    }
+
+    WorldCache handle() {
+        WorldCache out;
+        out.tags = &tags;
+        out.properties = &properties;
+        out.types = &types;
+        out.world = &world;
+        out.ledger = &ledger;
+        return out;
+    }
+};
+
+// What the clip builds. Deterministic, so both ends of a round trip build the same thing, and
+// deliberately more than one chunk: a wall either side of the origin, a separate outbuilding
+// eight chunks away, and a lintel that crosses a chunk boundary.
+//
+// `flavour` is the clip CHANGING under a file that was written against it -- the sampler moved,
+// somebody edited the script -- which is the case the baseline fingerprint exists to catch.
+void build_clip_world(World& world, MatterLedger& ledger, VoxelTypeId stone, VoxelTypeId wood,
+                      bool flavour = false) {
+    apply_op(world, Op::fill_box(1, 1, -40, -40, -40, 39, 39, 39, stone, MatterReason::Generation),
+             ledger);
+    apply_op(world,
+             Op::fill_box(2, 1, 250, 250, 250, 290, 280, 280, wood, MatterReason::Generation),
+             ledger);
+    apply_op(world, Op::fill_box(3, 1, 100, 0, 0, 140, 20, 20, stone, MatterReason::Generation),
+             ledger);
+    if (flavour) {
+        // A different clip, agreeing with the first everywhere except one brick of the wall.
+        apply_op(world, Op::fill_box(4, 1, 16, 16, 16, 23, 23, 23, wood, MatterReason::Generation),
+                 ledger);
+    }
+}
+
+// Both worlds, voxel for voxel, over every box either of them can hold anything in. Not a hash and
+// not a count: a hash says two worlds differ and a probe grid says nothing at all about the voxel
+// between two probes, and the thing being tested here is precisely whether one voxel came back.
+void must_be_identical(const World& got, const World& want) {
+    CHECK(got.content_hash() == want.content_hash());
+    CHECK(got.stats().solid_voxels == want.stats().solid_voxels);
+    CHECK(got.chunk_count() == want.chunk_count());
+    // The wall, exhaustively -- 512,000 voxels, and it is where every carve in this file lands.
+    u64 differing = 0;
+    for (i64 z = -41; z <= 40; ++z) {
+        for (i64 y = -41; y <= 40; ++y) {
+            for (i64 x = -41; x <= 40; ++x) {
+                if (got.get(x, y, z) != want.get(x, y, z)) ++differing;
+            }
+        }
+    }
+    CHECK(differing == 0);
+    // And the two outlying pieces, which is where a lost chunk would show.
+    u64 outlying = 0;
+    for (i64 z = 249; z <= 291; ++z) {
+        for (i64 y = 249; y <= 281; ++y) {
+            for (i64 x = 249; x <= 291; ++x) {
+                if (got.get(x, y, z) != want.get(x, y, z)) ++outlying;
+            }
+        }
+    }
+    for (i64 z = -1; z <= 21; ++z) {
+        for (i64 y = -1; y <= 21; ++y) {
+            for (i64 x = 99; x <= 141; ++x) {
+                if (got.get(x, y, z) != want.get(x, y, z)) ++outlying;
+            }
+        }
+    }
+    CHECK(outlying == 0);
+}
+
+// A path in the system temporary directory, removed however the test leaves.
+struct Scratch {
+    std::string path;
+
+    explicit Scratch(const char* name) {
+        path = (std::filesystem::temp_directory_path() / name).string();
+    }
+    ~Scratch() {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        std::filesystem::remove(path + ".part", ignored);
+    }
+    u64 bytes() const {
+        std::error_code error;
+        const auto size = std::filesystem::file_size(path, error);
+        return error ? 0u : static_cast<u64>(size);
+    }
+};
+
+CachedEditBox box_of(i64 x0, i64 y0, i64 z0, i64 x1, i64 y1, i64 z1) {
+    CachedEditBox box;
+    box.low[0] = x0;
+    box.low[1] = y0;
+    box.low[2] = z0;
+    box.high[0] = x1;
+    box.high[1] = y1;
+    box.high[2] = z1;
+    return box;
+}
+
+}  // namespace
+
+// ============================================================================================
+// The round trip. This is the deliverable.
+// ============================================================================================
+
+TEST_CASE("a carved world comes back carved, with the clip re-derived around it") {
+    Scratch file("ws_test_edits_roundtrip.world");
+    const u64 key = world_cache_key("a clip", 32, 1234);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    REQUIRE(wrote.world.content_hash() == wrote.clip_world.content_hash());
+
+    // THE EDIT THAT CAN BE LOST. A doorway cut clean through the wall: the saved world holds air
+    // where the clip holds stone, and a file that only writes what it HAS writes nothing here.
+    apply_op(wrote.world,
+             Op::fill_box(10, 1, -12, -12, -12, 11, 11, 11, kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+    // A second carve that takes a whole chunk out, so the case where a chunk stops existing is
+    // exercised as well as the case where one loses a few bricks.
+    apply_op(wrote.world,
+             Op::fill_box(11, 1, 250, 250, 250, 290, 280, 280, kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+    // And matter placed where the clip puts none, plus matter of a material the clip never used
+    // laid over matter it did.
+    apply_op(wrote.world,
+             Op::fill_box(12, 1, 60, 60, 60, 70, 70, 70, wrote.marble, MatterReason::PlayerPlace),
+             wrote.ledger);
+    apply_op(wrote.world,
+             Op::fill_box(13, 1, -30, -30, -30, -25, -25, -25, wrote.marble,
+                          MatterReason::PlayerPlace),
+             wrote.ledger);
+    // And a hut built in an empty field: a chunk the clip has never heard of, so there is nothing
+    // to be a difference FROM and every brick of it has to be written.
+    apply_op(wrote.world,
+             Op::fill_box(14, 1, 5000, 5000, 5000, 5031, 5031, 5031, wrote.marble,
+                          MatterReason::PlayerPlace),
+             wrote.ledger);
+
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.clip_world;
+    out.edits_named = true;
+    out.edited = {box_of(-12, -12, -12, 11, 11, 11),     box_of(250, 250, 250, 290, 280, 280),
+                  box_of(60, 60, 60, 70, 70, 70),         box_of(-30, -30, -30, -25, -25, -25),
+                  box_of(5000, 5000, 5000, 5031, 5031, 5031)};
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    // The reading end knows only the clip. It builds what the clip builds and lays the file over
+    // it, in place, which is the ordinary path.
+    Side read;
+    read.make_types();
+    build_clip_world(read.world, read.ledger, read.stone, read.wood);
+    WorldCache in = read.handle();
+    in.baseline = &read.world;
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+
+    CHECK(in.mode == WorldCacheMode::EditOnly);
+    CHECK(in.baseline_agreed);
+    CHECK(in.baseline_chunks_differing == 0);
+    CHECK(in.edits_named);
+    CHECK(in.edited.size() == 5);
+
+    must_be_identical(read.world, wrote.world);
+
+    // Said again as the things a person would look at, so a failure names what is wrong rather
+    // than only that something is.
+    CHECK(read.world.get(0, 0, 0) == kAir);          // the doorway
+    CHECK(read.world.get(-12, -12, -12) == kAir);    // its corner
+    CHECK(read.world.get(-13, -13, -13) == read.stone);   // and the wall beside it
+    CHECK(read.world.get(12, 12, 12) == read.stone);
+    CHECK(read.world.get(270, 270, 270) == kAir);    // the demolished outbuilding
+    CHECK(read.world.get(-27, -27, -27) == read.marble);
+    CHECK(read.world.get(5015, 5015, 5015) == read.marble);   // the hut in the empty field
+    CHECK(read.world.get(120, 10, 10) == read.stone);     // untouched, and not in the file at all
+
+    // Nothing left standing where an edit emptied it. A brick or a chunk kept alive with nothing
+    // in it is `world_has` claiming matter the world does not have, which the marcher draws as a
+    // cube it can never build and the chisel's own raycast cannot find (D620, D621) -- and the
+    // clearing path here is exactly where one would be left behind.
+    const WorldStats after = read.world.stats();
+    CHECK(after.empty_bricks == 0);
+    CHECK(after.empty_chunks == 0);
+}
+
+TEST_CASE("the carve survives with a baseline in a world of its own") {
+    // The same trip with the baseline kept separate from the world it is laid into, which is the
+    // other of the two shapes WorldCache::baseline allows.
+    Scratch file("ws_test_edits_separate.world");
+    const u64 key = world_cache_key("a clip", 32, 99);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    apply_op(wrote.world,
+             Op::fill_box(10, 1, -4, -40, -4, 4, 39, 4, kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.clip_world;
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    Side read;
+    read.make_types();
+    build_clip_world(read.clip_world, read.clip_ledger, read.stone, read.wood);
+    WorldCache in = read.handle();
+    in.baseline = &read.clip_world;   // a different world from `in.world`, which starts empty
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+
+    CHECK(in.baseline_agreed);
+    must_be_identical(read.world, wrote.world);
+    CHECK(read.world.get(0, 0, 0) == kAir);
+    CHECK(read.world.get(5, 0, 0) == read.stone);
+}
+
+// ============================================================================================
+// The file says which of the two things it is
+// ============================================================================================
+
+TEST_CASE("a whole world and a difference are different files, and the header says which") {
+    Scratch whole("ws_test_edits_mode_whole.world");
+    Scratch diff("ws_test_edits_mode_diff.world");
+    const u64 key = world_cache_key("a clip", 32, 7);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+
+    WorldCache full = wrote.handle();
+    REQUIRE(write_world_cache(whole.path, key, full));
+    WorldCache thin = wrote.handle();
+    thin.baseline = &wrote.clip_world;
+    REQUIRE(write_world_cache(diff.path, key, thin));
+
+    WorldCacheMode mode = WorldCacheMode::EditOnly;
+    REQUIRE(world_cache_mode_of(whole.path, mode));
+    CHECK(mode == WorldCacheMode::Whole);
+    REQUIRE(world_cache_mode_of(diff.path, mode));
+    CHECK(mode == WorldCacheMode::EditOnly);
+    CHECK_FALSE(world_cache_mode_of(whole.path + ".missing", mode));
+
+    // And the size, which is the whole point of the exercise: this world has no edits in it at
+    // all, so the difference carries no voxels -- 1,540 bytes against 20,991, and nearly all of
+    // the 1,540 is the type table and the baseline fingerprint. The ratio is the floor and not the
+    // headline: a toy world's fixed header is most of its difference file, and a real one's is
+    // rounding. Gated at a fifth, which is far below what was measured, because the number that
+    // matters is on the facility and not here.
+    CHECK(diff.bytes() * 5 < whole.bytes());
+
+    // An unedited world through the difference is still the same world.
+    Side read;
+    read.make_types();
+    build_clip_world(read.world, read.ledger, read.stone, read.wood);
+    WorldCache in = read.handle();
+    in.baseline = &read.world;
+    REQUIRE(read_world_cache(diff.path, key, in, nullptr));
+    must_be_identical(read.world, wrote.world);
+}
+
+TEST_CASE("a difference with no world to lay it over is refused rather than applied") {
+    Scratch file("ws_test_edits_nobaseline.world");
+    const u64 key = world_cache_key("a clip", 32, 11);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    apply_op(wrote.world,
+             Op::fill_box(10, 1, -12, -12, -12, 11, 11, 11, kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.clip_world;
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    Side read;
+    read.make_types();
+    WorldCache in = read.handle();   // no baseline
+    CHECK_FALSE(read_world_cache(file.path, key, in, nullptr));
+    // And nothing was written into the world on the way to refusing. A partly-applied difference
+    // is the failure that looks like a world still loading.
+    CHECK(read.world.chunk_count() == 0);
+}
+
+TEST_CASE("a world written before the mode byte is rejected, never misread") {
+    Scratch file("ws_test_edits_version.world");
+    const u64 key = world_cache_key("a clip", 32, 13);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    WorldCache out = wrote.handle();
+    REQUIRE(write_world_cache(file.path, key, out));
+    REQUIRE(world_cache_matches(file.path, key));
+
+    // Put the previous version number back in the header. Everything after the key is at a
+    // different offset in a version 5 file, so a reader that let this through would not fail --
+    // it would read a whole world as a difference, or a type table as a fingerprint.
+    {
+        std::fstream patch(file.path, std::ios::binary | std::ios::in | std::ios::out);
+        REQUIRE(patch.good());
+        patch.seekp(4);
+        const u32 five = 5u;
+        patch.write(reinterpret_cast<const char*>(&five), sizeof(five));
+    }
+
+    CHECK_FALSE(world_cache_matches(file.path, key));
+    WorldCacheMode mode = WorldCacheMode::Whole;
+    CHECK_FALSE(world_cache_mode_of(file.path, mode));
+
+    Side read;
+    read.make_types();
+    WorldCache in = read.handle();
+    CHECK_FALSE(read_world_cache(file.path, key, in, nullptr));
+    CHECK(read.world.chunk_count() == 0);
+}
+
+// ============================================================================================
+// The baseline, and what happens when it is not the one the file was cut from
+// ============================================================================================
+
+TEST_CASE("a difference laid over the wrong world says so, and keeps every edit it names") {
+    Scratch file("ws_test_edits_moved.world");
+    const u64 key = world_cache_key("a clip", 32, 17);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    apply_op(wrote.world,
+             Op::fill_box(10, 1, -12, -12, -12, 11, 11, 11, kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.clip_world;
+    out.edits_named = true;
+    out.edited = {box_of(-12, -12, -12, 11, 11, 11)};
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    // The clip has moved under the file: one brick of the wall is wood now.
+    Side read;
+    read.make_types();
+    build_clip_world(read.world, read.ledger, read.stone, read.wood, /*flavour=*/true);
+    WorldCache in = read.handle();
+    in.baseline = &read.world;
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+
+    CHECK_FALSE(in.baseline_agreed);
+    CHECK(in.baseline_chunks_differing == 1);
+    // Read anyway, and the doorway is still cut. Refusing would hand the caller nothing, and a
+    // caller with nothing rebuilds from the clip -- which loses the doorway outright.
+    CHECK(read.world.get(0, 0, 0) == kAir);
+    CHECK(read.world.get(-12, -12, -12) == kAir);
+    CHECK(read.world.get(-13, -13, -13) == read.stone);
+    // And the clip's own change came through, because that is what "re-derived around it" means.
+    CHECK(read.world.get(20, 20, 20) == read.wood);
+}
+
+TEST_CASE("matter the baseline has and the file never saw is counted as a disagreement") {
+    Scratch file("ws_test_edits_extra.world");
+    const u64 key = world_cache_key("a clip", 32, 19);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.clip_world;
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    Side read;
+    read.make_types();
+    build_clip_world(read.world, read.ledger, read.stone, read.wood);
+    // A whole chunk the file's fingerprint has no entry for. Every named chunk still agrees, so
+    // only the other direction of the check can see this one.
+    apply_op(read.world,
+             Op::fill_box(20, 1, 2000, 2000, 2000, 2050, 2050, 2050, read.stone,
+                          MatterReason::Generation),
+             read.ledger);
+    WorldCache in = read.handle();
+    in.baseline = &read.world;
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+    CHECK_FALSE(in.baseline_agreed);
+    CHECK(in.baseline_chunks_differing >= 1);
+}
+
+// ============================================================================================
+// Trap 7: what nobody said, and what somebody said was nothing
+// ============================================================================================
+
+TEST_CASE("nobody named the edits and nothing was edited are different files") {
+    const u64 key = world_cache_key("a clip", 32, 23);
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+
+    {
+        Scratch file("ws_test_edits_said_none.world");
+        WorldCache out = wrote.handle();
+        out.baseline = &wrote.clip_world;
+        out.edits_named = true;   // the op log was read, and it was empty
+        REQUIRE(write_world_cache(file.path, key, out));
+
+        Side read;
+        read.make_types();
+        build_clip_world(read.world, read.ledger, read.stone, read.wood);
+        WorldCache in = read.handle();
+        in.baseline = &read.world;
+        REQUIRE(read_world_cache(file.path, key, in, nullptr));
+        CHECK(in.edits_named);
+        CHECK(in.edited.empty());
+    }
+    {
+        Scratch file("ws_test_edits_said_nothing.world");
+        WorldCache out = wrote.handle();
+        out.baseline = &wrote.clip_world;
+        out.edits_named = false;   // nobody asked the op log
+        REQUIRE(write_world_cache(file.path, key, out));
+
+        Side read;
+        read.make_types();
+        build_clip_world(read.world, read.ledger, read.stone, read.wood);
+        WorldCache in = read.handle();
+        in.baseline = &read.world;
+        REQUIRE(read_world_cache(file.path, key, in, nullptr));
+        CHECK_FALSE(in.edits_named);
+        CHECK(in.edited.empty());
+    }
+    {
+        // And a whole-world file makes no claim about edits at all, which is a third thing again.
+        Scratch file("ws_test_edits_whole_says_nothing.world");
+        WorldCache out = wrote.handle();
+        REQUIRE(write_world_cache(file.path, key, out));
+
+        Side read;
+        read.make_types();
+        WorldCache in = read.handle();
+        in.edits_named = true;   // whatever the caller left in the struct
+        in.edited = {box_of(0, 0, 0, 1, 1, 1)};
+        REQUIRE(read_world_cache(file.path, key, in, nullptr));
+        CHECK_FALSE(in.edits_named);
+        CHECK(in.edited.empty());
+    }
+}
+
+TEST_CASE("a world may not be written as a difference from itself") {
+    Scratch file("ws_test_edits_selfdiff.world");
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.world;
+    CHECK_FALSE(write_world_cache(file.path, world_cache_key("a clip", 32, 29), out));
+}
+
+// ============================================================================================
+// The gap the difference alone cannot see, and the mechanism that closes it
+// ============================================================================================
+
+TEST_CASE("a hand-placed voxel that agrees with the clip survives, when it was named") {
+    // Somebody breaks a brick of the wall and puts the same stone straight back. The world now
+    // agrees with the clip there, so the difference has nothing to write -- and when the clip
+    // moves under the file, the brick comes back as whatever the clip says now. Naming the box is
+    // what keeps it.
+    Scratch named_file("ws_test_edits_named_keep.world");
+    Scratch bare_file("ws_test_edits_bare_keep.world");
+    const u64 key = world_cache_key("a clip", 32, 31);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    apply_op(wrote.world,
+             Op::fill_box(10, 1, 16, 16, 16, 23, 23, 23, kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+    apply_op(wrote.world,
+             Op::fill_box(11, 1, 16, 16, 16, 23, 23, 23, wrote.stone, MatterReason::PlayerPlace),
+             wrote.ledger);
+    REQUIRE(wrote.world.content_hash() == wrote.clip_world.content_hash());
+
+    WorldCache named = wrote.handle();
+    named.baseline = &wrote.clip_world;
+    named.edits_named = true;
+    named.edited = {box_of(16, 16, 16, 23, 23, 23)};
+    REQUIRE(write_world_cache(named_file.path, key, named));
+
+    WorldCache bare = wrote.handle();
+    bare.baseline = &wrote.clip_world;
+    REQUIRE(write_world_cache(bare_file.path, key, bare));
+    // The named file is bigger, and that is the whole of what naming buys: one brick of stone
+    // written down because a person chose it, not because it differs from anything.
+    CHECK(named_file.bytes() > bare_file.bytes());
+
+    {
+        Side read;
+        read.make_types();
+        build_clip_world(read.world, read.ledger, read.stone, read.wood, /*flavour=*/true);
+        WorldCache in = read.handle();
+        in.baseline = &read.world;
+        REQUIRE(read_world_cache(named_file.path, key, in, nullptr));
+        CHECK(read.world.get(20, 20, 20) == read.stone);   // the person's stone, kept
+    }
+    {
+        // And the same file without the naming. THIS IS THE DOCUMENTED LOSS, asserted so that it
+        // is a decision somebody made rather than a surprise: a brick that agrees with the clip
+        // and is not named comes back as the clip now builds it.
+        Side read;
+        read.make_types();
+        build_clip_world(read.world, read.ledger, read.stone, read.wood, /*flavour=*/true);
+        WorldCache in = read.handle();
+        in.baseline = &read.world;
+        REQUIRE(read_world_cache(bare_file.path, key, in, nullptr));
+        CHECK(read.world.get(20, 20, 20) == read.wood);    // the clip's, not the person's
+        CHECK_FALSE(in.baseline_agreed);                   // and the reader said so
+    }
+}
+
+TEST_CASE("a carve through air the clip agrees about is still a carve") {
+    // The other half of the same gap, and the one that comes back as SOLID rather than as the
+    // wrong colour. Somebody swings a chisel through open air beside the wall. The clip puts
+    // nothing there today, so there is no difference to write -- and if the clip grows a buttress
+    // there tomorrow, the swing has to have been recorded or the buttress fills the space they
+    // cleared.
+    Scratch file("ws_test_edits_air_carve.world");
+    const u64 key = world_cache_key("a clip", 32, 37);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    // 200..207 is open air in this clip -- the chisel meets nothing, changes nothing, and leaves
+    // the saved world byte-identical to the baseline. The only record that the swing happened is
+    // the named box.
+    apply_op(wrote.world,
+             Op::fill_box(10, 1, 200, 200, 200, 207, 207, 207, kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+    REQUIRE(wrote.world.content_hash() == wrote.clip_world.content_hash());
+
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.clip_world;
+    out.edits_named = true;
+    out.edited = {box_of(200, 200, 200, 207, 207, 207)};
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    // A clip that now builds something exactly there.
+    Side read;
+    read.make_types();
+    build_clip_world(read.world, read.ledger, read.stone, read.wood);
+    apply_op(read.world,
+             Op::fill_box(20, 1, 196, 196, 196, 211, 211, 211, read.stone,
+                          MatterReason::Generation),
+             read.ledger);
+    WorldCache in = read.handle();
+    in.baseline = &read.world;
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+
+    CHECK(read.world.get(203, 203, 203) == kAir);       // the swing, kept
+    CHECK(read.world.get(198, 198, 198) == read.stone); // and the clip's new matter beside it
+}
+
+// ============================================================================================
+// The facility, both ways. Skipped by default -- it samples a real clip and writes real files.
+// Run it with:  ws_tests.exe --no-skip --test-case="the facility, both ways"
+// ============================================================================================
+
+TEST_CASE("the facility, both ways" * doctest::skip()) {
+    // Where the clip is, from wherever the test binary happens to be run.
+    const char* candidates[] = {"clips/facility.clip", "../clips/facility.clip",
+                                "../../clips/facility.clip", "../../../clips/facility.clip"};
+    std::string clip_path;
+    for (const char* candidate : candidates) {
+        if (std::filesystem::exists(candidate)) {
+            clip_path = candidate;
+            break;
+        }
+    }
+    REQUIRE_MESSAGE(!clip_path.empty(), "clips/facility.clip is not beside the test binary");
+
+    i32 per_metre = 8;
+    if (const char* asked = std::getenv("WS_FACILITY_PER_METRE")) per_metre = std::atoi(asked);
+
+    JobSystem jobs;
+    TagRegistry tags;
+    PropertyRegistry properties;
+    VoxelTypeTable types;
+    forge::Script script = forge::load_clip_script(clip_path, types, tags);
+    script.settings.voxels_per_metre = per_metre;
+
+    const u64 sample_began = now_ns();
+    const forge::SampleResult built =
+        forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
+    const f64 sample_ms = ns_to_ms(now_ns() - sample_began);
+    REQUIRE_FALSE(built.clip.empty());
+
+    // The world the clip builds -- the baseline -- and a copy of it for somebody to carve.
+    World clip_world;
+    MatterLedger clip_ledger;
+    paste_clip(clip_world, clip_ledger, built.clip, built.origin_voxel[0], built.origin_voxel[1],
+               built.origin_voxel[2], PasteMode::Replace, MatterReason::Generation, 1, &jobs,
+               types.type_count());
+    World edited;
+    MatterLedger edited_ledger;
+    paste_clip(edited, edited_ledger, built.clip, built.origin_voxel[0], built.origin_voxel[1],
+               built.origin_voxel[2], PasteMode::Replace, MatterReason::Generation, 1, &jobs,
+               types.type_count());
+
+    // A chisel through the middle of it: two metres cubed, which is about what one swing takes.
+    const i64 reach = per_metre;   // one metre either side of the origin
+    apply_op(edited,
+             Op::fill_box(1, 1, -reach, -reach, -reach, reach, reach, reach, kAir,
+                          MatterReason::PlayerBreak),
+             edited_ledger);
+
+    const WorldStats stats = edited.stats();
+    std::printf("\nfacility      %s at %d voxels a metre, sampled in %.0f ms\n", clip_path.c_str(),
+                per_metre, sample_ms);
+    std::printf("world         %llu chunks, %llu solid voxels\n",
+                static_cast<unsigned long long>(stats.chunks),
+                static_cast<unsigned long long>(stats.solid_voxels));
+
+    Scratch whole("ws_facility_whole.world");
+    Scratch diff("ws_facility_edits.world");
+    const u64 key = world_cache_key("facility", per_metre, 1);
+
+    WorldCache out;
+    out.tags = &tags;
+    out.properties = &properties;
+    out.types = &types;
+    out.world = &edited;
+    out.ledger = &edited_ledger;
+
+    const u64 whole_began = now_ns();
+    REQUIRE(write_world_cache(whole.path, key, out));
+    const f64 whole_write_ms = ns_to_ms(now_ns() - whole_began);
+
+    out.baseline = &clip_world;
+    out.edits_named = true;
+    out.edited = {box_of(-reach, -reach, -reach, reach, reach, reach)};
+    const u64 diff_began = now_ns();
+    REQUIRE(write_world_cache(diff.path, key, out));
+    const f64 diff_write_ms = ns_to_ms(now_ns() - diff_began);
+
+    // A third file: the same world, untouched, written as a difference. That is the FIXED cost of
+    // an edit-only file -- the type table, the region list, the lamps and the baseline fingerprint
+    // -- with no voxels in it at all, and measuring it is what separates "the difference is small"
+    // from "the header is most of the file at this size".
+    Scratch bare("ws_facility_bare.world");
+    World untouched = clip_world;
+    {
+        WorldCache nothing;
+        nothing.tags = &tags;
+        nothing.properties = &properties;
+        nothing.types = &types;
+        nothing.world = &untouched;
+        nothing.ledger = &clip_ledger;
+        nothing.baseline = &clip_world;
+        REQUIRE(write_world_cache(bare.path, key, nothing));
+    }
+
+    std::printf("whole world   %llu bytes (%.2f MB), written in %.0f ms\n",
+                static_cast<unsigned long long>(whole.bytes()),
+                static_cast<f64>(whole.bytes()) / (1024.0 * 1024.0), whole_write_ms);
+    std::printf("clip + edits  %llu bytes (%.2f MB), written in %.0f ms  -- %.1fx smaller\n",
+                static_cast<unsigned long long>(diff.bytes()),
+                static_cast<f64>(diff.bytes()) / (1024.0 * 1024.0), diff_write_ms,
+                static_cast<f64>(whole.bytes()) / static_cast<f64>(diff.bytes()));
+    std::printf("  fixed cost  %llu bytes: the table, the leaves and the fingerprint, no voxels\n",
+                static_cast<unsigned long long>(bare.bytes()));
+    std::printf("  so voxels   %llu bytes whole -> %llu bytes as a difference (%.0fx)\n",
+                static_cast<unsigned long long>(whole.bytes() - bare.bytes()),
+                static_cast<unsigned long long>(diff.bytes() - bare.bytes()),
+                static_cast<f64>(whole.bytes() - bare.bytes()) /
+                    static_cast<f64>(diff.bytes() - bare.bytes() + 1));
+
+    // Reading the whole world back, which is what a shipped world costs today.
+    World back_whole;
+    MatterLedger back_whole_ledger;
+    TagRegistry whole_tags;
+    PropertyRegistry whole_properties;
+    VoxelTypeTable whole_types;
+    WorldCache in_whole;
+    in_whole.tags = &whole_tags;
+    in_whole.properties = &whole_properties;
+    in_whole.types = &whole_types;
+    in_whole.world = &back_whole;
+    in_whole.ledger = &back_whole_ledger;
+    const u64 read_whole_began = now_ns();
+    REQUIRE(read_world_cache(whole.path, key, in_whole, &jobs));
+    const f64 read_whole_ms = ns_to_ms(now_ns() - read_whole_began);
+
+    // And the difference, laid over the world the clip builds. The baseline here is read from the
+    // whole-world file rather than re-sampled, because that is how the two compose in the game: a
+    // world is shipped once beside its clip, and a person's save is what they changed about it.
+    World back_diff;
+    MatterLedger back_diff_ledger;
+    TagRegistry diff_tags;
+    PropertyRegistry diff_properties;
+    VoxelTypeTable diff_types;
+    WorldCache base_in;
+    base_in.tags = &diff_tags;
+    base_in.properties = &diff_properties;
+    base_in.types = &diff_types;
+    base_in.world = &back_diff;
+    base_in.ledger = &back_diff_ledger;
+    // The shipped world, unedited, so the baseline is what the clip builds.
+    Scratch shipped("ws_facility_shipped.world");
+    {
+        WorldCache ship;
+        ship.tags = &tags;
+        ship.properties = &properties;
+        ship.types = &types;
+        ship.world = &clip_world;
+        ship.ledger = &clip_ledger;
+        REQUIRE(write_world_cache(shipped.path, key, ship));
+    }
+    const u64 base_began = now_ns();
+    REQUIRE(read_world_cache(shipped.path, key, base_in, &jobs));
+    const f64 base_ms = ns_to_ms(now_ns() - base_began);
+
+    WorldCache in_diff = base_in;
+    in_diff.baseline = &back_diff;
+    const u64 read_diff_began = now_ns();
+    REQUIRE(read_world_cache(diff.path, key, in_diff, &jobs));
+    const f64 read_diff_ms = ns_to_ms(now_ns() - read_diff_began);
+
+    std::printf("read          whole %.0f ms;  shipped world %.0f ms + edits %.0f ms = %.0f ms\n",
+                read_whole_ms, base_ms, read_diff_ms, base_ms + read_diff_ms);
+    std::printf("sampling it instead would be %.0f ms\n\n", sample_ms);
+
+    CHECK(in_diff.baseline_agreed);
+    CHECK(back_whole.content_hash() == edited.content_hash());
+    CHECK(back_diff.content_hash() == edited.content_hash());
+    CHECK(diff.bytes() < whole.bytes());
+}
