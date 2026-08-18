@@ -3374,3 +3374,35 @@ both are now answering with the same rules.
 
 One piece was deliberately left out: a faster version of the shader for weak phones, which needs
 rebuilding against the new material model rather than merging. Nothing looks different without it.
+
+## The facility is not one building any more
+
+Until now "the facility" meant one thing: the big neoclassical block with the dome, and everything
+around it was empty ground. The other buildings existed, but each one lived in its own separate
+file, on its own patch of nothing, and you could only ever look at one at a time.
+
+They are being moved into the same place. Four of them are in so far:
+
+**The bell tower** stands off to the east, about thirty metres from the block, an eleven-metre
+square of lawn and gravel around its foot.
+
+**The grotto** is away to the west and slightly north — the sunken, encrusted one with water in it.
+
+**The garden theatre** is west as well, the big one: a curved bank of seating, a stage, and clipped
+hedge wings either side. It is the largest of the four by some way.
+
+**The glass pavilion** is at the far north end, on an island in a still basin, with its floor set
+lower than the ground so the water sits sunk into the garden rather than perched on top of it. That
+is what it is meant to do, and it is the sort of number somebody tidies up by accident later, so it
+is written down in three places now.
+
+Two of them are not standing where their own files said they should. The theatre was drawn to sit
+somewhere that turned out to run straight through the west wing of the main block, and it also
+landed on the grotto — so the theatre moved six metres west and the grotto moved two metres north.
+Neither collision was visible until they were in the same frame, which is rather the point.
+
+**What to look for:** they should be four separate buildings on one estate, each on its own ground,
+none of them touching. The bell tower to the east, the grotto and the theatre to the west, the
+pavilion straight ahead to the north past the fountain.
+
+Three more are still to come: the colonnade, the fountain and the orangery.
