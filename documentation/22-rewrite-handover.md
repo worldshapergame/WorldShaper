@@ -704,6 +704,26 @@ to reach them. **D672 is the entry; read it before touching any of this.**
    building and should not ride along with a fragment conversion. **Do not trust a grep here** —
    two static passes over these files disagreed with each other and both were wrong.
 
+   **AND A THIRD READING DISAGREES WITH D672'S OWN SENTENCE, so start by settling that.** The parser
+   knows FOUR operators here, not two: `max`, `min`, `union` and `intersection` are all separate
+   words in `clip_script.cpp`. And `20-clip-forge.md` §1 says a value is read either as **a distance
+   — negative inside, positive outside** or as **an amount — read for its value, not its sign**.
+   Under the distance reading `max` IS the intersection (a point is inside only where both are
+   negative), so `max { s_lich_zone  ... }` would bound correctly and the row above would be wrong.
+
+   The likely resolution — and it is a guess, which is why it is written as one — is that the second
+   operand is an AMOUNT and not a distance: `add { constant 0.378 negate { s_moss_n } }` is noise,
+   which has no sign convention, so `max` of a distance and an amount is not an intersection of
+   anything and the bound is accidental either way. **That is a measurement, not an argument.** The
+   cheap way to take it is a purpose-built clip of two boxes and one noise field, small enough to
+   sample in seconds, rather than another pass over a 1,000-line file. Do that BEFORE designing the
+   fix, because "what is the operator" and "where is the envelope" are different questions and only
+   the first has a cheap answer.
+
+   Note also that an `on=` envelope is a `weather`/`displace` thing; a `paint` rule bounds itself
+   through its `where=` shape. So "an `on=` envelope on every field-keyed rule" cannot be literally
+   what the paint rules need, and what they do need depends on the answer above.
+
 3. **The pavilion goes from 87 components to 98, and 218 loose voxels to 1,450.** Reproduces across
    two different boxes, so it is not the probe box. No cause established. Everything else matches
    its control to within probe-box margin.
