@@ -602,6 +602,39 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — six stages are HALF WRITTEN on branches, and the service killed all six
+
+Six agents were dispatched at the user's request, one per missing stage, each in its own worktree on
+files nobody else owned. **Every one was terminated mid-write by `529 Overloaded` or a server error**
+— not by anything wrong with the work. Their partial code is committed on their own branches so that
+none of it is lost, and the message on each says so:
+
+| branch `worktree-agent-…` | stage | how far it got |
+|---|---|---|
+| `ad27be322d5876f56` | **field compiler** — rewrite the estate's expression shallower | `src/forge/compile.hpp` only; the `.cpp` was never written |
+| `a964ee22a766e8370` | **R11f** — a world is a clip plus its edits | both halves of `world_cache.*` written; no test, never built |
+| `a3a69700bcbb4b874` | **R2b** — never store finer than a pixel | `node_pool.*` written up to the erosion sweep; no test, never built |
+| `afeefb8f62f2e332f` | **bulk GPU build** — the whole clip in one dispatch | ALL FOUR files written and it **LOSES THE DEVICE** — see below |
+| `a4358d066eb0822e5` | **CI world bake** | `tools/bake_world.ps1` written; no workflow |
+| (no worktree) | **R12c** — the marcher derives rather than stops | nothing written |
+
+**THE ONE THAT LOOKS FINISHED AND IS NOT.** `afeefb8f62f2e332f` wrote `src/gpu/field_bulk.*`,
+`shaders/sample_bulk.comp` and its own gate, and the gate FAILS: `VK_ERROR_DEVICE_LOST` and pages of
+`fault type 4` on a 12 m box at 4 voxels a metre — **110,592 cells, which is less than two of the
+per-node sampler's batches**. So it is an out-of-bounds write or a runaway, not the watchdog, and it
+was written by an author who never got to run it. It was integrated into `main`, built, gated,
+refused and reverted; the branch keeps it. **Do not merge it on the strength of it compiling.**
+
+**None of the six is mergeable as it stands, and the reason is worth stating plainly: not one of them
+ran its own gate.** That is the whole value of the arrangement — the dispatcher builds and tests every
+diff before it lands — and it is what stopped a device-losing shader reaching `main`.
+
+To pick any of them up: `git checkout worktree-agent-<id> -- <its files>` onto a clean tree, then
+finish it, build, and run the gate that stage owes. The prompts each was given are the specification
+and are worth reconstructing from this table plus the plan's own R11/R12 sections.
+
+---
+
 #### START HERE — the whole world up front, measured at four grains (D686)
 
 *"i just want to load into a world and it instantly load in its totality without cold bakes etc."*
