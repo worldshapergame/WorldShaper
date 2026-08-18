@@ -3474,3 +3474,15 @@ none of them touching. The bell tower to the east, the grotto and the theatre to
 pavilion straight ahead to the north past the fountain.
 
 Three more are still to come: the colonnade, the fountain and the orangery.
+
+## The graphics card can now carve the building, and it is not yet worth letting it
+
+When you walk into a world, the building around you is not sitting in a file waiting to be loaded. It is being *worked out* — from a recipe that says things like "a column here, fluted, with this stone weathered under the sill" — and turned into actual cubes while you stand there. That working out is the whole cost of the world filling in around you.
+
+Until now it was done by the computer's main processor, on about half its cores, while you played. This stage taught the **graphics card** to do it instead, which is the obvious thing to try: a processor has ten cores and a graphics card has thousands.
+
+**It works, and it gets the answer exactly right.** That mattered more than the speed and it is the part that took the care. There are now two entirely separate pieces of machinery that turn a recipe into cubes, and if they ever disagreed by a single cube you would get a building that changes shape depending on which one built it. So they are checked against each other: the game samples a patch of the estate both ways and compares every single cube. Twenty-four thousand cubes, no differences — not in shape, not in material, not anywhere.
+
+**And it is only about a third faster, which is not enough to switch on.** The reason is worth knowing because it is not what anyone expected. The graphics card really is much faster at each individual question — but the main processor is *asking far fewer questions*. It is clever about it: it reads the recipe once for a whole block of space, works out that the entire block is solid stone or entirely empty air, and fills it in without ever looking at the cubes inside. The graphics card, as built, asks about every cube. Thousands of lanes doing unnecessary work roughly cancels out ten cores doing clever work.
+
+So it stays switched off, and the next step is now precisely known rather than guessed at: teach the graphics card the same trick about blocks of space. There was a real risk of guessing here, and the way it was avoided was to add a counter that says how much of the recipe each cube actually reads — it turned out to be four thousand steps out of eighteen thousand, which says the shortcuts are working and the recipe is simply long. **Asking for a hundredfold and getting a third is a shortfall, and it is written down as one.**
