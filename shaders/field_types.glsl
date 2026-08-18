@@ -207,7 +207,17 @@ layout(push_constant) uniform FieldPush {
     uint flags;
 } field_push;
 
-#define WS_FIELD_FLAG_NO_RESCUE 1u   // --no-gpu-rescue: the thin-feature rescue off, as a control
+#define WS_FIELD_FLAG_NO_RESCUE 1u      // --no-gpu-rescue: the thin-feature rescue off, as a control
+#define WS_FIELD_FLAG_COUNT_VISITS 2u   // --gpu-visits: count nodes walked instead of building a world
+
+// How many nodes the walk has stepped through for this cell, when WS_FIELD_FLAG_COUNT_VISITS is on.
+//
+// An INSTRUMENT and not a feature, and it exists because the first attempt to make this shader
+// faster was about to be a guess. Cost here is (nodes walked) x (what a step costs), those two are
+// fixed by completely different things -- the shape of the clip's expression on one side, the stack
+// and the divergence on the other -- and no timing can tell them apart. This counts one of them so
+// the other can be divided out.
+uint ws_field_visits;
 
 // ---------------------------------------------------------------------------------------------
 // The stack.

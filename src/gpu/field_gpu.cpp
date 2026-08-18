@@ -22,6 +22,7 @@ struct FieldPush {
 static_assert(sizeof(FieldPush) == 32, "must match FieldPush in field_types.glsl");
 
 constexpr u32 kFlagNoRescue = 1u;
+constexpr u32 kFlagCountVisits = 2u;
 
 // Half a cell's diagonal, in voxels: the furthest a surface can be from a cell's centre and still
 // pass through that cell, and therefore the reach of the thin-feature rescue.
@@ -364,7 +365,7 @@ bool FieldSampler::submit(const std::vector<GpuSampleBoxRecord>& boxes) {
     push.box_count = count;
     push.first_type = first_type_;
     push.half_cell = kHalfCellDiagonal;
-    push.flags = rescue_ ? 0u : kFlagNoRescue;
+    push.flags = (rescue_ ? 0u : kFlagNoRescue) | (count_visits_ ? kFlagCountVisits : 0u);
     vkCmdPushConstants(cmd_, pipeline_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
                        &push);
     vkCmdDispatch(cmd_, (cells + 63) / 64, 1, 1);
@@ -418,6 +419,7 @@ bool FieldSampler::ready() {
     for (u32 i = 0; i < cells; ++i) {
         types_[i] = static_cast<VoxelTypeId>(out_type[i]);
         inside_[i] = static_cast<u8>(out_inside[i] != 0);
+        if (count_visits_) visits_ += out_inside[i];
     }
 
     last_gpu_ms_ = 0.0;
@@ -430,6 +432,7 @@ bool FieldSampler::ready() {
         }
     }
     last_host_ms_ = ns_to_ms(now_ns() - submit_began_ns_);
+    if (count_visits_) visited_cells_ += cells;
     delivered_ = count;
     in_flight_ = 0;
     return true;

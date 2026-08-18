@@ -169,21 +169,33 @@ struct Options {
     // rule: this runs while somebody is playing and taking every core sharpens the world by
     // stuttering it. Overridable so that the size of that choice is measured rather than assumed.
     u32 refine_workers = 0;
-    // R12: the ladder samples its nodes on the CARD. `--cpu-sample` is the control arm and is the
-    // state every figure taken before R12 was measured in — the background worker pool, one field
-    // evaluation per voxel on about half the machine's threads.
+    // R12: the ladder samples its nodes on the CARD, behind `--gpu-sample`, and it is OFF.
     //
-    // It is also the fallback rather than only a flag: a machine with no card, a driver that will
-    // not compile `sample_field.comp`, and a clip whose field outgrows the buffers all land on the
-    // same path, and the log says which and why. A GPU sampler that quietly answered for only the
-    // first n nodes of a field would be a different building with no error.
-    bool cpu_sample = false;
+    // **Measured before it was defaulted, which is why it is off.** Matched 45-second arms, estate,
+    // outdoor camera, same batch: the card delivered 87,680 nodes against the CPU's 66,432 — 1.30x,
+    // and a dispatch of 128 nodes is **40-60 ms of the card**, once a frame, against a frame the
+    // renderer wants in 17. A sampler that sharpens the world a third faster by taking two thirds of
+    // every frame is not a trade this project makes: `09-performance-budgets.md` treats a budget as
+    // a bug rather than a trade-off. `--refine-batch 2048` LOSES THE DEVICE outright — a dispatch
+    // past the driver's watchdog — which is the same fact at the other end.
+    //
+    // What it costs is measured too, and it is not the pipeline: `--gpu-visits` counts **4,158 node
+    // visits a cell** against a field of 18,250, so the box cull is working and the walk is simply
+    // long. The CPU wins its ground back by evaluating about ten times FEWER points — that is what
+    // `descend` is — and the card will beat it properly when it settles boxes the same way.
+    //
+    // `--cpu-sample` is the default and stays spelled, because it is what every figure recorded
+    // before R12 was measured in and a script should be able to say so out loud.
+    bool cpu_sample = true;
     // The thin-feature rescue on the card, off. The control arm for the one part of the per-voxel
     // definition that costs eight extra evaluations at every cell near a surface.
     bool gpu_rescue = true;
     // Sample N nodes both ways and count the cells that differ. The gate R12 is held to, and the
     // reason it is a mode rather than a test: it needs a device, and `ws_tests` has none.
     u32 gpu_sample_check = 0;
+    // Count the nodes each cell walks instead of building a world. What a dispatch costs is
+    // (nodes walked) x (what a step costs); no clock separates those two and this measures one.
+    bool gpu_visits = false;
     std::string clip_part;        // build only this let name, for looking at one piece
 
     // A smaller box to sample, overriding the clip's own.
@@ -990,11 +1002,15 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.field_single = true;
     } else if (arg == "--field-single-points") {
         options.field_single_points = next_number(20000);
+    } else if (arg == "--gpu-sample") {
+        // R12. Two flags of one build, as D407 requires, and this is the one that is off.
+        options.cpu_sample = false;
     } else if (arg == "--cpu-sample") {
-        // R12's control arm. Two flags of one build, as D407 requires.
         options.cpu_sample = true;
     } else if (arg == "--no-gpu-rescue") {
         options.gpu_rescue = false;
+    } else if (arg == "--gpu-visits") {
+        options.gpu_visits = true;
     } else if (arg == "--gpu-sample-check") {
         options.gpu_sample_check = static_cast<u32>(next_number(64));
     } else if (arg == "--refine-all") {
@@ -1445,10 +1461,12 @@ void print_help() {
         "                        metre-8 verdict D642 compared six materials against one on.\n"
         "                        NOTE that this alone restores the whole loading bar: it is one\n"
         "                        of the two flags the up-front sample is gated on\n"
-        "  --cpu-sample          the ladder samples its nodes on the CPU, one field evaluation\n"
-        "                        per voxel on half the machine's threads. R12's control arm,\n"
-        "                        and the state every figure recorded before R12 was measured\n"
-        "                        in. It is also the automatic fallback: no card, a shader that\n"
+        "  --gpu-sample          R12: the ladder samples its nodes on the CARD instead of on\n"
+        "                        half the machine's threads. OFF, and measured: 1.30x the\n"
+        "                        nodes in a matched window, for 40-60 ms of the card per\n"
+        "                        dispatch against a frame the renderer wants in 17\n"
+        "  --cpu-sample          the default, spelled, so a script can say which arm it took.\n"
+        "                        It is also the automatic fallback: no card, a shader that\n"
         "                        will not compile, or a field too big to upload all land here,\n"
         "                        and the log says which by name\n"
         "  --no-gpu-rescue       the thin-feature rescue off on the card. The control arm for\n"
@@ -1457,6 +1475,9 @@ void print_help() {
         "  --gpu-sample-check N  sample the first N nodes the ladder picks a SECOND time on the\n"
         "                        CPU and compare them cell for cell. The gate R12 is held to,\n"
         "                        counted three ways: matter, material and the clip mask\n"
+        "  --gpu-visits          count the nodes each cell WALKS instead of building a world.\n"
+        "                        What a dispatch costs is (nodes walked) x (what a step\n"
+        "                        costs), and no clock tells those two apart\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
         "  --fog e,albedo,g,h,y  air that is not empty: extinction per metre, single-scatter\n"
@@ -3303,6 +3324,7 @@ void Application::ensure_field_on_card() {
         return;
     }
     field_sampler_.set_rescue(options_.gpu_rescue);
+    field_sampler_.set_count_visits(options_.gpu_visits);
     gpu_check_left_ = options_.gpu_sample_check;
     WS_LOG_INFO("clip", "the ladder samples on the CARD{}{}",
                 options_.gpu_rescue ? "" : ", with the thin-feature rescue OFF",
@@ -9466,6 +9488,18 @@ int Application::play(const Options& options) {
                                 (refine_gpu_batches_ > 0)
                                     ? refine_total_gpu_ms_ / static_cast<f64>(refine_gpu_batches_)
                                     : 0.0);
+                    if (field_sampler_.counting_visits() && field_sampler_.visited_cells() > 0) {
+                        // The half of the cost no clock can see. A cell that walks three thousand
+                        // nodes is a clip problem; one that walks thirty and is still slow is a
+                        // stack problem, and the two want completely different work.
+                        WS_LOG_INFO("frame",
+                                    "ladder walk: {} nodes walked over {} cells — {:.0f} a cell, "
+                                    "against a field of {} nodes",
+                                    field_sampler_.visits(), field_sampler_.visited_cells(),
+                                    static_cast<f64>(field_sampler_.visits()) /
+                                        static_cast<f64>(field_sampler_.visited_cells()),
+                                    refine_plan_.ok() ? refine_plan_.field->size() : usize{0});
+                    }
                 } else {
                     WS_LOG_INFO("frame", "ladder sampler: the CPU ({})",
                                 options_.cpu_sample ? "--cpu-sample" : "no card sampler");

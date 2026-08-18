@@ -139,6 +139,14 @@ public:
     // a rule off is one of these; see documentation/22-rewrite-handover.md §7.
     void set_rescue(bool on) { rescue_ = on; }
 
+    // Count the nodes each cell walks instead of building a world. An instrument: what a dispatch
+    // costs is (nodes walked) x (what a step costs), and no clock can tell those two apart. See
+    // `ws_field_visits` in shaders/field_types.glsl.
+    void set_count_visits(bool on) { count_visits_ = on; }
+    bool counting_visits() const { return count_visits_; }
+    u64 visits() const { return visits_; }
+    u64 visited_cells() const { return visited_cells_; }
+
     void reload_if_changed() { pipeline_.reload_if_changed(); }
 
 private:
@@ -178,6 +186,9 @@ private:
     u32 in_flight_ = 0;      // boxes in the batch the card is working on
     u32 delivered_ = 0;
     bool rescue_ = true;
+    bool count_visits_ = false;
+    u64 visits_ = 0;
+    u64 visited_cells_ = 0;
     f64 last_gpu_ms_ = 0.0;
     f64 last_host_ms_ = 0.0;
     u64 submit_began_ns_ = 0;
