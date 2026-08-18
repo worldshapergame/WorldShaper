@@ -9486,3 +9486,136 @@ into is not ceremony.**
 | D676 | **`kMirrorStack` 64 → 128, measured at 80 on the estate** | fault | 64 refused every point; depth grows with the number of buildings, not their complexity |
 | D676 | **A uniform grid over a 125 m box cannot answer this** | honesty | 74 of 21,242 points near a surface; zero flips would have been a property of the grid |
 | D676 | **An agent's measurement is re-run on the tree it merges into** | honesty | It measured 553 rules; main had moved to 628, and its right answer was about the wrong building |
+
+## D677 — R12 is built and it is 1.30x, not 100x, and the instrument says exactly why
+
+**Asked for, in the user's own words:** *"speed up the world loading after launching the world by
+100x, make it also use pixel coverage on screen based resolution for the amount of detail it loads
+at"* — and then, when the launch half was read back to them: *"dont do cold runs, its supposed to
+launch instantly with no loading bar from now on, what i want is not launch speed but loading speed
+already inside a world."*
+
+So this is the ladder — the thing that fills detail in around a player who is already standing in
+the world — and not the launch, which R11d closed at D673. The second half of the ask was already
+true and was measured true at D674; this entry is about the first half.
+
+**R12 is built.** The clip's field, its parameters and the plan's widened paint rules go to the card
+(`src/gpu/field_gpu.*`), and `shaders/field_types.glsl` + `field_leaf.glsl` + `field_walk.glsl` +
+`sample_field.comp` evaluate it there. That is R12a and R12b, and the plan's own gate for them.
+
+### The gate passes, and it is the half that matters most
+
+`--gpu-sample-check N` samples the first N nodes **the ladder itself picked** a second time on the
+CPU, through the same `SamplePlan`, and compares cell for cell. On the estate — seven buildings,
+628 paint rules, an 18,250-node field, 80 deep:
+
+| | |
+|---|---|
+| nodes | 48 |
+| cells | 24,576 |
+| differ in MATTER | **0** |
+| differ in material only | **0** |
+| differ in the clip mask | **0** |
+
+D200k is *"one field evaluator, mirrored, or two renderers compute the world two ways"*, and this is
+that standard met on the real building rather than on a small clip. It gates the nodes the game
+actually asks for at the resolutions it actually asks at, which is precisely what D674 records a
+session being lost to — and it cannot pass vacuously the way `clips/sampler.clip` does.
+
+Three things made the transliteration land clean rather than nearly clean, and all three were paid
+for in advance by somebody else's entry: `Field::mirror_eval` existed to be copied (D644), `f32` was
+already known to be enough (D676), and the stack depth was already measured at 80 (D676).
+
+### It is 1.30x, and it ships OFF
+
+**Matched arms, and the first pair were not.** Estate, outdoor camera `0,10,-60,90,-6`, same batch,
+45 seconds each:
+
+| arm | nodes delivered | per node |
+|---|---|---|
+| `--gpu-sample` | **87,680** | 0.472 ms of card |
+| `--cpu-sample` (the default) | **66,432** | 0.650 ms of five threads |
+
+**1.30x.** The first comparison taken said the card was 1.7x SLOWER, and it was wrong for the
+oldest reason in this file: the two runs covered different windows, and a later window is a
+different set of nodes. Deeper nodes are finer and dearer, so a 150-second run and a 75-second run
+are not two measurements of one thing. Trap 8 wearing a wall clock.
+
+**Off by default, on three counts, and the first is the one that decides it:**
+
+1. **A dispatch of 128 nodes is 35–60 ms of the card**, once a frame, against a frame the renderer
+   wants in 17. A sampler that sharpens the world a third faster by taking two thirds of every
+   frame is not a trade this project makes — `09-performance-budgets.md` treats a budget as a bug.
+2. **`--refine-batch 2048` loses the device.** `VK_ERROR_DEVICE_LOST`, a page of `fault type 4`, on
+   the first dispatch: a dispatch past the driver's watchdog. That is the same fact as (1) read from
+   the other end, and it bounds how big a batch may ever be.
+3. Nothing a player would see is better, and the CPU arm is what every figure before this was taken
+   against.
+
+### Where the time goes, counted rather than reasoned about
+
+**`--gpu-visits` counts the nodes each cell WALKS**, because what a dispatch costs is *(nodes
+walked) x (what a step costs)*, those two are fixed by completely different things, and no clock can
+tell them apart. Estate: **171,683,497,791 nodes walked over 41,287,680 cells — 4,158 a cell,
+against a field of 18,250.**
+
+So the box cull IS working — a cell touches 23% of the field, not all of it — and the walk is simply
+long. And the CPU is not faster per evaluation; **it evaluates about ten times fewer points**. That
+is the whole of what `forge::sample`'s `descend` is: settle a whole box from one reading at its
+centre plus a Lipschitz slack, and only walk single voxels near a surface. The card brute-forces all
+512 cells of a node because that is the per-voxel DEFINITION the descent is an optimisation of.
+
+**So the next step is not a guess and it is not a tuning knob: give the card the descent.** One
+workgroup per node, 512 threads, a settle in shared memory at the node, its eight octants and its
+sixty-four sub-boxes, then per-cell only for what still straddles a surface. It needs `prune_root`,
+`prune_slack` and `slack` uploaded, all of which the plan already holds; using the global
+`prune_slack` rather than `slack_here`'s per-part figure is conservative and therefore safe — it
+settles less often and never wrongly.
+
+**And the honest arithmetic about the hundredfold.** A settle should recover most of the CPU's 10x,
+putting the card at roughly 6–8x. The rest is the walk itself: 4,158 visits a cell is a property of
+the CLIP's expression — seven buildings joined by translates, wide unions folded into chains of four
+— not of the shader. Cutting that is a CPU-side pass that compiles the field for the card: fold
+transform chains into the leaves, and build the hierarchy over wide unions that `Field::Accelerator`
+already knows how to make and that only 19 of 209 unions currently have. **A hundredfold is those
+two on top of each other, and this entry is the first of them with a number against it.**
+
+### The seventeen stacks, which is the reusable part
+
+`sample_field.comp` was written the obvious way first: a `thin_feature_here` with eight calls to
+`field_eval`, a `normal_at` with six, three in `main`. **GLSL has no out-of-line call** — the build
+compiles with `-O` and spirv-opt inlines — so that was seventeen private copies of a 96-frame stack,
+5.8 KB each, 98 KB of scratch per lane. It is now one call inside a small phase machine:
+
+| | seventeen calls | one call |
+|---|---|---|
+| glslc | 5.8 s | **0.7 s** |
+| SPIR-V | 1.05 MB | **286 KB** |
+
+The compile time is the visible half and the scratch is the half that mattered. **A helper with a
+call in it is a copy**, and on a card a copy of a stack machine is not free the way a copy of a
+function is.
+
+### Two things the agents found that outlive their diffs
+
+**`atan(0, 0)` is UNDEFINED in GLSL and `std::atan2(0, 0)` is 0.** Every op that measures an angle
+about an axis — `arc`, `revolve`, `polar repeat`, `spiral` — asks it of a point's offset from that
+axis, and a shape centred on a grid line puts sample points exactly there. A NaN in a distance field
+does not stay local: it propagates through every min and max above it and takes the building with
+it. `ws_atan2` in `field_types.glsl`.
+
+**`Field::eval` and `Field::mirror_eval` do not agree about everything, and the shader had to pick
+one.** The box cull exists in `eval` and not in the mirror; `blend` clamps its mix in `eval` and not
+in the mirror. The shader follows `eval`, because `eval` is what `forge::sample` calls and therefore
+what the gate compares against. Written down because the next person will meet the same fork.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D677 | **R12a and R12b are built and the mirror gate passes on the estate** | decision | 48 nodes, 24,576 cells, 0 differ in matter, material or mask |
+| D677 | **The card sampler ships OFF behind `--gpu-sample`** | decision | 1.30x for 35–60 ms of card a frame, and `--refine-batch 2048` loses the device |
+| D677 | **A cell walks 4,158 nodes of an 18,250-node field** | decision | The cull works; the CPU's advantage is evaluating ten times fewer points |
+| D677 | **The next step is the descent on the card, not a tuning knob** | decision | The instrument names it; a settle recovers the 10x and puts the card at 6–8x |
+| D677 | **The first arms were not comparable and said 1.7x SLOWER** | fault | 150 s against 75 s is two different node populations, not two measurements |
+| D677 | **A GLSL helper containing a call is a COPY of everything it calls** | fault | Seventeen stacks: glslc 5.8 s → 0.7, SPIR-V 1.05 MB → 286 KB |
+| D677 | **`atan(0,0)` is undefined in GLSL where C++ answers 0** | fault | Reachable on the axis of any revolve; a NaN takes the whole building |
+| D677 | **A hundredfold is the descent AND compiling the field for the card** | honesty | 1.30x is what one of the two halves buys, measured |

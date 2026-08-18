@@ -602,6 +602,64 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — 2026-08-18 (later still): R12 is built, it is right, and it is 1.30x
+
+**The ask was the LADDER, not the launch.** *"speed up the world loading after launching the world by
+100x"*, and then, unprompted, the correction that decides what the work is: *"dont do cold runs, its
+supposed to launch instantly with no loading bar from now on, what i want is not launch speed but
+loading speed already inside a world."* The launch is closed (R11d, D673). This is the ladder that
+fills detail in around somebody who is already standing in the world. **D677 is the entry.**
+
+**The field is on the card and it builds the same building.** `shaders/field_types.glsl`,
+`field_leaf.glsl`, `field_walk.glsl` and `sample_field.comp`, fed by `src/gpu/field_gpu.*`. That is
+R12a and R12b. The gate is `--gpu-sample-check N`, which samples the nodes **the ladder itself
+picked** a second time on the CPU and compares them cell for cell: on the estate, 48 nodes and
+24,576 cells, **0 differ in matter, 0 in material, 0 in the clip mask.**
+
+**And it is off**, behind `--gpu-sample`. Matched 45-second arms, estate, `0,10,-60,90,-6`, same
+batch: the card 87,680 nodes, the CPU 66,432 — **1.30x** — for **35–60 ms of the card per dispatch**,
+once a frame, against a frame the renderer wants in 17. `--refine-batch 2048` loses the device
+outright. A third more nodes for two thirds of every frame is not a trade this project makes.
+
+**What to do next, and it is not a guess.** `--gpu-visits` counts what no clock can separate: a cell
+**walks 4,158 nodes of an 18,250-node field**. So the box cull is working and the walk is simply
+long — and the CPU's whole advantage is that it evaluates about **ten times fewer points**, which is
+what `forge::sample`'s `descend` is. In order:
+
+1. **THE DESCENT, ON THE CARD.** One workgroup per node, 512 threads, a settle in shared memory at
+   the node, its eight octants and its sixty-four sub-boxes, then per-cell only for what still
+   straddles a surface. `prune_root`, `prune_slack` and `slack` are already in the `SamplePlan` and
+   only need uploading; using the global `prune_slack` rather than `slack_here`'s per-part figure
+   settles less often and never wrongly, so it is safe to start conservative. **Expected to recover
+   most of the CPU's 10x and put the card at 6–8x**, which is where it can be defaulted on.
+2. **Then compile the field FOR the card.** 4,158 visits a cell is a property of the clip's
+   expression, not of the shader: seven buildings joined by translates, and wide unions folded into
+   chains of four. Fold transform chains into the leaves, and build the hierarchy over wide unions
+   that `Field::Accelerator` already knows how to make — D675 counted **19 of 209** unions with one.
+   **This is the other half of the hundredfold and neither half reaches it alone.**
+3. **A dispatch may not outlive the driver's watchdog.** Whatever the batch becomes, split the
+   submission. Losing the device is not a slow frame, it is the game gone.
+
+**Three things that outlive their diffs, and cost real time to find:**
+
+- **A GLSL helper containing a call is a COPY of everything it calls.** `sample_field.comp` was
+  written the obvious way with seventeen calls to `field_eval`; GLSL has no out-of-line call and the
+  build compiles with `-O`, so that was seventeen private copies of a 96-frame stack — 98 KB of
+  scratch a lane, **1.05 MB of SPIR-V and 5.8 s of glslc**. One call inside a phase machine is
+  **286 KB and 0.7 s**. If a phase is added there, add it to the machine.
+- **`atan(0, 0)` is UNDEFINED in GLSL where `std::atan2(0, 0)` is 0**, and every op that measures an
+  angle about an axis asks it of a point's offset from that axis — so a shape centred on a grid line
+  reaches it. A NaN in a distance field propagates through every min and max above it. `ws_atan2`.
+- **`Field::eval` and `Field::mirror_eval` do not agree about everything.** The box cull is in `eval`
+  and not the mirror; `blend` clamps its mix in `eval` and not the mirror. The shader follows
+  `eval`, because `eval` is what `forge::sample` calls and therefore what the gate compares against.
+
+**And the method note, which is the one that nearly published a wrong number.** The first arms taken
+said the card was **1.7x SLOWER**. They were a 150-second run against a 75-second one, and a later
+window is a different set of nodes — deeper nodes are finer and dearer. Trap 8 wearing a wall clock.
+**Match the window as well as the camera, the batch and the flags.**
+
+
 #### START HERE — 2026-08-18 (later): the loading bar is gone, and R11d was on a switch nobody threw
 
 **297 ms to playable on the estate**, against a control arm abandoned at 80% of 261 M voxels with its
@@ -4465,6 +4523,23 @@ takes its own "nothing has been measured" branch and no flag reaches it;
 `--face-fold` makes a coarse face take its sky and bounce from the four faces under it rather than
 from its own rays, which is R9f's fold — **off by default**, worth a third more light in the bounce
 and 2.8 ms of the faces pass;
+R12, the ladder's sampler on the card, is four flags and the first is off:
+
+```powershell
+WorldShaper --clip-file clipsacility.clip --gpu-sample            # R12: sample on the CARD (OFF by default)
+WorldShaper ... --gpu-sample --gpu-sample-check 48                   # ...and check those nodes against the CPU
+WorldShaper ... --gpu-sample --gpu-visits                            # how many NODES a cell walks, not how long
+WorldShaper ... --gpu-sample --no-gpu-rescue                         # the thin-feature rescue off, as a control
+```
+
+`--gpu-sample-check` is the gate R12 is held to and it is the one to run after ANY change to
+`field_leaf.glsl`, `field_walk.glsl` or `sample_field.comp`: it samples the nodes the ladder itself
+picked a second time on the CPU and counts what differs, in matter, in material and in the clip
+mask. Zero on all three is the only passing answer. `--gpu-visits` builds a world whose mask is
+nonsense and is not trying to build one -- it is the half of the cost no clock can see.
+
+`--cpu-sample` is the default and is spelled so a script can say which arm it took.
+
 `--no-emitter-cache` makes the emitter list rediscover every chunk on every announced change again,
 which is R9g's control arm and the state every figure before it was measured in — it is a cleared
 map rather than a second code path, so the arms cannot differ by a branch;
