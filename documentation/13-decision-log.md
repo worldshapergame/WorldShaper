@@ -9774,3 +9774,72 @@ and a hierarchy that cannot reject is a traversal paid on top of the scan it rep
 **Both of those are the same lesson as the descent above, three times in one session: the cheap
 control arm came first and each time it said do not build the thing.** What is left after all three
 is the walk itself, and 923 boxless nodes is the only lead with a number on it.
+
+## D679 — "I don't see the variable resolution" — and the world says they are right
+
+**Reported:** *"i dont see the variable resolution based on screen coverage either way still."*
+
+The record said this was working. **D674 says so in its own headline** — *"the pixel-driven resolution
+IS working — metre 32 within 31.25 m, metre 16 to 62.5, metre 8 to 125"* — and it cost three agents
+in three worktrees to establish, each of which refused the premise that it was broken. That entry is
+not wrong about what it measured. It is wrong about what it concluded.
+
+### What D674 measured, and the question it does not answer
+
+D674 measured the ladder's **batch line**: which nodes went into a batch, at what resolution, and —
+after that entry added it — how far away they were. It found metre 32 on nodes 14.0 to 31.2 m out and
+metre 16 on 31.3 to 36.9, which is `kRefineSplitAt` to the decimal. **The rule computes correctly.**
+
+That is a statement about a batch. It is not a statement about the WORLD, and the two come apart the
+moment a node can be sampled coarsely and then split and sampled again: every batch can be right at
+the instant it is picked and the fixed point still be uniform. *A rule that is right and a world that
+is uniform are two different facts*, and nothing in this repository was pointed at the second one.
+
+### The instrument that is, and what it says
+
+`detail by distance` is printed beside the settle line: every node the ladder has been through,
+binned by how far its centre is from the camera, reporting the resolution its own LEVEL implies.
+The bands are the rungs the rule itself predicts, so a working world puts its answers on the diagonal
+and a uniform one puts them in a column. Estate, 60 s, `--settle`:
+
+| | <8 m | 8–16 m | 16–31 m | 31–62 m | 62–125 m |
+|---|---|---|---|---|---|
+| **the rule asks for** | 32 | 32 | 32 | **16** | **8** |
+| enclosed camera | 31.0 | 32.0 | 32.0 | **32.0** (180,072 nodes) | — |
+| outdoor camera | — | 32.0 | 32.0 | **32.0** (45,195 nodes) | **32.0** (24 nodes) |
+
+**Everything, at every distance, at the authored resolution.** And an instrument that has been in the
+build since D619 says the same thing and nobody had read it that way — the `ladder:` level histogram
+from the same run is **L3 239,304 · L4 6,007 · L5 2,754 · L6 1,574 · L7 1,146 · L8 1,087**. A
+pixel-driven world would be a spread; this is everything split to the finest level with a rounding
+error of coarser nodes above it.
+
+Two instruments, one of them pre-existing and independent, and the player's own eye. **The cause is
+not established and this entry does not guess at one.** The split loop's condition is a disjunction —
+`refine_all || next_keen > kRefineSplitAt || !refine_would_improve(...)` — and the third disjunct is
+the one a session already named and three agents already cleared, so it is exactly the place to
+re-open carefully rather than confidently.
+
+### And the instrument was wrong the first time, in a way worth writing down
+
+The first version binned `RefineNode::applied_per_metre` and reported the 31–62 m band at **29.7
+voxels a metre over 198,844 nodes** — a number that looked like a smoking gun and was an artefact.
+`applied_per_metre` is *how finely the world already holds this volume*, and its own header says it
+is **inherited by children when a node splits**, so a level-4 node whose parent was sampled at 32
+reports 32 without ever having been sampled. It also reported 16–31 m at 8.7/m, COARSER than the band
+beyond it, which is the tell: a real detail rule cannot be non-monotonic in distance, and a reading
+that is should be doubted before it is published.
+
+That is the third instrument in one session to give a confident and false answer — after the refusal
+op stamp that said `constant` because two refusal paths never wrote it, and the two throughput arms
+measured over different windows. **The pattern is the same every time: a field that exists for one
+purpose, read for another, with nothing in its name to say so.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D679 | **The world is built at the authored resolution at every distance** | fault | Both cameras, every band out to 125 m, 32/m; and L3 239,304 against L4 6,007 |
+| D679 | **D674 measured the RULE and concluded about the WORLD** | fault | Every batch can be right when picked and the fixed point still be uniform |
+| D679 | **`detail by distance` is the instrument that asks the second question** | decision | Binned by the level's own resolution, over nodes that went through the ladder |
+| D679 | **`applied_per_metre` is INHERITED and must not be read as "what this node was sampled at"** | fault | It reported 29.7/m over 198,844 nodes, and 16–31 m coarser than 31–62 m |
+| D679 | **A detail rule that is not monotonic in distance is a broken instrument, not a finding** | honesty | The non-monotonicity is what exposed the first census |
+| D679 | **The cause is not established, and the third disjunct of the split is where to look** | honesty | `!refine_would_improve` is what D674's session named and three agents cleared |

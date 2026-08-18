@@ -602,6 +602,41 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — 2026-08-18 (last): the variable resolution is NOT reaching the world
+
+**Reported:** *"i dont see the variable resolution based on screen coverage either way still."*
+**They are right, and D674's headline says the opposite. D679 is the entry; read it first.**
+
+D674 measured the ladder's BATCH LINE and found the rule computing correctly — metre 32 on nodes
+14.0 to 31.2 m out, metre 16 on 31.3 to 36.9. That is true and it is a statement about a batch. It
+is not a statement about the world, and the two come apart the moment a node can be sampled
+coarsely, split, and sampled again: **every batch can be right when it is picked and the fixed point
+still be uniform.**
+
+`detail by distance`, beside the settle line, asks the second question. Estate, 60 s, `--settle`:
+
+| | <8 m | 8–16 m | 16–31 m | 31–62 m | 62–125 m |
+|---|---|---|---|---|---|
+| **the rule asks for** | 32 | 32 | 32 | **16** | **8** |
+| enclosed | 31.0 | 32.0 | 32.0 | **32.0** | — |
+| outdoor | — | 32.0 | 32.0 | **32.0** | **32.0** |
+
+And the `ladder:` level histogram, which has been in the build since D619 and which nobody had read
+this way, agrees independently: **L3 239,304 · L4 6,007 · L5 2,754 · L6 1,574 · L7 1,146 · L8 1,087**.
+A pixel-driven world is a spread; this is everything split to the finest level.
+
+**The cause is NOT established and do not assume one.** The split loop is a disjunction —
+`refine_all || next_keen > kRefineSplitAt || !refine_would_improve(...)` — and the third disjunct is
+the one a session already named and three agents already cleared (D674). It is the place to look and
+it is the place somebody has already been wrong about, so take the control arm before the theory.
+
+**And read D679's last section before trusting any instrument here.** The first version of this
+census binned `applied_per_metre` and reported a confident, specific, false answer, because that
+field is *inherited by children when a node splits* — its own header says so. Three instruments gave
+false answers in one session and all three were a field read for a purpose it was not for.
+
+---
+
 #### START HERE — 2026-08-18 (later still): R12 answers right, and it does not answer everywhere
 
 **THE FIRST THING TO DO IS THE BUG, and it has an exact repro.** With `--gpu-sample` on:

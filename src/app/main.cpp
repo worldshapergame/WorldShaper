@@ -2365,6 +2365,9 @@ private:
     // What the ladder actually looks like when it stops: a level histogram and, for the nodes it
     // left coarse, WHICH of the picker's tests is refusing them. Printed beside the settle line.
     std::string refine_census() const;
+    // What the world ACTUALLY holds, banded by distance -- the outcome of the pixel rule rather
+    // than the rule itself. See the block above it.
+    std::string refine_resolution_census() const;
     // Pick a half-built world back up: adopt the cache's flags onto the planned grid and leave
     // the ladder standing if anything is still coarse.
     void resume_refinement(forge::Script&& script, const WorldCache& cache,
@@ -4660,6 +4663,78 @@ bool Application::refine_node_is_a_no_op(const RefineNode& node) const {
 // Const, and it deliberately does not mark anything done: a report that changes what it reports on
 // is worthless. It repeats the arithmetic of `refine_candidate` rather than calling it for exactly
 // that reason.
+// Is the world's DETAIL actually a function of how many pixels a thing covers?
+//
+// The ladder's rule says a node splits while it is more than eight pixels across at 0.002 of its own
+// distance, and that the resolution follows the level -- so metre 32 out to 31.25 m, metre 16 to
+// 62.5, metre 8 to 125. D674 established that the rule computes correctly and cost three agents to
+// establish it, because the only instrument pointed at the question was a batch line that reported a
+// resolution with NO DISTANCE BESIDE IT.
+//
+// This is the other half of that, and it is the half a player can be shown: not what the rule
+// computes, but what the WORLD ended up holding, banded by how far away it is. A rule that is right
+// and a world that is uniform are two different facts, and only this one separates them.
+//
+// `applied_per_metre` is what each node was actually sampled at, so this reads the outcome rather
+// than re-deriving the intention.
+std::string Application::refine_resolution_census() const {
+    const f64 cx = camera_.metres_x();
+    const f64 cy = camera_.metres_y();
+    const f64 cz = camera_.metres_z();
+
+    // Bands chosen at the rungs the rule itself predicts, so a working world puts its answers on the
+    // diagonal and a uniform one puts them in a column.
+    static constexpr f64 kBand[] = {8.0, 16.0, 31.25, 62.5, 125.0, 1.0e30};
+    static constexpr const char* kBandName[] = {"<8m", "8-16m", "16-31m", "31-62m", "62-125m", ">125m"};
+    constexpr usize kBands = sizeof(kBand) / sizeof(kBand[0]);
+
+    // Resolutions the ladder can choose: 256 / 2^level, capped at the clip's own.
+    u64 count[kBands]{};
+    u64 sum_per_metre[kBands]{};
+    i32 finest[kBands]{};
+    i32 coarsest[kBands]{};
+    for (usize b = 0; b < kBands; ++b) coarsest[b] = 1 << 30;
+
+    for (const RefineNode& box : refine_regions_) {
+        // **`refine_resolution(level)` and NOT `applied_per_metre`, and the difference is the whole
+        // measurement.**
+        //
+        // `applied_per_metre` is how finely the WORLD already holds this volume, and its own header
+        // says it is *inherited by children when a node splits* — so a level-4 node whose parent was
+        // sampled at 32 reports 32 without ever having been sampled at all. Binned against distance
+        // that reads as "the ladder builds full detail everywhere", confidently, from a field that
+        // was never about this question. The first version of this census did exactly that and
+        // reported 198,844 nodes at 29.7 voxels a metre in a band where the rule asks for 16.
+        //
+        // What answers the question is the resolution the node's own LEVEL implies, over the nodes
+        // that have actually been through the ladder.
+        if (!box.done || box.applied_per_metre <= 0) continue;
+        const i32 per_metre = refine_resolution(box.key.level);
+        const f64 to_x = (box.low.x + box.high.x) * 0.5 - cx;
+        const f64 to_y = (box.low.y + box.high.y) * 0.5 - cy;
+        const f64 to_z = (box.low.z + box.high.z) * 0.5 - cz;
+        const f64 away = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
+        usize band = 0;
+        while (band + 1 < kBands && away > kBand[band]) ++band;
+        ++count[band];
+        sum_per_metre[band] += static_cast<u64>(per_metre);
+        finest[band] = std::max(finest[band], per_metre);
+        coarsest[band] = std::min(coarsest[band], per_metre);
+    }
+
+    std::string out;
+    for (usize b = 0; b < kBands; ++b) {
+        if (count[b] == 0) continue;
+        if (!out.empty()) out += "  ";
+        out += std::string(kBandName[b]) + ": " +
+               std::format("{:.1f}", static_cast<f64>(sum_per_metre[b]) /
+                                          static_cast<f64>(count[b])) +
+               "/m mean (" + std::to_string(coarsest[b]) + "-" + std::to_string(finest[b]) + ", " +
+               std::to_string(count[b]) + " nodes)";
+    }
+    return out.empty() ? std::string("nothing has been sampled yet") : out;
+}
+
 std::string Application::refine_census() const {
     const f64 cx = camera_.metres_x();
     const f64 cy = camera_.metres_y();
@@ -9537,6 +9612,10 @@ int Application::play(const Options& options) {
             }
             if (!refine_regions_.empty()) {
                 WS_LOG_INFO("frame", "ladder: {}", refine_census());
+                // What a player is actually standing in front of. The line above says which nodes
+                // are still coarse; this one says what the FINISHED ones came out at, against how
+                // far away they are, which is the only form of the question anybody can look at.
+                WS_LOG_INFO("frame", "detail by distance: {}", refine_resolution_census());
                 // Where a load's seconds went, over the whole run rather than over one batch.
                 //
                 // The batch line has always timed one batch, and one batch is a few tens of
