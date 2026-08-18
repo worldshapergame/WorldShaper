@@ -37,7 +37,13 @@ if [[ $force -eq 1 || ! -x "$out" || -n "$newest" ]]; then
         "$root/tools/clipcheck.cpp" \
         "$root"/src/core/*.cpp "$root"/src/world/*.cpp "$root"/src/game/*.cpp \
         "$root"/src/forge/*.cpp \
-        -o "$out" -pthread
+        -o "$out" -pthread -ldbghelp
+    # -ldbghelp because src/core/crash.cpp calls SymInitialize, StackWalk64 and the rest of
+    # the Windows symbol API. CMake links it for every other target and this script did not,
+    # so the standalone build has failed on Windows with ten undefined references for as long
+    # as the crash handler has existed -- which is why the header above says "nothing here
+    # needs Windows" and the link line proves otherwise. Harmless elsewhere: the flag is only
+    # reached on a toolchain that has the library.
 fi
 
 exec "$out" "$@"

@@ -441,7 +441,15 @@ void crash_install(std::string_view log_name) {
     std::signal(SIGABRT, on_signal);
     // Without this the CRT shows its own "abnormal program termination" box first and the
     // handler above never runs.
+    //
+    // MSVC only, and the guard is not decoration: `_set_abort_behavior` is a Microsoft CRT
+    // extension that mingw's does not provide, so `tools/clipcheck.sh` -- which compiles the same
+    // sources with g++ and is the only way to sample a clip without a graphics device -- has
+    // failed to link on Windows for as long as this call has been here. The box it suppresses is
+    // an MSVC box; a build that does not have the function does not have the box either.
+#ifdef _MSC_VER
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
     // A stack overflow arrives with almost no stack left. Reserving a slice up front is
     // what lets the handler run at all rather than faulting again inside itself.
     ULONG guarantee = 64 * 1024;
