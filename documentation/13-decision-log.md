@@ -9144,24 +9144,39 @@ block's limed bloom on top of its own weathering.
 
 ### The estate sampled whole, which is the only arm that shows them coexisting
 
-Every figure above is one part on its own. The whole manifest at **metre 4** (metre 8 does not
-finish inside fifteen minutes now — the box is 125.5 x 37.5 x 110.5 m):
+Every figure above is one part on its own. The whole manifest at **metre 8**:
 
-    matter extent   88.000 x 36.500 x 80.250 m
-    volume          540,453 voxels        surface 356,038 faces
-    worldbox        x -52.5 .. 35.5   y -5.25 .. 31.25   z -16.5 .. 63.75
-    never fired     6 of 553 rules
-    connected       271 components, largest 258,212, 282,241 NOT joined to it
+    sampled box     1004 x 300 x 884 voxels    125.500 x 37.500 x 110.500 m
+    matter extent   88.000 x 36.625 x 80.500 m
+    volume          4,079,451 voxels           surface 1,488,450 faces
+    worldbox        x -52.5 .. 35.5   y -5.375 .. 31.25   z -16.625 .. 63.875
+    never fired     2 of 553 rules
+    connected       883 components, largest 1,837,605, 2,241,846 NOT joined to it
 
-**The 282,241 unjoined voxels are the point, not a fault.** The two largest floating groups are at
-x -52.5..-19.75, z -8.5..18.0 and x -45.0..-23.25, z 20.5..33.75 — the theatre and the grotto, on
-their site-plan rows to the quarter metre. Four buildings that do not touch the block or each other
-is what a separate building IS, and it is why `grounds` joins after the voids.
+**The 2,241,846 unjoined voxels are the point, not a fault.** The four largest floating groups are
+each one of the new buildings, and each sits on its site-plan row:
 
-The six idle rules are all pre-existing — four in site.clip, one in terrace.clip, one weather coat —
-and none belongs to a new fragment, so every rule the four conversions carried does fire. At metre 4
-a voxel is 0.25 m, so fine coats being absent there is expected and this is not evidence against
-them; it is evidence that nothing a conversion touched went silent.
+    957,067 voxels   x -52.500 .. -19.625   z  -8.500 .. 18.125     the theatre
+    502,703          x -14.000 ..  13.875   z  40.250 .. 63.750     the pavilion
+    495,637          x -45.125 .. -23.000   z  20.500 .. 33.875     the grotto
+    278,228          x  24.375 ..  35.375   z   8.500 .. 19.375     the campanile
+
+The largest component, 1,837,605 voxels, is the block. Four buildings that touch neither it nor each
+other is what a separate building IS, and it is why `grounds` joins after the voids. Each group is a
+little smaller than the same part measured alone, because a part sampled by itself carries ground
+that here abuts its neighbour's.
+
+Only two rules are idle — `boxwood where=site_moss` and one fissure weather — and neither belongs to
+a converted fragment, so nothing the four conversions carried went silent, which is the failure mode
+a translated paint rule has.
+
+**A CORRECTION, and the entry carried the error for one commit.** This paragraph first said metre 8
+"does not finish inside fifteen minutes" and gave metre 4 figures instead. It does finish. The run
+had been backgrounded and its output file was read while it was still writing, and a file holding
+only the startup banner was taken for a run that had died rather than one that had not got there
+yet. The metre 4 arm was real and its numbers were right for metre 4 — 540,453 voxels, 271
+components, 6 idle rules — but it was measured for a reason that was not true, and at 0.25 m a voxel
+it understates the coats: six rules look idle there against two here.
 
 | # | Decision | Kind | Why |
 |---|---|---|---|
