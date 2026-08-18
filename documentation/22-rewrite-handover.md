@@ -602,6 +602,40 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — 2026-08-18: the facility is an estate now, and three buildings are still outside it
+
+`clips/facility.clip` was one neoclassical block. It is **four buildings plus the block** as of
+today: campanile, grotto, theatre and pavilion, each a standalone clip from `clips/estate/` carried
+in by one translate. They join in a third union, `grounds`, beside `shell` and `inside`, at the
+`furnished` line — for the reason `part_terrace` joins there, that no void in the manifest is meant
+to reach them. **D672 is the entry; read it before touching any of this.**
+
+**What is left, in order:**
+
+1. **Three buildings are not in**: `colonnade`, `fountain`, `orangery`. Their worktrees exist under
+   `.claude/worktrees/` and are empty — the branches point at `main` with nothing on them. The
+   conversion is mechanical and D672 describes it in five steps; the vectors are already in
+   `_contract.clip`'s site table, and the bounds already hold all seven.
+
+2. **`surface.clip` weathers buildings thirty metres away, and this is not fixed.** Its rules are
+   keyed on FIELDS, not places, and `max { zone field }` is a union over fields rather than an
+   intersection — so the block's limed bloom lands on the campanile. Proven by commenting out two
+   lines (D672). The fix is an `on=` envelope on every field-keyed rule in `surface.clip` and
+   `walls.clip`; it changes the block's own paint, so it needs a before-and-after on the whole
+   building and should not ride along with a fragment conversion. **Do not trust a grep here** —
+   two static passes over these files disagreed with each other and both were wrong.
+
+3. **The pavilion goes from 87 components to 98, and 218 loose voxels to 1,450.** Reproduces across
+   two different boxes, so it is not the probe box. No cause established. Everything else matches
+   its control to within probe-box margin.
+
+4. **Nobody has looked at the estate.** Every figure here is `--clip-part` at metre 8. There has
+   been no render of the four buildings together, and each brings its own lawn — the theatre's slab
+   is drawn past its own bounds by design, the campanile has an 11 m apron, and `site.clip` has
+   ground to x ±17.1. They do not overlap today. Whether they read as one estate or as four lawns
+   with seams is a question a picture answers and a voxel count does not.
+
+
 #### START HERE — 2026-08-17: the fifteen are assembled, and what is left of them
 
 **The clip viewer's fifteen ported features are in ONE build on

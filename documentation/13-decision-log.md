@@ -9088,3 +9088,65 @@ the fix is the house idiom rather than a cast invented for the occasion.
 | D671 | **A red CI is not a background condition — D668 said this and it happened again** | honesty | Six pushes landed on `main` over two hours with the build broken, and the next thing to notice was the owner unable to start the game |
 | D671 | **"The game will not start" was a tool the game does not link** | honesty | `run.bat` exits on any build failure, so any target's failure is indistinguishable from the game being broken. The binary was working the whole time |
 | D671 | **A commit whose subject says "WIP: partial work" does not belong on `main`** | decision | 6727226 named itself unfinished and broke the build for a day; the subject line was the warning and nobody read it |
+
+## D672 — the estate is one clip, and the block's weathering paints buildings thirty metres away
+
+The facility was one neoclassical block. It is seven buildings now: the block, and six standalone
+clips from `clips/estate/` carried into `clips/facility.clip` by one translate each. Four are in as
+of this entry — campanile, grotto, theatre, pavilion — and the colonnade, fountain and orangery are
+not.
+
+### The shape of a conversion, and the one that is silent
+
+A standalone clip owns `metre`, `bounds`, `variation`, a base coat and `solid`. A fragment owns none
+of them; the manifest does. So converting one is: strip those five, bind exactly one `part_<name>`,
+and wrap the assembly in the translate from _contract.clip's site table.
+
+**And then translate every shape named in every `paint ... where=` rule by the same vector.** This is
+the failure with no error: the stone moves, the paint stays where it was drawn, and nothing in
+`components`, `volume` or `surface` changes because paint moves no matter. The campanile has 14
+paint rules and 3 weather scopes over 16 shapes; the pavilion 37; the theatre 32; the grotto 26 and
+3. Each got an `_at` twin. `below=` goes 0.02 to 0.035 at the same time, per BRIEF.md rule 5,
+because a translated shape disagrees with its own voxels for 3–16% of them.
+
+### The control arm that makes this checkable
+
+Each estate original is left untouched, so **it is the control**, and at metre 8 the translate is a
+whole number of cells in every axis — so `volume`, `surface` and `components` must match TO THE
+VOXEL, and a single voxel of difference is a fault rather than a rounding.
+
+|  | control | via `clips/facility.clip` | components |
+|---|---|---|---|
+| campanile | 281,448 | 281,449 | 41 / 217 loose, both |
+| grotto | 496,095 | 496,099 | 9 / 9 loose, both |
+| theatre | 947,788 | 957,248 | 37 / 139 loose, both |
+| pavilion | 502,601 | 503,973 | 87 / 218 → **98 / 1,450** |
+
+The small differences are probe-box margin. The theatre's 9,460 is its ground slab, drawn past its
+own bounds so the frame is filled rather than fringed: +2,844 lawn and +6,952 gravel, and the
+identical 37/139 is the proof nothing built moved. **The pavilion's is not explained**, reproduces
+across two different boxes, and is written down as measured rather than reasoned about.
+
+### The finding that was not being looked for
+
+**`surface.clip` paints the campanile from thirty metres away.** Every rule in it carries `where=`
+and both its weathers carry `on=`, so a grep for unscoped rules calls the file clean — and that is
+the wrong question. The targets are FIELDS, not places. `s_tops` is `max { s_top_zone <noise> }`,
+which reads as an intersection with a bounded zone and is not one: over these fields `max` is a
+union, so the noise half paints wherever it crosses its threshold, estate-wide.
+
+Established by control and not by reading, which matters because two static passes over the same
+files got it wrong in both directions — one said 19 rules leak, one said 66, and the real answer
+came from commenting two lines out. With `paint tuff where=s_tops` and `where=s_str_run` disabled
+and nothing else changed, tuff leaves the campanile's speck list entirely and the report re-classes
+site.clip's own tuff rules as `idle`. About 1,624 surface voxels, ~1.5% of the tower, wearing the
+block's limed bloom on top of its own weathering.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D672 | **A fragment translates its paint rules as well as its stone** | decision | The failure is silent: right geometry, wrong colour, and no counter in the report changes |
+| D672 | **The untouched estate original is the control arm** | decision | At metre 8 the translate is a whole number of cells, so the two must agree to the voxel |
+| D672 | **`max { zone field }` does not bound a rule to the zone** | fault | Over fields it is a union, so `surface.clip` weathers every building on the estate |
+| D672 | **A grep for `where=`/`on=` is not a test of whether a rule is bounded** | honesty | Both static passes were wrong; two commented-out lines settled it in one run |
+| D672 | **The pavilion's 87→98 components is recorded unexplained** | honesty | It reproduces across two boxes, so it is not the box, and no cause was established |
+| D672 | **Four buildings each bring their own ground, and nobody has looked** | honesty | They do not overlap today; whether they read as one estate or four lawns needs a render |
