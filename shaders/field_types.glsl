@@ -282,6 +282,16 @@ void ws_other_axes(uint axis, out uint a, out uint b) {
     else                 { a = 0u; b = 1u; }
 }
 
+// `std::atan2`, including the one case GLSL leaves UNDEFINED and C++ does not.
+//
+// `atan(y, x)` in GLSL is undefined when both arguments are nought; `std::atan2(0, 0)` is 0. That
+// is not a corner nobody reaches — every op that measures an angle about an axis (`arc`,
+// `revolve`, `polar repeat`, `spiral`) asks it of a point's offset from that axis, and a shape
+// centred on a grid line puts sample points exactly on its own axis. An undefined answer there is
+// a NaN, and a NaN in a distance field does not stay local: it propagates out through every min
+// and max above it and takes a whole building with it.
+float ws_atan2(float y, float x) { return (x == 0.0 && y == 0.0) ? 0.0 : atan(y, x); }
+
 float ws_smooth_min(float a, float b, float k) {
     if (k <= 0.0) return min(a, b);
     const float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
