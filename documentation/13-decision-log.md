@@ -9142,6 +9142,27 @@ and nothing else changed, tuff leaves the campanile's speck list entirely and th
 site.clip's own tuff rules as `idle`. About 1,624 surface voxels, ~1.5% of the tower, wearing the
 block's limed bloom on top of its own weathering.
 
+### The estate sampled whole, which is the only arm that shows them coexisting
+
+Every figure above is one part on its own. The whole manifest at **metre 4** (metre 8 does not
+finish inside fifteen minutes now — the box is 125.5 x 37.5 x 110.5 m):
+
+    matter extent   88.000 x 36.500 x 80.250 m
+    volume          540,453 voxels        surface 356,038 faces
+    worldbox        x -52.5 .. 35.5   y -5.25 .. 31.25   z -16.5 .. 63.75
+    never fired     6 of 553 rules
+    connected       271 components, largest 258,212, 282,241 NOT joined to it
+
+**The 282,241 unjoined voxels are the point, not a fault.** The two largest floating groups are at
+x -52.5..-19.75, z -8.5..18.0 and x -45.0..-23.25, z 20.5..33.75 — the theatre and the grotto, on
+their site-plan rows to the quarter metre. Four buildings that do not touch the block or each other
+is what a separate building IS, and it is why `grounds` joins after the voids.
+
+The six idle rules are all pre-existing — four in site.clip, one in terrace.clip, one weather coat —
+and none belongs to a new fragment, so every rule the four conversions carried does fire. At metre 4
+a voxel is 0.25 m, so fine coats being absent there is expected and this is not evidence against
+them; it is evidence that nothing a conversion touched went silent.
+
 | # | Decision | Kind | Why |
 |---|---|---|---|
 | D672 | **A fragment translates its paint rules as well as its stone** | decision | The failure is silent: right geometry, wrong colour, and no counter in the report changes |
