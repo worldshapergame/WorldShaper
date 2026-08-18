@@ -3487,7 +3487,13 @@ Until now it was done by the computer's main processor, on about half its cores,
 
 So it stays switched off, and the next step is now precisely known rather than guessed at: teach the graphics card the same trick about blocks of space. There was a real risk of guessing here, and the way it was avoided was to add a counter that says how much of the recipe each cube actually reads — it turned out to be four thousand steps out of eighteen thousand, which says the shortcuts are working and the recipe is simply long. **Asking for a hundredfold and getting a third is a shortfall, and it is written down as one.**
 
-**Since then you have said the trade is worth it, so it is switched on.** The world now fills in about a third faster and the picture runs slower while it does. Nothing else about the game changes.
+**You said the trade was worth it, so I switched it on — and then had to switch it off again the same hour.** Not because of the trade you agreed to. Because of two things underneath it that you were never actually asked about, and could not have been.
+
+The first: pointed at the view the game opens on — standing inside the building — the graphics card came back **unable to answer for about two thousand cubes**. Not wrong about them; unable. A cube nobody worked out gets written down as empty air, and empty air in the middle of a wall is a hole. Everything I had checked before this was from a camera standing outside the building, and it was the wrong camera to have checked.
+
+The second is worse: before I put a limit on it, that same view **crashed the graphics driver outright**. The card was given a piece of work it never finished, and after about two seconds Windows resets the card out from under the game — which would have meant losing whatever you were building, mid-session, with no warning. There is a limit on it now, so it gives up and says so instead of hanging.
+
+A slower picture is a trade you can weigh. Holes in your building and losing your session are not, so I did not ask again — it is off until it is fixed, and I have left an exact recipe for reproducing it.
 
 And the reason I gave above for why it was only a third turned out to be wrong, which is worth saying because the correction is what makes the next step obvious. I said the main processor was clever about whole blocks of space and the graphics card was not. It is — but not here: by the time the game asks for a patch of world, it has already thrown away every patch that is entirely solid or entirely empty, so what is left is all surface, and there is no cleverness left to copy. Both machines are doing the same amount of work.
 
