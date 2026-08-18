@@ -2188,8 +2188,29 @@ shader without changing."*
   refused at 45× (D646): a cull box an answer can vouch for is, on this building, a box that rejects
   nothing. The cull is fast because it reads boxes tighter than the answers justify.**
 
-  **The open question this stage still owns is whether `f32` is enough**, and it is the reason the
-  mirror exists: no property of the graph can answer it. The mirror is now the place to ask.
+  **ANSWERED — D676. `f32` is enough, and the question's own premise was wrong.** `--field-single`
+  walks the estate on two grids and reports **0 sign changes over 44,084 points, 10,683 of them
+  within half a voxel of a surface**; worst difference at a surface **0.47 µm against a 31.25 mm
+  voxel**, and 0 of 4,396 paint evaluations change a rule's own band decision.
+
+  The premise — *"forty nodes deep, so does a point survive forty transforms in single precision"* —
+  is not what accumulates. **The error is a function of DISTANCE FROM THE ORIGIN**: 2.25e-7 m in
+  `sampler.clip`'s 12 m box against 4.35e-6 m out at 63 m on the estate, a ratio of 22 against a
+  coordinate ratio of about 20. So this stays safe while a world stays within kilometres of its
+  origin and degrades linearly in that, not in how deep or complicated the clip is.
+
+  **A uniform grid cannot answer this and must not be used alone.** The estate's box is 125.5 x 37.5
+  x 110.5 m, so 21,242 evenly spaced points put only 74 within half a voxel of a surface — and a sign
+  can only change where the reference answer is smaller than the gap between the arms, which is
+  microns. Zero flips off that grid is a property of the grid. The second grid projects candidates
+  onto the isosurface and walks real voxel centres; that is where the 10,683 come from.
+
+  **And the stack is 128, not 64 — measured at 80 on the estate (D676).** D643's 41-deep, 36-reached
+  figures are the FACILITY's. Depth grows with the NUMBER of buildings on the estate rather than with
+  any building's complexity, because each is a translate joining one union of seven and every painted
+  shape carries a translated twin. **R12b's register budget is written against 128.** At 64 the
+  mirror refused every point of the estate, and a refusal reports nought sign changes over nought
+  points — which reads exactly like agreement unless refusals are counted separately.
 - **R12c — the marcher derives rather than stops.** A descent that reaches a node the pool has not
   built evaluates the field there instead of reporting a miss. R2d's stand-in stops being what a
   player waits behind and becomes what is drawn for the one frame a derivation costs.
