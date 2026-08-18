@@ -387,6 +387,29 @@ Measured on the spot the game starts you in: the first run still takes 133 secon
 
 What this does **not** fix is the stutter during that first build. Each box, when it's ready, gets stamped into the world in one uninterrupted go, and the big ones take up to seventeen seconds with everything else frozen. That's the freezing you reported, it's the next thing on the list, and the answer is to stamp it in slices across many frames instead of all at once. This change just means you only pay it once.
 
+## The estate is finished — seven buildings, not four
+
+The facility used to be one neoclassical block. Four more went up around it — a bell tower, a
+grotto, a garden theatre and a lakeside pavilion — and three were still waiting: the forecourt
+colonnade, the fountain court and the orangery. Those three are in now, so the estate is complete.
+
+Each one was drawn as its own building, at its own origin, and then carried to its place on the
+grounds by a single instruction. The colonnade sweeps out south of the great steps, the fountain
+court sits on the axis to the north, and the orangery stands on the east terrace — lifted 0.90 m,
+because a terrace is higher than a lawn.
+
+The catch with moving a building is that **the paint doesn't move with the stone.** The rules that
+say "this bit is travertine, that bit is weathered granite" name shapes, and moving the building
+leaves the shapes where they were drawn. Get it wrong and every coat still lands on *something* —
+so the materials list looks right, the proportions look right, and the paint is sitting in mid-air
+where the building used to be. Every shape a rule names now has a moved twin, sixty-four of them
+across the three buildings.
+
+Two of the three fit their site with very little room: the colonnade's gate comes within **35 cm**
+of the edge of the world the game samples, and the orangery's east end within **50 cm**. Anything
+that grows past that edge isn't trimmed — it simply never gets built, and nothing reports it. Both
+are written into the files so the next person to extend either building knows before they start.
+
 ## The loading bar was a switch that was never flipped
 
 You said you'd spent a long time making it so there's no loading bar, and that there was still one,
