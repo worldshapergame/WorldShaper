@@ -387,6 +387,51 @@ Measured on the spot the game starts you in: the first run still takes 133 secon
 
 What this does **not** fix is the stutter during that first build. Each box, when it's ready, gets stamped into the world in one uninterrupted go, and the big ones take up to seventeen seconds with everything else frozen. That's the freezing you reported, it's the next thing on the list, and the answer is to stamp it in slices across many frames instead of all at once. This change just means you only pay it once.
 
+## The loading bar was a switch that was never flipped
+
+You said you'd spent a long time making it so there's no loading bar, and that there was still one,
+and that it had got much longer since the estate buildings went in. All three were true, and the
+reason is smaller and more annoying than a bug.
+
+The work was done. Building the world only where you're looking — instead of building the whole
+estate before you're allowed in — was finished weeks ago, tested five different ways, and then left
+switched **off** behind a pair of options you'd have to type on the command line to get.
+
+It needed **two** switches, not one. Everything written about it — the headings, the summaries, the
+notes to whoever picked it up next — named only the first. The first switch stops the game *pasting*
+the rough version of the building into the world. The second stops it *making* the rough version at
+all. Flipping only the first means the game still spends all that time building something and then
+throws it away, which is exactly as slow as not flipping anything and looks identical from your
+chair. So it read as a considered decision that was still pending, for weeks, and it was really just
+a sentence that was missing a word.
+
+The number you saw is the proof. 259.9 million voxels: the whole estate measured at one cube per
+eight centimetres, then blown up four times in each direction — 4,079,451 × 64 = 261 million. That
+was the bar. Every building you added made it bigger, because that step never got faster, it only
+got more building to chew through.
+
+**Both switches are on now.** The estate opens in **under a third of a second** and builds itself
+around you while you're already walking about in it. The old behaviour is still there, as
+`--coarse-paste`, because every speed measurement in the project was taken against it and they'd all
+be meaningless otherwise.
+
+Two other things had to be fixed to make that safe, and both were real faults hiding behind the
+switch:
+
+**The world you build is now kept when you leave it.** It was only ever saved at a moment the game
+calls a fixed point — when it runs out of anything worth sharpening. Wander round a building for two
+minutes and quit and everything it had built was thrown away, and the next launch started from
+nothing. Again, and again. That was visible in your own game folder: bookkeeping files for four
+different copies of the facility, and an actual saved world beside only one of them, days old. It now
+saves on the way out, in about four milliseconds, and the world grows a bit every time you play.
+
+**Specks are cleaned up in one more place.** Some materials are meant to look mottled and some just
+have stray dots. The game works out which is which and tidies the dots — but only when it stopped
+sharpening because it ran out of *visible* work. If it ever genuinely finished a building, it took a
+different exit and never tidied at all. That never showed before, because the old rough-build step
+happened to do the tidying first. Take that step away and it would have started showing. It's done on
+both exits now.
+
 ## The renderer rewrite — what has actually changed
 
 You asked for three things rewritten: the path tracer made faster and cleaner, the chunk system

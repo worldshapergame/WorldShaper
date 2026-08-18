@@ -9186,3 +9186,99 @@ it understates the coats: six rules look idle there against two here.
 | D672 | **A grep for `where=`/`on=` is not a test of whether a rule is bounded** | honesty | Both static passes were wrong; two commented-out lines settled it in one run |
 | D672 | **The pavilion's 87→98 components is recorded unexplained** | honesty | It reproduces across two boxes, so it is not the box, and no cause was established |
 | D672 | **Four buildings each bring their own ground, and nobody has looked** | honesty | They do not overlap today; whether they read as one estate or four lawns needs a render |
+
+## D673 — the loading bar was a flag nobody had turned on, and 259.9 M voxels the player never sees
+
+**Reported, and the report is the diagnosis:** *"ive spent considerable time making it so that theres
+no loading bar when loading a world yet whenever i load a world it still has a loading bar which is
+now very long since ive added more buildings to the clip fallback"* — and then, from the run itself:
+*"stuck on 80% which is 259,9M voxels because the more voxels it loads the slower it loads and says
+40 minutes left"*.
+
+R11d was built, gated on five measurements, and **shipped switched off**. `main.cpp`'s
+`coarse_sample_needed` reads `!no_coarse_paste || stipple_at_coarse`, and the defaults were `false`
+and `true` — so the condition was `true` on every launch that has ever happened, and the whole
+building was sampled at metre 8 and inflated 4x on paste before the first frame was drawn. The
+handover said this in as many words and it was read as a caveat rather than as the bug: *"the loading
+bar does NOT go with this flag"*. **One flag was never enough. There were two, and only one of them
+was ever discussed.**
+
+### The arithmetic the player did for us
+
+259.9 M is not a mystery number and it is not a leak. The estate at metre 8 is **4,079,451 voxels**
+(D672), the coarse paste inflates 4x per axis, and 4,079,451 x 64 = **261,084,864**. The bar was
+counting the up-front build's own pasted output, and the reason it grew is the reason it had to:
+four more buildings is four more helpings of a sample whose only remaining customer was the stipple
+verdict.
+
+**The measurement is the two arms, same estate, same camera, same binary:**
+
+| | to playable | what the bar counts |
+|---|---|---|
+| `--coarse-paste --stipple-at-coarse` (what shipped) | **abandoned at 80% with "40 minutes left"** | 259.9 M of 261 M voxels |
+| the defaults after this entry | **297 ms** | nothing; there is no sampling stage |
+
+`load stages: reading the clip 85ms  building the world 5ms  handing it to the card 15ms  settling
+189ms`. There is no `sampling` line because the stage is never entered.
+
+### Four things went in, and only the first is the flag
+
+1. **The two defaults flipped**, with `--coarse-paste` and `--stipple-at-coarse` as the control arms
+   and both documented in `--help`. `--no-coarse-paste` and `--stipple-from-world` still parse and
+   still mean what they meant: they are in scripts, in baseline rows and in D630–D635, and **an
+   unrecognised argument is warned about and ignored**, so deleting them would have left every one
+   of those silently running the arm it thought it had opted out of. Trap 15.
+
+2. **The world clean only ever ran on a stand-down.** `refine_save_owed_` is set by the stand-down
+   and by nothing else; a ladder that finishes every node arrives at the *other* fixed point in
+   `deliver_refinement`, tears itself down and resets `refine_script_`, after which
+   `start_refinement` returns at its null check before it can set the flag. So a clip the ladder
+   COMPLETES was never despeckled. That was invisible while the verdict came from the up-front
+   sample — the specks were gone before the ladder started — and flipping the default would have
+   made it a real fault on every clip small enough for one camera to finish. The handover named it
+   as a reading and said plainly that nobody had run it; it is fixed on both paths now.
+
+3. **Nothing was kept when a player left a world.** `save_refined_world` had exactly two callers,
+   both fixed points. Walk around a building for two minutes and quit and the ladder's whole
+   session went in the bin, and the next launch started from nothing, for ever. The evidence was in
+   the reporter's own cache directory: `.load` files for four different facility paths written as
+   recently as that week, and a `.world` beside **one** of them, days older. It saves on the way
+   out now, after `stop_refine_worker()` so nothing is half-pasted. **This matters more with R11d
+   on, not less** — the world now IS what the ladder made, so throwing it away throws away all of
+   it rather than a sharpening pass over a coarse build.
+
+4. **The cache key did not record which arm built the world.** It never had to while both arms were
+   opt-ins nobody passed. As control arms against a shipped default they are both one flag away, on
+   one binary and one clip, and they build genuinely different worlds — one the whole building at
+   metre 8, the other only what a camera has looked at. A control run would have read the world the
+   treatment run wrote, **both would have hashed the same, and the agreement would have been the
+   fault**. That is trap 4 arriving through the cache, where it is invisible. `--clip-coarse` went
+   in for the same reason and had the hole for longer: it sets the resolution the up-front build
+   samples at, which is not `voxels_per_metre`, so every `--clip-coarse N` shared one key.
+
+### Recorded and NOT explained: the paste is superlinear
+
+*"the more voxels it loads the slower it loads"* is the reporter's observation and it is not
+accounted for. A coarse paste of 261 M voxels should be linear in voxels and the run's own estimate
+moved the wrong way as it went. **The path is off by default now, so no player meets it** — but
+`--coarse-paste` is the control arm for every figure recorded before this entry, and on the estate
+it is currently close to unusable. Anyone reproducing an old baseline needs to know that before they
+budget for it. No cause established; it was not measured, because removing the path answered the
+report.
+
+### The method note, and it is the one worth keeping
+
+**The bug was in a document before it was in the code, and it had been read.** §5's R11d section
+states the two-flag condition correctly, names `D647` for it, and still describes the feature as
+*"IS BUILT AND OPT-IN — `--no-coarse-paste`"* in its heading. A heading naming one flag over a body
+naming two is how a thing stays switched off for weeks with everybody believing it is a decision.
+**The heading is now the condition.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D673 | **R11d ships on; `--coarse-paste` and `--stipple-at-coarse` are the control arms** | decision | 297 ms to playable against an arm abandoned at 80% of 261 M voxels |
+| D673 | **A feature gated on two flags may not be described by one of them** | honesty | The heading said `--no-coarse-paste`; the code said `|| stipple_at_coarse`, and it shipped off |
+| D673 | **The world clean must happen at BOTH fixed points, not just the stand-down** | fault | A ladder that completes resets the script before the flag that triggers cleaning is set |
+| D673 | **A world is kept when the player leaves it, not only at a fixed point** | decision | Two callers, both fixed points, so an ordinary session kept nothing at all |
+| D673 | **The cache key names the arm that built the world** | fault | Otherwise the control arm reads the treatment arm's world and the two agree perfectly |
+| D673 | **The superlinear coarse paste is recorded and unexplained** | honesty | Off by default so no player meets it, but it is the control arm for every older figure |

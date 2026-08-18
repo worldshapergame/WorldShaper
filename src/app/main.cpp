@@ -116,23 +116,51 @@ struct Options {
     // The control arm for the batch being sampled one node per worker rather than one node at a
     // time. R11a proved a single node gains nothing from the job system; the batch does.
     bool no_batch_parallel = false;
-    // Where the stipple verdict comes from. TRUE -- the up-front coarse sample -- is what ships,
-    // and `--stipple-from-world` is the opt-in for R11d option 2.
+    // Where the stipple verdict comes from. FALSE -- the world at the fixed point -- is what ships
+    // now, and `--stipple-at-coarse` is the control arm that puts the up-front sample back.
     //
-    // Option 2 is built, measured and NOT on by default, because it is not free and D630 says why:
-    // cleaning the world costs 19 s of a 19 s load, and the verdict taken from a partially refined
-    // world protects NOTHING at all -- 0 materials against the fully refined world's one and the
-    // metre-8 sample's six. A verdict that depends on how much of the building the camera happened
-    // to sharpen is not a verdict.
-    bool stipple_at_coarse = true;
+    // It shipped the other way round for as long as R11d was opt-in, and the reason it flipped is
+    // the loading bar rather than the verdict. This flag is one of the TWO that `coarse_sample_needed`
+    // reads, so leaving it true kept the whole-building metre-8 sample alive on every launch
+    // whatever `no_coarse_paste` said -- 2,754 ms on the single block, and it grows with the clip.
+    // The estate made that unignorable: four more buildings, four more helpings of a sample whose
+    // only remaining customer was this verdict.
+    //
+    // What the flip costs was measured before it was made. D642: the coarse verdict protects four
+    // materials that have nothing to protect at the detail a player stands in -- 392, 455 and 509
+    // have no specks at all at metre 32 -- and the world's own verdict moves 154 voxels in a
+    // building of 3.8 M. D662 took the price of taking it off the world from 13,185 ms to 2,084 at
+    // metre 16 and 5,242 to 644 at metre 8, by sharing the READ half of the judging and cleaning
+    // walks, which is what made this affordable at all.
+    //
+    // D630's objection -- that a verdict taken from a partially refined world protects nothing --
+    // is answered by WHERE it is taken rather than by argument: `clean_world_stipple` runs at the
+    // ladder's fixed point and nowhere else, so the world it judges is at the detail it is going to
+    // be at. See the two call sites; the second of them is new with this change, and D673 is why.
+    bool stipple_at_coarse = false;
     // The control arm for the world clean itself, and it is the pass D630 timed: two whole-world
     // walks, one chunk at a time, on the calling thread, writing each chunk back before the next is
     // captured. It exists so that "the shared walk agrees with the two, and threading changed
     // nothing" is a run of one build with a flag either way rather than an argument.
     bool world_clean_serial = false;
-    // R11d: take the up-front coarse sample for its verdict but do not paste it, so the ladder
-    // builds the world from nothing. Opt-in while it is being measured.
-    bool no_coarse_paste = false;
+    // R11d, and it is the shipped state now: nothing is pasted up front, so the ladder builds the
+    // world from nothing rather than over a blocky whole-building stand-in. `--coarse-paste` is the
+    // control arm.
+    //
+    // The name reads backwards against its own default and that is deliberate. Inverting it means
+    // inverting five conditions that each mean something different -- what a node's floor detail
+    // is, whether the sample is needed at all, whether the paste happens, which paste, and whether
+    // the compact follows it -- and every one of them is a place a silent sign error would produce
+    // a world that is merely WRONG rather than a build that fails. The name stayed; the default
+    // moved. `--coarse-paste` is what the old default is called from here on.
+    //
+    // It was opt-in for three reasons and D673 answers or accepts each. The far chisel is still
+    // unmeasured (R11h's remaining half). Flipping it makes the shipped world camera-dependent, so
+    // every baseline figure in the repository is now against a world that grew where somebody
+    // looked -- `baseline.ps1` already copes, because it pairs rows by view and never compares
+    // across cameras (D633). And the loading bar, which is the whole point: it does not go with
+    // this flag alone, which is why `stipple_at_coarse` above moved in the same change.
+    bool no_coarse_paste = true;
     // How many nodes the ladder picks and samples per wake. 0 keeps kRefineBatch. This is how the
     // default was chosen and is the control arm for it.
     usize refine_batch = 0;
@@ -852,7 +880,16 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
     } else if (arg == "--no-batch-parallel") {
         options.no_batch_parallel = true;
     } else if (arg == "--stipple-from-world") {
+        // What this asked for is the default now. Kept because it is written into scripts, into
+        // baseline rows and into four decision-log entries, and an argument the exe does not
+        // recognise is WARNED about and ignored -- so dropping it would leave every one of those
+        // silently running the arm it thought it had opted out of. Trap 15.
         options.stipple_at_coarse = false;
+    } else if (arg == "--stipple-at-coarse") {
+        // The control arm: take the verdict from the up-front whole-clip sample, the way it shipped
+        // until D673. This is also the only way to get the metre-8 verdict back, which is the arm
+        // D642's six-materials-against-one comparison is measured on.
+        options.stipple_at_coarse = true;
     } else if (arg == "--world-clean-serial") {
         options.world_clean_serial = true;
     } else if (arg == "--clean-world") {
@@ -860,7 +897,16 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
     } else if (arg == "--clean-world-rounds") {
         options.clean_world_rounds = static_cast<u32>(std::max<i64>(1, next_number(2)));
     } else if (arg == "--no-coarse-paste") {
+        // The default since D673. Kept for the same reason as `--stipple-from-world` above: it is
+        // in scripts and in the five gates D630-D635 were measured with, and an unrecognised
+        // argument is ignored rather than refused.
         options.no_coarse_paste = true;
+    } else if (arg == "--coarse-paste") {
+        // The control arm: build the whole building coarse up front and paste it, so a player is
+        // standing in a blocky version of everything within a second or two and it sharpens in
+        // place. This is what shipped until D673 and it is what every figure recorded before then
+        // was measured against.
+        options.no_coarse_paste = false;
     } else if (arg == "--refine-workers" && i + 1 < argc) {
         options.refine_workers = static_cast<u32>(std::max(1, std::atoi(argv[++i])));
     } else if (arg == "--refine-batch" && i + 1 < argc) {
@@ -1323,6 +1369,17 @@ void print_help() {
         "  --clean-world-rounds N  how many times each arm is run and printed (2)\n"
         "  --world-clean-serial  in game: clean the world the way D630 measured it, two walks\n"
         "                        on one thread. The control arm for the same change\n"
+        "  --coarse-paste        build the whole building coarse before the first frame and\n"
+        "                        paste it, so a player stands in a blocky version of all of it\n"
+        "                        and it sharpens in place. This is what shipped until D673 and\n"
+        "                        it is what every figure recorded before then was measured\n"
+        "                        against. The control arm for R11d\n"
+        "  --stipple-at-coarse   take the stipple verdict from the up-front whole-clip sample\n"
+        "                        at metre 8 rather than from the world at the ladder's fixed\n"
+        "                        point. The control arm for D673, and the only way back to the\n"
+        "                        metre-8 verdict D642 compared six materials against one on.\n"
+        "                        NOTE that this alone restores the whole loading bar: it is one\n"
+        "                        of the two flags the up-front sample is gated on\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
         "  --fog e,albedo,g,h,y  air that is not empty: extinction per metre, single-scatter\n"
@@ -3502,6 +3559,28 @@ void Application::deliver_refinement(RefineDelivery delivered) {
         const WorldStats now = world_.stats();
         WS_LOG_INFO("clip", "world fully sharpened: {} chunks, {} solid voxels", now.chunks,
                     now.solid_voxels);
+        // AND THE DESPECKLE, which until D673 could only happen on the other path.
+        //
+        // This is a fixed point exactly as the stand-down is -- every node is at the detail it is
+        // going to be at, which is the one condition `clean_world_stipple` needs -- and it was the
+        // only one of the two that never cleaned. `refine_save_owed_` is set by a stand-down and by
+        // nothing else, and a ladder that finishes every node arrives HERE instead, tears itself
+        // down four lines below and resets `refine_script_`, after which `start_refinement` returns
+        // at its null check before it can ever set the flag. So a clip the ladder completed came out
+        // with every speck in it.
+        //
+        // It was invisible while the verdict came from the up-front sample, because then the specks
+        // were already gone before the ladder started -- which is exactly why flipping that default
+        // had to bring this line with it. The handover named it as a reading and said plainly that
+        // nobody had run it; the run is D673's, and the clip that reaches it is any clip small
+        // enough for one camera to finish, which is most of `clips/` and none of the facility.
+        //
+        // `refine_world_cleaned_` is shared with the stand-down path, so a world that stood down,
+        // cleaned, then went on to finish is not cleaned twice.
+        if (!refine_world_cleaned_ && options_.despeckle && !options_.stipple_at_coarse) {
+            refine_world_cleaned_ = true;
+            clean_world_stipple();
+        }
         save_refined_world();
         if (!refine_cache_path_.empty()) {
             WS_LOG_INFO("clip", "kept the finished world; the next launch reads it back");
@@ -4378,8 +4457,25 @@ void Application::build_world() {
         if (coarse > 1) {
             const i32 asked = script.settings.voxels_per_metre;
             script.settings.voxels_per_metre = std::max<i32>(1, asked / static_cast<i32>(coarse));
-            WS_LOG_INFO("clip", "coarse build: sampling at metre {} and scaling {}x on paste",
-                        script.settings.voxels_per_metre, coarse);
+            // Said in terms of what will actually happen, which since D673 is usually nothing.
+            //
+            // This line printed "scaling 4x on paste" unconditionally, above a decision made two
+            // hundred lines below it about whether to sample at all -- so the first thing the log
+            // said about a load was the one thing that had stopped being true, and it said it on
+            // every launch. That is worth more than a tidy: this is the line somebody greps for
+            // when a player reports a loading bar, and it would have sent them to the coarse build
+            // in a run that never ran one.
+            if (!options_.no_coarse_paste || options_.stipple_at_coarse) {
+                WS_LOG_INFO("clip", "coarse build: sampling at metre {}{}",
+                            script.settings.voxels_per_metre,
+                            options_.no_coarse_paste
+                                ? " for its stipple verdict only, not pasted"
+                                : (" and scaling " + std::to_string(coarse) + "x on paste"));
+            } else {
+                WS_LOG_INFO("clip",
+                            "no coarse build: the ladder samples at metre {} and up, on demand",
+                            script.settings.voxels_per_metre);
+            }
         }
 
         // The air, in the shader's units, now that the clip has said how big a metre is.
@@ -4451,8 +4547,29 @@ void Application::build_world() {
         // builds, and counting it means a world put on the shelf — which is stamped with its
         // author as it is copied (D447) — no longer matches the world already built beside it. The
         // first open of every library world was a rebuild from cold because of one comment line.
+        //
+        // AND ON WHICH ARM BUILT IT, which it was not, and D673 is where that stopped being
+        // theoretical. `--coarse-paste` and `--stipple-at-coarse` are now control arms against a
+        // shipped default rather than opt-ins nobody passes, so both worlds are reachable from one
+        // binary on one clip — and they are not the same world. One holds the whole building at
+        // metre 8 with the ladder's sharpening over it; the other holds only what a camera has
+        // looked at. The key knew nothing about either, so a control run would have read the world
+        // the treatment arm wrote and reported it as its own. That is trap 4's rule — a counter
+        // taken from inside the change is not a control — arriving through the cache, where it is
+        // invisible: both arms produce a hash, the hashes agree, and the agreement is the fault.
+        //
+        // `--clip-coarse` goes in for the same reason and was missing for longer. It sets the
+        // resolution the up-front build samples at, which is not `voxels_per_metre` (that is the
+        // authored detail the ladder climbs to), so every `--clip-coarse N` for different N shared
+        // one key and handed back whichever world was written last.
+        //
+        // The cost of being wrong here is a rebuild, and the cost of being right is a rebuild the
+        // first time each arm is asked for. `--no-clip-cache` is still the way to have neither.
+        const std::string arm = std::string("|coarse-paste=") + (options_.no_coarse_paste ? "0" : "1") +
+                                "|stipple-at-coarse=" + (options_.stipple_at_coarse ? "1" : "0") +
+                                "|clip-coarse=" + std::to_string(options_.clip_coarse);
         const u64 key =
-            world_cache_key(ui::without_author(source) + "|part=" + options_.clip_part,
+            world_cache_key(ui::without_author(source) + "|part=" + options_.clip_part + arm,
                             script.settings.voxels_per_metre, build_stamp());
         if (!source.empty() && !options_.no_clip_cache) {
             WorldCache cache;
@@ -9267,6 +9384,42 @@ int Application::play(const Options& options) {
     // device with it, and destroying a pipeline against a dead device is an access violation in
     // the driver with this file nowhere in the stack.
     stop_refine_worker();
+
+    // AND KEEP WHAT THE LADDER BUILT, which until D673 only happened if the player stood still
+    // long enough for a fixed point and otherwise did not happen at all.
+    //
+    // This is the half of the loading-bar report that is not the loading bar. `save_refined_world`
+    // had exactly two callers, both of them fixed points -- the stand-down in `pump_refinement` and
+    // the every-node-finished path in `deliver_refinement` -- so a session that was neither, which
+    // is every session where somebody walks around a building for a few minutes and then quits, wrote
+    // nothing. The next launch started from nothing again, and the launch after that, for ever. The
+    // evidence was in the player's own cache directory: `.load` files for four different facility
+    // paths, written as recently as this week, and a `.world` beside only one of them from days
+    // earlier.
+    //
+    // It matters more with R11d on, not less. The up-front coarse build used to put a whole blocky
+    // building into the world within a second or two of launching whatever else happened; now the
+    // world IS what the ladder made, so throwing it away on the way out throws away all of it.
+    //
+    // Here rather than earlier because `stop_refine_worker` above is what makes it safe: the write
+    // has to see a world with nothing half-pasted into it, which is the same condition the two
+    // fixed points are chosen for, and a stopped worker gives it unconditionally. Everything torn
+    // down between the top of this function and here is GPU-side; the world, the tables and the
+    // ledger this reads are all still whole.
+    //
+    // It costs nothing when there is nothing to say: `save_refined_world` returns before it writes
+    // a byte unless more nodes are sharp than the file already knows about, and it refuses outright
+    // for an edited world -- the cache is keyed on the CLIP, so somebody's carving must never be
+    // handed to the next world built from it.
+    if (!refine_regions_.empty() && !refine_cache_path_.empty()) {
+        const u64 began = now_ns();
+        save_refined_world();
+        const f64 spent = ns_to_ms(now_ns() - began);
+        if (spent >= 1.0) {
+            WS_LOG_INFO("clip", "kept the world on the way out in {:.0f} ms", spent);
+        }
+    }
+
     clouds_.destroy();
     destroy_render_target();
     if (descriptor_pool_ != VK_NULL_HANDLE) {

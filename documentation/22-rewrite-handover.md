@@ -226,7 +226,7 @@ written for the person the work is for, so it is the one to keep current.
 | R6 post | M | **the light meter is done** (D577, D578) — it was not a sub-step in the plan because the tracer had one when the plan was written, and R3d and R1e between them left `kPreviewExposure` a constant of 3.2 with **no writer at all**. Two clips written to test exposure could not be used because of it: `many_lamps.clip` read **248.9 of 255** and `exposure_range.clip` **35.8**; they read **150.6** and **149.3** now. The facility moves 2–6%, because `kExposureBias` is a separate constant from `kMiddleGrey`. **a, b, c not started** |
 | R7 the primary ray | L | not started |
 | R8 infinite detail | XL | not started. **Re-sized to L**: R8c and R8d moved into R11 (D612) |
-| R11 the world source | XL | **a done** (D613) — the instrument, the mapping from a node to a box and a resolution, and an agreement check that failed and found a fifteen-month-old fault in the sampler's bulk settle. One node at the leaf is **1.389 ms** against 0.213 for an empty one; the fixed cost is the paint rules and not the box. **b–h not started, and b is next.** This is the stage the loading bar is in |
+| R11 the world source | XL | **a done** (D613) — the instrument, the mapping from a node to a box and a resolution, and an agreement check that failed and found a fifteen-month-old fault in the sampler's bulk settle. One node at the leaf is **1.389 ms** against 0.213 for an empty one; the fixed cost is the paint rules and not the box. **b, c and d are done; d shipped ON at D673 and the loading bar is gone with it — 297 ms to playable on the estate.** g needed no work (D633), h passes its near case (D635). e and f are not started, and f is the only one that can lose data. This is the stage the loading bar WAS in |
 | R12 the field on the card | L | not started. R11's successor |
 
 **Weighted by those sizes, roughly a fifth to a quarter of the plan is done**, and what is done is
@@ -601,6 +601,43 @@ before sixty metres does**, because a ray near the camera marches single voxels.
 a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
+
+#### START HERE — 2026-08-18 (later): the loading bar is gone, and R11d was on a switch nobody threw
+
+**297 ms to playable on the estate**, against a control arm abandoned at 80% of 261 M voxels with its
+own estimate saying forty minutes. Nothing is sampled up front any more; the ladder builds the world
+around the player. **D673 is the entry and it is short — read it before anything below.**
+
+The fault was not in the ladder. R11d had been built, gated on five measurements and left opt-in
+behind a condition of **two** flags — `!no_coarse_paste || stipple_at_coarse` — while every heading,
+summary and commit message about it named only `--no-coarse-paste`. Passing that one flag skips the
+paste and leaves the sample, which is the whole bar. **A feature gated on two flags may not be
+described by one of them**, and that is now trap-shaped: it cost weeks, and the correct condition was
+sitting in the body of the very section whose heading was wrong.
+
+**What is left of it, in order:**
+
+1. **The superlinear coarse paste is unexplained and recorded.** *"the more voxels it loads the
+   slower it loads"* — the estimate moved the wrong way as the up-front build ran. Off by default so
+   no player meets it, but `--coarse-paste` is the control arm for **every figure recorded before
+   D673**, and on the estate it is close to unusable. Anyone reproducing an old baseline needs that
+   before they budget for it.
+
+2. **The estate does not reach a fixed point from the enclosed camera.** `--settle` sat well past its
+   180 s deadline with `nodes left` *rising* — 7,831 to 8,273 — because the ladder splits as the
+   camera reveals detail faster than it completes. That is not obviously wrong (it is what a
+   pixel-driven world does with seven buildings in it) but it means **`--settle` is not currently a
+   usable harness on `facility.clip`**, and R11g's promise is that it is. `--cycle N` walks the
+   tear-down and is what D673 measured with.
+
+3. **Baselines recorded before D673 are against the other arm.** `baseline.ps1` needs no change — it
+   pairs rows by view and never compares across cameras (D633) — but a CSV taken with the paste and
+   one without are not comparable row for row. The cache key now names the arm, so the two no longer
+   silently share a world.
+
+4. **The far chisel is still unmeasured.** R11h's remaining half, unchanged by this: sixty metres
+   into a surface never approached, where the proximity radius must hold *sampling* rather than
+   *residency*. The near case is clean (D635).
 
 #### START HERE — 2026-08-18: the facility is an estate now, and three buildings are still outside it
 
@@ -1144,10 +1181,31 @@ wakes, so the cold facility settled 32 nodes short and its hash moved. And "stan
 passes the furthest-out memo" can never be satisfied, because every sweep rewrites the memos it
 refuses. The window is measured from the last sweep that **delivered**.
 
-#### R11d IS BUILT AND OPT-IN — `--no-coarse-paste`. Read D630 to D635 before touching it.
+#### R11d IS ON BY DEFAULT (D673). It was gated on TWO flags and its heading named one.
 
-The up-front sample is **taken and not pasted**: the ladder builds the world from nothing, seeded at
-eight metres. Five gates were run and it passes all five.
+**This heading used to read *"IS BUILT AND OPT-IN — `--no-coarse-paste`"*, and that is how the
+feature stayed switched off for weeks with everybody believing it was a decision.** The condition in
+`main.cpp` is `!no_coarse_paste || stipple_at_coarse` — **two** flags, and passing only the one in
+the heading left the whole-building sample running. The body below said so correctly and pointed at
+D647 for it; the heading is what people read. It is the condition now.
+
+The defaults are `no_coarse_paste = true` and `stipple_at_coarse = false` as of D673, so the up-front
+sample is **not taken at all**: the ladder builds the world from nothing. `--coarse-paste` and
+`--stipple-at-coarse` are the control arms, and **`--stipple-at-coarse` alone restores the entire
+loading bar**, because it is one of the two flags the sample is gated on.
+
+Measured on the estate, same camera, same binary: **297 ms to playable** against a control arm
+abandoned at 80% of 261 M voxels with its own estimate saying forty minutes. `load stages: reading
+the clip 85ms  building the world 5ms  handing it to the card 15ms  settling 189ms`, and no sampling
+stage at all.
+
+Three things went in with the flip and each was a fault the flip would have exposed: the world clean
+ran on the stand-down and never on the ladder COMPLETING, a world was kept only at a fixed point and
+never when the player left one, and the cache key did not record which arm built it — so a control
+run read the treatment run's world and the two agreed perfectly. **D673 is the entry.**
+
+The up-front sample was **taken and not pasted** in R11d's first form: the ladder builds the world
+from nothing, seeded at eight metres. Five gates were run and it passes all five.
 
 | what was asked of it | result |
 |---|---|
@@ -1677,7 +1735,7 @@ the order:
 | **R11a** | ~~one node, sampled, **timed**~~ — **DONE** (D613). `--sample-cost` and `tools/samplecost.ps1`; the numbers are below | nothing. It is a measurement |
 | **R11b** | ~~the unit of refinement is a node, not a region~~ -- **DONE** (D615): seeded at four metres, split to one as you get near | detail stops arriving as slabs |
 | **R11c** | ~~resolution is `256 / 2^level`~~ -- **DONE** (D616): and the split threshold became eight voxels at a pixel each | the 8 -> 32 jump becomes 8 -> 16 -> 32, following you |
-| **R11d** | nothing is sampled up front. **The headline** | no loading bar at all |
+| **R11d** | ~~nothing is sampled up front. **The headline**~~ — **DONE and ON** (D673): it was built weeks earlier and gated on two flags, and its own heading named one of them | **no loading bar at all** — 297 ms to playable on the estate |
 | **R11e** | a light path may not cause sampling — R9h one level down | nothing, until it is missing |
 | **R11f** | a world is a clip plus its edits. **R8d, and the only sub-step that can lose data** | a `.world` stops being 608 MB |
 | **R11g** | `--settle` and the harness mean what they say | nothing. It protects every figure in this file |
