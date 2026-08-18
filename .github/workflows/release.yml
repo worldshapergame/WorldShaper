@@ -25,7 +25,25 @@ permissions:
   attestations: write
 
 jobs:
+  # THE WORLD BAKE, AND IT IS A `needs:` RATHER THAN A STEP SO THAT IT CANNOT BE SKIPPED.
+  #
+  # D684: a stale baked world cannot be detected on an install. `shipped_stamp()` is
+  # `kWorldBuildVersion` and nothing else, because that is the only stamp a machine with no source
+  # tree can compute — so it sees the world FORMAT change and is blind to the SAMPLER changing
+  # underneath it. There is no check the game can make. The only defence is that every release
+  # bakes from its own commit, which is what naming the bake here buys: the release waits for it,
+  # and a bake that fails is a release that does not happen.
+  #
+  # It runs at this commit, because `uses: ./` in the same repository always does.
+  bake:
+    uses: ./.github/workflows/bake-world.yml
+    with:
+      clips: facility
+      seconds: 900
+      budget_mb: 64
+
   windows:
+    needs: bake
     runs-on: windows-latest
     env:
       # Lifted to the job so the signing step's `if` can see it. A step cannot read the env
@@ -118,6 +136,34 @@ jobs:
             throw "the executable says $reported, the tag says ${{ steps.version.outputs.version }}"
           }
 
+      # THE BAKED WORLDS, INTO THE DIRECTORY THAT SHIPS.
+      #
+      # Before Package, for the same reason signing is: `Copy-Item build\bin\clips` is what puts
+      # the clips in the zip, so anything that is to travel with them has to be in that folder
+      # first. `--bake-world` writes `clips\facility.clip` -> `clips\facility.world`, and
+      # `cmake/copy_clips.cmake` drops only `.clip.world` and `.clip.load`, so the name is already
+      # one that survives a rebuild of that folder.
+      #
+      # The size is PRINTED. A download that grows is a decision somebody should be able to see
+      # having been made; the bake workflow refuses to go over its own budget, and this line is
+      # where the number reaches the release log.
+      - name: Take the baked worlds
+        uses: actions/download-artifact@v4
+        with:
+          name: world-bake
+          path: bake
+
+      - name: ...and put them where the clips ship from
+        shell: pwsh
+        run: |
+          $worlds = Get-ChildItem bake\clips -Filter '*.world' -ErrorAction SilentlyContinue
+          if (-not $worlds) { throw "the bake produced no worlds; a release must not ship without them" }
+          foreach ($w in $worlds) {
+            Copy-Item $w.FullName build\bin\clips\ -Force
+            Write-Host ("{0}  {1:N2} MB" -f $w.Name, ($w.Length / 1MB))
+          }
+          Write-Host "the download grows by ${{ needs.bake.outputs.total_mb }} MB"
+
       # Before packaging, or the zip would carry the unsigned executable and the signature
       # would be on a file nobody downloads.
       #
@@ -184,7 +230,8 @@ jobs:
 
           # Named one at a time, so a missing one says which.
           foreach ($needed in @('WorldShaper.exe', 'SDL3.dll',
-                                'shaders\visibility.comp.spv', 'clips\facility.clip')) {
+                                'shaders\visibility.comp.spv', 'clips\facility.clip',
+                                'clips\facility.world')) {
             if (-not (Test-Path (Join-Path $out $needed))) {
               throw "the zip has no $needed in it"
             }
@@ -207,6 +254,49 @@ jobs:
             throw "the shipped facility built to nothing"
           }
           Write-Host "the unpacked download built the facility: $($volume.Groups[1].Value) voxels"
+
+      # ------------------------------------------------------------------------------------------
+      # AND THAT THE BAKED WORLD IS READ, WHICH IS A DIFFERENT QUESTION FROM IT BEING PRESENT.
+      #
+      # D685 is this gate's whole reason for existing. The bake was built, measured, photographed
+      # and reported as working, and it did nothing at all on the only path a player uses — because
+      # every measurement was taken with `--clip-file` and a player opens the shelf. The file was
+      # in the download. It was simply never looked at. Nothing about a `.world` sitting in a zip
+      # says the game will use it, and if the key does not match it is refused in silence and the
+      # sampler runs for four minutes exactly as it did before.
+      #
+      # So: unpack, hand the game an empty data root, let it seed its own shelf from the shipped
+      # clips the way a first launch does, open the world off that shelf, and require the line
+      # `opened the world shipped at`. `tools\bake_world.ps1 -GateOnly` is that, and it is the same
+      # code path a person runs by hand — a gate nobody can run is a gate nobody checks.
+      #
+      # UNVERIFIED FROM A DEVELOPMENT MACHINE: this needs a Vulkan device and a hosted runner has
+      # no graphics card, so it borrows the software one the bake workflow installs. If that turns
+      # out not to work on a runner, this step fails and no release is published — which is the
+      # correct way round, and documentation/15-releases.md says what to do instead.
+      # ------------------------------------------------------------------------------------------
+      - name: A Vulkan that does not need a graphics card
+        shell: pwsh
+        env:
+          WS_MESA: '24.3.4'
+        run: |
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$env:WS_MESA/mesa3d-$env:WS_MESA-release-msvc.7z"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\mesa.7z"
+          & 7z x "$env:RUNNER_TEMP\mesa.7z" -o"$env:RUNNER_TEMP\mesa" -y | Out-Null
+          $icd = Get-ChildItem "$env:RUNNER_TEMP\mesa" -Recurse -Filter 'lvp_icd.x86_64.json' |
+                 Select-Object -First 1
+          if (-not $icd) { throw "no lavapipe ICD in the Mesa archive -- the layout changed" }
+          "VK_DRIVER_FILES=$($icd.FullName)" >> $env:GITHUB_ENV
+          "VK_ICD_FILENAMES=$($icd.FullName)" >> $env:GITHUB_ENV
+
+      - name: Check the download's world is READ and not just present
+        shell: pwsh
+        run: |
+          # No exit-code test after it: the script throws, and a throw is already a failed step.
+          # Testing $LASTEXITCODE here would read whatever the last NATIVE command left behind,
+          # which is not the script and is usually zero.
+          $out = Join-Path $env:RUNNER_TEMP "unpacked"
+          .\tools\bake_world.ps1 -Game $out -Clips facility -GateOnly
 
       # Signs a statement, in GitHub's name, that this exact file came out of this exact
       # commit through this exact workflow. Free, and verifiable with `gh attestation verify`.

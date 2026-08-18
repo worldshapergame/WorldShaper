@@ -1,0 +1,357 @@
+# Carve the shipped worlds on a build server, so a player's first sight of one is a read.
+#
+# `tools/bake_world.ps1` is the whole of what this does; every step below exists to get a Windows
+# runner into the state where that script can run, and to carry its output to the release. Run the
+# script by hand and you get the same worlds, the same gate and the same numbers.
+#
+# WHY IT LOOKS LIKE pages.yml. The clip viewer has been running the game's own sampler on CI over
+# every clip since D666: it plans once, shards the work across runners, keys each output so a warm
+# run is seconds rather than an hour, and publishes. This is that pipeline pointed at the world
+# cache instead of the viewer's quads. The differences are forced and there are two:
+#
+#   - It is WINDOWS, not Linux. `ws_bake_web` is `-DWS_TOOLS_ONLY=ON` -- the field, the sampler and
+#     the type table, none of which know what a GPU is. A world cache is not that. It is what the
+#     REFINEMENT LADDER built, and the ladder is driven by what a camera can see and how many
+#     pixels each node covers, so baking one means running the actual game with an actual renderer.
+#   - It therefore needs Vulkan, and a hosted runner has no graphics card. See the software Vulkan
+#     step below, which is the one part of this file that is a bet rather than a certainty.
+#
+# WHY A RELEASE CANNOT SKIP IT. `workflow_call`. `release.yml` names this file as a `needs:` job, so
+# the bake is not a step somebody remembers to run before tagging -- it is a job the release waits
+# for and dies with. D684 says plainly that a stale baked world CANNOT BE DETECTED ON AN INSTALL:
+# `shipped_stamp()` sees the world FORMAT change and is blind to the SAMPLER changing. Nothing in
+# the game can catch it, so the only defence is that the bake happens on every release from the
+# same commit as the build. That is what this arrangement buys.
+
+name: bake-world
+
+on:
+  workflow_call:
+    inputs:
+      clips:
+        description: 'Which worlds to bake, comma-separated stems, or * for the whole shelf'
+        required: false
+        type: string
+        default: 'facility'
+      seconds:
+        description: 'Deadline for one bake, in seconds'
+        required: false
+        type: number
+        default: 900
+      # Underscores and not hyphens, here and everywhere below. A GitHub expression parses
+      # `inputs.budget-mb` as a subtraction, so a hyphenated name has to be written
+      # `inputs['budget-mb']` at every use and reads as a typo the one time somebody forgets.
+      budget_mb:
+        description: 'The most the baked worlds may add to the download'
+        required: false
+        type: number
+        default: 64
+    outputs:
+      artifact:
+        description: 'The artifact holding clips/*.world'
+        value: world-bake
+      total_mb:
+        description: 'How much bigger the download gets'
+        value: ${{ jobs.collect.outputs.total_mb }}
+
+  workflow_dispatch:
+    inputs:
+      clips:
+        description: 'Which worlds to bake, comma-separated stems, or * for the whole shelf'
+        required: false
+        default: 'facility'
+      seconds:
+        description: 'Deadline for one bake, in seconds'
+        required: false
+        default: '900'
+      budget_mb:
+        description: 'The most the baked worlds may add to the download'
+        required: false
+        default: '64'
+
+  # KEEPING THE CACHE WARM IS THE POINT OF THIS TRIGGER, not publishing anything.
+  #
+  # A cold bake is minutes to hours and a release should not be the first time anybody finds that
+  # out. Every push that could change what a bake produces re-bakes here, so by the time a tag is
+  # dispatched the cache is already holding a world made from that exact source and the release
+  # spends seconds on the gate instead of an hour on the sampler.
+  push:
+    branches: [main]
+    paths:
+      - 'clips/**'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'tools/bake_world.ps1'
+      - '.github/workflows/bake-world.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  # Picked ONCE, and handed to every runner. pages.yml learned this the hard way: twelve runners
+  # each answering the same question for themselves is twelve chances to disagree if anything moves
+  # mid-run, and half a world from one commit beside half from another is the failure nobody sees.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+      clips: ${{ steps.pick.outputs.clips }}
+      seconds: ${{ steps.pick.outputs.seconds }}
+      budget: ${{ steps.pick.outputs.budget }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Which worlds
+        id: pick
+        run: |
+          set -euo pipefail
+          want='${{ inputs.clips || github.event.inputs.clips || 'facility' }}'
+          if [ "$want" = "*" ]; then
+            # Exactly what `Shell::seed_worlds` puts on the shelf: every TOP-LEVEL clip, and
+            # nothing out of the fragment folders, because a fragment is not a world.
+            stems=$(find clips -maxdepth 1 -name '*.clip' -printf '%f\n' | sed 's/\.clip$//' | sort)
+          else
+            stems=$(printf '%s' "$want" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$')
+          fi
+          echo "clips=$(printf '%s' "$stems" | paste -sd, -)" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(printf '%s\n' "$stems" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+          echo "seconds=${{ inputs.seconds || github.event.inputs.seconds || 900 }}" >> "$GITHUB_OUTPUT"
+          echo "budget=${{ inputs.budget_mb || github.event.inputs.budget_mb || 64 }}" >> "$GITHUB_OUTPUT"
+          echo "baking: $stems"
+
+  # ONE BUILD, HANDED ROUND. Every baking runner needs the same executable, and a Windows build of
+  # this project is the expensive part of any workflow it appears in -- so it happens once and
+  # travels as an artifact. It is also the same executable the gate runs, which matters: a gate
+  # built from a different commit is a gate testing a different sampler.
+  build:
+    needs: plan
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # PINNED, for the reason release.yml is pinned and states at length: `latest` meant the
+      # shader compiler changed under the build between runs, and on v0.7.0 glslc died with an
+      # access violation on clouds.comp. 1.4.341.0 is the generation the project targets -- volk
+      # is pinned to `vulkan-sdk-1.4.341.0` in cmake/Dependencies.cmake.
+      - name: Install the Vulkan SDK
+        shell: pwsh
+        env:
+          WS_VULKAN_SDK: 1.4.341.0
+        run: |
+          $url = "https://sdk.lunarg.com/sdk/download/$env:WS_VULKAN_SDK/windows/vulkan-sdk.exe"
+          Write-Host "Vulkan SDK $env:WS_VULKAN_SDK from $url"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\vulkan-sdk.exe"
+          $args = @('--root', 'C:\VulkanSDK', '--accept-licenses',
+                    '--default-answer', '--confirm-command', 'install')
+          Start-Process -FilePath "$env:RUNNER_TEMP\vulkan-sdk.exe" -ArgumentList $args -Wait
+          "VULKAN_SDK=C:\VulkanSDK" >> $env:GITHUB_ENV
+          "C:\VulkanSDK\Bin" >> $env:GITHUB_PATH
+          & C:\VulkanSDK\Bin\glslc.exe --version
+
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install Ninja
+        shell: pwsh
+        run: choco install ninja -y --no-progress
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build
+
+      # The same gate a local change gets. A build that fails them must not bake a world that a
+      # release would then ship.
+      - shell: pwsh
+        run: .\build\bin\ws_tests.exe
+
+      # `build\bin` IS THE SHIPPING LAYOUT, and that is the whole reason the bake runs there.
+      # `tools/package.ps1` and release.yml both stage this exact directory into the zip -- exe,
+      # shaders, clips -- so a world baked beside `build\bin\clips\facility.clip` is a world baked
+      # at the path it ships at. Baking anywhere else is D685 wearing a different hat.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game
+          path: build/bin
+          retention-days: 1
+
+  # ONE RUNNER PER WORLD. pages.yml's reasoning applies unchanged: no world needs another world's
+  # output, so the work divides perfectly and the wall clock becomes the slowest single bake.
+  bake:
+    needs: [plan, build]
+    runs-on: windows-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        clip: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: game
+          path: bin
+
+      # ------------------------------------------------------------------------------------------
+      # SOFTWARE VULKAN, AND THIS IS THE ONE STEP IN THIS FILE THAT IS NOT KNOWN TO WORK.
+      #
+      # A hosted runner has no graphics card. `ws_bake_web` sidesteps that by not being a renderer;
+      # a world cache cannot, because it is the record of what the refinement ladder built and the
+      # ladder is driven by what a camera sees. So the runner is given Mesa's `lavapipe`, which is
+      # a Vulkan 1.3 implementation that runs on the CPU, and the loader is pointed at it.
+      #
+      # PINNED to an exact release for the reason the SDK above is pinned: a build tool that
+      # changes under the build between runs is weather, and this project has already lost three
+      # releases to exactly that.
+      #
+      # Two honest caveats, neither of which can be settled from a development machine:
+      #   - Whether lavapipe satisfies everything `Device::create` asks for, and whether SDL can
+      #     open a window on a hosted runner at all. If either is no, this job fails loudly, which
+      #     is the right failure -- `documentation/15-releases.md` says what to do about it.
+      #   - Refinement advances PER FRAME. At software frame rates a bake covers far less world per
+      #     second of wall clock than the two minutes a real card takes, which is why the deadline
+      #     here defaults to 900 s and not to the 150 s a local bake uses. A short deadline does not
+      #     break the world; it makes it smaller, and the script says so when it happens.
+      # ------------------------------------------------------------------------------------------
+      - name: A Vulkan that does not need a graphics card
+        shell: pwsh
+        env:
+          WS_MESA: '24.3.4'
+        run: |
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$env:WS_MESA/mesa3d-$env:WS_MESA-release-msvc.7z"
+          Write-Host "Mesa $env:WS_MESA (lavapipe) from $url"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\mesa.7z"
+          & 7z x "$env:RUNNER_TEMP\mesa.7z" -o"$env:RUNNER_TEMP\mesa" -y | Out-Null
+          $icd = Get-ChildItem "$env:RUNNER_TEMP\mesa" -Recurse -Filter 'lvp_icd.x86_64.json' |
+                 Select-Object -First 1
+          if (-not $icd) { throw "no lavapipe ICD in the Mesa archive -- the layout changed" }
+          # Both names, because which one the loader reads depends on its version: VK_DRIVER_FILES
+          # from 1.3.207 onwards, VK_ICD_FILENAMES before it. Setting both costs nothing.
+          "VK_DRIVER_FILES=$($icd.FullName)" >> $env:GITHUB_ENV
+          "VK_ICD_FILENAMES=$($icd.FullName)" >> $env:GITHUB_ENV
+          Write-Host "ICD at $($icd.FullName)"
+
+      # WHAT THIS RUNNER WOULD BAKE WITH, PRINTED. release.yml prints its glslc version for the
+      # same reason: when this next breaks, the log should say which implementation it was rather
+      # than leaving the next session to guess.
+      - name: Which Vulkan
+        shell: pwsh
+        continue-on-error: true
+        run: Get-Content $env:VK_DRIVER_FILES
+
+      # THE WARM PATH, and it is what makes a release affordable.
+      #
+      # The key is the SOURCE, not the clip: `hashFiles` over `clips/**` and `src/**` moves the
+      # moment anything that could change what a bake produces changes. That is the honest version
+      # of the key the game itself cannot have — a shipped world is keyed on `shipped_stamp()`,
+      # which is `kWorldBuildVersion` and nothing else, the only stamp a machine with no source
+      # tree can compute, and therefore blind to the sampler moving under it (D684). A hit here
+      # means the same bytes would come out again, so the job does only the gate and takes seconds;
+      # a miss is a cold bake, and it is a cold bake exactly when something changed that should
+      # cause one. "Re-bake on every release" enforced rather than written down.
+      - name: The world this runner baked last time
+        id: warm
+        uses: actions/cache@v4
+        with:
+          path: worlds
+          key: world-${{ matrix.clip }}-${{ hashFiles('clips/**', 'src/**', 'CMakeLists.txt') }}
+
+      - name: Put a cached world back where it ships
+        if: steps.warm.outputs.cache-hit == 'true'
+        shell: pwsh
+        run: Copy-Item "worlds\${{ matrix.clip }}.world" "bin\clips\" -Force
+
+      # `-GateOnly` on a warm runner: bake nothing, and still prove the file reads with THIS
+      # build. A cached world that no longer loads must fail here rather than in the release.
+      - name: Bake, and prove it is read off the shelf
+        shell: pwsh
+        run: |
+          $ps = @{
+            Game     = 'bin'
+            Clips    = '${{ matrix.clip }}'
+            Seconds  = ${{ needs.plan.outputs.seconds }}
+            BudgetMB = ${{ needs.plan.outputs.budget }}
+            Report   = 'report-${{ matrix.clip }}.json'
+          }
+          if ('${{ steps.warm.outputs.cache-hit }}' -eq 'true') { $ps.GateOnly = $true }
+          Write-Host ($ps | Out-String)
+          & .\tools\bake_world.ps1 @ps
+          New-Item -ItemType Directory -Path worlds -Force | Out-Null
+          Copy-Item "bin\clips\${{ matrix.clip }}.world" worlds\ -Force
+
+      - name: What it cost
+        shell: pwsh
+        run: |
+          $r = Get-Content "report-${{ matrix.clip }}.json" -Raw | ConvertFrom-Json
+          # `@()` because ConvertTo-Json renders a one-element array as a bare object, so indexing
+          # the round trip fails on exactly the single-clip case this workflow's default is.
+          $w = @($r.worlds)[0]
+          "### ${{ matrix.clip }}"                                   >> $env:GITHUB_STEP_SUMMARY
+          "| | |"                                                    >> $env:GITHUB_STEP_SUMMARY
+          "|---|---|"                                                >> $env:GITHUB_STEP_SUMMARY
+          "| adds to the download | $($w.mb) MB |"                   >> $env:GITHUB_STEP_SUMMARY
+          "| bake |  $($w.seconds) s |"                              >> $env:GITHUB_STEP_SUMMARY
+          "| nodes | $($w.nodes) |"                                  >> $env:GITHUB_STEP_SUMMARY
+          "| read off the shelf in | $($w.read.ready_ms) ms |"       >> $env:GITHUB_STEP_SUMMARY
+          "| solid voxels | $($w.read.voxels) |"                     >> $env:GITHUB_STEP_SUMMARY
+          "| sha256 | ``$($w.sha256)`` |"                            >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: world-${{ matrix.clip }}
+          path: |
+            worlds/${{ matrix.clip }}.world
+            report-${{ matrix.clip }}.json
+          retention-days: 7
+
+  # One artifact for the release to consume, and one report saying what the download grew by.
+  #
+  # EVERY WORLD OR NONE, and that is the opposite of what pages.yml does on purpose. The viewer
+  # publishes whatever arrived because a site with eleven clips on it is better than a stale one;
+  # a release with one world baked and another silently missing is a download where one scene opens
+  # instantly and the next takes four minutes, for no reason a player could ever work out.
+  collect:
+    needs: [plan, bake]
+    runs-on: ubuntu-latest
+    outputs:
+      total_mb: ${{ steps.sum.outputs.total }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: world-*
+          merge-multiple: true
+          path: incoming
+
+      - name: Every world that was asked for, or none
+        id: sum
+        run: |
+          set -euo pipefail
+          mkdir -p world-bake/clips
+          missing=0
+          for stem in $(printf '%s' '${{ needs.plan.outputs.clips }}' | tr ',' ' '); do
+            if [ ! -f "incoming/$stem.world" ]; then
+              echo "::error::$stem was asked for and no runner produced a world for it"
+              missing=1
+              continue
+            fi
+            cp "incoming/$stem.world" "world-bake/clips/$stem.world"
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          cp incoming/report-*.json world-bake/ 2>/dev/null || true
+          total=$(du -sm world-bake/clips | cut -f1)
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          {
+            echo "## The world bake"
+            echo ""
+            echo "Every download gets **${total} MB** bigger, and every one of these was read back"
+            echo "off the shelf by a run with no cache of its own before this job passed."
+            echo ""
+            ls -l world-bake/clips | sed 's/^/    /'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: world-bake
+          path: world-bake
+          retention-days: 30

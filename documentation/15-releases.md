@@ -25,6 +25,141 @@ The workflow refuses to build a tag that does not match the source. That check i
 point: the updater compares the latest release's tag against the version compiled into the
 running game, and that comparison is only meaningful if the two can never drift.
 
+## The world bake, which every release runs and no release can skip
+
+**A player's first sight of the facility should be a read, not four minutes of sampling.** Building
+that world from its recipe is tens of seconds of field evaluation at best and minutes in practice;
+reading one back is under a second. Seven measured attempts failed to make the sampling materially
+cheaper (D683). So the world is sampled **once, on a build server**, and travels in the download.
+
+`.github/workflows/bake-world.yml` is that build server, and `tools/bake_world.ps1` is the whole of
+what it does — the workflow only gets a Windows runner into the state where the script can run.
+
+### What actually happens
+
+| | |
+|---|---|
+| what is baked | `clips/facility.clip` → `clips/facility.world`, from the spawn camera |
+| how | the game itself: `--world <the clip> --bake-world --settle`, which runs the refinement ladder and writes what it reached |
+| where it ends up | `build\bin\clips`, which is the folder `Copy-Item build\bin\clips` puts in the zip |
+| how the game finds it | a shelf world looks beside itself **and** in the shipped `clips/`, paired by stem, and the key is hashed from the clip's source text so a wrong file is refused rather than believed (D685) |
+| what the download costs | **3.63 MB**, measured. The workflow refuses to go over 64 MB without somebody raising the budget on purpose |
+| what a cold bake costs | **157.6 s** for the facility on a desktop card, 29,184 of 39,864 nodes. On a runner with no graphics card it is longer, which is why the workflow's deadline is 900 s and not 150 |
+| what a warm bake costs | **7.7 s**, all of it the gate. The cache is keyed on `clips/**` and `src/**`, so a run with nothing changed re-proves the world and bakes nothing |
+| what a player gets for it | the world **read in 133 ms** and **everything ready at t+404 ms**, against minutes of sampling |
+
+It buys the **first sight** of the world and not the whole of it, which is the design and not a
+shortfall (D684, R11d). The same run reports `cached world has 29056 of 39864 leaves at the clip's
+own detail, 10808 still to sharpen, carrying on from here` — a player who walks somewhere the baking
+camera never looked still pays for somewhere new.
+
+### Why it is a `needs:` job and not a step somebody remembers
+
+**A stale baked world cannot be detected on an install.** A shipped world is keyed on
+`shipped_stamp()`, which is `kWorldBuildVersion` and nothing else — the only stamp a machine with no
+source tree beside it can compute. That key sees the world **format** change and is completely blind
+to the **sampler** changing underneath it (D684). There is no check the game can make, on any
+machine, ever.
+
+The only defence is that the bake happens on every release, from the same commit as the build. So
+`release.yml` names `bake-world.yml` as a `needs:` job rather than running a bake step: the release
+waits for it, and a bake that fails is a release that does not happen. Skipping it is not
+discouraged, it is unavailable.
+
+### The gate, which is the part that matters
+
+Before publishing, the release **unpacks its own zip somewhere else, hands the game an empty data
+root, and makes it open the world the way a player does.** It fails unless the log says
+
+```
+opened the world shipped at 'clips\facility.world'; nothing to sample
+```
+
+That line, and nothing weaker, because **a `.world` sitting in a zip proves nothing about whether
+the game will use it.** D685 is exactly that failure: the bake was built, measured, photographed and
+reported as working, and it did nothing at all on the only path anybody uses. Every number in that
+report was real. They were all taken with `--clip-file`, and a player opens the shelf.
+
+So the gate reproduces a first launch instead: an empty `LOCALAPPDATA` means no world cache and an
+empty shelf, `Shell::seed_worlds` fills that shelf from the shipped clips, and the world is opened
+by the path the shell hands down — `<data root>\worlds\facility.wsworld`. If the key does not match,
+the file is refused **in silence** and the sampler runs exactly as it did before, so a run that
+merely succeeds is not evidence.
+
+What a passing gate looks like, from a real run on this machine — note that the shelf starts empty
+and the game fills it, which is the whole point:
+
+```
+library  shelf 'worlds' at '<a fresh data root>\WorldShaper\worlds': 0 things
+library  put 20 shipped worlds on the shelf
+world    opened the world shipped at 'clips\facility.world'; nothing to sample
+world    '...\worlds\facility.wsworld' loaded from cache in 133 ms [t+166 ms]:
+         22 chunks, 1049158 solid voxels
+load     everything ready  [t+404 ms]
+```
+
+### Running it by hand
+
+The script is the same code the workflow calls, which is deliberate — a gate nobody can run is a
+gate nobody checks.
+
+```powershell
+tools\bake_world.ps1                      # bake what ships, from build\bin, and prove it reads
+tools\bake_world.ps1 -Clips *             # every world the shelf seeds, not just the facility
+tools\bake_world.ps1 -GateOnly            # prove the worlds already there are read; bake nothing
+tools\bake_world.ps1 -Game C:\unpacked    # against an unpacked download rather than a build
+```
+
+Only the facility is baked by default, and that is a decision about the size of the download rather
+than an oversight: the shelf seeds every top-level clip, but the other nineteen are test scenes — a
+sky, a pane of glass, a row of lamps — that build in seconds from cold.
+
+**Two ways to write the bake command that do nothing and say nothing**, both measured here:
+
+- **`--clip-file` bakes nothing at all.** Any run carrying `--clip-file` and no `--screenshot` goes
+  to `run_clip_tool`, which parses, samples, prints a measurement and exits — it has no world, no
+  ladder and no `--bake-world` in it. On `sky_test` that command exits 0 in four seconds having
+  written no file; on the facility it burns minutes of sampling first, which is what makes it look
+  like it worked. Use `--world <the clip>`.
+- **`--settle` does not end a run.** Only `--screenshot` does. A `--settle --max-seconds 60` bake
+  was still drawing at frame 94,200 when it was killed — having already written a correct world, so
+  on a build server it is a job that hits its timeout over a bake that succeeded.
+
+And `--no-clip-cache` belongs on the bake and **must never be on the gate**: the shipped-world
+lookup lives inside `if (!source.empty() && !options_.no_clip_cache)`, so a gate carrying it would
+skip the very read it exists to prove.
+
+### The one part of this that is a bet
+
+**A hosted runner has no graphics card, and a world cache cannot be built without one.** The clip
+viewer sidesteps this by building with `-DWS_TOOLS_ONLY=ON` — the field, the sampler and the type
+table, none of which know what a GPU is. A world cache is not that: it is the record of what the
+refinement ladder built, and the ladder is driven by what a camera can see and how many pixels each
+node covers. Baking one means running the actual game with an actual renderer.
+
+So the workflow installs **Mesa's `lavapipe`**, a Vulkan 1.3 implementation that runs on the CPU,
+and points the loader at it. It is pinned to an exact Mesa release for the reason the Vulkan SDK is
+pinned: a build tool that changes under the build between runs cost this repository three releases
+(D641).
+
+**Whether that works on a hosted runner has not been established.** Two things could be false and
+neither can be settled from a development machine: whether lavapipe satisfies everything
+`Device::create` asks for, and whether SDL can open a window on a runner at all. There is also a
+cost even when it does work — refinement advances per frame, so at software frame rates a bake
+covers less world per second of wall clock, which makes the world smaller rather than broken.
+
+If it turns out not to work, the job fails and no release is published, which is the right way
+round. The fallback is to bake by hand on a machine with a graphics card and package with
+`tools/package.ps1`:
+
+```powershell
+tools\bake_world.ps1            # writes build\bin\clips\facility.world and proves it reads
+tools\package.ps1               # stages build\bin\clips, so the world goes with it
+```
+
+That download carries **no provenance attestation** — say so in the release notes, as this document
+already requires for any zip built that way.
+
 ## The update check
 
 `src/app/updater.cpp`. On start, on its own thread, it asks GitHub for the latest release,

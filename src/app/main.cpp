@@ -5302,6 +5302,15 @@ void Application::build_world() {
             options_.bake_world ? shipped_world_for(path) : std::string();
         const u64 bake_key =
             world_cache_key(keyed_on, script.settings.voxels_per_metre, shipped_stamp());
+        // `--no-clip-cache` SUPPRESSES THE SHIPPED WORLD TOO, and that is deliberate but it has
+        // already caught somebody, so it is said here rather than left to be discovered.
+        //
+        // The flag means "build this from the clip and trust nothing precomputed", and a world
+        // baked beside the clip is precomputed — so it is covered by the same guard as this
+        // machine's own cache. What that means in practice is that **you cannot verify a bake with
+        // `--no-clip-cache`**: the obvious spelling of "a fresh install with no cache of its own"
+        // is the one spelling that skips the read it is meant to prove. Use a fresh data root
+        // instead, which is what `tools/bake_world.ps1` does and is a truer fresh install anyway.
         if (!source.empty() && !options_.no_clip_cache) {
             WorldCache cache;
             cache.tags = &tags_;
