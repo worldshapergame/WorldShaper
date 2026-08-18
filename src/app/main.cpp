@@ -199,6 +199,9 @@ struct Options {
     // Count the nodes each cell walks instead of building a world. What a dispatch costs is
     // (nodes walked) x (what a step costs); no clock separates those two and this measures one.
     bool gpu_visits = false;
+    // How wide a union has to be before a hierarchy is built over its leaves. 0 is off, which is the
+    // default and what D637 measured on the facility. See `forge::accelerate_unions_from`.
+    u32 accelerate_from = 0;
     std::string clip_part;        // build only this let name, for looking at one piece
 
     // A smaller box to sample, overriding the clip's own.
@@ -1012,6 +1015,8 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.cpu_sample = true;
     } else if (arg == "--no-gpu-rescue") {
         options.gpu_rescue = false;
+    } else if (arg == "--accelerate-from") {
+        options.accelerate_from = static_cast<u32>(next_number(8));
     } else if (arg == "--gpu-visits") {
         options.gpu_visits = true;
     } else if (arg == "--gpu-sample-check") {
@@ -12824,6 +12829,12 @@ int main(int argc, char** argv) {
     if (options.help) {
         ws::print_help();
         return 0;
+    }
+    // Before ANY clip is parsed, because the hierarchy is built inside `parse_clip_script` and a
+    // Field's shape does not change after that. Set here rather than beside each parse for the same
+    // reason: there are several parses and only one decision.
+    if (options.accelerate_from > 0) {
+        ws::forge::accelerate_unions_from(options.accelerate_from);
     }
     if ((!options.clip_file.empty() || options.sample_cost || options.stipple_tiled ||
          options.field_single || options.clean_world) &&

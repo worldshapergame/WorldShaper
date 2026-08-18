@@ -69,6 +69,19 @@ f64 usable_displacement(f64 amount, i32 voxels_per_metre, const char* what) {
 }
 namespace forge {
 
+// How wide a union has to be before a hierarchy is built over its leaves' boxes, for every clip
+// parsed after this is called. `Field::kAccelerateNever` is off and is the default.
+//
+// A file-scope setting rather than a parameter, and that is a deliberate compromise: it reaches
+// `build_bounds` through call sites that would otherwise all have to grow an argument for a
+// control arm, and it is read once per parse. The alternative was leaving it unreachable, which
+// is what it WAS -- D637 measured this feature, refused it, and left it with no caller at all,
+// so every `accelerator_count()` since has read nought without anybody meaning it to.
+usize g_accelerate_from = Field::kAccelerateNever;
+
+void accelerate_unions_from(usize leaves) { g_accelerate_from = leaves; }
+
+
 namespace {
 
 // --- tokens ---------------------------------------------------------------------------
@@ -1797,6 +1810,12 @@ Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const T
     // The graph is complete now, so the boxes that let a union skip its distant children can be
     // worked out. Done here rather than in the sampler because a Field can be sampled many
     // times and its shape does not change between them.
+    //
+    // And the hierarchy over a wide union's leaves, if anybody has asked for one. **Nobody could
+    // before this line existed**: `Field::accelerate_from` was settable and had no caller anywhere
+    // in the engine, so `accelerator_count()` read nought on every clip ever built and the whole
+    // path was dead code being reported as a measurement. See `forge::accelerate_unions_from`.
+    if (g_accelerate_from != Field::kAccelerateNever) script.field.accelerate_from(g_accelerate_from);
     script.field.build_bounds();
     if (!script.has_solid && script.errors.empty()) {
         script.errors.push_back(ScriptError{0, "the file never says which shape is the solid"});

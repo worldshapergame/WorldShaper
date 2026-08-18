@@ -602,6 +602,44 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — the 100x, and the five levers that are NOT it
+
+**Read D682 before proposing anything here.** Five structural levers were measured in one session,
+most with a control arm taken BEFORE the work, and this is the ledger so nobody spends another
+session on the same five:
+
+| lever | result |
+|---|---|
+| the field evaluated on the CARD (R12) | correct; **1.30x outdoors, 0.37x indoors** |
+| `forge::sample`'s descent, on the card | **nothing** — 100% of the ladder's cells are already singles |
+| shrinking `FieldFrame` to halve the shader's scratch | **nothing** — 53.6 ms against 54.7 with a frame 1.6x bigger |
+| the union hierarchy over wide unions | **nothing** — 14,080 nodes against 14,336, now on the estate too |
+| the thin-feature rescue off | **11%** |
+| bounding all 628 paint rules perfectly | **at most 1.3x** — paint is 24% of sampling |
+
+**What is left is the shape walk, and it is 76% of the bill: ~8,231 node visits a cell over an
+18,250-node expression.** Neither arm avoids it, no index rejects it, and the descent already takes
+everything it can before the ladder sees a node. **The cost is what the clip IS.**
+
+**So the only remaining hundredfold is not to evaluate it at all, and that already works.** D611:
+the facility with its cache complete loads in **804 ms** against 17 s of ladder — **21x**. D634: one
+camera's world is picked up by another in **52 ms**. What nobody gets is the FIRST time, and the
+shipped game hands every player exactly that. **Ship the world built, or build it once at install.**
+The blocker is size — 608 MB for the facility (D611) — and the plan already has the answer to size:
+**R11f, a world is a clip plus its edits**, which is also the one sub-step that can lose data.
+**That is a decision for the user, not an optimisation**, which is why it is named here rather
+than started.
+
+`--accelerate-from N` is new and is the control arm for the hierarchy: it had **no caller at all**
+until now, so `accelerator_count()` read nought on every clip ever built and nothing said that was
+a switch rather than a result.
+
+**And a fifth instrument to distrust:** `load stages:` can print a PREVIOUS run's row as this
+run's. Two consecutive runs printed `cutting the shape 9727ms` identical to the millisecond, four
+lines under `everything ready [t+337 ms]`. It was nearly reported as a ten-second launch stage.
+
+---
+
 #### START HERE — 2026-08-18 (last): the pixel rule WORKS, and four instruments lied to get there
 
 **Reported:** *"i dont see the variable resolution based on screen coverage either way still."*

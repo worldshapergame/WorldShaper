@@ -188,6 +188,26 @@ struct Script {
 //
 // Errors are collected rather than thrown, and parsing continues past them, because an author
 // wants to be told about all four mistakes in a file rather than the first one four times.
+// How wide a union has to be before a hierarchy is built over its leaves' boxes, for every clip
+// parsed after this is called. `Field::kAccelerateNever` is off, and off is the default.
+//
+// **D637 built this, measured it on the FACILITY, and refused it** -- 67.2 s against 53.6 at metre
+// 16 -- for a reason that is about buildings rather than about trees: *the parts of a building are
+// LAYERS and not regions*, so every part's box spans the block, a point in a wall is genuinely
+// inside a dozen of them, and a hierarchy that cannot reject is a traversal paid on top of the scan
+// it replaced. That reasoning is sound and it is why this is off.
+//
+// **It also says, in its own last paragraph, what would change it:** *"a clip of separated buildings
+// is the case it was written for and nobody has authored one yet."* **Somebody has now** -- the
+// estate is seven buildings on a site plan, each a `translate` joining one union of seven (D672),
+// and those ARE regions rather than layers. So the refusal stays right about the facility and is an
+// open question about the estate, which is the clip the game now ships.
+//
+// It had NO CALLER for that whole time, which is the part worth noticing: `accelerator_count()` has
+// read nought on every clip ever built, and nothing anywhere said that was a switch rather than a
+// result.
+void accelerate_unions_from(usize leaves);
+
 Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const TagRegistry& tags);
 
 // Reads the file and parses it. A missing file is an error like any other.

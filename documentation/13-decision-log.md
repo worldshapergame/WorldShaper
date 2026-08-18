@@ -10016,3 +10016,93 @@ them once fixes both.
 | D681 | **The card is 2.7x SLOWER on the enclosed camera and 1.30x faster outdoors** | decision | 5,280 nodes against 14,464 in a matched 45 s; it stays off |
 | D681 | **The gap is divergence, not work** | decision | 2x the visits for 23x the cost; `--no-gpu-rescue` is only 11% |
 | D681 | **The next lever is the 8 unbounded paint rules, and it speeds the CPU arm** | decision | ~5,500 of 8,231 visits a cell, and it is D672's open paint fault seen from the other end |
+
+## D682 — the union hierarchy had no caller at all, and now that it has one it is still worth nothing
+
+**Asked for again: 100x.** So every remaining structural lever was taken in turn, each with its
+control arm first. All of them came back at nought or near it, and this entry is the ledger, because
+the value of a session like this is that nobody spends another one on the same five ideas.
+
+### The accelerator was dead code being reported as a measurement
+
+`Field::accelerate_from` is settable, `eval_accelerated` is written, `accelerator_count()` is
+reported by the clip tool — and **nothing in the engine ever called the setter.** So
+`accelerator_count()` has read nought on every clip ever built, and the census line that says
+`0 hierarchies over 0 leaves` beside `824 wide unions` reads like a missing optimisation when it is
+a switch nobody could reach. D637 measured the feature, refused it, and left it with no caller;
+nothing anywhere said that nought was a decision rather than a result.
+
+It has one now — `forge::accelerate_unions_from`, behind `--accelerate-from N`, off by default —
+and the hierarchy engages: on the estate, **383 hierarchies over 4,033 leaves** at N=4, 146 over
+2,866 at N=8.
+
+### And the reason to try it was good, and it was still wrong
+
+D637's refusal rests on a fact about buildings: *the parts of a building are LAYERS and not regions*,
+so every part's box spans the block and a hierarchy that cannot reject is a traversal paid on top of
+the scan it replaced. **Its own last paragraph says what would change that:** *"a clip of separated
+buildings is the case it was written for and nobody has authored one yet."*
+
+**Somebody has now.** D672 made the estate seven buildings on a site plan, each a `translate` joining
+one union of seven, and those genuinely are regions. So the refusal was worth re-opening.
+
+**Matched arms, enclosed camera, `--no-clip-cache`, 45 s, CPU sampler:**
+
+| | nodes built |
+|---|---|
+| `--accelerate-from 0` (off) | **14,336** |
+| `--accelerate-from 4` | **14,080** |
+
+**Nothing — 1.8%, inside the noise.** The plain box cull already rejects the other six buildings from
+any point inside one; what is left to walk is that building's own sub-unions, and those are layers
+exactly as D637 said. **The refusal holds, now on two clips instead of one, and the flag stays as the
+control arm so nobody has to take it on trust a third time.**
+
+### The whole ledger, so nobody repeats it
+
+Every one of these was measured today, most of them with a control arm taken before the work:
+
+| lever | result |
+|---|---|
+| the field evaluated on the CARD (R12) | correct; **1.30x outdoors, 0.37x indoors** (D677, D681) |
+| `forge::sample`'s descent, on the card | **nothing** — 100% of the ladder's cells are already singles (D678) |
+| shrinking `FieldFrame` to halve the shader's scratch | **nothing** — 53.6 ms against 54.7 with a frame 1.6x bigger (D678) |
+| the union hierarchy over wide unions | **nothing** — 14,080 against 14,336 nodes (this entry) |
+| the thin-feature rescue off | **11%** (D681) |
+| bounding all 628 paint rules perfectly | **at most 1.3x** — paint is 24% of sampling |
+
+**What is left is the shape walk, and it is 76% of the bill: ~8,231 node visits a cell over an
+18,250-node expression.** Neither arm can avoid it, no index rejects it, and the descent already
+removed everything it can before the ladder ever sees a node. **The cost is what the clip IS.**
+
+### So the only remaining hundredfold is not to evaluate it at all
+
+And that already exists and is already measured. D611: the facility with its cache complete loads in
+**804 ms** against 17 s of ladder — **21x**. D634: a world built from one camera is picked up by
+another in **52 ms**. The machinery works, is gated, and ships.
+
+**What nobody gets is the first time**, and the shipped game hands every player exactly that. So the
+route to the number the user is asking for is **to ship the world built**, or to build it once at
+install, rather than to make the sampler faster. Its blocker is size — D611 records 608 MB for the
+facility — and the plan's own answer to size is **R11f, a world is a clip plus its edits**, which is
+already a lettered sub-step and is described as the only one that can lose data.
+
+**That is a decision for the user rather than an optimisation**, which is why this entry ends by
+naming it instead of starting it.
+
+### And a fifth instrument, for the collection
+
+`load stages:` prints **a row from a PREVIOUS run** when this run's shape is classified differently
+from the merged history's. Two consecutive runs printed `cutting the shape 9727ms` identical to the
+millisecond, which is not a thing two runs do; the same log says `everything ready [t+337 ms]` four
+lines above it. It was nearly reported as a ten-second launch stage. `LoadProgress::history` merges
+this run into the previous ones by shape and the printer then picks a shape by a different rule.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D682 | **The union hierarchy had NO CALLER; `--accelerate-from` gives it one** | fault | `accelerator_count()` read nought on every clip ever built and nothing said it was a switch |
+| D682 | **It is still worth nothing, now on the estate too** | decision | 14,080 nodes against 14,336; the plain box cull already rejects the other buildings |
+| D682 | **Five structural levers measured, all at or near nought** | honesty | The ledger above, so the next session does not spend itself on the same five |
+| D682 | **The cost is the shape walk and it is what the clip IS** | decision | 76% of sampling, ~8,231 visits a cell, and no index rejects it |
+| D682 | **The only remaining hundredfold is shipping the world BUILT** | decision | 804 ms cached against 17 s of ladder (D611); the blocker is size, and R11f is the plan's answer |
+| D682 | **`load stages:` can print a previous run's row as this run's** | fault | Two runs identical to the millisecond, beside `everything ready [t+337 ms]` |
