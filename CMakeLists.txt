@@ -228,7 +228,8 @@ set(WS_TEST_SOURCES_HEADLESS
     tests/test_node_pool.cpp
     tests/test_world_cache.cpp
     tests/test_world_stipple.cpp
-    tests/test_face_store.cpp)
+    tests/test_face_store.cpp
+    tests/test_field_gpu.cpp)
 
 set(WS_TEST_SOURCES_UI
     tests/test_font.cpp
@@ -300,9 +301,12 @@ add_library(ws_gpu STATIC
     src/gpu/type_tables.cpp
     src/gpu/screenshot.cpp
     src/gpu/shell_pass.cpp
-    src/gpu/feedback.cpp)
+    src/gpu/feedback.cpp
+    src/gpu/field_gpu.cpp)
 target_include_directories(ws_gpu PUBLIC src)
-target_link_libraries(ws_gpu PUBLIC ws_core ws_world ws_platform ws_ui ws_volk ws_vma ws_stb)
+# ws_forge, for R12: `src/gpu/field_gpu.cpp` uploads a `forge::SamplePlan` to the card. The
+# dependency runs one way only -- nothing in forge/ knows what a device is -- so this adds no cycle.
+target_link_libraries(ws_gpu PUBLIC ws_core ws_world ws_forge ws_platform ws_ui ws_volk ws_vma ws_stb)
 
 # VMA is a third-party single-header implementation; do not hold it to our warning bar.
 if(MSVC)

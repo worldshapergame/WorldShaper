@@ -50,6 +50,7 @@
 #include "gpu/loading_screen.hpp"
 #include "gpu/face_buffers.hpp"
 #include "gpu/face_light.hpp"
+#include "gpu/field_gpu.hpp"
 #include "gpu/node_buffers.hpp"
 #include "gpu/render_params.hpp"
 #include "gpu/profiler.hpp"
@@ -168,6 +169,21 @@ struct Options {
     // rule: this runs while somebody is playing and taking every core sharpens the world by
     // stuttering it. Overridable so that the size of that choice is measured rather than assumed.
     u32 refine_workers = 0;
+    // R12: the ladder samples its nodes on the CARD. `--cpu-sample` is the control arm and is the
+    // state every figure taken before R12 was measured in — the background worker pool, one field
+    // evaluation per voxel on about half the machine's threads.
+    //
+    // It is also the fallback rather than only a flag: a machine with no card, a driver that will
+    // not compile `sample_field.comp`, and a clip whose field outgrows the buffers all land on the
+    // same path, and the log says which and why. A GPU sampler that quietly answered for only the
+    // first n nodes of a field would be a different building with no error.
+    bool cpu_sample = false;
+    // The thin-feature rescue on the card, off. The control arm for the one part of the per-voxel
+    // definition that costs eight extra evaluations at every cell near a surface.
+    bool gpu_rescue = true;
+    // Sample N nodes both ways and count the cells that differ. The gate R12 is held to, and the
+    // reason it is a mode rather than a test: it needs a device, and `ws_tests` has none.
+    u32 gpu_sample_check = 0;
     std::string clip_part;        // build only this let name, for looking at one piece
 
     // A smaller box to sample, overriding the clip's own.
@@ -974,6 +990,13 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.field_single = true;
     } else if (arg == "--field-single-points") {
         options.field_single_points = next_number(20000);
+    } else if (arg == "--cpu-sample") {
+        // R12's control arm. Two flags of one build, as D407 requires.
+        options.cpu_sample = true;
+    } else if (arg == "--no-gpu-rescue") {
+        options.gpu_rescue = false;
+    } else if (arg == "--gpu-sample-check") {
+        options.gpu_sample_check = static_cast<u32>(next_number(64));
     } else if (arg == "--refine-all") {
         options.refine_all = true;
     } else if (arg == "--clip-at") {
@@ -1422,6 +1445,18 @@ void print_help() {
         "                        metre-8 verdict D642 compared six materials against one on.\n"
         "                        NOTE that this alone restores the whole loading bar: it is one\n"
         "                        of the two flags the up-front sample is gated on\n"
+        "  --cpu-sample          the ladder samples its nodes on the CPU, one field evaluation\n"
+        "                        per voxel on half the machine's threads. R12's control arm,\n"
+        "                        and the state every figure recorded before R12 was measured\n"
+        "                        in. It is also the automatic fallback: no card, a shader that\n"
+        "                        will not compile, or a field too big to upload all land here,\n"
+        "                        and the log says which by name\n"
+        "  --no-gpu-rescue       the thin-feature rescue off on the card. The control arm for\n"
+        "                        the one part of the per-voxel rule that costs eight extra\n"
+        "                        evaluations at every cell near a surface\n"
+        "  --gpu-sample-check N  sample the first N nodes the ladder picks a SECOND time on the\n"
+        "                        CPU and compare them cell for cell. The gate R12 is held to,\n"
+        "                        counted three ways: matter, material and the clip mask\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
         "  --fog e,albedo,g,h,y  air that is not empty: extinction per metre, single-scatter\n"
@@ -2013,6 +2048,63 @@ private:
     };
     std::vector<RefineJob> refine_batch_;
     std::unique_ptr<forge::SampleResult> refine_result_;
+
+    // R12 — the ladder's sampler, on the card.
+    //
+    // The batch the card is working on lives HERE and not on the worker's queue, because a
+    // `VkQueue` is not thread-safe and the frame is submitted from the main thread. Everything
+    // else about the ladder is unchanged and deliberately so: the pick, the shortlist, the
+    // occlusion memo, `refine_outstanding_` and `kRefineInFlight` all behave identically in both
+    // arms, so `--cpu-sample` compares two samplers and not two schedulers.
+    FieldSampler field_sampler_;
+    std::vector<RefineJob> refine_gpu_batch_;
+    u64 refine_gpu_began_ns_ = 0;
+    f64 refine_total_gpu_ms_ = 0.0;      // what the CARD spent, from its own timestamps
+    u64 refine_gpu_batches_ = 0;
+    // Whether the card is doing the sampling. False on a machine with no device, when
+    // `sample_field.comp` would not build, when the clip's field does not fit, and under
+    // `--cpu-sample`. The reason is logged once at the point it is decided.
+    bool gpu_sampling() const {
+        return !options_.cpu_sample && field_sampler_.valid() && field_sampler_.loaded();
+    }
+    // The clip's field, up to the card, once. Lazy rather than at the point the plan is built,
+    // because the plan is built while the world is being opened and the device's pipelines are
+    // created after that — and because the resume path builds a plan of its own. `tried` rather
+    // than a retry: a field that will not fit, or a shader that will not compile, is a fact about
+    // this clip and this driver, and asking again every frame would say so sixty times a second.
+    void ensure_field_on_card();
+    bool field_card_tried_ = false;
+    // Hand the picked batch to the card. Returns false if it is still busy with the last one.
+    bool submit_refinement_to_card();
+    // Turn a finished dispatch into the same RefineDelivery the worker thread would have made.
+    bool collect_refinement_from_card();
+
+    // --- the gate, and it is the whole of why R12 may be believed --------------------------------
+    //
+    // `--gpu-sample-check N` samples the first N nodes the LADDER ITSELF picks a second time, on the
+    // CPU, and compares them cell for cell. Two things make that the right shape for this gate
+    // rather than a grid of its own:
+    //
+    //   it measures the nodes the game actually asks for, at the resolutions it actually asks at,
+    //   which is what D674 records a whole session being lost to — a rule that is right everywhere
+    //   the instrument looked and wrong where the ladder looks;
+    //
+    //   and it cannot be satisfied vacuously. `clips/sampler.clip` returns the same hash however
+    //   wrong a footprint change is, because every node of it is inside eight metres; this walks
+    //   whatever the camera is in front of.
+    //
+    // Counted three ways on purpose. A cell that differs in TYPE is a colour; a cell that differs in
+    // SOLIDITY is geometry, and is the one that matters. `mask` is a cell one arm thinks is part of
+    // the clip and the other does not, which is the bounds shape disagreeing rather than the solid.
+    u32 gpu_check_left_ = 0;
+    u32 gpu_check_nodes_ = 0;
+    u64 gpu_check_cells_ = 0;
+    u64 gpu_check_type_ = 0;
+    u64 gpu_check_solid_ = 0;
+    u64 gpu_check_mask_ = 0;
+    bool gpu_check_reported_ = false;
+    void gpu_check_node(const RefineJob& job);
+    void gpu_check_report();
 
     // A batch with what its sampling cost, which travels with it rather than in a shared field:
     // with more than one batch in flight, `refine_sample_ms_` written by the worker and read by the
@@ -3119,6 +3211,214 @@ void Application::refine_worker() {
     }
 }
 
+// One node, sampled a second time on the CPU and compared cell for cell.
+//
+// The CPU arm is `forge::sample` through the SAME plan the card was given, so a disagreement is the
+// evaluator and not the plan. It is expensive — it is the whole thing R12 exists to stop doing —
+// which is why it runs for a fixed number of nodes and then reports.
+void Application::gpu_check_node(const RefineJob& job) {
+    if (job.result == nullptr) return;
+    --gpu_check_left_;
+    ++gpu_check_nodes_;
+
+    const forge::SampleResult expect = forge::sample(refine_plan_, job.settings, nullptr, {});
+    const Clip& mine = job.result->clip;
+    const Clip& theirs = expect.clip;
+    if (theirs.size[0] != mine.size[0] || theirs.size[1] != mine.size[1] ||
+        theirs.size[2] != mine.size[2]) {
+        WS_LOG_WARN("clip", "gpu check: the two arms disagree about the SIZE of a node, {}x{}x{} "
+                            "against {}x{}x{} — the box arithmetic differs, not the field",
+                    mine.size[0], mine.size[1], mine.size[2], theirs.size[0], theirs.size[1],
+                    theirs.size[2]);
+        return;
+    }
+
+    u32 shown = 0;
+    for (i32 z = 0; z < mine.size[2]; ++z) {
+        for (i32 y = 0; y < mine.size[1]; ++y) {
+            for (i32 x = 0; x < mine.size[0]; ++x) {
+                const usize at = mine.index(x, y, z);
+                ++gpu_check_cells_;
+                const bool solid_mine = mine.voxels[at] != kAir;
+                const bool solid_theirs = theirs.voxels[at] != kAir;
+                if (mine.inside[at] != theirs.inside[at]) ++gpu_check_mask_;
+                if (solid_mine != solid_theirs) {
+                    ++gpu_check_solid_;
+                    // The first few, with where they are, because "0.4% of cells differ" says
+                    // nothing about WHICH op is wrong and one coordinate in the building does.
+                    if (shown < 4) {
+                        ++shown;
+                        const f64 voxel = 1.0 / static_cast<f64>(job.settings.voxels_per_metre);
+                        WS_LOG_WARN("clip",
+                                    "gpu check: cell ({}, {}, {}) of the node at ({:.3f}, {:.3f}, "
+                                    "{:.3f}) m, metre {} — card says {}, CPU says {}",
+                                    x, y, z,
+                                    (static_cast<f64>(job.result->origin_voxel[0] + x) + 0.5) * voxel,
+                                    (static_cast<f64>(job.result->origin_voxel[1] + y) + 0.5) * voxel,
+                                    (static_cast<f64>(job.result->origin_voxel[2] + z) + 0.5) * voxel,
+                                    job.settings.voxels_per_metre,
+                                    solid_mine ? "matter" : "air", solid_theirs ? "matter" : "air");
+                    }
+                } else if (mine.voxels[at] != theirs.voxels[at]) {
+                    ++gpu_check_type_;
+                }
+            }
+        }
+    }
+    if (gpu_check_left_ == 0) gpu_check_report();
+}
+
+void Application::gpu_check_report() {
+    if (gpu_check_reported_) return;
+    gpu_check_reported_ = true;
+    const f64 share = (gpu_check_cells_ > 0)
+                          ? 100.0 * static_cast<f64>(gpu_check_solid_) /
+                                static_cast<f64>(gpu_check_cells_)
+                          : 0.0;
+    WS_LOG_INFO("clip",
+                "gpu check: {} nodes, {} cells — {} differ in MATTER ({:.4f}%), {} in material "
+                "only, {} in the clip mask. {}",
+                gpu_check_nodes_, gpu_check_cells_, gpu_check_solid_, share, gpu_check_type_,
+                gpu_check_mask_,
+                (gpu_check_solid_ == 0 && gpu_check_type_ == 0 && gpu_check_mask_ == 0)
+                    ? "The two evaluators agree."
+                    : "THE TWO EVALUATORS DISAGREE — the card is not building the CPU's world.");
+}
+
+void Application::ensure_field_on_card() {
+    if (field_card_tried_ || options_.cpu_sample) return;
+    if (refine_script_ == nullptr || !refine_plan_.ok()) return;
+    field_card_tried_ = true;
+    if (!field_sampler_.valid()) {
+        WS_LOG_INFO("clip", "the ladder samples on the CPU: {}",
+                    field_sampler_.why_not().empty() ? "there is no card sampler on this run"
+                                                     : field_sampler_.why_not());
+        return;
+    }
+    const forge::SampleSettings& settings = refine_script_->settings;
+    if (!field_sampler_.upload(refine_plan_, settings.bounds, settings.has_bounds)) {
+        // Said out loud and by name. A sampler that silently fell back would make every figure
+        // below it a figure about the other arm, which is trap 4 arriving through a fallback.
+        WS_LOG_WARN("clip", "the ladder samples on the CPU: {}", field_sampler_.why_not());
+        return;
+    }
+    field_sampler_.set_rescue(options_.gpu_rescue);
+    gpu_check_left_ = options_.gpu_sample_check;
+    WS_LOG_INFO("clip", "the ladder samples on the CARD{}{}",
+                options_.gpu_rescue ? "" : ", with the thin-feature rescue OFF",
+                gpu_check_left_ > 0 ? ", and the first nodes are checked against the CPU" : "");
+}
+
+// R12: the picked batch, handed to the card instead of to the worker pool.
+//
+// The boxes are built from exactly what `node_sample_settings` put in each job, and the voxel each
+// node starts at is `voxel_floor` — the same arithmetic `forge::sample` uses to turn a box in
+// metres into a range on the voxel grid. It has to be the same to the integer: a corner half an
+// epsilon low is a clip one voxel wide of its own node, for ever, in a file.
+bool Application::submit_refinement_to_card() {
+    if (refine_batch_.empty() || field_sampler_.busy()) return false;
+
+    std::vector<GpuSampleBoxRecord> boxes;
+    boxes.reserve(refine_batch_.size());
+    for (const RefineJob& job : refine_batch_) {
+        const i32 per_metre = (job.settings.voxels_per_metre > 0) ? job.settings.voxels_per_metre
+                                                                  : kVoxelsPerMetre;
+        GpuSampleBoxRecord box{};
+        const f64 low[3] = {job.settings.low.x, job.settings.low.y, job.settings.low.z};
+        for (u32 axis = 0; axis < 3; ++axis) {
+            box.lo[axis] = static_cast<i32>(
+                std::floor(low[axis] * static_cast<f64>(per_metre)));
+        }
+        box.voxel = static_cast<f32>(1.0 / static_cast<f64>(per_metre));
+        boxes.push_back(box);
+    }
+    if (boxes.size() > FieldSampler::kMaxBoxes) return false;
+
+    refine_gpu_began_ns_ = now_ns();
+    if (!field_sampler_.submit(boxes)) return false;
+    refine_gpu_batch_.swap(refine_batch_);
+    refine_batch_.clear();
+    {
+        std::lock_guard<std::mutex> lock(refine_mutex_);
+        ++refine_outstanding_;
+    }
+    return true;
+}
+
+// The card's answer, made into the same delivery the worker thread would have made.
+//
+// Everything downstream of here — the paste, the announce, the despeckle verdict, the cache — is
+// untouched and must stay that way, because that is what makes `--cpu-sample` a comparison of two
+// samplers rather than of two engines.
+bool Application::collect_refinement_from_card() {
+    if (refine_gpu_batch_.empty() || !field_sampler_.ready()) return false;
+
+    const std::vector<VoxelTypeId>& types = field_sampler_.types();
+    const std::vector<u8>& inside = field_sampler_.inside();
+    constexpr usize kCells = static_cast<usize>(forge::kNodeVoxels) *
+                             static_cast<usize>(forge::kNodeVoxels) *
+                             static_cast<usize>(forge::kNodeVoxels);
+
+    RefineDelivery landed;
+    landed.jobs.swap(refine_gpu_batch_);
+    refine_gpu_batch_.clear();
+
+    for (usize j = 0; j < landed.jobs.size(); ++j) {
+        RefineJob& job = landed.jobs[j];
+        const i32 per_metre = (job.settings.voxels_per_metre > 0) ? job.settings.voxels_per_metre
+                                                                  : kVoxelsPerMetre;
+        auto result = std::make_unique<forge::SampleResult>();
+        const f64 low[3] = {job.settings.low.x, job.settings.low.y, job.settings.low.z};
+        for (u32 axis = 0; axis < 3; ++axis) {
+            result->origin_voxel[axis] =
+                static_cast<i64>(std::floor(low[axis] * static_cast<f64>(per_metre)));
+            result->clip.size[axis] = forge::kNodeVoxels;
+        }
+        result->clip.voxels.assign(kCells, kAir);
+        result->clip.inside.assign(kCells, u8{1});
+        const usize base = j * kCells;
+        if (base + kCells <= types.size()) {
+            std::copy(types.begin() + base, types.begin() + base + kCells,
+                      result->clip.voxels.begin());
+            std::copy(inside.begin() + base, inside.begin() + base + kCells,
+                      result->clip.inside.begin());
+        }
+        // Every function in forge that returns a Clip calls this; anything that makes one in place
+        // has to, and the ghost march reads it.
+        result->clip.build_coarse();
+        result->voxels_asked = kCells;
+        job.result = std::move(result);
+
+        // Against the CPU sampler, on the RAW block, before either arm is despeckled — otherwise
+        // the comparison is of two despecklers and not of two evaluators.
+        if (gpu_check_left_ > 0) gpu_check_node(job);
+
+        // The stipple verdict, from the RAW sample and before this node is despeckled — the same
+        // question asked of the same voxels the up-front build asked it of. R11d route 1.
+        job.stipple = forge::stipple_counts(job.result->clip);
+        if (despeckle_) {
+            const forge::DespeckleReport cleaned =
+                forge::despeckle(job.result->clip, 0.05, &refine_stipple_);
+            refine_total_repainted_.fetch_add(cleaned.repainted, std::memory_order_relaxed);
+            refine_total_left_.fetch_add(cleaned.left, std::memory_order_relaxed);
+        }
+    }
+
+    landed.asked = static_cast<u64>(landed.jobs.size()) * kCells;
+    // The card's own clock, not the wall's. A wall clock round a submission measures the queue as
+    // well, and the queue is the frame — which is how a sampler that costs nothing can be made to
+    // look as though it costs a frame.
+    landed.sample_ms = field_sampler_.last_gpu_ms();
+    refine_total_gpu_ms_ += field_sampler_.last_gpu_ms();
+    ++refine_gpu_batches_;
+
+    {
+        std::lock_guard<std::mutex> lock(refine_mutex_);
+        refine_landed_.push_back(std::move(landed));
+    }
+    return true;
+}
+
 void Application::stop_refine_worker() {
     if (!refine_thread_.joinable()) return;
     {
@@ -3400,7 +3700,7 @@ bool Application::start_refinement() {
     refine_settled_ = false;
     refine_empty_since_ = 0;   // this sweep found something; the window starts again from the next
 
-    if (refine_jobs_ == nullptr) {
+    if (refine_jobs_ == nullptr && !gpu_sampling()) {
         // Fewer workers than the main system, and deliberately. This runs while somebody is
         // playing; taking every core would sharpen the world by stuttering it.
         const u32 hardware = std::thread::hardware_concurrency();
@@ -3414,6 +3714,20 @@ bool Application::start_refinement() {
 
     refine_total_nodes_ += refine_batch_.size();
     refine_total_pick_ms_ += ns_to_ms(now_ns() - pick_began);
+
+    // R12: the card, if it has the field. One submission, recorded on this thread and waited for by
+    // nobody — `pump_refinement` polls the fence next frame. `refine_outstanding_` is incremented
+    // inside, so `kRefineInFlight` means what it has always meant and the two arms schedule alike.
+    if (gpu_sampling()) {
+        if (submit_refinement_to_card()) return true;
+        // The card is still busy with the last batch. Put the picked nodes back on the shelf
+        // rather than dropping them: `enlist` has already marked them `done` and taken them out of
+        // the next pick, so a dropped batch is a hole in the world nothing ever fills again. D624
+        // is that fault from the other side.
+        for (const RefineJob& job : refine_batch_) refine_regions_[job.at].done = false;
+        refine_batch_.clear();
+        return false;
+    }
 
     // Hand it over and go. The sampler is already running and may already be halfway through the
     // batch before this one; that is the whole point of `kRefineInFlight`.
@@ -3431,6 +3745,13 @@ bool Application::start_refinement() {
 
 // Take delivery of a finished batch, if one is ready, and put it in the world.
 void Application::pump_refinement() {
+    ensure_field_on_card();
+    // R12: take the card's answer BEFORE topping the queue up, so the slot it frees is available to
+    // the pick immediately below rather than a frame later. This is D622's own ordering finding —
+    // the pick a frame late does not merely delay a batch, it changes which nodes are held out and
+    // so which world the ladder settles on.
+    if (gpu_sampling()) collect_refinement_from_card();
+
     // KEEP THE SAMPLER FED FIRST, before anything else this function does.
     //
     // The order matters and it is the whole of the double buffer. Picking after the paste means the
@@ -4307,6 +4628,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
     refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
                                       refine_script_->paint);
     log_the_plan("resumed");
+    field_card_tried_ = false;   // R12: a new plan is a new field to put on the card
     // What the world on disk is already at: the coarse rung it was built with. A cached world may
     // hold sharpened boxes as well, which resume_refinement marks below.
     refine_coarse_per_metre_ = refine_script_->settings.voxels_per_metre;
@@ -4920,6 +5242,8 @@ void Application::build_world() {
                 refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
                                                   refine_script_->paint);
                 log_the_plan("the ladder");
+                // R12: a new plan is a new field to put on the card.
+                field_card_tried_ = false;
                 refine_coarse_per_metre_ = refine_script_->settings.voxels_per_metre;
                 seed_refine_nodes(*refine_script_);
                 WS_LOG_INFO("clip",
@@ -7937,6 +8261,17 @@ int Application::play(const Options& options) {
     // still comes from the build, because hot reload only ever runs where the source is.
     const std::filesystem::path shaders = compiled_shader_dir();
 
+    // R12 — the ladder's sampler on the card. Created unconditionally, for the same reason the
+    // node pool below is: a path that is only built when it is asked for is a path nobody notices
+    // has stopped compiling. A failure here is not fatal — `--cpu-sample`'s arm is the fallback,
+    // and it says so by name rather than quietly sampling somewhere else.
+    if (!options_.cpu_sample) {
+        if (!field_sampler_.create(device_, std::filesystem::path(WS_SHADER_SOURCE_DIR), shaders)) {
+            WS_LOG_WARN("gpu", "the ladder cannot sample on the card: {}",
+                        field_sampler_.why_not());
+        }
+    }
+
     // The node pool, its buffers, its descriptor set and its pipeline. Created unconditionally
     // rather than behind the flag: the point of R1c is that the two marchers can be swapped at
     // run time and diffed on one camera, and a path that is only built when it is asked for is a
@@ -9118,6 +9453,24 @@ int Application::play(const Options& options) {
                     refine_total_rays_, refine_total_ray_ms_, refine_total_sample_ms_,
                     refine_total_paste_ms_, refine_stand_downs_, refine_rearm_camera_,
                     refine_rearm_world_);
+                // R12: which sampler did the work, and what the CARD spent as measured on the card.
+                // Said beside the line above rather than folded into it, because `sample ... ms
+                // background` means two entirely different things in the two arms — a worker pool's
+                // seconds in one and a queue's in the other — and a figure that changes meaning
+                // without changing its name is how a measurement gets carried across arms.
+                if (gpu_sampling()) {
+                    WS_LOG_INFO("frame",
+                                "ladder sampler: the CARD, {} dispatches, {:.0f} ms of GPU "
+                                "({:.3f} ms each)",
+                                refine_gpu_batches_, refine_total_gpu_ms_,
+                                (refine_gpu_batches_ > 0)
+                                    ? refine_total_gpu_ms_ / static_cast<f64>(refine_gpu_batches_)
+                                    : 0.0);
+                } else {
+                    WS_LOG_INFO("frame", "ladder sampler: the CPU ({})",
+                                options_.cpu_sample ? "--cpu-sample" : "no card sampler");
+                }
+                if (gpu_check_left_ > 0 || gpu_check_nodes_ > 0) gpu_check_report();
                 // The verdict is the whole point of the line, not the counts. Every node the
                 // ladder sharpens is despeckled against a judgement taken once over the WHOLE clip
                 // (forge::StippleVerdict), and forge::despeckle reads an EMPTY verdict as
