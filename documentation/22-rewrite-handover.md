@@ -691,6 +691,30 @@ to reach them. **D672 is the entry; read it before touching any of this.**
      orangery x **72.00** against **72.5** (0.50 m). Their weathering is 0.16/0.14 and 0.05/0.04,
      so both hold today. Both headers say so.
 
+   **AND THE CONTROL-ARM METHOD DOES NOT WORK FOR TWO OF THE SEVEN.** D672's verification rests on
+   the translate being a whole number of cells, so both arms land on one grid and a single voxel of
+   difference is a fault. Measured across all seven:
+
+   | | vector | whole cells at metre 8 / 16 / 32 |
+   |---|---|---|
+   | campanile, grotto, theatre, pavilion, **colonnade** | whole metres | yes / yes / yes |
+   | **fountain** | `(0, 0, 26.55)` | **no / no / no** |
+   | **orangery** | `(42.30, 0.90, -5.25)` | **no / no / no** |
+
+   It is not a bad choice of number, it is **the estate's own module**: the site plan is laid out on
+   0.45 m and **0.45 × 32 = 14.4**, so any module-derived offset is off the voxel grid at every
+   resolution the game uses. The four D672 converted compare exactly because their vectors happen to
+   be whole METRES — an accident of the site plan, not a property of the method.
+
+   Measured, fountain at metre 8: **506,728 voxels against the control's 500,333**, 151,902 faces
+   against 151,244. That gap is resampling and cannot be tuned away. What survives as evidence is
+   `never fired`, the material SET and the component count, none of which depends on the grid.
+   `probes` for all three are in `clips/facility/requests/` and say this in their own headers.
+
+   **And the material COUNT is not comparable for the fountain at all**: the control reports 368,518
+   distinct records against the probe's 19, because `clips/estate/fountain.clip` carries
+   `variation ... budget=1400000` and a fragment wears the manifest's variation instead.
+
    `colonnade` is authored at `metre 16` against a `metre 32` manifest. That is the safe direction
    and only that one — a feature that resolves at 1/16 m also resolves at 1/32, and its smallest
    members were sized against the coarser voxel. A fragment authored FINER than the manifest is the

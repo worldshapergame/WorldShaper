@@ -1,0 +1,89 @@
+# orangery-probe — the orangery on its own, in FACILITY coordinates, so it can be measured without
+# sampling the rest of the estate.
+#
+#   .uildin\WorldShaper.exe --clip-file clipsacilityequests\orangery-probe.clip #        --clip-metre 16 --clip-part part_orangery
+#
+# and THE CONTROL ARM, which is the whole point of the file:
+#
+#   .uildin\WorldShaper.exe --clip-file clips\estate\orangery.clip #        --clip-metre 16 --clip-part part_orangery
+#
+# `clips/facility/orangery.clip` is a copy of `clips/estate/orangery.clip` carried to (42.30, 0.90, -5.25), and the
+# estate original is UNTOUCHED — so the estate clip is the control, and the question this probe
+# answers is whether the copy is the same clip in a different place or a different clip.
+#
+# THIS BUILDING CANNOT BE COMPARED TO THE VOXEL, AND THE MODULE IS WHY.
+#
+# D672's control-arm method rests on the translate being a whole number of cells, so that both arms
+# put the building on the same grid and one voxel of difference is a fault. **That does not hold
+# here at any resolution.** The vector is (42.3, 0.9, -5.25), and:
+#
+#     42.3 x 8 = 338.4     x 16 = 676.8     x 32 = 1353.6
+#
+# none of them whole. It is not a bad choice of number, it is the estate's own module: the site plan
+# is laid out on 0.45 m, and **0.45 x 32 = 14.4**, so ANY module-derived offset is off the voxel grid
+# at every resolution the game uses. The four buildings D672 converted compare exactly because their
+# vectors happen to be whole METRES -- (30, 0, 14), (-34, 0, 22), (-36, 0, 16), (0, 0, 46) -- which
+# is an accident of the site plan and not a property of the method.
+#
+# So `volume` and `surface` WILL differ between the arms by a few thousand voxels of resampling, and
+# that difference is not a fault and cannot be tuned away. Measured, metre 8, fountain:
+# **506,728 against the control's 500,333** and 151,902 faces against 151,244. What is still worth
+# reading is `never fired`, the material SET, and the component count -- none of which depends on
+# the grid.
+#
+# To get an exact arm somebody would have to move the building to a whole number of voxels, which
+# changes the site plan, or compare at a resolution where the module divides, which does not exist.
+# Neither is this file's decision to make.
+#
+# WHAT THE BOX COSTS, 60.5 x 13.0 x 13.0 m, because a probe that will not run is not an instrument:
+#
+#   metre  8     5.2 M cells    0.03 GB
+#   metre 16    41.9 M cells    0.21 GB   THE DEFAULT BELOW
+#   metre 32   335.0 M cells    1.68 GB   runs, and is the metre the clip is authored at
+#
+# THE TRANSLATE HAS A HEIGHT IN IT AND THIS IS THE ONLY ONE THAT DOES: (42.30, 0.90, -5.25). The
+# orangery stands on the east terrace rather than on the lawn. At metre 16 a cell is 0.0625 m and
+# 0.90 is a whole number of them, so the two arms still land on the same grid and must agree to the
+# voxel; at metre 8 (0.125 m) 0.90 is 7.2 cells and THEY WILL NOT -- so compare at 16, not at 8.
+#
+# ITS EAST END IS 0.50 m FROM THE MANIFEST'S OWN `bounds` HIGH of x 72.5. This probe's box is cut to
+# 72.5 for that reason: it is where the building stops being sampled in the real world, so a probe
+# that reached further would measure matter the game never builds.
+#
+# THE THREE THINGS TO READ, in the order they catch things:
+#
+#   never fired   a rule that painted nothing. Silent, and it looks exactly like success — it is the
+#                 first thing a botched translate shows. If the geometry was carried and a shape a
+#                 rule names was not, the rule asks its question where the building is not and
+#                 paints nothing. NEITHER run should print this line at all.
+#   materials     the same set. The weathering coats will not match the control exactly and are not
+#                 meant to: a weather mask is noise asked in WORLD coordinates, so carrying the
+#                 building slides it across the field. The PAINTS have no such excuse.
+#   components    the same count as the control, whatever that count is. It is not 1 and is not
+#                 meant to be; what matters is that the two arms agree.
+#
+# AND THE SHARES WILL NOT MATCH EXACTLY, for two reasons that are both deliberate. The estate clip
+# carries its own base coat and this probe uses the manifest's; and every rule in the fragment is
+# `below=0.035` rather than 0.02, which lets each rule reach further and hands surface from the
+# first rule to the ones after it. Both are argued in clips/facility/orangery.clip's own header.
+#
+# NOT YET RUN. This file is written from the conversion's arithmetic and has not been executed
+# against either arm — see the decision log entry that added the three fragments. Whoever runs it
+# first should replace this paragraph with the numbers, the way campanile-probe.clip does.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+# The coat everything starts in, exactly as the manifest has it.
+paint limestone
+
+include "../orangery.clip"
+
+# `metre` and `bounds` come AFTER EVERY include and not before -- `_order.clip` includes
+# `_contract.clip` again and the contract re-states the estate's box and its metre, so these two
+# lines put anywhere above the last include are quietly undone by it, and the undoing looks exactly
+# like the narrowing having had no effect. Written out in ballroom-probe.clip, which paid for it.
+metre 16
+bounds 12 -1 -12.5   72.5 12 0.5
+
+solid part_orangery

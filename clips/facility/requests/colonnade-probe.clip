@@ -1,0 +1,71 @@
+# colonnade-probe — the colonnade on its own, in FACILITY coordinates, so it can be measured without
+# sampling the rest of the estate.
+#
+#   .uildin\WorldShaper.exe --clip-file clipsacilityequests\colonnade-probe.clip #        --clip-metre 16 --clip-part part_colonnade
+#
+# and THE CONTROL ARM, which is the whole point of the file:
+#
+#   .uildin\WorldShaper.exe --clip-file clips\estate\colonnade.clip #        --clip-metre 16 --clip-part part_colonnade
+#
+# `clips/facility/colonnade.clip` is a copy of `clips/estate/colonnade.clip` carried to (0, 0, -29.00), and the
+# estate original is UNTOUCHED — so the estate clip is the control, and the question this probe
+# answers is whether the copy is the same clip in a different place or a different clip.
+#
+# THE TRANSLATE IS A WHOLE NUMBER OF CELLS, which is what makes that comparison exact rather than
+# approximate -- and this is the ONLY one of the three buildings added with it for which that is
+# true. (0, 0, -29.00) is a whole number of metres, so it is whole at 8, 16 and 32. The fountain's
+# 26.55 and the orangery's 42.30/0.90 are module-derived, and 0.45 x 32 = 14.4, so neither lands on
+# the voxel grid at ANY resolution; their probes say so. At metre 16 a cell is 0.0625 m and every component of (0, 0, -29.00) is a whole number of
+# them, and this box's corner is a whole number of cells from the estate box's corner. So both runs
+# put the building on the same grid and **`volume`, `surface` and `components` must match TO THE
+# VOXEL** — a single voxel of difference is a fault, not a rounding.
+#
+# WHAT THE BOX COSTS, 54.0 x 19.5 x 33.0 m, because a probe that will not run is not an instrument:
+#
+#   metre  8    17.8 M cells    0.09 GB   the whole-clip resolution, and what to check first
+#   metre 16   142.3 M cells    0.71 GB   THE DEFAULT BELOW, and the metre this clip is AUTHORED at
+#   metre 32  1138.7 M cells    5.69 GB   will not run on an ordinary machine; do not reach for it
+#
+# THIS ONE IS AUTHORED AT `metre 16`, ALONE AMONG THE SEVEN. `clips/estate/colonnade.clip` says
+# `metre 16` and the manifest samples at 32. That is safe in that direction only -- a feature that
+# resolves at 1/16 m also resolves at 1/32 -- but it means the honest resolution to COMPARE the two
+# arms at is 16, which is also the only one that fits in memory here. The metre-32 box is 5.69 GB
+# and the building has no detail at that scale that it did not already have at 16.
+#
+# THE THREE THINGS TO READ, in the order they catch things:
+#
+#   never fired   a rule that painted nothing. Silent, and it looks exactly like success — it is the
+#                 first thing a botched translate shows. If the geometry was carried and a shape a
+#                 rule names was not, the rule asks its question where the building is not and
+#                 paints nothing. NEITHER run should print this line at all.
+#   materials     the same set. The weathering coats will not match the control exactly and are not
+#                 meant to: a weather mask is noise asked in WORLD coordinates, so carrying the
+#                 building slides it across the field. The PAINTS have no such excuse.
+#   components    the same count as the control, whatever that count is. It is not 1 and is not
+#                 meant to be; what matters is that the two arms agree.
+#
+# AND THE SHARES WILL NOT MATCH EXACTLY, for two reasons that are both deliberate. The estate clip
+# carries its own base coat and this probe uses the manifest's; and every rule in the fragment is
+# `below=0.035` rather than 0.02, which lets each rule reach further and hands surface from the
+# first rule to the ones after it. Both are argued in clips/facility/colonnade.clip's own header.
+#
+# NOT YET RUN. This file is written from the conversion's arithmetic and has not been executed
+# against either arm — see the decision log entry that added the three fragments. Whoever runs it
+# first should replace this paragraph with the numbers, the way campanile-probe.clip does.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+# The coat everything starts in, exactly as the manifest has it.
+paint limestone
+
+include "../colonnade.clip"
+
+# `metre` and `bounds` come AFTER EVERY include and not before -- `_order.clip` includes
+# `_contract.clip` again and the contract re-states the estate's box and its metre, so these two
+# lines put anywhere above the last include are quietly undone by it, and the undoing looks exactly
+# like the narrowing having had no effect. Written out in ballroom-probe.clip, which paid for it.
+metre 16
+bounds -27 -2 -46.5   27 17.5 -13.5
+
+solid part_colonnade
