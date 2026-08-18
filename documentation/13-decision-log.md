@@ -10106,3 +10106,97 @@ this run into the previous ones by shape and the printer then picks a shape by a
 | D682 | **The cost is the shape walk and it is what the clip IS** | decision | 76% of sampling, ~8,231 visits a cell, and no index rejects it |
 | D682 | **The only remaining hundredfold is shipping the world BUILT** | decision | 804 ms cached against 17 s of ladder (D611); the blocker is size, and R11f is the plan's answer |
 | D682 | **`load stages:` can print a previous run's row as this run's** | fault | Two runs identical to the millisecond, beside `everything ready [t+337 ms]` |
+
+## D683 — pruning the field to one box: built, exact, and worth 2%. And why "under a second" is not reachable by evaluating
+
+**Asked for: *"first load should be instant not more than a second"*, and *"i want 100x from loading
+it the first time, we can add cache later"*.** This entry is the seventh lever measured against that
+and the arithmetic that says the ask cannot be met the way it is framed. It is written as plainly as
+it can be, because the honest answer is more use than another 1.02x.
+
+### What was built, and it was the best idea left
+
+A cell of the estate walks **8,231 nodes of an 18,250-node field**. A node of the render tree holds
+**512 cells**, and every one of them independently walked the same eighteen thousand nodes to
+independently discover that the same eighteen thousand were nowhere near it. Which shapes can matter
+is a property of the BOX, not of the cell — so answer it once per node and let all 512 walk what is
+left.
+
+`Field::pruned_to(root, low, high, slack)` does exactly that: every union child whose own box cannot
+reach the sample box, plus the slack the descent will allow for, is replaced by a **constant equal to
+the gap between the boxes**. That is a lower bound on what the child would have answered anywhere in
+the box — the shape is inside its box, so it cannot be nearer than the box is — and a minimum over
+lower bounds is a lower bound. **Never an over-statement**, which is the only direction the sampler's
+settling survives.
+
+Only `Op::Union`, deliberately. `difference` is `max(a, -b)`, so under-stating `b` OVER-states the
+answer, which is the direction that deletes matter. Each op has its own sign to reason about and
+none of the others was done.
+
+**It is exact and the gate says so.** `clips/sampler.clip --refine-all --no-despeckle`, both arms:
+`a7660d52378d3c27`, **1,430,152 solid voxels, identical**.
+
+### And it is worth two per cent
+
+**Estate, enclosed camera, cold, matched 45 s, CPU sampler:**
+
+| | nodes built | per node |
+|---|---|---|
+| pruned | 13,824 | **3.19 ms** |
+| `--no-prune` | 13,312 | **3.26 ms** |
+
+**2%, which is noise.** REVERTED.
+
+**And the reason is the finding, not the failure.** The box cull already refuses to descend into a
+far child for the price of one box test, so pruning removes the box test and not the descent. Which
+means **the 8,231 nodes a cell walks are not distant shapes it could have skipped — they are all
+genuinely near it.** A point inside the block is inside dozens of overlapping layers, and every one
+of them really does have to be asked. There is nothing there to prune.
+
+### So: under a second is not reachable by evaluating the field, and here is the arithmetic
+
+- A cell costs about **8,231 node visits** at about **3.5 ns** a visit — roughly **29 µs a cell**.
+- A node of the render tree is **512 cells**, so about **15 core-ms**.
+- The visible world from one camera is **tens of thousands** of such nodes.
+
+That is tens of core-seconds for the first sight of the estate, and it is not slack: **seven separate
+attacks on it have now been measured** and the best of them was 1.3x.
+
+| lever | worth |
+|---|---|
+| the field on the card (R12) | 1.30x outdoors, **0.37x indoors** |
+| the descent, on the card | nothing — 100% of the ladder's cells are already singles |
+| shrinking the shader's stack frame | nothing — measured with a deliberately bloated one |
+| the union hierarchy over wide unions | nothing — on the facility (D637) and on the estate (D682) |
+| the thin-feature rescue off | 11% |
+| bounding every paint rule perfectly | at most 1.3x — paint is 24% of sampling |
+| **pruning the field to the box** | **2%** — this entry |
+
+**The cost is not an inefficiency in the sampler. It is what the estate IS**: seven buildings of
+hand-authored classical detail, 18,250 nodes of expression, and a promise that every voxel is real.
+Evaluating that for a hundred thousand cubes takes what it takes.
+
+### What actually reaches "under a second", stated so the choice is the user's
+
+1. **Do not compute it then — compute it before.** Already built, already measured: a world with its
+   cache complete loads in **804 ms** (D611) and one camera's world is picked up by another in
+   **52 ms** (D634). The user has deferred this twice as "cache later", but it is the only mechanism
+   in the engine that produces the number they are asking for, and *shipping the estate already
+   built* is what turns it from a second-visit benefit into a first-visit one. Its blocker is size,
+   and **R11f — a world is a clip plus its edits** — is the plan's own answer to size.
+2. **Make the clip cheaper.** 18,250 nodes is a content decision, not an engine one. Halving the
+   estate's expression halves the load, and nothing in the engine can do that on the author's behalf.
+3. **Keep filling progressively**, which is what happens today and is what R11d was for: 337 ms to
+   standing in it, and detail arriving around you.
+
+**None of the three is "evaluate the same field a hundred times faster", and after seven measured
+attempts the honest position is that no fourth option exists.** Saying otherwise would be promising a
+multiple, which §5 warns against by name.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D683 | **`Field::pruned_to` is exact and is worth 2%; reverted** | fault | 3.19 ms a node against 3.26, on a gate that hashes identically |
+| D683 | **The 8,231 nodes a cell walks are all genuinely NEAR it** | decision | Pruning far union children changed nothing, so there were none to remove |
+| D683 | **Seven levers measured; the best is 1.3x** | honesty | The table above, so nobody spends an eighth session on a 1.02x |
+| D683 | **"Under a second" is not reachable by evaluating the field** | honesty | 29 µs a cell x 512 cells x tens of thousands of nodes, and none of it is slack |
+| D683 | **The only mechanisms that reach it are precompute, a cheaper clip, or progressive fill** | decision | All three are decisions for the user rather than optimisations |

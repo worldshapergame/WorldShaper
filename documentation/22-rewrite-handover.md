@@ -616,10 +616,25 @@ session on the same five:
 | the union hierarchy over wide unions | **nothing** — 14,080 nodes against 14,336, now on the estate too |
 | the thin-feature rescue off | **11%** |
 | bounding all 628 paint rules perfectly | **at most 1.3x** — paint is 24% of sampling |
+| pruning the field to the sample BOX (`Field::pruned_to`) | **2%** — built, exact, reverted (D683) |
 
 **What is left is the shape walk, and it is 76% of the bill: ~8,231 node visits a cell over an
 18,250-node expression.** Neither arm avoids it, no index rejects it, and the descent already takes
 everything it can before the ladder sees a node. **The cost is what the clip IS.**
+
+**And D683 is the one that settles it.** The best remaining idea was that 512 cells of a node each
+walk the same eighteen thousand nodes to each discover the same eighteen thousand are far away — so
+answer it once per box. Built, proved exact on the gate (`a7660d52378d3c27`, 1,430,152 voxels,
+both arms identical), and **worth 2%**. The reason is the finding: the box cull already refuses a
+far child for the price of one box test, so **the 8,231 nodes a cell walks are all genuinely NEAR
+it**. A point inside the block is inside dozens of overlapping layers and every one really does
+have to be asked. There is nothing to prune.
+
+**So the arithmetic, and it is not slack:** ~8,231 visits a cell at ~3.5 ns is **29 µs a cell**;
+a node is 512 cells, so **15 core-ms**; the visible world is tens of thousands of nodes. Seven
+levers have now been measured against that and the best was 1.3x. **Under a second, computed at the
+moment it is asked for, is not reachable.** The three things that DO reach it are precompute, a
+cheaper clip, and progressive fill — all decisions rather than optimisations.
 
 **So the only remaining hundredfold is not to evaluate it at all, and that already works.** D611:
 the facility with its cache complete loads in **804 ms** against 17 s of ladder — **21x**. D634: one
