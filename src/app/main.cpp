@@ -2099,6 +2099,9 @@ private:
     // this clip and this driver, and asking again every frame would say so sixty times a second.
     void ensure_field_on_card();
     bool field_card_tried_ = false;
+    // Whether this world came back from a cache rather than being built from nothing this run. Read
+    // by `refine_resolution_census`, which cannot mean anything over a world older than the camera.
+    bool refine_resumed_ = false;
     // Hand the picked batch to the card. Returns false if it is still busy with the last one.
     bool submit_refinement_to_card();
     // Turn a finished dispatch into the same RefineDelivery the worker thread would have made.
@@ -4723,6 +4726,19 @@ std::string Application::refine_resolution_census() const {
     }
 
     std::string out;
+    // **A RESUMED WORLD CANNOT ANSWER THIS QUESTION, and the line has to say so or it lies.**
+    //
+    // A world is kept when the player leaves it and grows across launches (D634) — that is the
+    // design, and it means a cached world is the UNION of everything every camera has ever been
+    // near, all of it at the detail it was near at. Binned against the distance from THIS camera
+    // that reads as "the ladder builds full detail everywhere", confidently, from a world that is
+    // simply older than the question. It read exactly that way for an hour and a wrong answer went
+    // to the user off the back of it (D680); cold and one camera, the same build answers 17.5
+    // voxels a metre in the 31-62 m band, which is the rule.
+    if (refine_resumed_) {
+        out = "NOT COMPARABLE — this world was resumed from a cache, so it holds what every camera "
+              "before this one was near. Re-run with --no-clip-cache. ";
+    }
     for (usize b = 0; b < kBands; ++b) {
         if (count[b] == 0) continue;
         if (!out.empty()) out += "  ";
@@ -4813,6 +4829,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
                                       refine_script_->paint);
     log_the_plan("resumed");
     field_card_tried_ = false;   // R12: a new plan is a new field to put on the card
+    refine_resumed_ = true;      // this world is older than this camera; see refine_resolution_census
     // What the world on disk is already at: the coarse rung it was built with. A cached world may
     // hold sharpened boxes as well, which resume_refinement marks below.
     refine_coarse_per_metre_ = refine_script_->settings.voxels_per_metre;
@@ -5428,6 +5445,7 @@ void Application::build_world() {
                 log_the_plan("the ladder");
                 // R12: a new plan is a new field to put on the card.
                 field_card_tried_ = false;
+                refine_resumed_ = false;   // built from nothing this run
                 refine_coarse_per_metre_ = refine_script_->settings.voxels_per_metre;
                 seed_refine_nodes(*refine_script_);
                 WS_LOG_INFO("clip",

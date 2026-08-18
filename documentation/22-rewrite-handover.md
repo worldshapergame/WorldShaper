@@ -602,38 +602,35 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### START HERE — 2026-08-18 (last): the variable resolution is NOT reaching the world
+#### START HERE — 2026-08-18 (last): the pixel rule WORKS, and four instruments lied to get there
 
 **Reported:** *"i dont see the variable resolution based on screen coverage either way still."*
-**They are right, and D674's headline says the opposite. D679 is the entry; read it first.**
+**They cannot see it, and it IS working. D680 is the entry; D679 above it is wrong and withdrawn.**
 
-D674 measured the ladder's BATCH LINE and found the rule computing correctly — metre 32 on nodes
-14.0 to 31.2 m out, metre 16 on 31.3 to 36.9. That is true and it is a statement about a batch. It
-is not a statement about the world, and the two come apart the moment a node can be sampled
-coarsely, split, and sampled again: **every batch can be right when it is picked and the fixed point
-still be uniform.**
+Cold, one camera, 60 s, outdoor: the 31-62 m band comes back at **17.5 voxels a metre against a
+predicted 16**, and the residue is expected — the ladder measures to the NEAREST point of a node's
+box and the census to its centre, so a node just past 31.25 m by centre can be correctly sampled at
+32. The batch line agreed all along: `metre 32-32, 14.1-18.2 m out`, 463 times, never past 37 m.
 
-`detail by distance`, beside the settle line, asks the second question. Estate, 60 s, `--settle`:
+**Why nobody can see it, and both halves are by design and undocumented for a player:**
 
-| | <8 m | 8–16 m | 16–31 m | 31–62 m | 62–125 m |
-|---|---|---|---|---|---|
-| **the rule asks for** | 32 | 32 | 32 | **16** | **8** |
-| enclosed | 31.0 | 32.0 | 32.0 | **32.0** | — |
-| outdoor | — | 32.0 | 32.0 | **32.0** | **32.0** |
+1. **It is invisible on purpose.** Detail below a pixel is not drawn — §1's own promise — so a
+   working pixel-driven world looks IDENTICAL to a fully detailed one. `--debug-mode 3` exists
+   because of exactly that, and right now it is solid green from the enclosed camera, which is
+   correct: that room is all inside 31 m.
+2. **The world never gives detail back.** It accumulates across cameras and across launches (D634)
+   and nothing ever coarsens what is built, so after a few minutes everything you have stood near
+   is at authored detail for ever. **That is the open thing, and it is R2b** — *a node finer than
+   the pixel is never stored* — half-built since D259 because eviction can only drop what it can
+   afford to rebuild. R12 is what makes it affordable, which is the second reason R12 exists.
 
-And the `ladder:` level histogram, which has been in the build since D619 and which nobody had read
-this way, agrees independently: **L3 239,304 · L4 6,007 · L5 2,754 · L6 1,574 · L7 1,146 · L8 1,087**.
-A pixel-driven world is a spread; this is everything split to the finest level.
-
-**The cause is NOT established and do not assume one.** The split loop is a disjunction —
-`refine_all || next_keen > kRefineSplitAt || !refine_would_improve(...)` — and the third disjunct is
-the one a session already named and three agents already cleared (D674). It is the place to look and
-it is the place somebody has already been wrong about, so take the control arm before the theory.
-
-**And read D679's last section before trusting any instrument here.** The first version of this
-census binned `applied_per_metre` and reported a confident, specific, false answer, because that
-field is *inherited by children when a node splits* — its own header says so. Three instruments gave
-false answers in one session and all three were a field read for a purpose it was not for.
+**AND READ D680'S LAST SECTION BEFORE TRUSTING ANY INSTRUMENT IN THIS AREA.** Four measurements in
+one session gave confident, specific, false answers, every one of them a field read for a purpose
+it was not built for: two throughput figures over different windows; a refusal op stamp whose
+default value is a real op; `applied_per_metre`, which is inherited by children when a node splits;
+and the census over a CACHED world. Three were caught. The one that was not was the one that AGREED
+WITH THE USER'S REPORT — which is precisely when the control arm gets skipped. `--no-clip-cache`
+was one flag away the whole time, and `refine_resolution_census` now says so in its own line.
 
 ---
 

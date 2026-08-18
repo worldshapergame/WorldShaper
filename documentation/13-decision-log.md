@@ -9775,7 +9775,13 @@ and a hierarchy that cannot reject is a traversal paid on top of the scan it rep
 control arm came first and each time it said do not build the thing.** What is left after all three
 is the walk itself, and 923 boxless nodes is the only lead with a number on it.
 
-## D679 — "I don't see the variable resolution" — and the world says they are right
+## D679 — "I don't see the variable resolution" — WITHDRAWN, see D680
+
+> **This entry is WRONG and is kept for how it went wrong. Its census ran against a world resumed
+> from a cache, which holds the union of everything every camera before it was near — so it read
+> "full detail everywhere" from a world that was simply older than the question. Cold and one
+> camera, the same build answers 17.5 voxels a metre where the rule asks for 16. The rule works.
+> D680.**
 
 **Reported:** *"i dont see the variable resolution based on screen coverage either way still."*
 
@@ -9843,3 +9849,87 @@ purpose, read for another, with nothing in its name to say so.**
 | D679 | **`applied_per_metre` is INHERITED and must not be read as "what this node was sampled at"** | fault | It reported 29.7/m over 198,844 nodes, and 16–31 m coarser than 31–62 m |
 | D679 | **A detail rule that is not monotonic in distance is a broken instrument, not a finding** | honesty | The non-monotonicity is what exposed the first census |
 | D679 | **The cause is not established, and the third disjunct of the split is where to look** | honesty | `!refine_would_improve` is what D674's session named and three agents cleared |
+
+## D680 — D679 was wrong, the rule works, and the world is simply older than the camera
+
+**D679 is the entry directly above and it is WRONG. It went to the user as "you are right, it is not
+happening", and it is not what is happening.** Left standing rather than edited, because the way it
+went wrong is the fourth instance of one mistake in a single session and that is the useful part.
+
+### The measurement, taken again the way it should have been
+
+D679's census ran against a **world resumed from a cache**. A world is kept when the player leaves it
+and grows across launches — **that is D634 and it is the design** — so a cached world holds the union
+of everything every camera has ever been near, all of it at the detail it was near at. Binned against
+the distance from *this* camera it reads as "the ladder builds full detail everywhere", confidently,
+from a world that is simply older than the question. That day's cache had absorbed every R12 test run
+from two cameras.
+
+**Cold, one camera, one world, same build, same 60 seconds:**
+
+| | <8 m | 8–16 m | 16–31 m | 31–62 m |
+|---|---|---|---|---|
+| **the rule asks for** | 32 | 32 | 32 | **16** |
+| outdoor, cached (D679) | — | 32.0 | 32.0 | **32.0** over 45,195 nodes |
+| **outdoor, cold** | — | 32.0 | 32.0 | **17.5** over 44 nodes |
+
+**17.5 against a predicted 16**, and the residue is expected rather than slack: the ladder measures
+to the NEAREST POINT of a node's box and this census measures to its centre, so a node whose centre
+is just past 31.25 m can have its near face inside it and be correctly sampled at 32. **The rule
+works. D674 was right, and its three agents were right to refuse the premise.**
+
+And the batch line said so all along, from the same run: `metre 32-32, 14.1-18.2 m out`, four hundred
+and sixty-three times, never once past 37 m. Two instruments disagreed and the older one was right —
+it should have been the tie-breaker within a minute rather than after an hour.
+
+### The second thing D679 got wrong, and it is the same shape
+
+D679 quoted the `ladder:` level histogram — **L3 239,304 against L4 6,007** — as independent
+corroboration that everything is cut to the finest level. It is not corroboration and it is not
+independent: **a level-3 node is 0.25 m across and a level-8 node is 8 m, so one L8 node covers 32,768
+times the volume of one L3 node.** Counting nodes across levels compares a grain of sand with a
+building. A perfectly pixel-driven world would still show that histogram.
+
+### What the user is actually seeing, which is a real thing and is not a bug
+
+The rule works, and it is still true that **nobody can see it**, for two reasons that are both by
+design and neither of which was written down anywhere a player could reach:
+
+1. **It is invisible on purpose.** Detail below a pixel is not drawn — that is §1's own promise. A
+   working pixel-driven world looks *identical* to a fully detailed one. There is nothing to see, and
+   `--debug-mode 3` exists precisely because of that.
+2. **The world never gives detail back.** It accumulates across cameras and across launches (D634),
+   and nothing ever coarsens what has already been built. So after a few minutes of play everything
+   you have ever stood near is at authored detail for ever, and the coarse-far behaviour only ever
+   applies to places you have never approached. **That is a real design question and it is open** —
+   R2b's unfinished half, *a node finer than the pixel is never stored*, has been blocked since D259
+   because eviction can only drop what it can afford to rebuild.
+
+### The pattern, four times in one session
+
+Every one of these was a field or a counter read for a purpose it was not built for, with nothing in
+its name to say so:
+
+| what was read | what it actually is | what it said |
+|---|---|---|
+| two throughput figures | different time windows, different node populations | the card is 1.7x SLOWER |
+| `ws_field_refused_op` | nought by default, and nought is `constant` | the loop is in op `constant` |
+| `RefineNode::applied_per_metre` | inherited by children when a node splits | 198,844 nodes at 29.7/m, non-monotonic |
+| the same census over a CACHED world | the union of every camera that came before | the pixel rule does not work |
+
+Three were caught before they left the room. The fourth was not, and the difference was not skill: it
+was that the first three had a cheap control arm within reach and the fourth had one too —
+`--no-clip-cache` — that nobody reached for, because the number was interesting and it agreed with
+what the user had just said. **A measurement that confirms the report is exactly the one to take the
+control arm on.**
+
+`refine_resolution_census` now refuses to be read over a resumed world, in the line itself.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D680 | **The pixel-driven resolution WORKS; D679 is withdrawn** | fault | Cold, one camera: 17.5/m in the 31-62 m band against a predicted 16 |
+| D680 | **A cached world cannot answer a question about distance from THIS camera** | fault | It is the union of every camera before it, by design, since D634 |
+| D680 | **The census says so in its own line rather than leaving it to be remembered** | decision | The number was interesting and agreed with the report, which is when nobody checks |
+| D680 | **Counting NODES across levels compares a grain of sand with a building** | fault | An L8 node is 32,768 times an L3 node by volume; the histogram proves nothing |
+| D680 | **A measurement that confirms the user's report needs its control arm MORE, not less** | honesty | Three of four bad instruments were caught; the one that agreed with the report was not |
+| D680 | **What the player cannot see is real and is R2b: the world never gives detail back** | decision | It accumulates across cameras and launches and nothing ever coarsens it |

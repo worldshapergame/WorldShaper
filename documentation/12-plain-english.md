@@ -3498,3 +3498,15 @@ A slower picture is a trade you can weigh. Holes in your building and losing you
 And the reason I gave above for why it was only a third turned out to be wrong, which is worth saying because the correction is what makes the next step obvious. I said the main processor was clever about whole blocks of space and the graphics card was not. It is — but not here: by the time the game asks for a patch of world, it has already thrown away every patch that is entirely solid or entirely empty, so what is left is all surface, and there is no cleverness left to copy. Both machines are doing the same amount of work.
 
 What is actually slow is **reading the recipe**. Every cube reads about two thousand steps of it, and a quarter of the recipe cannot be skipped over because nobody has written down where in space those parts apply. Fixing that speeds up the graphics card and the main processor by the same amount, which is a much better thing to be fixing.
+
+## The detail-by-distance thing does work, and I told you it did not
+
+You said you could not see the world using coarser cubes for things far away. I measured it, told you that you were right and that it was not happening, and that was wrong. It is happening.
+
+What I did was ask the game what detail it had built at various distances — without noticing that the world I was asking had been **saved and reloaded from earlier sessions**. A world keeps what it has built and grows every time you play it, so the one I measured was the sum of everywhere I had stood all day, all of it at full detail. Of course it looked uniform. Measured properly — a fresh world, one viewpoint — things past thirty metres are built at half detail and things past sixty at a quarter, which is exactly the rule.
+
+So why can you not see it? Two reasons, and both are worth knowing.
+
+**The first is that you are not supposed to.** The whole promise is that detail smaller than a pixel is not drawn — so a world that gets this right looks *identical* to one that wastes effort being detailed at a distance. There is nothing to see. If you want to see it, press the detail view (`--debug-mode 3`): green is finest, red is coarsest, and it paints the picture by what the game actually did.
+
+**The second is a real gap, and this is the one worth your opinion.** The world never gives detail back. Once you have stood near something it stays at full detail for ever, across sessions. So the coarse-at-a-distance behaviour only ever applies to places you have never walked to — and after a few minutes of play, that is almost nowhere. Making the world let go of detail you have walked away from is a real piece of work that has been waiting on the graphics card being able to rebuild it cheaply, which is the other reason that work matters.
