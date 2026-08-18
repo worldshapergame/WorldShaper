@@ -418,8 +418,19 @@ bool FieldSampler::ready() {
     const u32* out_inside = reinterpret_cast<const u32*>(base + readback_.size / 2);
     for (u32 i = 0; i < cells; ++i) {
         types_[i] = static_cast<VoxelTypeId>(out_type[i]);
-        inside_[i] = static_cast<u8>(out_inside[i] != 0);
-        if (count_visits_) visits_ += out_inside[i];
+        // The top bit is a REFUSAL and not part of the mask: the walk ran out of stack or out of
+        // turns for that cell, and the shader has no way to assert. Counted rather than dropped --
+        // a refusal that reads as "air" is a hole in a wall that nothing anywhere reports.
+        const u32 word = out_inside[i];
+        if ((word & 0x80000000u) != 0 && !count_visits_) {
+            ++refused_;
+            // WHICH op the walk was standing on, or 128 for running out of stack. Kept as the
+            // FIRST one seen rather than a histogram: a refusal is a fault to be fixed, not a
+            // statistic, and one op number is what turns a hunt into a line number.
+            if (refused_op_ == 0xFFFFFFFFu) refused_op_ = (word >> 24u) & 0x7Fu;
+        }
+        inside_[i] = static_cast<u8>((word & 0x7FFFFFFFu) != 0);
+        if (count_visits_) visits_ += word;
     }
 
     last_gpu_ms_ = 0.0;

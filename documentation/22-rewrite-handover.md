@@ -602,7 +602,37 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### START HERE — 2026-08-18 (later still): R12 is built, it is right, and it is ON at 1.30x
+#### START HERE — 2026-08-18 (later still): R12 answers right, and it does not answer everywhere
+
+**THE FIRST THING TO DO IS THE BUG, and it has an exact repro.** With `--gpu-sample` on:
+
+```powershell
+WorldShaper --clip-file clipsacility.clip --gpu-sample --cam "0,0,0,-90,0" --refine-batch 32
+```
+
+**1,952 cells of the first batch come back REFUSED** — the walk gave up on them, they are written
+as air, and air in a wall is a hole. It is not depth: `WS_FIELD_STACK` went 96 → 128 (which is
+right anyway, it tracks `Field::kMirrorStack`) and that took it from thousands to two thousand, and
+192 changed nothing more. The op stamp says `constant`, which is a LEAF and provably cannot loop,
+so either the stamp reads the wrong frame or a refusal path still does not write it — those are the
+two places to look, and both are in `field_eval`.
+
+**And it lost the DEVICE before `WS_FIELD_TURNS` existed**, on that same camera, on the first
+dispatch, at the default batch. A walk that does not terminate is a dispatch that does not
+complete, which is a driver reset about two seconds later. The turn bound is what turned that into
+a log line; do not remove it, and do not raise it without a reason.
+
+**`kSafeBoxes` is 32 for a separate reason**: a dispatch of 128 nodes is **883 ms** from the
+enclosed camera against **55 ms** from the outdoor one. Batch size does not affect throughput (64
+and 256 both give 0.457 ms a node), so the cap is free.
+
+**The method note, and it is the expensive one.** Every figure in D677 and in the first half of D678
+was taken from the OUTDOOR camera. The engine's own default is the enclosed one — §0 says so — and
+it is the one with the device-losing bug in it. **Run the enclosed camera first.**
+
+---
+
+#### What R12 is, and the 1.30x
 
 **The ask was the LADDER, not the launch.** *"speed up the world loading after launching the world by
 100x"*, and then, unprompted, the correction that decides what the work is: *"dont do cold runs, its
@@ -616,7 +646,9 @@ R12a and R12b. The gate is `--gpu-sample-check N`, which samples the nodes **the
 picked** a second time on the CPU and compares them cell for cell: on the estate, 48 nodes and
 24,576 cells, **0 differ in matter, 0 in material, 0 in the clip mask.**
 
-**And it is ON, because the user chose the trade (D678).** Matched 45-second arms, estate,
+**The user chose the trade and it was switched on, and then off again the same hour — over the
+refusals above, which are not a trade anybody can be asked to weigh (D678).** Matched 45-second
+arms, estate,
 `0,10,-60,90,-6`, same batch: the card 87,680 nodes, the CPU 66,432 — **1.30x** — for **35–60 ms of
 the card per dispatch**, once a frame, against a frame the renderer wants in 17. Both halves of that
 were put to them in one sentence and the answer was *"do it, yes its worth it"*. `--cpu-sample` is
@@ -647,11 +679,19 @@ what `forge::sample`'s `descend` is. In order:
    chain of four-child nodes and only **19 of 209** wide unions carry an accelerator. **Start by
    finding out why 923 nodes have no box.** Unlike the descent this has a number in front of it
    rather than behind it, and it speeds the CPU arm by the same factor.
-2. **Then the frame on the card.** `FieldFrame` is fifteen words and only six of them are used by
-   the ops that carry the walk; `fold`, `lean`, `axes`, `neighbours` and `scale` belong to `repeat`,
-   `scatter` and `revolve` alone. A 96-frame stack is 5.8 KB of scratch a lane and the walk is the
-   thing reading it. Splitting the cold half onto a small side stack is contained, and the gate
-   proves it. **Worth about 2x and it is the cheapest thing on this list.**
+~~2. **Then the frame on the card.**~~ **MEASURED AND REFUTED, before it was built.** The argument
+   was good — `FieldFrame` is fifteen words, only six carry the walk, and a 96-frame stack is
+   5.8 KB of scratch a lane — and the control arm is one line: **nine dead words added to the
+   struct**, so a frame is 24 words instead of 15. Same camera, same batch, 40 seconds:
+   **53.6 ms a dispatch against 54.7**. No change. The scratch stack is not what a dispatch waits
+   on, and the note is now in `field_types.glsl` where somebody about to do it will read it.
+
+2. **And do NOT re-open the union hierarchy either.** It looks like the answer to a 4,158-visit
+   walk over 824 wide unions with zero hierarchies over them, and D637 built it, measured it and
+   refused it: **67.2 s with against 53.6 s without** on the facility at metre 16, same content
+   hash. The reason is written above `Field::accelerate_from` and it is about buildings rather
+   than about trees — *the parts of a building are LAYERS and not regions*, so a point in a wall
+   is genuinely inside a dozen bounding boxes and no ordering rejects any of them.
 3. **A dispatch may not outlive the driver's watchdog.** `kSafeBoxes` holds that today. Whatever the
    batch becomes, split the SUBMISSION rather than raising the cap.
 

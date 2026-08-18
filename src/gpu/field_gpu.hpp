@@ -123,7 +123,13 @@ public:
     // 117 ms on the estate's worst camera, which is a sixteenth of the watchdog and leaves room for
     // a card slower than this one and a clip heavier than this one. A lost device is not a slow
     // frame — it is the game gone mid-session, with whatever the player was building.
-    static constexpr u32 kSafeBoxes = 256;
+    // **32, not 256, and the number came down after a measurement rather than up.** The estate's
+    // ENCLOSED camera — the game's own default, standing inside the building — costs 883 ms for 128
+    // nodes where the outdoor camera costs 55. At that rate 256 nodes is 1.8 s, which is not under
+    // the watchdog at all; 32 is about 220 ms of the worst camera measured. Batch size was separately
+    // measured not to affect throughput (64 and 256 both give 0.457 ms a node), so this costs
+    // nothing and is pure headroom.
+    static constexpr u32 kSafeBoxes = 32;
 
     // Record and submit. `boxes` must be at most kMaxBoxes. Returns false if a batch is already in
     // flight, which the caller treats as "come back next frame".
@@ -155,6 +161,11 @@ public:
     // `ws_field_visits` in shaders/field_types.glsl.
     void set_count_visits(bool on) { count_visits_ = on; }
     bool counting_visits() const { return count_visits_; }
+    // Cells the card could not answer for at all. Nought is the only acceptable number: a refusal
+    // is not a wrong voxel, it is a voxel nobody computed, and it must never read as air.
+    u64 refused() const { return refused_; }
+    // The op the first refusal was standing on, or 128 for depth. ~0 when nothing has refused.
+    u32 refused_op() const { return refused_op_; }
     u64 visits() const { return visits_; }
     u64 visited_cells() const { return visited_cells_; }
 
@@ -199,6 +210,8 @@ private:
     bool rescue_ = true;
     bool count_visits_ = false;
     u64 visits_ = 0;
+    u64 refused_ = 0;
+    u32 refused_op_ = 0xFFFFFFFFu;
     u64 visited_cells_ = 0;
     f64 last_gpu_ms_ = 0.0;
     f64 last_host_ms_ = 0.0;

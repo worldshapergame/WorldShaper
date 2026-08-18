@@ -230,13 +230,47 @@ uint ws_field_visits;
 // a frame here is registers or scratch, one stack per invocation, and the CPU's headroom is free
 // where this is not.
 //
+// **AND IT IS 128, THE SAME AS THE CPU'S, BECAUSE 96 WAS NOT ENOUGH AND THE WAY THAT SHOWED WAS A
+// LOST DEVICE.** D676 measured the estate's deepest reached path at 80 over a grid of points, and 96
+// was chosen here as that measurement plus headroom, deliberately smaller than `Field::kMirrorStack`
+// on the argument that a frame is scratch memory on a card and free on a CPU. Both halves of that
+// were wrong. A grid of points is not the set of points a CAMERA asks about — the enclosed camera
+// stands inside the building, where the paths are deepest — and 96 refused **4,580 cells of a single
+// batch**. The frame size was then measured directly and does not move a dispatch at all (see the
+// note under `FieldFrame`), so the headroom costs nothing and there was never a reason to be mean
+// with it. **This number tracks `Field::kMirrorStack`; if that moves, move this.**
+//
 // **Running out must not be mistaken for an answer.** `field_eval` returns WS_FIELD_REFUSED, which
 // is a value no real field produces, and the sampler counts refusals separately and reports them.
 // D676 is exactly this fault from the CPU side: at a stack of 64 the mirror refused every point of
 // the estate, and a refusal reports nought sign changes over nought points, which reads precisely
 // like perfect agreement.
-#define WS_FIELD_STACK 96u
+#define WS_FIELD_STACK 128u
 #define WS_FIELD_REFUSED 3.0e30
+
+// AND THE WALK IS BOUNDED IN TURNS AS WELL AS IN DEPTH, because on a card the two failures are not
+// the same failure.
+//
+// A stack machine whose every case does not either push or finish does not return a wrong answer;
+// it does not return. On a CPU that is a hung thread somebody can attach a debugger to. On a card it
+// is a dispatch that never completes, and after about two seconds Windows RESETS THE DEVICE — which
+// arrives as `VK_ERROR_DEVICE_LOST` in whatever call happens next, pages of `fault type 4` from the
+// fault extension, and the game gone mid-session with whatever the player was building. It cost a
+// device on the enclosed camera before this constant existed, on the very first dispatch.
+//
+// 65,536 is thirty-two times the ~2,000 nodes an evaluation of the estate actually walks, so no
+// honest walk can reach it, and a walk that does reports a REFUSAL — which is counted, surfaced and
+// gated — rather than taking the machine down. D678.
+#define WS_FIELD_TURNS 65536u
+
+// Whether this invocation hit something it could not answer for, and WHICH OP it was standing on
+// when it happened. Nought is the only acceptable number and the sampler says so out loud.
+//
+// The op is the whole value of this. "Some cells refused" is a hunt; "1,952 cells refused, all of
+// them on op 34" is a line number. It costs one word and it is written once, at the moment the walk
+// gives up, so it is free on every walk that does not.
+uint ws_field_refused;
+uint ws_field_refused_op;
 
 struct FieldFrame {
     uint node;
@@ -253,6 +287,19 @@ struct FieldFrame {
     uint neighbours;
     float scale;    // what the copy being asked about was scaled by, so it can be undone on the way out
 };
+
+// **DO NOT SPEND A SESSION SHRINKING THAT STRUCT. It was measured and it does not matter.**
+//
+// The obvious reading of this file is that fifteen words times ninety-six frames is 5.8 KB of
+// scratch memory per invocation, that only six of the fifteen are used by the ops which carry the
+// walk (`fold`, `lean`, `axes`, `neighbours` and `scale` belong to `repeat`, `scatter`, `revolve`,
+// `curvature` and `facing` alone), and that moving the cold half onto a small side stack would
+// halve the traffic and roughly double the throughput. It is a good argument and it is wrong.
+//
+// The control arm is one line and it was taken before the work: **nine dead words added here**, so
+// a frame is 24 words instead of 15 -- 1.6x the stack, the same everything else. Estate, outdoor
+// camera, 40 seconds, same batch: **53.6 ms a dispatch against 54.7 ms**. No change at all, which
+// is the answer, and it says the scratch stack is not what a dispatch is waiting on. D678.
 
 // ---------------------------------------------------------------------------------------------
 // The two halves. Defined in field_leaf.glsl and field_walk.glsl; declared here so either may be

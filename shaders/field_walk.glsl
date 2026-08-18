@@ -292,6 +292,8 @@ float ws_walk_fold(uint at, uint op, float acc, float v) {
     {                                                                   \
         const uint ws_child = (child_index);                            \
         if (ws_child >= node_count || top >= WS_FIELD_STACK) {          \
+            /* 128u marks a refusal that is DEPTH, not a walk that would not end. */ \
+            ws_field_refused_op = 128u;                                 \
             return WS_FIELD_REFUSED;                                    \
         }                                                               \
         stack[top].node = ws_child;                                     \
@@ -315,7 +317,15 @@ float ws_walk_fold(uint at, uint op, float acc, float v) {
 
 float field_eval(uint root, vec3 p) {
     const uint node_count = field_nodes.items.length();
-    if (root >= node_count) return WS_FIELD_REFUSED;
+    if (root >= node_count) {
+        // 129 for "asked about a node that is not there". EVERY refusal path has to stamp its own
+        // number here, and the reason is that the default value of this variable is nought, which
+        // is `constant` -- a real op. A path that refuses without writing it reports a confident,
+        // specific and entirely false culprit, and two of the three paths did exactly that for an
+        // hour before this comment existed. Trap 7, in the one place that cannot assert.
+        ws_field_refused_op = 129u;
+        return WS_FIELD_REFUSED;
+    }
 
     FieldFrame stack[WS_FIELD_STACK];
     uint top = 0u;
@@ -330,7 +340,28 @@ float field_eval(uint root, vec3 p) {
     stack[0].scale = 1.0;
     top = 1u;
 
+    uint turns = 0u;
     while (top > 0u) {
+        // Bounded, and the bound is not paranoia -- see WS_FIELD_TURNS. A case that neither pushes
+        // nor finishes is a dispatch that never returns, and that is a LOST DEVICE rather than a
+        // wrong number.
+        if (++turns > WS_FIELD_TURNS) {
+            // The PARENT'S op, not the top frame's, and the difference is the whole point.
+            //
+            // A walk that will not end is one whose case pushes a child and then does not advance
+            // `step`, so it pushes the same child again for ever. The frame on TOP when the count
+            // trips is therefore the innocent child — usually a leaf, which provably cannot loop —
+            // and reporting that one sends somebody to read the one op in the file that is not the
+            // problem. The frame under it is the one that is not advancing.
+            //
+            // `ws_field_refused_op` also has to be SET here rather than left at its initial value:
+            // nought is `constant`, which is a real op number, so a path that refuses without
+            // writing this reports a confident, specific and completely false answer. That happened
+            // once already, in the hour this line was written.
+            ws_field_refused_op =
+                field_nodes.items[stack[top >= 2u ? top - 2u : top - 1u].node].op;
+            return WS_FIELD_REFUSED;
+        }
         ++ws_field_visits;   // the instrument; see field_types.glsl
         const uint fi = top - 1u;
         const uint ni = stack[fi].node;
@@ -819,6 +850,7 @@ float field_eval(uint root, vec3 p) {
 
             default:
                 // An op this file has not learned. Never a number — see WS_FIELD_REFUSED.
+                ws_field_refused_op = op;
                 return WS_FIELD_REFUSED;
         }
     }

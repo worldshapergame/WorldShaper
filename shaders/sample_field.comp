@@ -91,7 +91,12 @@ layout(local_size_x = 64) in;
 // builds a world whose mask is nonsense and is not trying to build one: it is measuring how many
 // nodes a cell walks, which is the half of the cost no clock can separate out.
 uint ws_mask_or_visits(uint mask) {
-    return ((field_push.flags & WS_FIELD_FLAG_COUNT_VISITS) != 0u) ? ws_field_visits : mask;
+    if ((field_push.flags & WS_FIELD_FLAG_COUNT_VISITS) != 0u) return ws_field_visits;
+    // The top bit says this cell could not be answered for -- the walk ran out of stack or out of
+    // turns. It rides on the mask because a refusal has to reach the host somehow, and the host
+    // counts it and says so; a cell that quietly took the "air" branch after a refusal would be a
+    // hole in a wall that nothing anywhere reports. Trap 7, on the one path that cannot assert.
+    return mask | (ws_field_refused != 0u ? 0x80000000u : 0u);
 }
 
 // One of the six central-difference offsets, as `sub` counts 0..5: axis `sub >> 1`, plus first.
@@ -143,6 +148,7 @@ bool rule_could_apply(uint rule, vec3 p) {
 
 void main() {
     ws_field_visits = 0u;
+    ws_field_refused = 0u;
     const uint gid = gl_GlobalInvocationID.x;
     const uint box = gid / WS_NODE_CELLS;
     if (box >= field_push.box_count) return;
@@ -197,6 +203,7 @@ void main() {
 
         // ---- THE ONE CALL. See the header before adding a second ------------------------------
         const float v = field_eval(ask_node, ask_at);
+        if (v >= WS_FIELD_REFUSED) ws_field_refused = 1u;
 
         // ---- what it meant --------------------------------------------------------------------
         if (phase == PH_BOUNDS) {

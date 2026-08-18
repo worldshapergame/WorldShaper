@@ -169,22 +169,27 @@ struct Options {
     // rule: this runs while somebody is playing and taking every core sharpens the world by
     // stuttering it. Overridable so that the size of that choice is measured rather than assumed.
     u32 refine_workers = 0;
-    // R12: the ladder samples its nodes on the CARD, and it is ON. `--cpu-sample` is the control arm
-    // and is the state every figure recorded before R12 was measured in.
+    // R12: the ladder samples its nodes on the CARD, behind `--gpu-sample`, and it is OFF AGAIN.
     //
-    // **It was off for one commit and the user turned it on, and the trade is theirs rather than
-    // ours.** The measurement put to them was the honest one: the card delivers about a third more
-    // nodes a second, and a dispatch is tens of milliseconds of a frame the renderer wants in 17, so
-    // the world sharpens faster and the picture is slower while it does. Asked whether a sharp world
-    // was worth a slower one arriving, they said yes. `09-performance-budgets.md` is about budgets
-    // nobody chose; this one was chosen, out loud, by the person the budgets are for.
+    // **The user was asked and said yes, and then the thing they said yes to turned out not to be
+    // the whole question.** What was put to them was a frame-rate trade — a sharper world sooner
+    // against a slower picture while it fills — and they took it, which settled that. Turning it on
+    // then surfaced two things that are not a trade and were never theirs to accept:
     //
-    // Two things that are NOT part of that trade and are engineering rather than preference:
-    // `FieldSampler::kSafeBoxes` caps what one dispatch may carry, because past the driver's
-    // watchdog the device is LOST rather than slow, and the CPU arm remains the automatic fallback
-    // for a machine with no card, a shader that will not compile, or a field too big to upload —
-    // each of which says so in the log by name rather than quietly sampling somewhere else.
-    bool cpu_sample = false;
+    //   **the card REFUSES cells.** 1,952 of a single batch from the game's own default camera. A
+    //   refusal is not a wrong voxel, it is a voxel nobody computed, and it reads as air — a hole in
+    //   a wall. The evaluator agrees with the CPU everywhere it answers (the gate says so) and that
+    //   is a different claim from answering everywhere.
+    //
+    //   **a dispatch reached 883 ms** on that same camera, where the outdoor one is 55. The driver
+    //   resets a device that has not come back in about two seconds, and the first attempt at this
+    //   camera did exactly that: `VK_ERROR_DEVICE_LOST` and pages of `fault type 4`. A lost device
+    //   is not a slow frame; it is the game gone mid-session with whatever was being built.
+    //
+    // Neither is something a player can be asked to weigh, so the answer is not "ask again", it is
+    // "off until it is fixed". The repro is exact and the instruments are in: `--gpu-sample --cam
+    // "0,0,0,-90,0"` on `clips/facility.clip`, first batch. D678.
+    bool cpu_sample = true;
     // The thin-feature rescue on the card, off. The control arm for the one part of the per-voxel
     // definition that costs eight extra evaluations at every cell near a surface.
     bool gpu_rescue = true;
@@ -2078,6 +2083,7 @@ private:
     FieldSampler field_sampler_;
     std::vector<RefineJob> refine_gpu_batch_;
     u64 refine_gpu_began_ns_ = 0;
+    u64 refine_gpu_refused_ = 0;
     f64 refine_total_gpu_ms_ = 0.0;      // what the CARD spent, from its own timestamps
     u64 refine_gpu_batches_ = 0;
     // Whether the card is doing the sampling. False on a machine with no device, when
@@ -3471,6 +3477,29 @@ bool Application::collect_refinement_from_card() {
         }
     }
 
+    // A refusal is not a wrong voxel, it is a voxel nobody computed, and it reads as air unless
+    // somebody counts it. Said the moment it happens rather than at the settle line, because the
+    // thing it is most likely to mean is a walk that did not terminate — which on a card is a lost
+    // device rather than a slow frame, and the turn cap is the only reason this is a log line at all.
+    if (field_sampler_.refused() > refine_gpu_refused_) {
+        const u64 fresh = field_sampler_.refused() - refine_gpu_refused_;
+        refine_gpu_refused_ = field_sampler_.refused();
+        WS_LOG_WARN("clip",
+                    "the card REFUSED {} cells of this batch ({} in all), standing on {} — those "
+                    "cells are holes rather than air. See WS_FIELD_TURNS",
+                    fresh, refine_gpu_refused_,
+                    (field_sampler_.refused_op() == 128u)
+                        ? std::string("the STACK — depth, and it wants a bigger WS_FIELD_STACK")
+                    : (field_sampler_.refused_op() == 129u)
+                        ? std::string("a node index PAST THE END of the field")
+                    : (field_sampler_.refused_op() < static_cast<u32>(forge::Op::Power) + 1u)
+                        ? std::string("op `") +
+                              forge::op_name(
+                                  static_cast<forge::Op>(field_sampler_.refused_op())) +
+                              "` — either a walk that would not end or an op the card has not "
+                              "learned"
+                        : std::string("something it could not name"));
+    }
     landed.asked = static_cast<u64>(landed.jobs.size()) * kCells;
     // The card's own clock, not the wall's. A wall clock round a submission measures the queue as
     // well, and the queue is the frame — which is how a sampler that costs nothing can be made to

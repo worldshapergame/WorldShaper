@@ -9624,7 +9624,9 @@ what the gate compares against. Written down because the next person will meet t
 
 Two things, and the second is a correction of the entry directly above it.
 
-### The trade was put to the user and they took it
+### The trade was put to the user, they took it, and it was not the whole question
+
+**Read this heading and the next one together, because the second undoes the first.**
 
 D677 shipped R12 switched off, and the reason given was honest: the card delivers about a third more
 nodes a second, and a dispatch is tens of milliseconds of a frame the renderer wants in 17, so the
@@ -9632,8 +9634,10 @@ world sharpens faster and the picture is slower while it does. That is a trade a
 FEELS, which is not an engineering call — so it was put to the person the game is for, in one
 sentence, with both halves of it. *"do it, yes its worth it."*
 
-**`--gpu-sample` is therefore the default and `--cpu-sample` is the control arm.**
-`09-performance-budgets.md` is about budgets nobody chose; this one was chosen out loud.
+**`--gpu-sample` was therefore made the default — and then turned off again within the hour, for
+reasons that were never theirs to weigh. See "and then it refused cells" below.** The trade itself
+stands: `09-performance-budgets.md` is about budgets nobody chose, and this one was chosen out loud.
+What follows is not a budget.
 
 **One thing that is NOT part of that trade and is engineering rather than preference.**
 `FieldSampler::kSafeBoxes` caps what one submission may carry, at 256 nodes — measured at 117 ms on
@@ -9641,6 +9645,46 @@ the estate's worst camera, a sixteenth of the driver's watchdog. `--refine-batch
 says to the picker; what reaches the card is clamped. Past the watchdog the device is **lost**, not
 slow, and that is the game gone mid-session with whatever somebody was building. A player cannot
 choose that trade because a player cannot see it coming.
+
+### And then it refused cells, and lost a device, on the game's own default camera
+
+**Everything measured until this point was the OUTDOOR camera.** `0,10,-60,90,-6`, chosen because it
+holds near and far geometry in one view. The enclosed camera — `0,0,0,-90,0`, standing inside the
+building, which is what the engine opens on and what §0 calls the enclosed case — was not run against
+the card until the switch was flipped. It should have been the first one run and not the last.
+
+**It lost the device.** `VK_ERROR_DEVICE_LOST` on the FIRST dispatch, a page of `fault type 4` from
+the fault extension, at the default batch of 128 — not at the 2048 that D677 recorded. Two separate
+causes, and the second is not fixed:
+
+**One: the walk had no bound on its turns.** A stack machine whose every case does not either push or
+finish does not return a wrong answer, it does not return — and on a card that is a dispatch which
+never completes, which is a driver reset. `WS_FIELD_TURNS` bounds it at 65,536 turns against a
+measured mean of 4,158, so a runaway now REFUSES, is counted, and is reported. That converted a lost
+device into a log line, which is the only reason the rest of this section could be written at all.
+
+**Two: it refuses 1,952 cells of the first batch from that camera, and why is not established.**
+Raising `WS_FIELD_STACK` from 96 to 128 — the CPU mirror's own depth, and the right value regardless,
+since 96 was chosen against a grid of points rather than against a camera — took it from thousands of
+cells to about two thousand. Raising it to 192 changed nothing further, so **the residue is not
+depth**. The op stamp says `constant`, which is a leaf and provably cannot loop, so the stamp is
+either reading the wrong frame or a refusal path is still not writing it.
+
+**And the number that decides the default on its own: a dispatch of 128 nodes takes 883 ms from that
+camera**, against 55 from the outdoor one. `kSafeBoxes` is therefore 32 rather than 256 — about
+220 ms of the worst camera measured, and free, because batch size was separately measured not to
+affect throughput at all (64 and 256 both give 0.457 ms a node).
+
+**So it ships OFF, and this is not "ask the user again".** A refusal is not a wrong voxel, it is a
+voxel nobody computed, and it reads as air: a hole in a wall. The gate says the two evaluators agree
+everywhere the card ANSWERS, which is a different claim from answering everywhere, and the counter is
+what separates them — trap 7 again, in the one place that cannot assert.
+
+**The method note, and it is the one worth keeping.** Every figure in D677 and in the first half of
+this entry is from one camera. The engine's own default camera is the enclosed case, §0 says so, and
+it was the camera that had a device-losing bug in it. *A measurement from one camera cannot tell a
+working system from a broken one* — D632 wrote that sentence about completeness figures and it is
+just as true of a crash.
 
 ### And D677's own "next step" is wrong, measured on the nodes it is about
 
@@ -9693,9 +9737,40 @@ the sampler runs on a card or not.
 
 | # | Decision | Kind | Why |
 |---|---|---|---|
-| D678 | **The card sampler is ON; the user took the trade** | decision | A sharper world sooner against a slower picture while it fills, put to them in one sentence |
-| D678 | **A dispatch is capped at `kSafeBoxes` = 256 whatever `--refine-batch` says** | decision | Past the watchdog the device is lost, not slow, and nobody can choose that trade |
+| D678 | **The user took the frame-rate trade, and it was turned on** | decision | A sharper world sooner against a slower picture while it fills, put to them in one sentence |
+| D678 | **...and turned OFF again the same hour, over refusals and a lost device** | fault | 1,952 cells refused and 883 ms a dispatch, from the camera the engine opens on |
+| D678 | **The walk is bounded in TURNS, not only in depth** | fault | A case that neither pushes nor finishes is a driver reset, not a wrong number |
+| D678 | **`WS_FIELD_STACK` is 128, tracking the CPU mirror** | fault | 96 was sized against a grid of points; a camera reaches deeper |
+| D678 | **A dispatch is capped at `kSafeBoxes` = 32 whatever `--refine-batch` says** | decision | 883 ms for 128 nodes on the enclosed camera; batch size does not affect throughput anyway |
+| D678 | **Every figure in D677 came from ONE camera, and the other one crashed** | honesty | D632's sentence about completeness figures applies to crashes too |
 | D678 | **D677's "give the card the descent" is refuted** | fault | 100% of the ladder's cells come down to a single voxel; a settle saves nothing |
 | D678 | **A 10x inferred from two throughput figures is not a measurement** | honesty | The gate already sampled both ways and could have been asked directly |
 | D678 | **`voxels_settled` and `voxels_asked` OVERLAP and only the second answers this** | fault | A single voxel that settles empty is counted in both, since R11a |
 | D678 | **The cost is the field walk, ~2,000 nodes an evaluation, and BOTH arms pay it** | decision | 923 of 18,250 nodes carry no box (D675); that is the next stage |
+| D678 | **Shrinking `FieldFrame` was measured and refused before it was built** | honesty | Nine dead words added: 53.6 ms a dispatch against 54.7. The scratch stack is not what it waits on |
+| D678 | **The union hierarchy must not be re-opened** | honesty | 824 wide unions, zero hierarchies — and D637 already built one and measured 67.2 s against 53.6 |
+
+### Two more things that were going to be built, and were measured first instead
+
+**The frame on the card.** `FieldFrame` is fifteen words, only six of them carry the walk, and a
+96-frame stack is 5.8 KB of scratch per invocation — so splitting the cold half (`fold`, `lean`,
+`axes`, `neighbours`, `scale`, which belong to `repeat`, `scatter`, `revolve`, `curvature` and
+`facing` alone) onto a small side stack should halve the traffic and roughly double the throughput.
+Good argument. **The control arm is one line: nine dead words added to the struct, making a frame 24
+words instead of 15.** Estate, outdoor camera, 40 seconds, same batch: **53.6 ms a dispatch against
+54.7 ms.** No change at all. The scratch stack is not what a dispatch is waiting on, and that work
+would have bought nothing. The note now lives in `field_types.glsl`, where the next person to have
+the idea will read it before having it.
+
+**The union hierarchy.** The estate reports **824 wide unions and ZERO hierarchies over them**, which
+reads exactly like a missing optimisation sitting in plain sight next to a 4,158-visit walk. It is
+not missing; it is switched off, by `Field::kAccelerateFromDefault = kAccelerateNever`, and **D637
+built it, measured it and refused it**: 67.2 / 65.0 s with against 53.6 / 53.9 s without on the
+facility at metre 16, same content hash either way. The reason is a fact about buildings rather than
+about trees, and it is written above `accelerate_from`: *the parts of a building are LAYERS and not
+regions*, so every part's box spans the block, a point in a wall is genuinely inside a dozen of them,
+and a hierarchy that cannot reject is a traversal paid on top of the scan it replaced.
+
+**Both of those are the same lesson as the descent above, three times in one session: the cheap
+control arm came first and each time it said do not build the thing.** What is left after all three
+is the walk itself, and 923 boxless nodes is the only lead with a number on it.
