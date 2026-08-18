@@ -100,6 +100,7 @@ include "facility/surface.clip"
 # inside the block's own footprint, x +/-16.875, z -16.5 .. 8.55 -- so the building's weathering
 # cannot reach out here, and these fragments' own coats cannot reach back.
 include "facility/campanile.clip"
+include "facility/grotto.clip"
 
 # --- assembly ------------------------------------------------------------------------------------
 
@@ -122,9 +123,10 @@ let built = union { shell inside }
 # rooms themselves — each expose one shape named `<part>_void`, and they are all taken away
 # here, in one place, where the order is visible.
 #
-# TWENTY-EIGHT PARTS AND TWELVE VOIDS, AND EVERY ONE OF EACH IS ACCOUNTED FOR. Fourteen parts in
-# `shell`, eleven in `inside`, part_fittings and part_terrace joined below, and one in `grounds`:
-# twenty-eight, which is every `part_` bound in clips/facility/, each named exactly once. Twelve `void_` are bound and
+# TWENTY-NINE PARTS AND TWELVE VOIDS, AND EVERY ONE OF EACH IS ACCOUNTED FOR. Fourteen parts in
+# `shell`, eleven in `inside`, part_fittings and part_terrace joined below, and two in `grounds`:
+# twenty-nine, which is every `part_` bound in clips/facility/, each named exactly once. The
+# grounds parts expose no void: grotto.clip says so in as many words, and campanile.clip likewise. Twelve `void_` are bound and
 # twelve are subtracted here, so there is no void without a part and no part whose void is left
 # out. The three parts that expose no void say so in their own files, in as many words:
 # surface.clip ("there is no void_surface"), terrace.clip ("it removes nothing from anybody") and
@@ -295,7 +297,7 @@ let hollowed = difference {
 # not in `inside`: they stand outside the block, no void in this manifest is meant to reach them,
 # and passing them through the door-and-window difference could only ever remove something by
 # accident. Each brings its own ground and its own weathering and takes nothing away from anybody.
-let grounds = union { part_campanile }
+let grounds = union { part_campanile part_grotto }
 
 let furnished = union { hollowed  difference { part_fittings void_doors void_windows }  part_terrace  grounds }
 
