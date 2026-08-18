@@ -292,8 +292,11 @@ float ws_walk_fold(uint at, uint op, float acc, float v) {
     {                                                                   \
         const uint ws_child = (child_index);                            \
         if (ws_child >= node_count || top >= WS_FIELD_STACK) {          \
-            /* 128u marks a refusal that is DEPTH, not a walk that would not end. */ \
-            ws_field_refused_op = 128u;                                 \
+            /* 128u out of STACK, 130u a child index past the end of the field. Two very */ \
+            /* different faults: the first wants a bigger stack and the second is a bad */ \
+            /* index, and one code for both sent an hour after the wrong one. */         \
+            ws_field_refused_op = (top >= WS_FIELD_STACK) ? 128u : 130u;  \
+            ws_field_refused = 1u;                                      \
             return WS_FIELD_REFUSED;                                    \
         }                                                               \
         stack[top].node = ws_child;                                     \
@@ -324,6 +327,7 @@ float field_eval(uint root, vec3 p) {
         // specific and entirely false culprit, and two of the three paths did exactly that for an
         // hour before this comment existed. Trap 7, in the one place that cannot assert.
         ws_field_refused_op = 129u;
+        ws_field_refused = 1u;
         return WS_FIELD_REFUSED;
     }
 
@@ -360,6 +364,7 @@ float field_eval(uint root, vec3 p) {
             // once already, in the hour this line was written.
             ws_field_refused_op =
                 field_nodes.items[stack[top >= 2u ? top - 2u : top - 1u].node].op;
+            ws_field_refused = 1u;
             return WS_FIELD_REFUSED;
         }
         ++ws_field_visits;   // the instrument; see field_types.glsl
@@ -851,6 +856,7 @@ float field_eval(uint root, vec3 p) {
             default:
                 // An op this file has not learned. Never a number — see WS_FIELD_REFUSED.
                 ws_field_refused_op = op;
+                ws_field_refused = 1u;
                 return WS_FIELD_REFUSED;
         }
     }

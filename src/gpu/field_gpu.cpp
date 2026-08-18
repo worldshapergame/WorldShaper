@@ -427,9 +427,9 @@ bool FieldSampler::ready() {
             // WHICH op the walk was standing on, or 128 for running out of stack. Kept as the
             // FIRST one seen rather than a histogram: a refusal is a fault to be fixed, not a
             // statistic, and one op number is what turns a hunt into a line number.
-            if (refused_op_ == 0xFFFFFFFFu) refused_op_ = (word >> 24u) & 0x7Fu;
+            if (refused_op_ == 0xFFFFFFFFu) refused_op_ = (word >> 8u) & 0xFFu;
         }
-        inside_[i] = static_cast<u8>((word & 0x7FFFFFFFu) != 0);
+        inside_[i] = static_cast<u8>((word & 1u) != 0);
         if (count_visits_) visits_ += word;
     }
 

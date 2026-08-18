@@ -3497,7 +3497,9 @@ bool Application::collect_refinement_from_card() {
                     (field_sampler_.refused_op() == 128u)
                         ? std::string("the STACK — depth, and it wants a bigger WS_FIELD_STACK")
                     : (field_sampler_.refused_op() == 129u)
-                        ? std::string("a node index PAST THE END of the field")
+                        ? std::string("a ROOT index past the end of the field")
+                    : (field_sampler_.refused_op() == 130u)
+                        ? std::string("a CHILD index past the end of the field")
                     : (field_sampler_.refused_op() < static_cast<u32>(forge::Op::Power) + 1u)
                         ? std::string("op `") +
                               forge::op_name(

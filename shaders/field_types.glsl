@@ -258,10 +258,17 @@ uint ws_field_visits;
 // fault extension, and the game gone mid-session with whatever the player was building. It cost a
 // device on the enclosed camera before this constant existed, on the very first dispatch.
 //
-// 65,536 is thirty-two times the ~2,000 nodes an evaluation of the estate actually walks, so no
-// honest walk can reach it, and a walk that does reports a REFUSAL — which is counted, surfaced and
-// gated — rather than taking the machine down. D678.
-#define WS_FIELD_TURNS 65536u
+// **The number is 1,048,576 and it was 65,536, which was sized against the wrong thing.** 65,536 is
+// eight times the 8,231 nodes a cell of the ENCLOSED camera walks, which sounds ample and refused
+// 1,952 cells of one batch. The mistake is that this counts turns per EVALUATION and an evaluation
+// is not bounded by the field's node count: `occlusion` asks its child fourteen times, `curvature`
+// seven, `repeat` eight, and nested those multiply — so one honest evaluation of a weathering rule
+// can walk far more nodes than the field has. Sized now at 57x the whole field rather than at a
+// multiple of a mean, which is the only bound that means anything when re-entrant ops compose.
+//
+// A walk that reaches even this reports a REFUSAL — counted, surfaced and gated — rather than taking
+// the machine down. D678, D681.
+#define WS_FIELD_TURNS 1048576u
 
 // Whether this invocation hit something it could not answer for, and WHICH OP it was standing on
 // when it happened. Nought is the only acceptable number and the sampler says so out loud.

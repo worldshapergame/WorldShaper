@@ -96,7 +96,17 @@ uint ws_mask_or_visits(uint mask) {
     // turns. It rides on the mask because a refusal has to reach the host somehow, and the host
     // counts it and says so; a cell that quietly took the "air" branch after a refusal would be a
     // hole in a wall that nothing anywhere reports. Trap 7, on the one path that cannot assert.
-    return mask | (ws_field_refused != 0u ? 0x80000000u : 0u);
+    // Bit 0 is the mask, bit 31 says refused, and bits 8..15 say WHY.
+    //
+    // **The `why` was missing entirely until now, and the host was decoding it anyway.** It read
+    // bits 24..30 of a word that only ever had bit 31 set, so it got nought every time -- and
+    // nought is `constant`: a real op, a leaf, one that provably cannot loop. Every refusal in this
+    // shader has therefore been reporting an impossible culprit, confidently, and two rounds of
+    // work went looking for a loop in the one op that cannot have one.
+    //
+    // Eight bits and not seven, because the codes run PAST the op numbers -- 128 out of stack, 129
+    // a root that is not there, 130 a child index past the end -- and 128 does not fit in seven.
+    return mask | (ws_field_refused != 0u ? (0x80000000u | (ws_field_refused_op << 8u)) : 0u);
 }
 
 // One of the six central-difference offsets, as `sub` counts 0..5: axis `sub >> 1`, plus first.
@@ -149,6 +159,7 @@ bool rule_could_apply(uint rule, vec3 p) {
 void main() {
     ws_field_visits = 0u;
     ws_field_refused = 0u;
+    ws_field_refused_op = 0u;
     const uint gid = gl_GlobalInvocationID.x;
     const uint box = gid / WS_NODE_CELLS;
     if (box >= field_push.box_count) return;
@@ -203,7 +214,18 @@ void main() {
 
         // ---- THE ONE CALL. See the header before adding a second ------------------------------
         const float v = field_eval(ask_node, ask_at);
-        if (v >= WS_FIELD_REFUSED) ws_field_refused = 1u;
+        // A REFUSAL IS NOT A VALUE, and this line used to say it was.
+        //
+        // It read `v >= WS_FIELD_REFUSED`, which asks "is the answer enormous" and calls that a
+        // refusal. A field can answer enormously without anything having gone wrong -- an unknown
+        // leaf answers 1e30 exactly as `Field::eval` does, `displace` and `multiply` scale whatever
+        // they are given, and any of those crosses 3e30 honestly. Worse, a refusal invented that way
+        // carries no op with it, so `ws_field_refused_op` stays at its initial NOUGHT, and nought is
+        // `constant` -- a real op, a leaf, one that provably cannot loop. So the instrument reported
+        // 1,952 cells refused on an op that cannot refuse, and it was believed for an hour.
+        //
+        // `field_eval` now raises the flag itself at each of its four refusal points, so a refusal
+        // is a fact the walk states rather than a number this line guesses at.
 
         // ---- what it meant --------------------------------------------------------------------
         if (phase == PH_BOUNDS) {

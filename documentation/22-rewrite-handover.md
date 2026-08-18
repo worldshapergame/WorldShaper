@@ -634,33 +634,46 @@ was one flag away the whole time, and `refine_resolution_census` now says so in 
 
 ---
 
-#### START HERE — 2026-08-18 (later still): R12 answers right, and it does not answer everywhere
+#### START HERE — 2026-08-18: R12 is CORRECT, and it is the wrong tool where the player stands
 
-**THE FIRST THING TO DO IS THE BUG, and it has an exact repro.** With `--gpu-sample` on:
+**D681 is the entry. The refusals are gone and there was never a bug in the walk.**
 
-```powershell
-WorldShaper --clip-file clipsacility.clip --gpu-sample --cam "0,0,0,-90,0" --refine-batch 32
-```
+`WS_FIELD_TURNS` was 65,536, sized as "thirty-two times the ~2,000 nodes an evaluation walks". Both
+halves were wrong: a walk is NOT bounded by the field's node count — `occlusion` asks its child
+fourteen times, `curvature` seven, `repeat` eight, and nested they multiply — and ~2,000 was the
+OUTDOOR camera, where the enclosed one walks **8,231 nodes a cell**. Raised, refusals went
+**1,952 → 0** with the gate still passing. It is 1,048,576 now, which is 57x the whole field rather
+than a multiple of a mean.
 
-**1,952 cells of the first batch come back REFUSED** — the walk gave up on them, they are written
-as air, and air in a wall is a hole. It is not depth: `WS_FIELD_STACK` went 96 → 128 (which is
-right anyway, it tracks `Field::kMirrorStack`) and that took it from thousands to two thousand, and
-192 changed nothing more. The op stamp says `constant`, which is a LEAF and provably cannot loop,
-so either the stamp reads the wrong frame or a refusal path still does not write it — those are the
-two places to look, and both are in `field_eval`.
+**The instrument that sent two rounds of work at a phantom is worth reading about in D681.** The op
+stamp was never packed into the output word at all, so the host decoded nought from every refusal —
+and nought is `constant`, a leaf that provably cannot loop. When it was packed, the codes (128, 129,
+130) did not fit in the seven bits left under the refusal flag, and 128 masks to 0, which is
+`constant` again. Two independent routes to one false name.
 
-**And it lost the DEVICE before `WS_FIELD_TURNS` existed**, on that same camera, on the first
-dispatch, at the default batch. A walk that does not terminate is a dispatch that does not
-complete, which is a driver reset about two seconds later. The turn bound is what turned that into
-a log line; do not remove it, and do not raise it without a reason.
+**And the verdict, measured on both cameras at last:**
 
-**`kSafeBoxes` is 32 for a separate reason**: a dispatch of 128 nodes is **883 ms** from the
-enclosed camera against **55 ms** from the outdoor one. Batch size does not affect throughput (64
-and 256 both give 0.457 ms a node), so the cap is free.
+| matched 45 s, `--no-clip-cache` | nodes built | per node |
+|---|---|---|
+| enclosed, `--gpu-sample` | **5,280** | 8.2 ms of card |
+| enclosed, `--cpu-sample` | **14,464** | 3.0 ms of five threads |
+| outdoor, `--gpu-sample` | 87,680 | 0.47 ms of card |
+| outdoor, `--cpu-sample` | 66,432 | 0.65 ms of five threads |
 
-**The method note, and it is the expensive one.** Every figure in D677 and in the first half of D678
-was taken from the OUTDOOR camera. The engine's own default is the enclosed one — §0 says so — and
-it is the one with the device-losing bug in it. **Run the enclosed camera first.**
+**2.7x SLOWER indoors, 1.30x faster outdoors, so it stays off** — and now for a measured reason
+rather than a hazard. A cell of the enclosed camera walks twice the nodes and costs twenty-three
+times, so the gap is DIVERGENCE and not work; `--no-gpu-rescue` was taken as a control first and is
+only 11%.
+
+**THE NEXT LEVER, and it speeds the arm that actually ships.** Both arms walk the same tree and the
+walk is the bill: 8,231 nodes a cell over an 18,250-node field. D675 counted what most of it is —
+**8 of the estate's 628 paint rules are asked at EVERY solid voxel**, because the planner can bound
+them for neither a box nor a region. Eight unbounded rules at ~690 nodes a walk is about 5,500 of
+those 8,231. **And it is already an open fault from the other side: D672 item 2**, `surface.clip`
+weathering buildings thirty metres away because its rules are keyed on fields rather than places.
+The same eight rules, the same missing envelope, costing paint accuracy one way and load time the
+other. Fix them once, fix both — and read D672 item 2 first, because it warns that a grep over those
+files has already been wrong twice.
 
 ---
 

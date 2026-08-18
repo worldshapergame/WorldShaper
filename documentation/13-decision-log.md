@@ -9933,3 +9933,86 @@ control arm on.**
 | D680 | **Counting NODES across levels compares a grain of sand with a building** | fault | An L8 node is 32,768 times an L3 node by volume; the histogram proves nothing |
 | D680 | **A measurement that confirms the user's report needs its control arm MORE, not less** | honesty | Three of four bad instruments were caught; the one that agreed with the report was not |
 | D680 | **What the player cannot see is real and is R2b: the world never gives detail back** | decision | It accumulates across cameras and launches and nothing ever coarsens it |
+
+## D681 — the card answers everywhere now, and it is 2.7x SLOWER where the player stands
+
+Three things: the refusals were never a bug in the evaluator, the instrument that said they were had
+two faults stacked on each other, and with both fixed the card is measurably the wrong choice on the
+camera that matters.
+
+### The refusals were the turn cap, and the cap was sized against the wrong camera
+
+D678 bounded the walk at `WS_FIELD_TURNS` = 65,536 and called that "thirty-two times the ~2,000 nodes
+an evaluation walks, so no honest walk can reach it". Both halves of that are wrong.
+
+**A walk is not bounded by the field's node count.** `occlusion` asks its child fourteen times,
+`curvature` seven, `repeat` eight, and nested those MULTIPLY — so one honest evaluation of a
+weathering rule can walk far more nodes than the field contains. And the ~2,000 figure was the
+OUTDOOR camera; the enclosed one walks **8,231 nodes a cell**, and a cell near a surface pays the
+thin-feature rescue on top, which is eight more full walks.
+
+Raised to 4,194,304 as a test: **refusals 1,952 → 0**, and the gate still passes — 48 nodes, 24,576
+cells, 0 differing in matter, material or mask. Settled at **1,048,576**, which is 57x the whole
+field rather than a multiple of a mean, because a multiple of a mean is exactly what was wrong.
+
+**So there was never a walk that would not end.** Two rounds of work went looking for one.
+
+### The instrument had two faults, and the second hid the first
+
+**The op stamp was never packed into the output word at all.** The shader raised the refusal bit and
+nothing else; the host read bits 24..30 of a word that only ever had bit 31 set, got nought every
+time, and nought is `constant` — a real op, a leaf, one that provably cannot loop. So every refusal
+reported an impossible culprit, and it was believed twice.
+
+**And the codes did not fit even once they were written.** 128 for out-of-stack, 129 for a bad root,
+130 for a bad child — packed under the refusal flag into seven bits. 128 masks to 0, which is
+`constant` again. Two independent ways to produce the same false name for the same fault.
+
+It is eight bits at 8..15 now, the mask is bit 0, and the four refusal paths each stamp their own
+code. With that fixed the stamp said `union` — which was ALSO not a culprit, because it was reporting
+the frame under the top of a walk that had simply run long. **An instrument that names a suspect is
+more dangerous than one that says nothing**, and this one named three in a row.
+
+### And with all of it correct, the card loses
+
+**Matched 45-second arms, `--no-clip-cache`, the ENCLOSED camera — the one the game opens on:**
+
+| arm | nodes built | per node |
+|---|---|---|
+| `--gpu-sample` | **5,280** | 8.2 ms of card |
+| `--cpu-sample` | **14,464** | 3.0 ms of five threads |
+
+**2.7x slower.** Outdoors it is 1.30x faster (D677). A cell of the enclosed camera walks 8,231 nodes
+against the outdoor camera's 4,158 — twice — but costs **21.4 µs against 0.92**, twenty-three times.
+That gap is not work, it is divergence: inside a building neighbouring cells take wildly different
+paths through the walk, and a warp runs the union of all of them.
+
+`--no-gpu-rescue` was taken as a control before blaming the rescue: **350.8 ms against 312.9 ms a
+dispatch, 11%.** Not the lever either.
+
+**So the card sampler stays OFF, and now for a measured reason rather than a hazard.** The user took
+the frame-rate trade and that trade was real; what they were not shown, because it had not been
+measured yet, is that on the camera they actually spawn in the card is not faster at all.
+
+### What the load actually costs, and it is not a GPU question
+
+Both arms walk the same tree, and the walk is the bill: **8,231 nodes a cell** on an 18,250-node
+field. D675 already counted what most of that is — **8 of the estate's 628 paint rules are asked at
+EVERY solid voxel**, because the planner can bound them for neither a box nor a region. Eight
+unbounded rules at roughly 690 nodes a walk is about five and a half thousand of those 8,231.
+
+**That is the next lever and it makes the CPU arm faster, which is the arm that ships.** It is also
+already an open fault from the other side: D672 item 2 — `surface.clip` weathers buildings thirty
+metres away because its rules are keyed on FIELDS rather than on places. The same eight rules, the
+same missing envelope, costing paint accuracy in one direction and load time in the other. Fixing
+them once fixes both.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D681 | **There was never a non-terminating walk; the turn cap was too low** | fault | 65,536 → 4,194,304 took refusals 1,952 → 0 with the gate still passing |
+| D681 | **A turn cap cannot be a multiple of the field size** | fault | `occlusion` x14, `curvature` x7, `repeat` x8, and nested they multiply |
+| D681 | **The refusal op was never packed into the word, and the codes did not fit anyway** | fault | Two independent routes to reporting `constant`, a leaf that cannot loop |
+| D681 | **An instrument that names a suspect is worse than one that says nothing** | honesty | It named `constant` twice and `union` once, and all three were innocent |
+| D681 | **The card is 2.7x SLOWER on the enclosed camera and 1.30x faster outdoors** | decision | 5,280 nodes against 14,464 in a matched 45 s; it stays off |
+| D681 | **The gap is divergence, not work** | decision | 2x the visits for 23x the cost; `--no-gpu-rescue` is only 11% |
+| D681 | **The next lever is the 8 unbounded paint rules, and it speeds the CPU arm** | decision | ~5,500 of 8,231 visits a cell, and it is D672's open paint fault seen from the other end |
