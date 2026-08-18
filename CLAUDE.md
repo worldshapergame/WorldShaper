@@ -29,7 +29,7 @@ Three things that make this a rule rather than a habit:
   bin\WorldShaper.exe for writing`, which reads like a code fault and is not one.
 - **`--ff-only`.** A branch that has diverged from `main` is something to find out about
   deliberately, not by watching git invent a merge commit.
-- **Run `build.bat` from PowerShell, as `cmd /c "<absolute path>uild.bat"`.** Invoking it from
+- **Run `build.bat` from PowerShell, and give it the FULL path** -- `cmd /c "<repo>\build.bat"`, not a relative name and not a `cd` in front of it. Invoking it from
   the Bash tool as `cmd.exe /c "cd /d <path> && build.bat" | tail` **hangs immediately and for
   ever** — no compiler ever starts, the output is empty, and there is nothing to distinguish it from
   a slow build. One sat for an hour. Two things make it worse than a wasted hour: a hung build is
