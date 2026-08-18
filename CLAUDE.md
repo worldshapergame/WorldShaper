@@ -82,6 +82,28 @@ Anything it could not make work comes back said plainly, which is worth more tha
 Whoever dispatched them still reads every diff, integrates them one at a time, and builds and tests
 after each — the merge is not delegated, and neither is the report.
 
+### And "produce code" means WRITE A FEATURE. It does not mean verify, fix or measure.
+
+**Sharpened by the user on 2026-08-18, and it is a narrowing of the rule above, not a restatement
+of it.** An agent is dispatched to build a thing that was not there. It is **not** dispatched to:
+
+- **verify, review, refute or audit** somebody else's change;
+- **fix a bug** — find one, reproduce one, or work out what broke;
+- **measure** anything, take a baseline, or build an instrument.
+
+Those are the dispatcher's own work, and they are the work that requires having read the thing. Do
+them inline. **Unless the user asks for one of them by name, in which case do exactly the one they
+asked for.**
+
+The reason is D674 and it cost a full evening. Three agents were sent to fix a rule that was not
+broken and a fourth to refute what they built; the arithmetic that settled it — `kRefineSplitAt` is
+eight pixels at 0.002 of their distance, a node is eight voxels a side, so metre 32 is correct out
+to 31.25 m — is four lines and needed no agent at all. Every one of the three had to build its own
+instrument before it could start, which is three measurements of the same thing and three chances
+to measure it wrong. **An agent sent to check something reads the same source the dispatcher would
+have read, and comes back with a conclusion nobody can trace** — which is the original ban's own
+reason, wearing a diff as a disguise.
+
 Still true, and it is what makes parallel work safe here: give each agent an isolated worktree and
 files nobody else is in. Two agents in one shader is a lost afternoon.
 
