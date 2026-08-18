@@ -3523,13 +3523,41 @@ void Application::deliver_refinement(RefineDelivery delivered) {
         coarsest = std::min(coarsest, job.settings.voxels_per_metre);
         finest_seen = std::max(finest_seen, job.settings.voxels_per_metre);
     }
+    // AND HOW FAR AWAY THEY WERE, which this line did not say and which is the whole meaning of it.
+    //
+    // D674. `metre 32-32` is the correct answer for a batch of near nodes and a serious fault for a
+    // batch of far ones, and for the life of this line the two were the same fifteen characters. A
+    // session read forty batches of `metre 32-32` from a camera sixty metres out, concluded the
+    // ladder was ignoring its own pixel rule, and sent three agents to fix a rule that was working:
+    // the nodes were 14 to 31 metres away, which is exactly where `kRefineSplitAt` asks for metre
+    // 32. The resolution alone cannot distinguish "correct" from "broken" and never could.
+    //
+    // Distance is what closes it, because the rule is a ratio of size to distance and this line
+    // already had the size. Measured from the camera at the moment the batch is delivered rather
+    // than when it was picked -- a batch is one or two frames in flight, and the pick's own camera
+    // is not kept.
+    f64 nearest = 1e30;
+    f64 furthest = 0.0;
+    {
+        const f64 cx = camera_.metres_x();
+        const f64 cy = camera_.metres_y();
+        const f64 cz = camera_.metres_z();
+        for (const RefineJob& job : finished) {
+            const f64 dx = (job.settings.low.x + job.settings.high.x) * 0.5 - cx;
+            const f64 dy = (job.settings.low.y + job.settings.high.y) * 0.5 - cy;
+            const f64 dz = (job.settings.low.z + job.settings.high.z) * 0.5 - cz;
+            const f64 away = std::sqrt(dx * dx + dy * dy + dz * dz);
+            nearest = std::min(nearest, away);
+            furthest = std::max(furthest, away);
+        }
+    }
     WS_LOG_INFO("clip",
-                "batch: {} nodes at metre {}-{}, sampled {:.0f} ms ({} voxels asked), pasted "
-                "{:.0f} ms (paste {:.0f} + replay {:.0f}), {} bricks, {} emptied ({} chunks), "
-                "{} nodes left",
-                finished.size(), coarsest, finest_seen, refine_sample_ms_, refine_asked_,
-                ns_to_ms(now_ns() - began), paste_ms, replay_ms, bricks, bricks_emptied,
-                chunks_emptied, left);
+                "batch: {} nodes at metre {}-{}, {:.1f}-{:.1f} m out, sampled {:.0f} ms ({} voxels "
+                "asked), pasted {:.0f} ms (paste {:.0f} + replay {:.0f}), {} bricks, {} emptied "
+                "({} chunks), {} nodes left",
+                finished.size(), coarsest, finest_seen, finished.empty() ? 0.0 : nearest, furthest,
+                refine_sample_ms_, refine_asked_, ns_to_ms(now_ns() - began), paste_ms, replay_ms,
+                bricks, bricks_emptied, chunks_emptied, left);
     // The running total, because the count that matters is not how many one batch emptied but how
     // many are STANDING. One is a rate and the other is the number of lumps.
     refine_bricks_emptied_ += bricks_emptied;

@@ -9282,3 +9282,78 @@ naming two is how a thing stays switched off for weeks with everybody believing 
 | D673 | **A world is kept when the player leaves it, not only at a fixed point** | decision | Two callers, both fixed points, so an ordinary session kept nothing at all |
 | D673 | **The cache key names the arm that built the world** | fault | Otherwise the control arm reads the treatment arm's world and the two agree perfectly |
 | D673 | **The superlinear coarse paste is recorded and unexplained** | honesty | Off by default so no player meets it, but it is the control arm for every older figure |
+
+## D674 — the ladder was doing its job, and a log line with no distance in it cost three agents
+
+**The diagnosis in this entry's own first draft was wrong, and that is what the entry is for.**
+
+Asked to make loading a hundred times faster and to *"actually use the variable detail based on
+pixels taken on screen"*, a session read the ladder's batch line across three cameras:
+
+| camera | what it sees | what the line said |
+|---|---|---|
+| `0,0,0,-90,0` enclosed | everything close | every batch `metre 32-32` |
+| `0,60,-900,90,-4` far | everything tiny | every batch `metre 1-1` |
+| `0,10,-60,90,-6` outdoor | near *and* far in one view | **39 of 40 batches `metre 32-32`** |
+
+That third row was read as *"a building fifty metres away is being sampled at authored detail"*, the
+`!refine_would_improve` disjunct in the split loop was named as the cause, and three agents were sent
+to fix it in isolated worktrees. **All three independently refused the premise**, each having built
+its own distance instrument first, and each was right.
+
+### The arithmetic, which nobody had to run an agent to get
+
+`kRefineSplitAt` is `8.0 * 0.002` — eight pixels, each 0.002 of its own distance. A node is eight
+voxels a side at every level, so a level-4 node is 0.5 m across and splits while `0.5 / away >
+0.016`, which is **`away < 31.25 m`**. So metre 32 is correct out to 31.25 m, metre 16 to 62.5, metre
+8 to 125. The agents measured metre 32 on nodes **14.0 to 31.2 m away** and metre 16 on **31.3 to
+36.9**. The rule was working to the decimal.
+
+The outdoor camera sits ten metres up and sixty metres out, over ground that begins directly beneath
+it. Its forty batches of `metre 32-32` were near-field nodes — the lawn in front of the camera, not
+the buildings beyond it.
+
+### What actually went wrong, and it is one line
+
+**`batch: N nodes at metre A-B` carried no distance.** `metre 32-32` is the right answer for a batch
+of near nodes and a serious fault for a batch of far ones, and for the life of that line the two
+were the same fifteen characters. A resolution alone cannot separate "correct" from "broken", and
+this line was the only instrument pointed at the question.
+
+The line now says how far out the batch was. It is a ratio of size to distance and the line already
+had the size.
+
+### The refutation that came back anyway, and it is worth keeping
+
+One approach reported `works = true`. It was refuted on all the things that matter, and two of its
+findings stand on their own:
+
+- **It shattered the enclosed room into a lattice of floating blocks with sky between them** — §5's
+  own stated failure mode for R11d, arrived at from the other direction. The mechanism is the
+  general lesson: **a coarse node covers a BIGGER box, and the paste scale inflates it to fill.** So
+  coverage and resolution are one quantity, and capping the resolution without changing the box buys
+  holes. 100,104 live nodes against the control's 21,615, and 38% slower.
+- **`clips/sampler.clip` cannot gate this class of work at all.** Its every node is inside 8 m, where
+  the footprint rung is 32 regardless, so the gate passes byte-identically whatever the footprint
+  rule does. It gated `--refine-all` correctly and this vacuously, and nothing said which.
+- It also left `--refine-all` with no fixed point — the region list grew without bound, 3.7 M nodes
+  and rising. Not shipped; recorded because the next attempt will meet it.
+
+### So where the load time actually is
+
+Not in over-sampling. A batch is ~65,536 voxels in ~500 ms, which is **7.6 µs a voxel** against 139
+paint rules and a 3,744-node shape field — the figure R11a already recorded. The pixel rule is
+already minimising *how many* voxels are asked for; what is left is the cost of asking one. R11a's
+other finding is the lever short of R12: **85% of what an empty node costs is `sample()` re-deriving
+every paint rule's slack and box on every call** (0.213 ms on 139 rules against 0.012 ms on four).
+**A hundredfold is R12, the field on the card, and it has not started.** Saying otherwise to the
+user would be promising a multiple, which §5 already warns against by name.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D674 | **The pixel-driven resolution was already correct; the diagnosis against it was not** | fault | metre 32 within 31.25 m is what `kRefineSplitAt` asks for, and it was measured at 31.2 |
+| D674 | **A resolution reported without a distance cannot be read** | decision | `metre 32-32` is right for near nodes and wrong for far ones, spelled identically |
+| D674 | **Three agents refusing a premise is the instrument working** | honesty | Each built its own distance census first; two set `works=false` rather than claim a gate |
+| D674 | **Coverage and resolution are one quantity, because the paste inflates to fill the box** | fault | Capping resolution without changing the box shattered the room into floating blocks |
+| D674 | **`clips/sampler.clip` gates `--refine-all` and cannot gate the footprint rule** | honesty | Every node of it is inside 8 m, so the rung is 32 whatever the rule does |
+| D674 | **A hundredfold on the load is R12 and nothing short of it** | honesty | 7.6 µs a voxel is field evaluation; the pixel rule already minimises the voxel count |

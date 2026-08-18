@@ -639,6 +639,27 @@ sitting in the body of the very section whose heading was wrong.
    into a surface never approached, where the proximity radius must hold *sampling* rather than
    *residency*. The near case is clean (D635).
 
+**And read D674 before touching the ladder's resolution rule, because a session already got this
+wrong.** The pixel-driven resolution IS working — metre 32 within 31.25 m, metre 16 to 62.5, metre 8
+to 125, which is `kRefineSplitAt` (eight pixels at 0.002 of their own distance) applied to a node
+eight voxels a side. It was read as broken off a batch line that reported a resolution with no
+distance beside it, and three agents in three worktrees each built a distance census and each refused
+the premise. The line carries distance now. Three things that came out of it and outlive it:
+
+- **Coverage and resolution are ONE quantity.** A coarse node covers a bigger box and the paste scale
+  inflates it to fill. Cap the resolution without changing the box and the room comes apart into
+  floating blocks with sky between them — measured, 100,104 live nodes against 21,615, and 38%
+  slower. That is §5's own stated R11d failure mode reached from the other side.
+- **`clips/sampler.clip` cannot gate footprint work.** Every node of it is inside 8 m, where the rung
+  is 32 whatever the rule says, so it returns `a1f8bc6c656343b7` byte-identically however wrong the
+  change is. It gates `--refine-all` properly and this vacuously, and nothing in the output says
+  which. **A clip with geometry past 60 m is the missing gate.**
+- **The load is not over-sampling and a hundredfold is not hiding in the ladder.** A batch is ~65,536
+  voxels in ~500 ms — **7.6 µs a voxel**, which is field evaluation against 139 paint rules. The
+  pixel rule already minimises how many voxels are asked for. R11a's finding is the only lever short
+  of R12: **85% of an empty node's cost is `sample()` re-deriving every rule's slack and box on
+  every call.** R12 is the hundredfold and it has not started.
+
 #### START HERE — 2026-08-18: the facility is an estate now, and three buildings are still outside it
 
 `clips/facility.clip` was one neoclassical block. It is **four buildings plus the block** as of
