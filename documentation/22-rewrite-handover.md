@@ -602,6 +602,37 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — the whole world bakes, and `--refine-all` is the word that was missing
+
+**The user's complaint all along was that entering a world does not show all of it, and every bake
+before this one deserved it**: `--bake-world` alone saves what the ladder REACHED, which is one
+camera's walk. Adding `--refine-all` makes the ladder refine every node regardless of visibility,
+and then the file is the world.
+
+| | |
+|---|---|
+| nodes | **647,797 of 647,797** — all of them |
+| solid voxels | 128,129,202 |
+| file | **74 MB** |
+| content | `8784cc7c79f1a88d` |
+| opens in | **446 ms**, complete, from viewpoints the bake never used |
+
+Verified the way the earlier one was not: opened from the SHELF, from three cameras including one
+above the roof and one sixty metres outside — the dome with its ribs, the balustrades, the corner
+urns, the portico and the steps, all present at frame 60. D685 is the fault this avoids, and it is
+avoided by shooting cameras the bake did not come from.
+
+**So the bake command in `tools/bake_world.ps1` and in `15-releases.md` needs `--refine-all`.**
+Without it a release ships a world complete only where the baking camera stood, which is exactly the
+floor-with-no-walls the user photographed.
+
+**And 74 MB is the number that decides whether R11f gets wired.** It is shippable as it stands. If a
+bigger estate makes it not, R11f is in and gated and cuts the voxel payload 148x — but read its two
+open data-loss cases first, because that format must be handed the op log's edited boxes or a brick
+somebody carved and refilled comes back as the clip's.
+
+---
+
 #### START HERE — one cell walks a million nodes, and it is the lever
 
 **The single most useful measurement of the whole R12 effort, and it came out of a feature that does
