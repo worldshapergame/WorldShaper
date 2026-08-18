@@ -55,6 +55,16 @@ jobs:
         shell: pwsh
         run: choco install ninja -y --no-progress
 
+      # BEFORE the build, because it needs neither a compiler nor a card and the build is ten
+      # minutes. The four faults it tests for all PARSE -- a bare `paint` covering the whole world,
+      # a rule keyed on a shape the translate left behind, a twin standing before its own source,
+      # a whole-clip statement the manifest owns -- so nothing downstream of here can catch them.
+      # Two of the seven estate conversions shipped a bare `paint limestone` that would have
+      # repainted four finished buildings, through a clean parse and an unchanged material census.
+      - name: The estate fragments are fragments
+        shell: pwsh
+        run: python tools/fragcheck.py
+
       - name: Build
         shell: pwsh
         run: |
