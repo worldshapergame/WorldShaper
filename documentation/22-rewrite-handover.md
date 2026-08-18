@@ -602,6 +602,48 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — one cell walks a million nodes, and it is the lever
+
+**The single most useful measurement of the whole R12 effort, and it came out of a feature that does
+not ship.** Measured one cell at a time on the estate at 4 voxels a metre:
+
+| one cell | nodes walked | on its own |
+|---|---|---|
+| (-6, -4, -6), under the podium | **1,073,935** | **372 ms** |
+| (0, 0, 0), the rotunda floor | 5,195 | 1.8 ms |
+| (0, 4, 0), air inside | 6,915 | 2.3 ms |
+| (-40, 12, -40), open sky | 6,425 | 2.1 ms |
+
+**Two hundred times, and nothing refuses — it is honest work.** Deep inside solid matter almost
+nothing culls, so the unbounded weathering rules walk most of the building and `occlusion` asks its
+child fourteen times over.
+
+**And those are exactly the cells `forge::sample`'s descent never asks about**, because it settles
+their whole box from one reading at its centre. That single fact reconciles the entire ledger: the
+descent's value is enormous and is spent BEFORE the ladder sees a node (so D678 was right that a
+settle on the ladder's own nodes buys nothing), and the card loses precisely where those cells are —
+2.7x indoors (D681), 200x here.
+
+**SO THE LEVER IS THE EIGHT UNBOUNDED PAINT RULES, and it is the clearest one anybody has had.**
+D675 counted them: 8 of 628 rules are asked at EVERY solid voxel because the planner can bound them
+for neither a box nor a region. A cell deep in matter pays all eight and each walks most of the
+building — which is the million. Bound them and that cell stops costing 372 ms.
+
+**It is also D672 item 2**, still open: the same eight field-keyed rules are why `surface.clip`
+weathers the campanile thirty metres away. One change fixes the stains and the load together, and it
+speeds the CPU arm, which is the arm that ships. **Read D672 item 2 before touching those files** —
+it records that two static passes over them disagreed with each other and both were wrong, and that
+the operator question (`max` as union or intersection) wants a purpose-built two-box clip to settle
+rather than another read.
+
+**And the whole-clip build on the card is retired.** 131,072 cells took 25 s of dispatch against
+`forge::sample`'s two; the estate at metre 4 extrapolates to hours against the CPU's 129.8 s. Coarser
+grains make it WORSE, because the thin-feature rescue's shell is `voxel x 0.866` thick. It is on
+`worktree-agent-afeefb8f62f2e332f` with its gate passing on the boxes the card can finish (0 differing
+cells in 131,072 and in 32,768) — the agreement is real, the throughput is not.
+
+---
+
 #### START HERE — three stages landed, and the compiler needs ONE change before it can be wired
 
 `forge::compile_field` is in, gated, and **bit-exact near every surface** — 1.20x on the cost of
