@@ -1,0 +1,176 @@
+# theatre-probe — the garden theatre on its own, in its FACILITY place, for clipcheck.
+#
+# The contract for the dimensions and the materials, the order because the manifest loads it before
+# any fragment and a fragment is entitled to reach for it, then the fragment itself.
+#
+#   build\bin\WorldShaper.exe --clip-file clips\facility\requests\theatre-probe.clip ^
+#                             --clip-metre 8 --clip-part part_theatre
+#   ./build/clipcheck clips/facility/requests/theatre-probe.clip --metre 8  --part part_theatre
+#   ./build/clipcheck clips/facility/requests/theatre-probe.clip --metre 16 --part part_theatre
+#
+# ITERATE AT METRE 8: eleven seconds and 5.0 M cells. Metre 16 is ninety seconds and is the arm to
+# take before believing anything about a material share, for the reason the oak note below gives.
+#
+# IT HAS ITS OWN `bounds` AND THEY ARE THE POINT OF THE FILE. `_contract.clip` declares the
+# facility's box, -17 -0.9 -16.5 .. 17 20 8.5, and this part stands entirely OUTSIDE it: it is
+# translated to (-36, 0, 8) and occupies x -52.20 .. -19.80, y -0.45 .. 9.00, z -8.20 .. 17.90.
+# Sampled against the contract's box this probe would report EMPTY — the most flattering failure
+# there is. The box below is that extent with 0.60 to 0.80 m of air round it and nothing else: a
+# small box round ONE part, never the whole complex.
+#
+# ================================================================================================
+# WHAT IT CHECKS, AND WHAT A CORRECT RESULT LOOKS LIKE
+# ================================================================================================
+#
+# The conversion of clips/estate/theatre.clip (standalone, its own metre and bounds, drawn about the
+# orchestra's own centre) into clips/facility/theatre.clip (a fragment, translated to (-36, 0, 8)).
+# A translation is an ISOMETRY, so the correct result is not "similar" — it is the same clip to the
+# voxel. Both arms `--clip-metre 8 --clip-part part_theatre`:
+#
+#                       CONTROL                        FRAGMENT
+#                       clips/estate/theatre.clip      this probe, box matched to the control's
+#                                                      own bounds + (-36, 0, 8)
+#   sampled box         259 x 76 x 209                 259 x 76 x 209
+#   matter extent       (0,0,0)..(258,72,208)          (0,0,0)..(258,72,208)
+#   volume              947788 voxels                  947788 voxels
+#   surface             257578 faces                   257578 faces
+#   centroid            (129.4, 17.5, 90.8)            (129.4, 17.5, 90.8)
+#   components          37, largest 947649             37, largest 947649
+#   floating            139 voxels in 8 clumps         139 voxels in 8 clumps, same 8 sizes,
+#                                                        every one at the same MODEL position
+#   materials           19                             19
+#   never fired         no such line — all 37 fired    no such line — all 37 fired
+#   worldbox            -16.25 -0.50 -16.25            -52.25 -0.50 -8.25
+#                        .. 16.125 8.625 9.875          .. -19.875 8.625 17.875
+#                                                      = the control's, + (-36, 0, 8), exactly
+#
+# and at metre 16, same two arms: volume 7553164 both, surface 1042414 faces both, 5 components and
+# 4 floating voxels both, and the four loose voxels carry the SAME VOXEL INDICES in both arms while
+# the two origins differ by exactly (-576, 0, +128) voxels — which is (-36, 0, 8) m at metre 16.
+#
+# The bounds this file actually ships with are 0.60 to 0.80 m wider than that matched box, because a
+# probe box should not sit on the geometry it is measuring. That costs nothing but ground: at metre 8
+# the shipped box reports volume 957248 rather than 947788, and the whole 9460-voxel difference is
+# lawn (+2844) and gravel (+6952) — the theatre's ground slab is drawn past its own bounds on every
+# side so the frame is filled rather than fringed, so a wider box simply admits more lawn. Nothing
+# built moves. If you want the identity above, set the bounds to
+#
+#   bounds -52.20 -0.45 -8.20   -19.80 9.00 17.90
+#
+# ================================================================================================
+# THE ONE MATERIAL SHARE THAT MOVED, AND WHY — oak and granite, and it is a REPAIR
+# ================================================================================================
+#
+# At metre 8, in the matched box, one pair of shares is not the control's:
+#
+#   control    granite 157712 (16.64%)    oak  8193 (0.86%)
+#   fragment   granite 149774 (15.80%)    oak 16429 (1.73%)
+#
+# Chased, with the control arm taken on ONE LINE of the fragment rather than by argument. Putting
+# `paint oak where=th_stage_boards_at` back to `below=0.02` and changing nothing else:
+#
+#   below=0.02    granite 158224    oak  7979
+#   below=0.035   granite 149774    oak 16429
+#
+# — 8450 voxels, exactly equal and opposite. So it is not the translate, it is the `below=` that
+# BRIEF.md rule 5 requires for a transformed shape, and those 8450 voxels are the rind that rule
+# exists to prevent: the stage boards are 0.18 m thick and a metre-8 voxel is 0.125 m, so the layer
+# holding the board's underside has its CENTRE 0.0325 m below the board and was being painted by the
+# granite base under it. They are board voxels that were wearing the base's colour. At 0.035 they
+# are oak.
+#
+# IT IS A COARSE-GRID ARTEFACT AND IT SHRINKS WHERE IT MATTERS. Measured at metre 16, both arms:
+# oak 97167 (1.29%) control against 96265 (1.27%) fragment — the doubling is gone, because at
+# 0.0625 m the board is 2.88 voxels thick instead of 1.44. Do not read a share off metre 8 alone.
+#
+# The other movements at metre 8 are all one mechanism and all small: every rule's band widened by
+# 0.015 and a later coat covers an earlier one, so each rule took a little from whatever is painted
+# before it — hedge +604 off iron -215 (the berceau frame is painted before its hedge), silver +82
+# off bronze -24 (a footlight reflector is painted after its trough), travertine -2631 under the
+# granite bands laid over it. None of them is a material appearing or disappearing.
+#
+# ================================================================================================
+# WHERE THE SEPARATE COMPONENTS ARE — 37 at metre 8, and WHERE is the finding, not how many
+# ================================================================================================
+#
+# More than one component is expected and correct: this part is a cavea, a stage, four pairs of
+# hedge wings, a hedge tunnel on an iron frame and twenty-four footlights, and the hedges are real
+# displaced matter rather than green boxes. Every loose piece at metre 8 is a thin thing the grid
+# has bitten through at a resolution FOUR TIMES COARSER than the metre 32 this part is drawn for.
+# In FACILITY coordinates, so read them straight off the game:
+#
+#   50 voxels   x -49.25 .. -48.88   y 5.38 .. 6.50   z 7.75 .. 8.25
+#   50 voxels   x -23.13 .. -22.75   y 5.38 .. 6.50   z 7.75 .. 8.25
+#       — THE TWO ENDS OF THE BERCEAU, at the vault's springing (y 6.06), where the leaf tunnel is
+#         cut off flat at the analemmae. The iron hoop is 0.045 across, which is 0.36 of a voxel
+#         here, and the hedge's own displacement is 0.09, which is 0.72 of one; the last rib and the
+#         shears-cut end of the foliage simply cannot both be resolved. These are the two biggest
+#         pieces and they are the same piece twice, mirrored.
+#   2 voxels    x -49.25 .. -49.13   y 6.50 .. 6.63   z 7.88 .. 8.13
+#   2 voxels    x -22.88 .. -22.75   y 6.50 .. 6.63   z 7.88 .. 8.13
+#       — the same two ends, one course higher.
+#   2 voxels    x -23.63 .. -23.50   y 6.13 .. 6.38   z 8.00 .. 8.13
+#       — the vault's INNER HAUNCH at the east end, on the eaves rail's own arris (radius 11.99 to
+#         12.44 in model terms). theatre.clip's berceau section is about exactly this corner.
+#    1 voxel    x -47.00             y 5.88           z -2.38
+#       — the berceau's OUTER hedge wall where it stands on the coping, just under the springing.
+#   2 voxels    x -42.88 .. -42.63   y 1.13 .. 1.25   z 8.13 .. 8.25
+#   2 voxels    x -29.38 .. -29.13   y 1.13 .. 1.25   z 8.13 .. 8.25
+#       — THE OUTBOARD TOP CORNER OF A FOOTLIGHT HOOD, one each side, on the second-outermost of the
+#         twelve lights per side. The hood is 0.045 thick and overhangs its reflector; at metre 8
+#         that corner has under a voxel of overlap with anything.
+#
+# NOTHING IN THAT LIST IS IN THE CAVEA, THE ORCHESTRA, THE STAGE, THE PROSCENIUM OR THE WINGS. If a
+# loose piece ever turns up in one of those, it is not the grid and it is not this conversion.
+#
+# At metre 16 the whole list collapses to 5 components and 4 single voxels — two on a bench nosing
+# at model radius 7.02, one on the coping cap's outer arris, one on the vault's extrados near the
+# crown — which is what theatre.clip's own header reports for metre 32 as well.
+#
+# ================================================================================================
+# THE FOOTLIGHTS, WHICH ARE THE PART'S WHOLE REASON TO EXIST
+# ================================================================================================
+#
+# Twenty-four small emissives lighting 102 m2 of proscenium from below at a grazing angle. `taper`
+# is the material to check first and the one a botched translate drops without a word, because 72
+# voxels do not move any other number in the report. It survived, at both resolutions:
+#
+#   metre 8    control 72 voxels        fragment 72 voxels
+#   metre 16   control 120 voxels       fragment 166 voxels
+#
+# The metre-16 gain is the same `below=` widening as everything else — the flame is painted after
+# its own silver reflector, so at 0.035 it takes back the rind of its surface that was wearing the
+# reflector's colour. `silver` moved with it (867 -> 1217) and `lamp`, the six standards and two
+# tripods, from 710 to 810. More emissive surface, not less, which is the right direction for the
+# one thing this part is here to measure.
+#
+# ================================================================================================
+# THE PART'S OWN TWO SELF-CHECKS, which run from this file and must BOTH report an EMPTY clip
+# ================================================================================================
+#
+#   --clip-part th_probe_joint     the stage's board joints against the proscenium they must not
+#                                  reach. Reports `matter none`. It is in the fragment's MODEL
+#                                  coordinates — two untranslated shapes against each other — so it
+#                                  asks the same question wherever the part stands.
+#   --clip-part th_probe_berceau   the head space of a person walking the leaf tunnel. Reports
+#                                  `matter none`, and — this is the line that matters — `asked 55832
+#                                  voxels individually`. An empty clip that asked ZERO voxels is
+#                                  empty because it fell outside the box, which is how a translated
+#                                  part and an untranslated probe agree with each other about
+#                                  nothing. Its ring and box are translated with the part.
+#
+# Both were run at metre 8 with the bounds below and both are clean.
+#
+# NOTHING IN THIS CONVERSION IS INCOMPLETE OR UNCERTAIN. The geometry is identical to the control at
+# two resolutions, every one of the 37 paint rules fires, all 19 materials are present, and the only
+# share that moved was chased to a single line with its own two arms.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+metre 32
+bounds -53.00 -1.00 -9.00   -19.00 9.50 18.50
+
+include "../theatre.clip"
+
+solid part_theatre
