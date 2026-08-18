@@ -629,11 +629,13 @@ to reach them. **D672 is the entry; read it before touching any of this.**
    two different boxes, so it is not the probe box. No cause established. Everything else matches
    its control to within probe-box margin.
 
-4. **Nobody has looked at the estate.** Every figure here is `--clip-part` at metre 8. There has
-   been no render of the four buildings together, and each brings its own lawn — the theatre's slab
-   is drawn past its own bounds by design, the campanile has an 11 m apron, and `site.clip` has
-   ground to x ±17.1. They do not overlap today. Whether they read as one estate or as four lawns
-   with seams is a question a picture answers and a voxel count does not.
+4. **Nobody has LOOKED at the estate.** It has been sampled whole — metre 8, 4,079,451 voxels, the
+   four new buildings coming out as the four largest floating components, each on its site-plan row
+   (D672) — so they are in the right places and they do not touch. That is a voxel count, and it is
+   not the same as somebody looking. **There has been no render of the four buildings together.**
+   Each brings its own lawn: the theatre's slab is drawn past its own bounds by design, the
+   campanile has an 11 m apron, and `site.clip` has ground to x ±17.1. They do not overlap. Whether
+   they read as one estate or as four lawns with seams is a question a picture answers.
 
 
 #### START HERE — 2026-08-17: the fifteen are assembled, and what is left of them
