@@ -10200,3 +10200,80 @@ multiple, which §5 warns against by name.
 | D683 | **Seven levers measured; the best is 1.3x** | honesty | The table above, so nobody spends an eighth session on a 1.02x |
 | D683 | **"Under a second" is not reachable by evaluating the field** | honesty | 29 µs a cell x 512 cells x tens of thousands of nodes, and none of it is slack |
 | D683 | **The only mechanisms that reach it are precompute, a cheaper clip, or progressive fill** | decision | All three are decisions for the user rather than optimisations |
+
+## D684 — the first sight of a world is a 3.7 MB read, and the picture is the whole entry
+
+**Chosen by the user, out of the three D683 put to them:** *"do 1"* — precompute it, rather than make
+the sampler faster or the clip cheaper. This is that, built and measured.
+
+### What a player sees, which is the only part that matters
+
+Same clip, same camera, same frame 60 — about one second after the world opens:
+
+| | what is on screen |
+|---|---|
+| with the world shipped beside the clip | **the finished rotunda**: urns in their niches, the green and red hangings, the coffered passage through, the inlaid floor with its coloured radials |
+| without it | **empty sky** |
+
+`opened the world shipped beside 'clips\facility.clip'; nothing to sample`, and
+`everything ready [t+336 ms]`.
+
+### How, in one flag each way
+
+`--bake-world` writes the finished world **beside its clip** — `clips/facility.clip` becomes
+`clips/facility.world` — at the same moment and through the same code that already writes this
+machine's own cache. On load, if this machine's cache misses, that file is tried. **Second, never
+first**: a world this machine built for itself is current by construction and may have grown past
+whatever was baked (D634).
+
+**3.7 MB**, 29,440 of 40,032 nodes, baked from the spawn camera in two minutes. Not the six hundred
+megabytes this log has been quoting since D611 — that figure is the whole facility at authored
+detail everywhere, and what a player needs to not be standing in an empty room is a fraction of it.
+**Nobody had looked at the size of the thing actually being proposed.**
+
+### The key, which is the only interesting engineering in it
+
+`world_cache_key` takes a `build_stamp`, and `build_stamp` folds the newest modification time across
+`src/forge` and `src/world` so that changing the sampler invalidates every cache. That is exactly
+right on this machine and impossible to satisfy for a file baked here and read somewhere else, where
+those directories do not exist.
+
+**They do not exist on an install, and `build_stamp` already knows what to do about it**: the
+directory walk finds nothing and the stamp falls back to `kWorldBuildVersion` alone. So a baked world
+is keyed with `shipped_stamp()` — that fallback, asked for deliberately — on both sides. It is
+readable on every install and on no development machine, which is the right way round.
+
+**And the honest cost of that, said plainly because nothing enforces it:** a stale baked world cannot
+be detected on an install. The key cannot see that the sampler changed, only that the world FORMAT
+did. **Re-bake on every release.** It belongs in the release procedure beside the tag, and it is not
+there yet.
+
+### Two things that were nearly silent failures
+
+**The bake wrote nothing for four minutes.** `save_refined_world` is called at the fixed point, and
+the estate does not reach one from the enclosed camera — 30,001 frames and 219 s, and no file. It is
+also called on the way out, and that call was gated on `!refine_cache_path_.empty()`, which
+`--no-clip-cache` empties on purpose so the baking machine's own world cannot contaminate the
+shipped one. **So the exact combination a release must be baked with was the one that wrote nothing
+at all, silently.** Both gates now count the bake path.
+
+**A baked world is refused for an edited one**, and that was already true and is worth keeping: the
+file is keyed on the CLIP, so a carving baked into it would arrive in every world any player ever
+made from that clip.
+
+### What this does and does not buy
+
+It buys **the first sight of a world**, which is what was asked for. It does not stop the ladder: the
+run above still sharpened 47,872 of 62,329 nodes over the following two minutes, because the baked
+world is what one camera reached in two minutes and a player who walks somewhere new still pays for
+somewhere new. **That is the design and not a shortfall** — R11d's whole argument is that a world is
+what has been looked at (D632).
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D684 | **A world can be baked beside its clip and read by an install** | decision | `--bake-world`; the rotunda at frame 60 against empty sky |
+| D684 | **It is 3.7 MB, not 608** | fault | D611's figure is the whole facility at authored detail; nobody had sized the actual proposal |
+| D684 | **A shipped world is keyed on `shipped_stamp`, the fallback an install computes** | decision | Readable on every install and on no development machine, which is the right way round |
+| D684 | **A stale baked world cannot be detected on an install — RE-BAKE ON EVERY RELEASE** | honesty | The key can see the format change and not the sampler change |
+| D684 | **The exact flags a release must bake with wrote nothing, silently** | fault | `--no-clip-cache` empties the path both save gates were testing |
+| D684 | **It buys the first sight, not the whole world** | honesty | The ladder still runs for anywhere the baking camera never looked |

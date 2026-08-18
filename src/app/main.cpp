@@ -202,6 +202,9 @@ struct Options {
     // How wide a union has to be before a hierarchy is built over its leaves. 0 is off, which is the
     // default and what D637 measured on the facility. See `forge::accelerate_unions_from`.
     u32 accelerate_from = 0;
+    // Write the finished world beside its clip, keyed so a SHIPPED install will read it. This is
+    // how a player's first sight of a world costs a read rather than an hour of sampling.
+    bool bake_world = false;
     std::string clip_part;        // build only this let name, for looking at one piece
 
     // A smaller box to sample, overriding the clip's own.
@@ -1015,6 +1018,8 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.cpu_sample = true;
     } else if (arg == "--no-gpu-rescue") {
         options.gpu_rescue = false;
+    } else if (arg == "--bake-world") {
+        options.bake_world = true;
     } else if (arg == "--accelerate-from") {
         options.accelerate_from = static_cast<u32>(next_number(8));
     } else if (arg == "--gpu-visits") {
@@ -1486,6 +1491,16 @@ void print_help() {
         "  --gpu-visits          count the nodes each cell WALKS instead of building a world.\n"
         "                        What a dispatch costs is (nodes walked) x (what a step\n"
         "                        costs), and no clock tells those two apart\n"
+        "  --bake-world          write the finished world BESIDE ITS CLIP, keyed the way an\n"
+        "                        install will ask for it, so a player's first sight of a world\n"
+        "                        costs a read rather than minutes of sampling. Bake with\n"
+        "                        --no-clip-cache so this machine's own accumulated world\n"
+        "                        cannot leak into the shipped one, and RE-BAKE whenever the\n"
+        "                        sampler changes: an install has no source tree to date the\n"
+        "                        key against, so nothing there can notice a stale one\n"
+        "  --accelerate-from N   build a hierarchy over the leaves of any union at least N\n"
+        "                        wide. OFF, and measured worth nothing twice -- on the\n"
+        "                        facility (D637) and on the estate (D682). A control arm\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
         "  --fog e,albedo,g,h,y  air that is not empty: extinction per metre, single-scatter\n"
@@ -1795,6 +1810,28 @@ u64 build_stamp() {
     }
     for (const char* file : kBuildInputFiles) fold(root / file);
     return stamp;
+}
+
+// The stamp a SHIPPED install computes, which is the constant `build_stamp` falls back to when
+// there is no source tree beside the executable.
+//
+// This is the whole trick behind shipping a world already built. `build_stamp` folds the newest
+// modification time across `src/forge` and `src/world` so that changing the sampler invalidates
+// every cache — exactly right on a development machine, and impossible to satisfy for a file baked
+// on one machine and read on another, where those directories do not exist at all. On an install
+// the loop finds nothing and the stamp is `kWorldBuildVersion` and nothing else.
+//
+// So a baked world is keyed with THIS, deliberately, on both sides: the baker asks for it and the
+// loader asks for it. What that means is that a shipped world is valid for exactly the world format
+// it was baked against and is discarded the moment that changes — which is the honest promise, and
+// the one thing that must never happen is a world baked by an older sampler being read as current.
+u64 shipped_stamp() { return kWorldBuildVersion * 0x9E3779B97F4A7C15ull; }
+
+// Where a world baked beside its clip lives: `clips/facility.clip` -> `clips/facility.world`.
+std::string shipped_world_for(const std::string& clip_path) {
+    std::filesystem::path out(clip_path);
+    out.replace_extension(".world");
+    return out.string();
 }
 
 std::string default_clip_path() {
@@ -2209,6 +2246,10 @@ private:
     i64 refine_at_[3]{0, 0, 0};
     std::string refine_cache_path_;
     u64 refine_cache_key_ = 0;
+    // ...and where the same world goes when it is being BAKED to ship, with the key an install
+    // will ask for rather than the one this machine would. See `shipped_stamp`.
+    std::string refine_bake_path_;
+    u64 refine_bake_key_ = 0;
 
     // The clip cut into boxes, each refined to full detail on its own and nearest first.
     //
@@ -2379,7 +2420,8 @@ private:
     // Pick a half-built world back up: adopt the cache's flags onto the planned grid and leave
     // the ladder standing if anything is still coarse.
     void resume_refinement(forge::Script&& script, const WorldCache& cache,
-                           const std::string& cache_path, u64 key, u32 coarse);
+                           const std::string& cache_path, u64 key, u32 coarse,
+                           const std::string& bake_path, u64 bake_key);
     // Keep what has been sharpened so far, if it is more than the file already holds.
     void save_refined_world();
 
@@ -4172,7 +4214,9 @@ void Application::log_starting_material() const {
 }
 
 void Application::save_refined_world() {
-    if (refine_cache_path_.empty() || refine_regions_.empty()) return;
+    // `refine_bake_path_` counts as somewhere to write: `--bake-world --no-clip-cache` is how a
+    // release is baked without the baking machine's own cache getting in the way.
+    if ((refine_cache_path_.empty() && refine_bake_path_.empty()) || refine_regions_.empty()) return;
 
     usize done = 0;
     for (const RefineNode& box : refine_regions_) {
@@ -4301,6 +4345,22 @@ void Application::save_refined_world() {
         }
         cache.emitters.push_back(CachedEmitters{coord.x, coord.y, coord.z, found->second});
     });
+    // And, when asked, the same world a second time beside its clip with the key an INSTALL will
+    // ask for. Written from here rather than from a mode of its own because this is the one moment
+    // it is safe: the ladder has stood down, nothing is half-pasted, and the edit check above has
+    // already refused to bake a world somebody has carved into.
+    if (!refine_bake_path_.empty()) {
+        if (write_world_cache(refine_bake_path_, refine_bake_key_, cache)) {
+            std::error_code size_error;
+            const auto bytes = std::filesystem::file_size(refine_bake_path_, size_error);
+            WS_LOG_INFO("clip", "baked the world for shipping: '{}' ({} MB), {} of {} nodes",
+                        refine_bake_path_, size_error ? 0 : (bytes >> 20), done,
+                        refine_regions_.size());
+        } else {
+            WS_LOG_WARN("clip", "could not bake the world to '{}'", refine_bake_path_);
+        }
+    }
+    if (refine_cache_path_.empty()) return;
     if (!write_world_cache(refine_cache_path_, refine_cache_key_, cache)) return;
     refine_saved_regions_ = done;
     WS_LOG_INFO("clip", "kept the world with {} of {} nodes sharpened", done,
@@ -4821,9 +4881,12 @@ std::string Application::refine_census() const {
 // to avoid. So the corners are compared instead, and a grid that has moved re-sharpens from
 // scratch: slow once, rather than a building that is quietly coarse in the wrong places for ever.
 void Application::resume_refinement(forge::Script&& script, const WorldCache& cache,
-                                    const std::string& cache_path, u64 key, u32 coarse) {
+                                    const std::string& cache_path, u64 key, u32 coarse,
+                                    const std::string& bake_path, u64 bake_key) {
     refine_cache_path_ = options_.no_clip_cache ? std::string() : cache_path;
     refine_cache_key_ = key;
+    refine_bake_path_ = bake_path;
+    refine_bake_key_ = bake_key;
     refine_authored_ = (options_.clip_metre > 0)
                            ? options_.clip_metre
                            : script.settings.voxels_per_metre * static_cast<i32>(coarse);
@@ -5196,9 +5259,18 @@ void Application::build_world() {
         const std::string arm = std::string("|coarse-paste=") + (options_.no_coarse_paste ? "0" : "1") +
                                 "|stipple-at-coarse=" + (options_.stipple_at_coarse ? "1" : "0") +
                                 "|clip-coarse=" + std::to_string(options_.clip_coarse);
+        const std::string keyed_on =
+            ui::without_author(source) + "|part=" + options_.clip_part + arm;
         const u64 key =
-            world_cache_key(ui::without_author(source) + "|part=" + options_.clip_part + arm,
-                            script.settings.voxels_per_metre, build_stamp());
+            world_cache_key(keyed_on, script.settings.voxels_per_metre, build_stamp());
+        // The same world, keyed the way an INSTALL will ask for it. `shipped_stamp` is what
+        // `build_stamp` falls back to where there is no source tree, which is every machine that
+        // is not this one — so a world baked here is readable there and nowhere else is it
+        // pretending to be current.
+        const std::string bake_path =
+            options_.bake_world ? shipped_world_for(path) : std::string();
+        const u64 bake_key =
+            world_cache_key(keyed_on, script.settings.voxels_per_metre, shipped_stamp());
         if (!source.empty() && !options_.no_clip_cache) {
             WorldCache cache;
             cache.tags = &tags_;
@@ -5231,7 +5303,29 @@ void Application::build_world() {
                 }
             }
 
-            if (read_world_cache(cache_path, key, cache, &jobs)) {
+            // THE WORLD SHIPPED BESIDE THE CLIP, when this machine has none of its own.
+            //
+            // This is the whole of what a player's FIRST sight of a world costs. Building the
+            // estate from its recipe is tens of seconds of field evaluation and seven measured
+            // attempts failed to make it materially less (D683); reading it back is under a second
+            // (D611). The difference is not a faster sampler, it is not sampling — and somebody
+            // has to have sampled it once, somewhere, which is `--bake-world`.
+            //
+            // Tried SECOND, so a world this machine has built for itself always wins: that one is
+            // current by construction, and it may have grown past whatever was baked (D634).
+            const std::string shipped = shipped_world_for(path);
+            bool from_shipped = false;
+            bool got = read_world_cache(cache_path, key, cache, &jobs);
+            if (!got && world_cache_matches(shipped, bake_key)) {
+                got = read_world_cache(shipped, bake_key, cache, &jobs);
+                from_shipped = got;
+                if (got) {
+                    WS_LOG_INFO("world", "opened the world shipped beside '{}'; nothing to sample",
+                                path);
+                }
+            }
+            (void)from_shipped;
+            if (got) {
                 progress_.enter(LoadStage::Uploading);
                 // The palette comes from the SCRIPT, not from the cache.
                 //
@@ -5283,7 +5377,8 @@ void Application::build_world() {
                 // rebuilt later, because it owns the field the background sampler reads and
                 // parsing is the only place it comes from.
                 if (coarse > 1) {
-                    resume_refinement(std::move(script), cache, cache_path, key, coarse);
+                    resume_refinement(std::move(script), cache, cache_path, key, coarse, bake_path,
+                                      bake_key);
                 }
                 const WorldStats cached_stats = world_.stats();
                 WS_LOG_INFO("world", "'{}' loaded from cache in {:.0f} ms [t+{:.0f} ms]: {} chunks, {} solid "
@@ -5439,6 +5534,8 @@ void Application::build_world() {
             if (coarse > 1) {
                 refine_cache_path_ = options_.no_clip_cache ? std::string() : cache_path;
                 refine_cache_key_ = key;
+                refine_bake_path_ = bake_path;
+                refine_bake_key_ = bake_key;
                 refine_authored_ = (options_.clip_metre > 0) ? options_.clip_metre
                                                              : script.settings.voxels_per_metre *
                                                                    static_cast<i32>(coarse);
@@ -10088,7 +10185,12 @@ int Application::play(const Options& options) {
     // a byte unless more nodes are sharp than the file already knows about, and it refuses outright
     // for an edited world -- the cache is keyed on the CLIP, so somebody's carving must never be
     // handed to the next world built from it.
-    if (!refine_regions_.empty() && !refine_cache_path_.empty()) {
+    // `refine_bake_path_` counts here too, and it is not a detail: a release is baked with
+    // `--bake-world --no-clip-cache`, which empties the user cache path deliberately so the baking
+    // machine's own accumulated world cannot contaminate the shipped one. Without this clause that
+    // is exactly the combination that writes nothing at all, silently, after four minutes of work.
+    if (!refine_regions_.empty() &&
+        (!refine_cache_path_.empty() || !refine_bake_path_.empty())) {
         const u64 began = now_ns();
         save_refined_world();
         const f64 spent = ns_to_ms(now_ns() - began);

@@ -3510,3 +3510,13 @@ So why can you not see it? Two reasons, and both are worth knowing.
 **The first is that you are not supposed to.** The whole promise is that detail smaller than a pixel is not drawn — so a world that gets this right looks *identical* to one that wastes effort being detailed at a distance. There is nothing to see. If you want to see it, press the detail view (`--debug-mode 3`): green is finest, red is coarsest, and it paints the picture by what the game actually did.
 
 **The second is a real gap, and this is the one worth your opinion.** The world never gives detail back. Once you have stood near something it stays at full detail for ever, across sessions. So the coarse-at-a-distance behaviour only ever applies to places you have never walked to — and after a few minutes of play, that is almost nowhere. Making the world let go of detail you have walked away from is a real piece of work that has been waiting on the graphics card being able to rebuild it cheaply, which is the other reason that work matters.
+
+## The first time you open a world, it is just there now
+
+You asked for the first load to be instant, and after seven attempts at making the building calculate faster -- none of which was worth more than a third -- the answer turned out to be not calculating it at that moment.
+
+The game can now **bake a world**: build it once, on my machine or on a build server, and save it beside the recipe. When you open that world, it reads the finished thing instead of working it out. A second in, you are standing in the rotunda -- urns in their niches, the hangings, the coffered passage, the inlaid floor -- where before there was empty sky.
+
+It costs **3.7 megabytes**. I had been telling you six hundred, which was the size of the whole estate carved to full detail everywhere; what you actually need to not be standing in an empty room is a fraction of that.
+
+**Two honest limits.** The baked world is what one viewpoint reached in two minutes, so if you walk somewhere it never looked, that part still builds around you as before -- which is the design rather than a shortfall. And the baked file has to be rebuilt whenever I change how buildings are carved; an installed copy of the game has no way to notice a stale one, so that goes in the release checklist rather than being something the game can catch.

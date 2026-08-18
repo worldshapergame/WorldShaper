@@ -602,6 +602,38 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — the first sight of a world is a 3.7 MB read now (D684)
+
+**The user chose precompute out of the three D683 put to them, and it is built.** `--bake-world`
+writes the finished world beside its clip — `clips/facility.clip` becomes `clips/facility.world` —
+and an install with no world of its own reads it instead of sampling. Same camera, frame 60, about
+a second in: **the finished rotunda against empty sky.** `everything ready [t+336 ms]`.
+
+**3.7 MB**, 29,440 of 40,032 nodes. Not the 608 MB this file has quoted since D611 — that is the
+whole facility at authored detail everywhere, and nobody had sized the thing actually proposed.
+
+**THE ONE THING THAT MUST GO IN THE RELEASE PROCEDURE AND IS NOT THERE YET.** A baked world is
+keyed on `shipped_stamp()` — the constant `build_stamp` falls back to where there is no source tree
+— because a key folding this machine's file times is unsatisfiable anywhere else. That key can see
+the world FORMAT change and cannot see the SAMPLER change, so **a stale baked world is undetectable
+on an install**. Re-bake on every release, beside the tag:
+
+```powershell
+WorldShaper --clip-file clips\facility.clip --no-title --no-clip-cache --bake-world \
+            --cam "0,0,0,-90,0" --settle --max-seconds 120
+```
+
+`--no-clip-cache` is not optional there: it empties the baking machine's own cache path so its
+accumulated world cannot leak into the shipped one. **That is also the exact combination that used
+to write nothing at all, silently** — both save gates tested the path it empties, and the estate
+never reaches the fixed point the other gate waits for. Fixed, and worth knowing about.
+
+**What it does not buy:** the ladder still runs. The baked world is what one camera reached in two
+minutes, and a player who walks somewhere new still pays for somewhere new — which is R11d's whole
+argument, that a world is what has been looked at (D632).
+
+---
+
 #### START HERE — the 100x, and the five levers that are NOT it
 
 **Read D682 before proposing anything here.** Five structural levers were measured in one session,
