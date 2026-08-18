@@ -3520,3 +3520,22 @@ The game can now **bake a world**: build it once, on my machine or on a build se
 It costs **3.7 megabytes**. I had been telling you six hundred, which was the size of the whole estate carved to full detail everywhere; what you actually need to not be standing in an empty room is a fraction of that.
 
 **Two honest limits.** The baked world is what one viewpoint reached in two minutes, so if you walk somewhere it never looked, that part still builds around you as before -- which is the design rather than a shortfall. And the baked file has to be rebuilt whenever I change how buildings are carved; an installed copy of the game has no way to notice a stale one, so that goes in the release checklist rather than being something the game can catch.
+
+## What it would cost to have the whole estate there the instant you arrive
+
+You asked for the world to load in its totality the moment you enter it, with nothing prepared in advance. The game can already do exactly that -- it used to, and the switch is still there -- so I turned it back on and timed it at four different levels of chunkiness.
+
+| the whole estate, carved at | ready in |
+|---|---|
+| full detail (3 cm cubes) | **still going after four minutes** |
+| 25 cm cubes | **2 minutes 10** |
+| 50 cm cubes | **22 seconds** |
+| 2 metre cubes | about a second |
+
+**One second buys cubes two metres across. A doorway is two metres.** So at the chunkiness that loads instantly, the estate is not a coarse building -- it is a pile of blocks the size of rooms.
+
+That is not the carving being slow. It is how much building there is: seven buildings of hand-drawn classical detail, and the recipe for them is eighteen thousand steps long. The time is directly proportional to that and to nothing else I have been able to find -- I have now tried eight different ways of making it faster and the best was worth thirty per cent.
+
+So the real choice is between the two ends I have measured. **A third of a second to be standing in it, with the building arriving around you** -- which is what you have. Or **twenty-two seconds to be standing in something complete but made of half-metre blocks.** Everything in between is a dial, and it is yours to set.
+
+The one thing that would genuinely change the answer is a smaller estate. A world that builds a hundred times faster is a world with a hundred times less carved into it, and that is a decision about the building rather than about the engine.

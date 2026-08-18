@@ -10317,3 +10317,67 @@ questions rather than one: the clips, and any world on the shelf beside them.
 | D685 | **`shipped_world_candidates` looks beside the file AND in shipped `clips/`** | decision | The key is content-hashed, so a wrong file is refused rather than believed |
 | D685 | **A shelf world is a different text and needs its own bake** | decision | 7.4 KB against a seven-building clip; the key is right to refuse |
 | D685 | **A gate that runs the developer's route protects neither route** | honesty | The picture, the timing and the flag were all real and all beside the point |
+
+## D686 — the whole world up front, measured at four grains, and there is no grain that is instant
+
+**Asked for, and it is unambiguous:** *"i just want to load into a world and it instantly load in its
+totality without cold bakes etc."* No precompute, no cache, no filling in around you — open a world
+and the whole thing is there.
+
+**This entry is that exact thing, measured, rather than argued about.** Every previous refusal in this
+log has been an argument from the per-cell cost. This is the request itself, run four times.
+
+### The measurement
+
+`--coarse-paste --clip-coarse N` builds the WHOLE clip before the first frame is drawn, which is
+precisely what was asked for. It is what shipped until D673 and the flags are still there as control
+arms. Estate, cold, no cache, time to `everything ready`:
+
+| the whole estate at | voxels | ready in |
+|---|---|---|
+| **metre 32** (authored, 3 cm) | — | **still running after 4 minutes**, 8,823 nodes left |
+| **metre 4** (25 cm) | 509,559,808 | **129.8 s** |
+| **metre 2** (50 cm) | 577,224,704 | **21.8 s** |
+| metre 1 (1 m), by extrapolation | — | ~4 s |
+| metre 0.5 (2 m voxels) | — | ~1 s |
+
+**One second buys voxels two metres across.** A doorway is two metres. A column is one. At the grain
+that loads instantly the estate is not a coarse building, it is a heap of blocks the size of rooms —
+and it is still half a gigabyte of them.
+
+**There is no resolution at which the whole estate builds in under a second and is still a building.**
+That is not a limit of the sampler, it is arithmetic about how much building there is.
+
+### Why it is worth having both halves of the trade written down
+
+R11d removed the up-front build and was right to (D673): it was 3.7 s of the load for a world nobody
+was looking at, and taking it out is what got a player standing in the world in **337 ms**. This entry
+is the other end of the same measurement — what it would cost to put back, and to put back *complete*.
+
+**337 ms to standing in it and filling around you, or 22 seconds to standing in a world made of
+half-metre blocks. Those are the two ends, both measured, and everything in between is a dial.**
+
+### And the ledger is now eight
+
+| lever | worth |
+|---|---|
+| the field on the card (R12) | 1.30x outdoors, 0.37x indoors |
+| the descent, on the card | nothing |
+| shrinking the shader's stack frame | nothing |
+| the union hierarchy over wide unions | nothing, twice (D637, D682) |
+| the thin-feature rescue off | 11% |
+| bounding every paint rule perfectly | at most 1.3x |
+| pruning the field to the sample box | 2% (D683) |
+| **building the whole world up front** | **22 s at 50 cm, 130 s at 25 cm** — this entry |
+
+**So the only quantity left that moves the load is how much clip there is.** 18,250 nodes of
+expression, 628 paint rules, seven buildings. The load is linear in that and in nothing else anybody
+has found. **A world that builds a hundred times faster is a world with a hundred times less in it**,
+and that is a decision for whoever authors the estate rather than for whoever writes the sampler.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D686 | **The whole estate up front is 22 s at metre 2 and 130 s at metre 4** | decision | Measured with `--coarse-paste --clip-coarse`, which is the request itself |
+| D686 | **One second buys two-metre voxels, and a doorway is two metres** | honesty | There is no grain that is both instant and a building |
+| D686 | **Eight levers measured; the load is linear in how much clip there is** | honesty | The table above; nothing else anybody has found moves it |
+| D686 | **337 ms filling around you, or 22 s of half-metre blocks — both ends measured** | decision | Everything between them is a dial somebody can choose |

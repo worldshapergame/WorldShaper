@@ -602,6 +602,32 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — the whole world up front, measured at four grains (D686)
+
+*"i just want to load into a world and it instantly load in its totality without cold bakes etc."*
+**That exact thing is `--coarse-paste --clip-coarse N`, it still works, and it was run four times.**
+Estate, cold, no cache, to `everything ready`:
+
+| the whole estate at | ready in |
+|---|---|
+| metre 32 (authored) | **still running after 4 minutes** |
+| metre 4 (25 cm) | **129.8 s** |
+| metre 2 (50 cm) | **21.8 s** |
+| metre 0.5 (2 m voxels), extrapolated | ~1 s |
+
+**One second buys voxels two metres across, and a doorway is two metres.** There is no grain at
+which the whole estate builds in under a second and is still a building. R11d removing the up-front
+build is the other end of the same measurement, and it is what gets a player standing in the world
+in **337 ms**.
+
+**Eight levers are now measured (D686 carries the table) and the load is linear in how much CLIP
+there is and in nothing else anybody has found.** 18,250 nodes, 628 paint rules, seven buildings. A
+world that builds a hundred times faster is a world with a hundred times less in it — which is a
+decision for whoever authors the estate, not for whoever writes the sampler. **Do not open a ninth
+attempt on the sampler without reading D682, D683 and D686 first.**
+
+---
+
 #### START HERE — the bake works, and D684 measured it on a path nobody uses (D685)
 
 **BAKE WHAT SHIPS, BY THE PATH IT SHIPS AT, AND OPEN IT THE WAY A PLAYER DOES.** D684 baked beside
