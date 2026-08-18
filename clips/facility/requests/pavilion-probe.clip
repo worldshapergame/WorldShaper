@@ -1,0 +1,136 @@
+# pavilion-probe — the belvedere on its own, in its place on the estate, for clipcheck.
+#
+# Not part of the building and nothing includes it. It exists so `part_pavilion` can be measured,
+# sliced and counted without the other twenty-odd fragments in the way — and so that `never fired`
+# means something, which it cannot when another file's paint rules are also in the list.
+#
+#   build\bin\WorldShaper.exe --clip-file clips\facility\requests\pavilion-probe.clip \
+#       --clip-metre 8  --clip-part part_pavilion          # iterate here
+#   ... --clip-metre 16 --clip-part part_pavilion
+#   ... --clip-metre 32 --clip-part part_pavilion          # the only run with a glazing bar in it
+#   ... --clip-metre 32 --clip-part pav_probe_room         # must be EMPTY
+#   ... --clip-metre 32 --clip-part pav_probe_doors        # must be EMPTY
+#
+# ================================================================================================
+# WHAT THE NUMBERS SHOULD SAY, so that a wrong one is recognisable rather than merely printed
+# ================================================================================================
+#
+# Everything below this line is MEASURED on this file at `--clip-metre 8`, not expected. Where a
+# number was not measured it says so.
+#
+# COMPONENTS ARE NOT 1 HERE AND NEVER WILL BE, and that is why this paragraph is longer than the
+# file. This part is a pavilion on an ISLAND in a BASIN with a BRIDGE across it, and those four are
+# one connected body: the island is joined to the bank by the bridge, and the lawn outside the
+# kerb, the kerb, the bed of the tank and the water are all one piece with each other. Everything
+# the counter reports beyond that is thin matter coming apart at the grid, which is what this
+# fragment is FOR.
+#
+#   metre 8, measured:  98 components, largest 502529 of 503979 voxels, 1450 loose
+#
+# Where the loose voxels are — worked out from `origin` and the reported voxel boxes, so these are
+# the actual groups the run printed and not a guess at them. Facility coordinates, with the
+# pavilion's own coordinates in brackets:
+#
+#   * 822 voxels, x -1.0..0.875, y 3.375..5.875, z 51.0..52.875  [local y 4.275..6.775]
+#     THE LOWER TWO-THIRDS OF THE CHANDELIER — three hoops, the arms, the 192 crystal drops and
+#     the drip finial — hanging free of its own stem. The stem is r=0.054, so 0.108 m across,
+#     which is 0.86 of a voxel at metre 8: it is a dotted line at this resolution and the break
+#     is somewhere near local y 5.9. See the note in pavilion.clip over `pav_ch_stem`, which
+#     records the same failure at metre 16 before the metalwork was thickened to 0.09..0.11.
+#     THIS GROUP IS NOT IN THE ESTATE ORIGINAL'S 218 AND IT IS NEW WITH THE PLACING. dy is -0.90,
+#     which is 7.2 voxels at metre 8, 14.4 at metre 16 and 28.8 at metre 32 — never a whole
+#     number — so the grid cuts this building at a different height than it cuts the standalone
+#     one, and a stem thinner than a voxel is decided by exactly that. NOT MEASURED AT METRE 32,
+#     where the stem is 3.5 voxels across and this should not arise. Somebody should look.
+#   * seven or more groups of 16..26 voxels, each a single (x,z) column running from about
+#     local y 1.0 to 4.2 at a radius near 5.2 — THE VERTICAL GLAZING BARS. 0.030 across, a quarter
+#     of a voxel at metre 8. Expected, and item 4 of pavilion.clip's own load list is the reason
+#     they are not thickened.
+#   * specks at the crown of the cupola and on the finial's coronet, for the reasons the estate
+#     original's header gives: eight ribs 0.09 wide meeting on a circle whose radius goes sub-voxel
+#     before they reach it, and cone tips, which are sub-voxel by construction at any radius.
+#
+# A loose group anywhere ELSE — out in the basin, under the bridge, at the kerb — is a real
+# floating part and means something has come away from the island.
+#
+# `never fired` PRINTED NOTHING IN EITHER ARM, so no rule of this fragment painted nothing. That
+# is the line that catches the one way this conversion fails silently: a `paint ... where=` left
+# pointing at an untranslated shape tests the wrong 24 metres of garden, matches nothing, and hands
+# the geometry back to the base coat with the volume and the component count unchanged.
+#
+# `materials` IS 30 AND THE ESTATE ORIGINAL'S IS 28. The two extra are `gravel` and `giallo`, and
+# they are extra because in the standalone clip at metre 8 they painted ZERO voxels and here they
+# paint 6877 and 1738. Both name thin HORIZONTAL slabs — `pav_isl_top` is 0.045 thick and
+# `pav_star` 0.065, well under the 0.125 voxel of metre 8 — and the dy of -0.90 moves the grid
+# 0.2 of a voxel up through them. THIS IS A CORRELATION I MEASURED AND NOT A MECHANISM I PROVED:
+# both fragment arms gain them, so it is the placing and not the `below=` change, but I did not run
+# the fourth arm that would settle it.
+#
+# The three materials this building exists for are `mirror`, `glass` and `water`. Measured at
+# metre 8, this file beside the estate original:
+#
+#                        estate original   this fragment   this fragment at below=0.02
+#     water              102924  20.48%    102943  20.43%   103146  20.47%
+#     mirror               1763   0.35%      3618   0.72%     1791   0.36%
+#     glass                1274   0.25%      1111   0.22%     1253   0.25%
+#     iron                  713   0.14%      1585   0.31%      649   0.13%
+#
+# WATER DOES NOT MOVE. MIRROR AND GLASS DO, AND IT IS THE `below=0.035` AND NOT THE TRANSLATE —
+# the third column is this same file with every `below=0.035` put back to 0.02, and it lands on
+# the original's numbers. The mirror panels are 0.06 m thick, half a voxel at metre 8, so widening
+# the band a rule answers to from 0.02 to 0.035 either side is most of their apparent thickness;
+# and `iron` is painted AFTER `glass`, so the same widening takes the pane edges off the glass and
+# gives them to the frame. BRIEF.md rule 5 requires the 0.035 for a shape a transform put where it
+# is, and every shape here now is one. NOT MEASURED AT METRE 32, where a 0.06 m panel is two
+# voxels rather than half of one and the widening should matter far less.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+# The coat everything starts in, exactly as clips/facility.clip:26 has it, so that any surface of
+# this fragment which no rule of this fragment reaches comes back as limestone and is VISIBLE as a
+# fault rather than as nothing. Without it a missed twin is a hole in the material table; with it,
+# it is a pale building.
+paint limestone
+
+include "../pavilion.clip"
+
+# ================================================================================================
+# A BOX ROUND THIS PART AND NOTHING ELSE, AND IT IS PHASE-ALIGNED TO THE CONTRACT'S
+# ================================================================================================
+#
+# `metre` and `bounds` come AFTER EVERY include and not before. `_contract.clip` states the
+# building's own `metre 32` / `bounds -17 -0.9 -16.5  17 20 8.5`, and these two lines put anywhere
+# above the last include are quietly undone by it — the trap ballroom-probe.clip paid twenty
+# minutes for, where the narrowing looked as though it had had no effect.
+#
+# The contract's box is 34 x 20.9 x 25 m, which at metre 32 is 582 million cells and 2.8 GB of
+# memory before a voxel exists — and it does not even CONTAIN this part, which stands at z 40..64,
+# thirty-two metres north of the contract's northern face. So the box has to be stated here in any
+# case, and it is stated as the part plus a margin: 30 x 13.625 x 25 m, holding the whole of
+# x -14.10..14.10, y -1.90..11.45, z 40.15..63.85 with better than half a metre of clearance on
+# every face but the top, where the finial leaves 0.15. A part that had drifted would fall OUT of
+# it and be seen at once rather than hidden.
+#
+# EVERY FACE IS AN EXACT NUMBER OF VOXELS FROM THE CONTRACT'S OWN FACE, at metre 8, 16 and 32
+# alike — each offset below is a whole multiple of 0.125 m:
+#
+#   x  -15.000 is  2.000 from -17.0      x  15.000 is 32.000 from -17.0
+#   y   -2.025 is -1.125 from  -0.9      y  11.600 is 12.500 from  -0.9
+#   z   39.500 is 56.000 from -16.5      z  64.500 is 81.000 from -16.5
+#
+# So the sampling grid falls in exactly the places it falls in the building, and a one-voxel
+# feature that survives here survives there. -2.025 and 11.600 look like arbitrary numbers and are
+# the opposite: -2.0 and 11.5 are the arbitrary ones, and each would move every voxel centre in
+# this part by a fraction and quietly change which of its one-voxel members exist.
+#
+# THIS PART IS SAMPLED AT A DIFFERENT y PHASE FROM THE ESTATE ORIGINAL AND THAT IS REAL, NOT AN
+# ARTEFACT OF THIS BOX. dy is -0.90, which is 28.8 voxels at metre 32 and 7.2 at metre 8 — not a
+# whole number either way. So the grid cuts this building 0.8 of a voxel higher up than it cuts
+# the one in clips/estate, and a one-voxel member near the boundary can exist in one and not in
+# the other. Expect the thin-matter counts to differ a little from the estate original's; it is
+# the facility's grid that this file has to be right on.
+metre 32
+bounds -15 -2.025 39.5   15 11.6 64.5
+
+solid part_pavilion
