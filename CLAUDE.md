@@ -104,6 +104,26 @@ to measure it wrong. **An agent sent to check something reads the same source th
 have read, and comes back with a conclusion nobody can trace** — which is the original ban's own
 reason, wearing a diff as a disguise.
 
+### Dispatching an agent is not a reason to stop working
+
+**Asked for directly on 2026-08-18.** An agent runs for tens of minutes. Handing one a task and then
+posting a status line is a session that has bought nothing with that time — the agent would have
+finished at the same moment either way, and the wait was spent by nobody.
+
+So: **dispatch, then immediately pick up other work.** When that piece is finished, check whether the
+agents are done; if they are not, pick up the next piece. Idle only when there is genuinely nothing
+left that does not collide.
+
+The one constraint is the one that already governs parallel agents — **files nobody else is in.**
+Whatever is picked up must not touch what the agents are touching, because the integrator resolving
+a conflict against its own uncommitted work is the lost afternoon this rule exists to prevent. In
+practice that means: agents in `src/` → work in `clips/` or `documentation/`; agents in one
+subsystem → work in another; and always commit what is finished before the diffs come back, so the
+integration starts from a clean tree.
+
+**A report is not work.** Writing to the user about what an agent is doing does not count as the
+work; it is what happens around it.
+
 Still true, and it is what makes parallel work safe here: give each agent an isolated worktree and
 files nobody else is in. Two agents in one shader is a lost afternoon.
 
