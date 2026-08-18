@@ -295,7 +295,7 @@ LoadProgress::Snapshot LoadProgress::look() const {
     return out;
 }
 
-LoadHistory LoadProgress::history(const LoadHistory& previous_runs) const {
+LoadHistory LoadProgress::history(const LoadHistory& previous_runs, usize* this_shape) const {
     // What this run did, filed under the shape it turned out to be, keeping whatever is known
     // about the other. A cache hit must not erase what the last cold build measured — that is the
     // whole reason there are two.
@@ -310,6 +310,7 @@ LoadHistory LoadProgress::history(const LoadHistory& previous_runs) const {
 
     LoadHistory out = previous_runs;
     const usize shape = LoadHistory::shape_of(measured);
+    if (this_shape != nullptr) *this_shape = shape;
     std::memcpy(out.seconds[shape], measured, sizeof(measured));
     out.known[shape] = true;
     return out;

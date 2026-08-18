@@ -9164,7 +9164,8 @@ int Application::play(const Options& options) {
     // nineties and the next thing on the screen is the world.
     WS_LOG_INFO("load", "everything ready  [t+{:.0f} ms]", ns_to_ms(now_ns() - load_began_ns_));
     progress_.finish();
-    const LoadHistory measured_load = progress_.history(load_history_);
+    usize this_load_shape = LoadHistory::kBuilt;
+    const LoadHistory measured_load = progress_.history(load_history_, &this_load_shape);
     progress_.history(load_history_).write(loading_cache_path());
 
     // What loading actually spent, per stage.
@@ -9178,9 +9179,16 @@ int Application::play(const Options& options) {
         for (u32 i = 0; i < static_cast<u32>(LoadStage::Count); ++i) {
             // Two shapes are kept apart -- a cold build and a cache hit spend themselves on
             // entirely different stages -- so report whichever this run actually was.
-            const usize shape = LoadProgress::likely_cached(measured_load) ? LoadHistory::kCached
-                                                                          : LoadHistory::kBuilt;
-            const f64 seconds = measured_load.seconds[shape][i];
+            //
+            // **`this_load_shape`, from the merge itself, and NOT `likely_cached`.** They are
+            // different questions and reading the wrong one printed another run's numbers as this
+            // one's: `likely_cached` guesses BEFORE a load which weights the bar should use, from
+            // whatever the file already holds, and the merged history holds both shapes — so when
+            // this run's shape and the guess disagreed, the line reported the OTHER shape's row,
+            // which belongs to some earlier run. Two consecutive runs printed `cutting the shape
+            // 9727ms` identical to the millisecond, four lines under `everything ready [t+337 ms]`,
+            // and it was nearly reported as a ten-second launch stage. D682.
+            const f64 seconds = measured_load.seconds[this_load_shape][i];
             if (seconds < 0.001) continue;
             if (!breakdown.empty()) breakdown += "  ";
             breakdown += std::string(stage_name(static_cast<LoadStage>(i))) + " " +

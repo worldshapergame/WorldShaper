@@ -123,7 +123,18 @@ public:
     // What actually happened, filed under the shape this run turned out to be and keeping what is
     // already known about the other shape — so a cache hit never erases what a cold build
     // measured, which is precisely the record the next cold build needs.
-    LoadHistory history(const LoadHistory& previous_runs) const;
+    // `this_shape`, when given, comes back holding which of the two shapes THIS RUN turned out to
+    // be — and it exists because reading the wrong one printed a previous run's numbers as though
+    // they were this one's.
+    //
+    // The returned history is the merge: this run filed under its own shape, keeping whatever was
+    // already known about the other, because a cache hit must not erase what the last cold build
+    // measured. Anything reporting on THIS run therefore has to be told which half it is, and the
+    // caller that guessed instead — with `likely_cached`, whose whole job is guessing before a run
+    // rather than reading after one — printed `cutting the shape 9727ms` identically to the
+    // millisecond on two consecutive runs, four lines under `everything ready [t+337 ms]`. It was
+    // very nearly reported to the user as a ten-second launch stage. D682.
+    LoadHistory history(const LoadHistory& previous_runs, usize* this_shape = nullptr) const;
 
 private:
     f64 weight_before(LoadStage stage) const;
