@@ -10277,3 +10277,43 @@ what has been looked at (D632).
 | D684 | **A stale baked world cannot be detected on an install — RE-BAKE ON EVERY RELEASE** | honesty | The key can see the format change and not the sampler change |
 | D684 | **The exact flags a release must bake with wrote nothing, silently** | fault | `--no-clip-cache` empties the path both save gates were testing |
 | D684 | **It buys the first sight, not the whole world** | honesty | The ladder still runs for anywhere the baking camera never looked |
+
+## D685 — the bake was reported as working and did nothing on the only path a player uses
+
+**Reported with a photograph, immediately after being told it was fixed:** *"it doesnt fully load it
+looks like this when i enter the world"* — a rotunda floor with the walls missing and white slabs
+adrift in the sky.
+
+**The feature did not fail. It never ran.** D684 baked the world beside `clips/facility.clip` and
+looked for it beside the file being opened. A player does not open that file. They open the **shelf**
+— `<data root>/worlds/facility.wsworld` — so the lookup asked for `worlds/facility.world`, found
+nothing, and the game did exactly what it did before. What the photograph shows is the old behaviour,
+unchanged, which is the honest description of what shipped.
+
+**And the reason it was reported as working is the whole entry: every measurement in D684 was taken
+with `--clip-file`, and `--clip-file` is not how anybody opens a world.** The picture was real, the
+timing was real, the flag was real, and the path was one nobody uses. A gate that runs the developer's
+route and not the player's is a gate that passes for both of them and protects neither.
+
+### Two things that were wrong, and they are different
+
+**The lookup was too narrow.** `shipped_world_candidates` now tries beside the opened file AND the
+shipped `clips/` directory, paired by stem — `facility.wsworld` looks for `clips/facility.world`.
+That is sound rather than a guess, because **the key is hashed from the SOURCE TEXT and not from the
+path** (author tag stripped, D447), so a file either matches by content or is refused by the key.
+
+**And the shelf world is a DIFFERENT TEXT from the clip**, which the widened lookup does not fix and
+must not: this machine's `facility.wsworld` is 7.4 KB standing against a clip that now includes seven
+buildings, so its key correctly refuses `clips/facility.world`. It is a world in its own right and it
+needs its own bake — `--world <path> --bake-world` — which is 5.3 MB and 39,121 of 48,169 nodes, and
+opens complete at frame 60.
+
+**So a release has to bake whatever it SHIPS, by the path it ships it at**, and that is now two
+questions rather than one: the clips, and any world on the shelf beside them.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D685 | **The bake was measured on `--clip-file` and a player uses the shelf** | fault | Every D684 figure was real and about a path nobody opens |
+| D685 | **`shipped_world_candidates` looks beside the file AND in shipped `clips/`** | decision | The key is content-hashed, so a wrong file is refused rather than believed |
+| D685 | **A shelf world is a different text and needs its own bake** | decision | 7.4 KB against a seven-building clip; the key is right to refuse |
+| D685 | **A gate that runs the developer's route protects neither route** | honesty | The picture, the timing and the flag were all real and all beside the point |

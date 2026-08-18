@@ -602,6 +602,29 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — the bake works, and D684 measured it on a path nobody uses (D685)
+
+**BAKE WHAT SHIPS, BY THE PATH IT SHIPS AT, AND OPEN IT THE WAY A PLAYER DOES.** D684 baked beside
+`clips/facility.clip` and looked beside the file being opened — and a player opens the SHELF,
+`<data root>/worlds/facility.wsworld`. So the lookup asked for a file that was never written, found
+nothing, and the game behaved exactly as before. Reported with a photograph within the hour.
+
+**Every figure in D684 was real and taken with `--clip-file`, which is not how anybody opens a
+world.** That is the lesson worth more than the fix.
+
+Two separate things: the lookup now tries beside the opened file AND the shipped `clips/` directory
+paired by stem (sound because the key is hashed from the source TEXT, not the path); and a shelf
+world is a different text from the clip — 7.4 KB against a seven-building estate — so its key
+correctly refuses the clip's bake and it needs its own:
+
+```powershell
+WorldShaper --world <path to .wsworld> --no-title --no-clip-cache --bake-world --settle --max-seconds 150
+```
+
+5.3 MB, 39,121 of 48,169 nodes, and the shelf world then opens complete at frame 60.
+
+---
+
 #### START HERE — the first sight of a world is a 3.7 MB read now (D684)
 
 **The user chose precompute out of the three D683 put to them, and it is built.** `--bake-world`

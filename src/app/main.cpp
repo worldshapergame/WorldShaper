@@ -1834,6 +1834,36 @@ std::string shipped_world_for(const std::string& clip_path) {
     return out.string();
 }
 
+// ...and every place to LOOK for one, which is not the same list, and getting that wrong made the
+// whole feature do nothing on the only path a player uses.
+//
+// A world is baked beside its clip — `clips/facility.clip` — and a player does not open that. They
+// open the shelf, which is `<data root>/worlds/facility.wsworld`, a copy of the same text under a
+// different name in a different directory. Looking only beside the file being opened therefore
+// found nothing, every time, for the one case that matters; it was tested with `--clip-file`, which
+// is not how anybody opens a world.
+//
+// Looking in the shipped `clips/` too is sound rather than a guess, because **the cache key is
+// hashed from the SOURCE TEXT and not from the path** (with the author tag stripped, D447). A world
+// on the shelf and the clip it was seeded from hash the same, so the file either matches by content
+// or is refused by the key. The stem is what pairs them: `facility.wsworld` looks for
+// `clips/facility.world`.
+std::vector<std::string> shipped_world_candidates(const std::string& opened_path) {
+    std::vector<std::string> out;
+    out.push_back(shipped_world_for(opened_path));
+    const std::string stem = std::filesystem::path(opened_path).stem().string();
+    const std::filesystem::path beside[] = {
+        std::filesystem::path("clips"),
+        compiled_shader_dir().parent_path() / "clips",
+        std::filesystem::path(WS_SHADER_SOURCE_DIR).parent_path() / "clips",
+    };
+    for (const auto& dir : beside) {
+        std::string candidate = (dir / (stem + ".world")).string();
+        if (candidate != out.front()) out.push_back(std::move(candidate));
+    }
+    return out;
+}
+
 std::string default_clip_path() {
     const std::filesystem::path candidates[] = {
         std::filesystem::path("clips") / "facility.clip",
@@ -5313,18 +5343,17 @@ void Application::build_world() {
             //
             // Tried SECOND, so a world this machine has built for itself always wins: that one is
             // current by construction, and it may have grown past whatever was baked (D634).
-            const std::string shipped = shipped_world_for(path);
-            bool from_shipped = false;
             bool got = read_world_cache(cache_path, key, cache, &jobs);
-            if (!got && world_cache_matches(shipped, bake_key)) {
-                got = read_world_cache(shipped, bake_key, cache, &jobs);
-                from_shipped = got;
-                if (got) {
-                    WS_LOG_INFO("world", "opened the world shipped beside '{}'; nothing to sample",
-                                path);
+            if (!got) {
+                for (const std::string& shipped : shipped_world_candidates(path)) {
+                    if (!world_cache_matches(shipped, bake_key)) continue;
+                    if (!read_world_cache(shipped, bake_key, cache, &jobs)) continue;
+                    got = true;
+                    WS_LOG_INFO("world", "opened the world shipped at '{}'; nothing to sample",
+                                shipped);
+                    break;
                 }
             }
-            (void)from_shipped;
             if (got) {
                 progress_.enter(LoadStage::Uploading);
                 // The palette comes from the SCRIPT, not from the cache.
