@@ -711,7 +711,18 @@ let part_orangery = translate { or_assembly } 42.30 0.90 -5.25
 # Later rules win, so the order is the order of covering: ground, then structure, then what is set
 # into it, and the glass before the iron so that a bar reads over the pane it holds.
 
-paint limestone
+# THE BASE COAT IS THE MANIFEST'S, AND THIS FILE'S OWN IS DELETED — the seventh statement.
+#
+# The standalone twin says `paint limestone` here, with no `where=`, and it is right to: a clip
+# needs a coat under everything else. A FRAGMENT must not, and the reason is rule ORDER rather
+# than colour. Later rules win, and the manifest includes the fragments in a fixed sequence -- so a
+# bare `paint` in this file runs AFTER every rule of every fragment included before it and repaints
+# all of them. This one is `limestone` and the manifest's own base coat is also `limestone`, so the
+# damage is invisible in a material census and total on the screen: campanile, grotto, theatre and
+# pavilion would come back solid limestone, stripped of every coat they were given, with a clean
+# parse and no error anywhere.
+#
+# The manifest paints the base coat once, before any fragment is included. See clips/facility.clip.
 
 paint lawn        where=or_terrace_at     below=0.035
 paint gravel      where=or_gravel_at      below=0.035

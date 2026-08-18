@@ -1121,7 +1121,18 @@ let colon_probe_walk = intersection {
 # statements below displace the surface by up to 0.050 m, and a test at zero misses every voxel
 # that displacement made — which leaves a pale rind of the base coat over the weathered work and
 # looks exactly like weathering rather than like the paint failing to reach the surface.
-paint limestone
+# THE BASE COAT IS THE MANIFEST'S, AND THIS FILE'S OWN IS DELETED — the seventh statement.
+#
+# The standalone twin says `paint limestone` here, with no `where=`, and it is right to: a clip
+# needs a coat under everything else. A FRAGMENT must not, and the reason is rule ORDER rather
+# than colour. Later rules win, and the manifest includes the fragments in a fixed sequence -- so a
+# bare `paint` in this file runs AFTER every rule of every fragment included before it and repaints
+# all of them. This one is `limestone` and the manifest's own base coat is also `limestone`, so the
+# damage is invisible in a material census and total on the screen: campanile, grotto, theatre and
+# pavilion would come back solid limestone, stripped of every coat they were given, with a clean
+# parse and no error anywhere.
+#
+# The manifest paints the base coat once, before any fragment is included. See clips/facility.clip.
 
 paint lawn       where=colon_ground_at      below=0.035
 paint gravel     where=colon_gravel_at      below=0.035
