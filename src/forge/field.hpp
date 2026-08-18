@@ -698,9 +698,27 @@ public:
     //
     // Returns false rather than a wrong number when it meets an op it does not mirror or runs out
     // of stack: "I could not" and "the answer is nought" must never be the same reply (trap 7).
-    // `kMirrorStack` is 64 because the deepest path in the facility's field is 41 and the deepest
-    // any evaluation actually went is 36 (D643).
-    static constexpr u32 kMirrorStack = 64;
+    // `kMirrorStack` was 64 because the deepest path in the FACILITY's field is 41 and the deepest
+    // any evaluation actually went is 36 (D643). **The estate needs 77** and 64 refused every point
+    // of it, so it is 128.
+    //
+    // What grew is not the buildings, it is the assembly. Each of the seven is bound as
+    // `part_x = translate { x_assembly }` and they join in one `union` of seven, and every shape a
+    // paint rule names carries a translated twin over whatever it was already made of. So depth
+    // rises with the number of buildings on the estate, not with how complicated any one of them
+    // is, and the next building will cost a few more frames whatever it looks like.
+    //
+    // 128 is 1.66x the measured 77, which is the same headroom 64 gave the facility's 41. It is not
+    // free on a card -- a frame is a node index, a point and a step counter, and the shader has to
+    // hold one stack per invocation -- so R12b's register budget is written against this number and
+    // not against 64. `--field-single` prints the depth actually reached; if it ever approaches
+    // this, the answer is not a bigger constant, because the growth is linear in buildings.
+    //
+    // A refusal and a disagreement are DIFFERENT ANSWERS and this constant is what separates them:
+    // `mirror_eval` returns false at `top >= kMirrorStack`, so a clip that outgrows the stack
+    // reports nought sign changes over nought points -- which reads exactly like perfect agreement
+    // unless somebody counts the refusals. It did, and that is the only reason this was found.
+    static constexpr u32 kMirrorStack = 128;
     bool mirror_eval(u32 at, Vec3 p, f64& out, u32* deepest = nullptr) const;
 
     // The same walk with every point and every answer rounded to SINGLE precision as it crosses a

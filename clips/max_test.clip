@@ -1,0 +1,75 @@
+# max_test — what does `max { distance amount }` actually bound?
+#
+# D672 says `max { zone field }` is "a union over fields rather than an intersection", and that this
+# is why `surface.clip`'s weathering reaches buildings thirty metres from the block. Two things in
+# the repository disagree with that sentence: `clip_script.cpp` knows `max`, `min`, `union` AND
+# `intersection` as four separate operators, and `20-clip-forge.md` §1 reads a value either as a
+# distance (negative inside) or as an amount (no sign convention at all). Under the distance reading
+# `max` IS the intersection and the rule would bound correctly.
+#
+# Nobody should read a third 1,000-line file to settle that. This is two boxes and one noise field,
+# which samples in seconds and answers it by measurement.
+#
+# HOW TO READ THE RESULT — `tools/clipcheck.sh clips/max_test.clip --metre 32`
+#
+# The solid is one small box, `mt_zone`, 2 m on a side at the origin, inside bounds that reach 10 m
+# in every direction. The PAINT is what is under test. Three rules, three materials, and each one
+# names a different combination:
+#
+#   in_zone     where=mt_zone                  the control: a plain distance, must be bounded
+#   by_amount   where=mt_max_amount            max { zone, an AMOUNT } -- the surface.clip form
+#   by_distance where=mt_max_distance          max { zone, another DISTANCE } -- the textbook form
+#
+# All three are painted on the same solid, so what separates them is only which cells each claims.
+# If `max` intersects, `mt_max_amount` and `mt_max_distance` both stay inside `mt_zone` and the
+# material census shows in_zone overpainted by whichever rule comes last. If `max` unions over an
+# amount, `by_amount` claims cells the zone does not contain -- but the SOLID is only the zone, so
+# it cannot claim cells outside the building either way.
+#
+# THAT LAST SENTENCE IS THE WHOLE TRAP AND IT IS WHY THIS FILE HAS A SECOND SOLID. A paint rule can
+# only colour matter that exists. Testing the bound against a solid the same shape as the zone
+# proves nothing at all, because there is nowhere outside the zone for the paint to go wrong. So the
+# solid here is a WIDE SLAB running the full 20 m, and the zone is a 2 m box in the middle of it:
+# now "does the rule stay in the zone" is a question the census can answer, because there are
+# eighteen metres of slab either side for it to leak onto.
+#
+# WHAT EACH ANSWER MEANS FOR surface.clip
+#
+#   by_amount confined to the middle 2 m    -> `max` bounds, D672's sentence is wrong, and the
+#                                              weathering leak has some other cause entirely
+#   by_amount spread along the slab         -> D672 is right, and the fix is a real envelope
+
+metre 32
+bounds -10 -1 -10   10 2 10
+
+# Four flat colours, declared here because this clip includes no contract. Nothing about the
+# appearance matters; what matters is that the census can tell the four apart by name.
+material base       rgb=200,200,200 rough=200
+material in_zone    rgb=20,200,20   rough=200
+material by_amount  rgb=200,20,20   rough=200
+material by_distance rgb=20,20,200  rough=200
+
+# The slab everything is painted on: 20 x 0.5 x 4 m, so a rule that leaks has somewhere to leak to.
+let mt_slab = box -10 0 -2   10 0.5 2
+
+# The zone. A 2 m box at the origin -- the thing every rule below is supposed to be confined to.
+let mt_zone = box -1 -0.5 -2   1 1 2
+
+# An AMOUNT: noise, read for its value and not its sign, the same shape as surface.clip's
+# `add { constant 0.378 negate { s_moss_n } }`.
+let mt_noise = fbm size=0.28 octaves=2 seed=349
+let mt_amount = add { constant 0.378 negate { mt_noise } }
+
+# A DISTANCE: a second box, overlapping the zone and running the length of the slab. Under the
+# distance reading `max { mt_zone mt_bar }` is their intersection, which is the middle 2 m only.
+let mt_bar = box -10 -0.5 -0.5   10 1 0.5
+
+let mt_max_amount   = max { mt_zone mt_amount }
+let mt_max_distance = max { mt_zone mt_bar }
+
+solid mt_slab
+
+paint base
+paint in_zone     where=mt_zone          below=0.035
+paint by_amount   where=mt_max_amount    below=0.035
+paint by_distance where=mt_max_distance  below=0.035

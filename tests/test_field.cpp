@@ -1393,6 +1393,73 @@ TEST_CASE("the mirror evaluator reaches the same answer as the recursive one") {
     CHECK(deepest < Field::kMirrorStack);
 }
 
+TEST_CASE("the single-precision mirror is the same walk, narrowed, and stays inside a micron") {
+    // R12b's last unknown is whether `f32` is enough for the field, and `mirror_eval_single` is
+    // the instrument that answers it: the same stack walk with every point and every answer
+    // narrowed to `float` as it crosses a node boundary. `--field-single` runs it over a whole
+    // building; this runs it over a small one, so that a regression in the narrowing has something
+    // to fail against that does not need the estate and two minutes.
+    //
+    // Three things are asserted and they are different claims. It is the SAME WALK -- so a
+    // structure the double arm can reach, the single arm can reach too. It is NARROWED -- so it
+    // must not come back bit-identical to the double arm everywhere, or the `narrow` has stopped
+    // happening and the mode would report a clean run for the wrong reason (trap 15: a clean
+    // measurement and a measurement that never ran look identical). And it must LEAVE THE FLAG
+    // DOWN -- the narrowing rides on a thread-local, so an arm run after a single-precision one
+    // has to be double again.
+    Field f;
+    const u32 wall = f.box({0, 1.0, 0}, {3.0, 1.0, 0.4});
+    const u32 hole = f.sphere({0.5, 1.2, 0}, 0.7);
+    const u32 carved = f.subtract({wall, hole});
+    const u32 post = f.cylinder({-2.0, 0.8, 0}, 0.25, 0.8, 1);
+    const u32 run = f.repeat(post, {1.3, 0, 0}, {3, 0, 0});
+    const u32 turned = f.rotate(f.unite({carved, run}), {0.0, 0.125, 0.0});
+    const u32 moved = f.translate(turned, {0.4, 0, 0.2});
+    const u32 root = f.unite({moved, f.torus({0, 2.4, 0}, 0.9, 0.2, 1)});
+    f.build_bounds();
+    REQUIRE(f.mirror_covers(root));
+
+    u64 points = 0;
+    u64 differed = 0;
+    u64 changed_side = 0;
+    f64 worst = 0.0;
+    for (int i = -8; i <= 8; ++i) {
+        for (int j = -5; j <= 9; ++j) {
+            for (int k = -6; k <= 6; ++k) {
+                const Vec3 p{i * 0.55, j * 0.43, k * 0.61};
+                f64 walked = 0.0;
+                f64 narrowed = 0.0;
+                REQUIRE(f.mirror_eval(root, p, walked));
+                REQUIRE(f.mirror_eval_single(root, p, narrowed));
+                ++points;
+                const f64 d = std::abs(walked - narrowed);
+                worst = std::max(worst, d);
+                if (d != 0.0) ++differed;
+                if ((walked < 0.0) != (narrowed < 0.0)) ++changed_side;
+            }
+        }
+    }
+    REQUIRE(points > 1000);
+
+    // Narrowing to `float` and back has a floor of about 6e-8 relative, and this shape is a few
+    // metres across, so a micron is the order to expect. A metre would be a broken walk and a
+    // bit-identical answer at every point would be a narrowing that is not happening.
+    CHECK(worst < 1e-5);
+    CHECK(differed > 0);
+    // Ties are the only thing single precision can move on a field this size, and this lattice
+    // deliberately misses every surface, so nothing here should change side at all.
+    CHECK(changed_side == 0);
+
+    // The flag is a thread-local and a walk that left it up would silently narrow every later
+    // evaluation on this thread -- including the reference arm of the mode that uses it.
+    for (int i = -8; i <= 8; ++i) {
+        const Vec3 p{i * 0.55, 0.43, 0.61};
+        f64 walked = 0.0;
+        REQUIRE(f.mirror_eval(root, p, walked));
+        CHECK(walked == f.eval(root, p));
+    }
+}
+
 TEST_CASE("the mirror says which op it does not know, rather than answering anyway") {
     // Trap 7 in the second evaluator: "I could not" and "the answer is nought" must never be the
     // same reply. Every op the facility's solid reaches is mirrored, and one that is not says so

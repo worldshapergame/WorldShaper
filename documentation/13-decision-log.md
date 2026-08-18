@@ -9412,3 +9412,77 @@ which is what D674 already concluded from the other end.
 | D675 | **R11a's 85% is a pre-D614 figure and must stop being quoted** | fault | The split was taken eleven days ago; the same table records 0.017 ms beside the 0.213 |
 | D675 | **A superseded figure beside its own correction is worse than no figure** | honesty | Both are in R11a's section; only the sentence gets remembered |
 | D675 | **Unbounded paint rules are not the estate's cost** | honesty | 545 of 553 are bounded, so `surface.clip`'s fault is visual and not a load cost |
+
+## D676 — f32 is enough for the field, and the instrument found a stack that was not
+
+R12's one open question is answered and its answer is yes, with a wide margin. The instrument that
+answers it also found something nobody was looking for, and the second finding is the more useful of
+the two because of HOW it surfaced.
+
+### `--field-single`, and what it says
+
+`Field::mirror_eval_single` walks the same nodes as `mirror_eval` rounding every point and every
+answer to `float` at each node boundary — a lower bound on a real `float` evaluator's error, because
+each node's own arithmetic stays double. It was built at D644 and **nothing runnable on Windows had
+ever called it**: `tools/paintcheck.cpp` does, but that tool is g++-only, is not in the CMake build,
+and walks the paint stack alone, so the solid had never been asked.
+
+`--field-single` asks it. Two grids, and the second is the point: the estate's box is
+**125.5 x 37.5 x 110.5 m**, so a uniform grid of 21,242 points stands 2.97 m apart and only **74** of
+them come within half a voxel of a surface — and a sign can only change where the reference answer is
+smaller than the gap between the arms, which is microns. **A uniform grid reports zero by
+construction**, and reporting only it would have been trap 15 exactly. So candidate points are
+projected onto the isosurface by two Newton steps, snapped to the authored lattice, and the 3x3x3
+block of real voxel centres around each is walked.
+
+**The estate, seven buildings, 32 voxels a metre:**
+
+| | |
+|---|---|
+| points | **44,084**, of which **10,683** within half a voxel of a surface |
+| sign changes | **0**, at the surface and deeper |
+| closest the reference got to zero | **1.23 µm** — the same order as the gap between the arms |
+| worst difference at a surface | **0.47 µm** against a **31.25 mm** voxel, 1/66,000 of one |
+| paint | 4,396 evaluations, **0** sign changes and **0** band-edge flips |
+
+**The error is a function of DISTANCE FROM THE ORIGIN, not of graph depth**, which refutes the
+premise the question was asked under. `sampler.clip` in a 12 m box: worst 2.25e-7 m. The estate, out
+to 63 m: 4.35e-6 m — a ratio of 22 against a coordinate ratio of about 20. So "forty transforms in
+single precision" is not what accumulates; `|p| x f32 epsilon` is. **That bounds the future**: f32
+stays safe while a world stays within kilometres of its origin, and it degrades linearly in that
+distance rather than in how complicated the clip is.
+
+What this cannot do is prove the rate is nought. The grid reached the edge of where a flip is
+possible and did not cross it; the implied rate is of order one in a million surface voxels.
+
+### And the finding nobody asked for: 64 stack frames was not enough
+
+**Run against the estate as it stands, every single point was REFUSED.** Not disagreed with —
+refused. `mirror_eval` returns false at `top >= kMirrorStack` and `kMirrorStack` was 64, sized at
+D643 on the facility's deepest path of 41 and deepest reached of 36. **The estate reaches 80.**
+
+What grew is the assembly and not the buildings. Each of the seven is `part_x = translate {
+x_assembly }`, they join in one union of seven, and every shape a paint rule names now carries a
+translated twin over whatever it was already made of. **So depth rises with the NUMBER of buildings,
+not with the complexity of any one of them**, and the next one costs a few more frames whatever it
+looks like. It is 128 now, which is 1.6x the measured 80 — the same headroom 64 gave 41.
+
+**The way this surfaced is the whole lesson.** A refusal and a disagreement are different answers,
+and a clip that outgrows the stack reports **nought sign changes over nought points** — which reads
+exactly like perfect agreement. The only reason it was caught is that the instrument counts refusals
+separately and says `NO POINT CAME WITHIN HALF A VOXEL OF A SURFACE, so nought sign changes is a
+property of the grid and not of the field`. Trap 7, designed for in advance, and it paid immediately.
+
+**It was also caught only because the integrator re-ran it.** The agent that built the mode measured
+**553 paint rules**; three more buildings landed on `main` while it worked and the estate is **628**.
+Its numbers were right for a building that no longer existed, and its verdict — the correct verdict —
+was reached on the wrong clip. **Re-running an agent's measurement on the tree it is being merged
+into is not ceremony.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D676 | **f32 is enough for the field** | decision | 0 sign changes over 44,084 points, 10,683 of them at a surface; worst 0.47 µm against a 31.25 mm voxel |
+| D676 | **The error scales with distance from the origin, not graph depth** | fault | 12 m box 2.25e-7, 63 m 4.35e-6 — a ratio of 22 against a coordinate ratio of 20; the question's premise was wrong |
+| D676 | **`kMirrorStack` 64 → 128, measured at 80 on the estate** | fault | 64 refused every point; depth grows with the number of buildings, not their complexity |
+| D676 | **A uniform grid over a 125 m box cannot answer this** | honesty | 74 of 21,242 points near a surface; zero flips would have been a property of the grid |
+| D676 | **An agent's measurement is re-run on the tree it merges into** | honesty | It measured 553 rules; main had moved to 628, and its right answer was about the wrong building |

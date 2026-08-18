@@ -401,6 +401,33 @@ struct Options {
     // so the arms are alternated inside one run and every round is printed.
     u32 clean_world_rounds = 2;
 
+    // R12b's last unknown, asked of a real building: is `f32` enough for the field?
+    //
+    // `Field::mirror_eval_single` is the shader-shaped stack walk with every point and every
+    // answer narrowed to `float` as it crosses a node boundary -- which is what a shader carrying
+    // `vec3` and `float` between nodes does. Each node's own arithmetic is still double, so it is
+    // a LOWER BOUND on what a real GLSL evaluator carries. It was written for this question and
+    // until now nothing in the game had ever asked it: the only caller anywhere was
+    // `tools/paintcheck.cpp`, which walks the PAINT stack on a machine with a POSIX shell.
+    //
+    // A flag rather than a test for the same reason `--stipple-tiled` is: the answer is a property
+    // of a real building at a real resolution. No property of the graph can give it -- the estate
+    // is 125.5 by 37.5 by 110.5 metres (the plan still says thirty-five across, which was the old
+    // facility) and forty nodes deep, and the question is whether a point that has been through
+    // forty transforms in single precision still lands on the same SIDE of a surface. An average
+    // error is not an answer to that and reporting one would be a wrong answer; what is counted
+    // is sign changes, split by whether they happen at the surface.
+    //
+    // Card-free and headless, beside `--clip-file`. Exits non-zero when a sign change happens
+    // at the surface, so it is a gate and not only a report.
+    bool field_single = false;
+    // How many lattice points to ask. The grid is the clip's own box at the authored resolution,
+    // strided on every axis until about this many points are left, so the walk is over the points
+    // a voxel decision is actually made at rather than over a box of arbitrary corners. The
+    // default finishes the estate in a couple of minutes on this machine; the mirror does not cull
+    // (D644), so one point costs about what a whole node's worth of culled evaluation does.
+    u64 field_single_points = 20000;
+
     // Deliberately crash, to prove reporting works on this machine before it is needed.
     // "read", "write", "check", "throw", "divzero", or "report" for a report without dying.
     std::string crash_test;
@@ -750,7 +777,7 @@ struct Options {
                !orbit.empty() || !cuts.empty() || chisel_every > 0 || ticks > 0 ||
                !crash_test.empty() || benchmark || !edit.empty() ||
                !preview.empty() || !clip.empty() || !clip_file.empty() || sample_cost ||
-               stipple_tiled || clean_world || max_seconds > 0.0;
+               stipple_tiled || field_single || clean_world || max_seconds > 0.0;
     }
 
     // Air that is not empty: --fog "extinction,albedo,g,scale-height,base".
@@ -943,6 +970,10 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.stipple_tiled = true;
     } else if (arg == "--stipple-level") {
         options.stipple_level = next_number(5);
+    } else if (arg == "--field-single") {
+        options.field_single = true;
+    } else if (arg == "--field-single-points") {
+        options.field_single_points = next_number(20000);
     } else if (arg == "--refine-all") {
         options.refine_all = true;
     } else if (arg == "--clip-at") {
@@ -1361,6 +1392,17 @@ void print_help() {
         "  --stipple-level N     the node level the tiles are taken at, which sets the\n"
         "                        resolution too: 5 is eight voxels a metre (default, and what\n"
         "                        the shipped verdict is taken at), 3 is the authored thirty-two\n"
+        "  --field-single        whether f32 is enough for the field: the mirror evaluator run\n"
+        "                        twice at every lattice point, once in double and once with\n"
+        "                        every point and answer narrowed to float at each node\n"
+        "                        boundary, counting the points that CHANGE SIDE. Headless; the\n"
+        "                        facility unless --clip-file says otherwise. R12b's last\n"
+        "                        unknown; exits non-zero if any sign change is at the surface\n"
+        "  --field-single-points N  the budget, in lattice points (20000). It is spent twice\n"
+        "                        over: on an open grid across the whole clip box, and on the\n"
+        "                        authored voxel centres around the surfaces themselves, which\n"
+        "                        is the only place a sign can change. A quarter again goes on\n"
+        "                        the paint rules. The default is about two minutes\n"
         "  --clean-world         what taking the stipple verdict from the WORLD costs, and\n"
         "                        whether the one shared walk agrees with the shipped two.\n"
         "                        Builds a world out of the clip and runs both arms over it,\n"
@@ -10747,6 +10789,670 @@ int run_stipple_tiled(const Options& options, const forge::Script& script, JobSy
     return passed ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------------------------
+// R12b's last unknown: is `f32` enough for the field?  `--field-single`.
+//
+// The plan names this as the one question about R12 that no property of the graph can answer, and
+// How deep the walk actually went on this clip, so `kMirrorStack` is a measurement rather than a
+// guess. The estate reached 77 where the facility reaches 36; see the constant's own note.
+static u32 g_probe_deepest = 0;
+
+// it is the reason `Field::mirror_eval_single` exists. The estate is thirty-five metres across and
+// forty nodes deep; the question is whether a point carried through forty transforms in single
+// precision still lands on the same SIDE of a surface as the double-precision original.
+//
+// **An average error is not an answer and printing one would be a wrong answer.** A field is read
+// for its sign: a voxel is filled when the answer is negative and empty when it is not. So what is
+// counted here is the points where `(ref < 0) != (single < 0)` -- each of which is a voxel that
+// exists in one evaluator and not the other -- split by whether the reference answer was near
+// enough to a surface for the disagreement to be a TIE rather than a failure. The distribution of
+// |difference| is printed by decade beside it, because one worst-case number cannot tell a field
+// that is uniformly a micron out from one that is exact everywhere and metres out in one place.
+//
+// Both arms are the same walk, so nothing here is confounded by the two evaluators being different
+// programs: `mirror_eval` and `mirror_eval_single` are one function and one stack, and the only
+// difference between the runs is the `narrow` at each push and each return. That also means
+// neither arm culls (D644), so a point costs about what a node's worth of culled sampling does.
+struct SinglePrecisionCounts {
+    u64 points = 0;
+    u64 refused = 0;        // the walk said "I could not" -- never counted as agreement (trap 7)
+    // How many of the points were near enough to a surface that a sign change was POSSIBLE at
+    // all, and the closest any of them got. Without these two a report of nought sign changes
+    // cannot be told from a grid that never went near a surface -- trap 15, and it is the whole
+    // reason this mode has two grids rather than one.
+    u64 near_surface = 0;
+    f64 closest = 1e300;
+    u64 flips = 0;          // (ref < 0) != (single < 0)
+    u64 flips_surface = 0;  // ...with |ref| inside half a voxel diagonal: a tie
+    u64 flips_deep = 0;     // ...further out than that: a precision failure
+    u64 band_flips = 0;     // paint only: the rule's [low, high] decision changed
+    // paint only: how many evaluations stood nearer to one of the rule's own band edges than the
+    // two arms stood to each other. A band flip can only happen among these, so it is the paint
+    // arm's answer to "could this sample ever have seen one" -- `near_surface`'s counterpart.
+    u64 edge_close = 0;
+    f64 worst = 0.0;
+    forge::Vec3 worst_at{0, 0, 0};
+    f64 worst_ref = 0.0;
+    f64 worst_single = 0.0;
+    forge::Vec3 flip_deepest_at{0, 0, 0};   // the deep flip that was furthest from a surface
+    f64 flip_deepest_ref = 0.0;
+    u32 flip_deepest_rule = 0;
+    u32 worst_rule = 0;
+    // |difference| by decade. 0 is "the two answers are bit-identical"; 1..kDecades-1 is
+    // 10^(e) <= |d| < 10^(e+1) for e from kFirstDecade upwards, with the ends saturating.
+    static constexpr i32 kFirstDecade = -20;
+    static constexpr u32 kDecades = 24;
+    u64 decade[kDecades]{};
+
+    void note(f64 ref, f64 single, forge::Vec3 at, f64 surface_reach, u32 rule) {
+        ++points;
+        const f64 d = std::abs(ref - single);
+        if (d > worst) {
+            worst = d;
+            worst_at = at;
+            worst_ref = ref;
+            worst_single = single;
+            worst_rule = rule;
+        }
+        if (d == 0.0) {
+            ++decade[0];
+        } else {
+            const i32 e = static_cast<i32>(std::floor(std::log10(d)));
+            const i32 slot = std::clamp(e - kFirstDecade, 0, static_cast<i32>(kDecades) - 2) + 1;
+            ++decade[slot];
+        }
+        closest = std::min(closest, std::abs(ref));
+        if (std::abs(ref) < surface_reach) ++near_surface;
+        if ((ref < 0.0) != (single < 0.0)) {
+            ++flips;
+            if (std::abs(ref) < surface_reach) {
+                ++flips_surface;
+            } else {
+                ++flips_deep;
+                if (std::abs(ref) > std::abs(flip_deepest_ref)) {
+                    flip_deepest_ref = ref;
+                    flip_deepest_at = at;
+                    flip_deepest_rule = rule;
+                }
+            }
+        }
+    }
+
+    void add(const SinglePrecisionCounts& other) {
+        points += other.points;
+        refused += other.refused;
+        near_surface += other.near_surface;
+        closest = std::min(closest, other.closest);
+        flips += other.flips;
+        flips_surface += other.flips_surface;
+        flips_deep += other.flips_deep;
+        band_flips += other.band_flips;
+        edge_close += other.edge_close;
+        for (u32 i = 0; i < kDecades; ++i) decade[i] += other.decade[i];
+        if (other.worst > worst) {
+            worst = other.worst;
+            worst_at = other.worst_at;
+            worst_ref = other.worst_ref;
+            worst_single = other.worst_single;
+            worst_rule = other.worst_rule;
+        }
+        if (std::abs(other.flip_deepest_ref) > std::abs(flip_deepest_ref)) {
+            flip_deepest_ref = other.flip_deepest_ref;
+            flip_deepest_at = other.flip_deepest_at;
+            flip_deepest_rule = other.flip_deepest_rule;
+        }
+    }
+};
+
+void print_single_decades(const char* what, const SinglePrecisionCounts& counts) {
+    // Only the rows that have anything in them, and every one of them, so the shape is visible.
+    // A single worst-case number cannot distinguish "a micron everywhere" from "exact everywhere
+    // and a metre out at one point", and those two are different answers to R12b's question.
+    std::printf("%-13s |difference| by decade, of %llu points:\n", what,
+                static_cast<unsigned long long>(counts.points));
+    if (counts.decade[0] > 0) {
+        std::printf("              %-22s %llu\n", "bit-identical",
+                    static_cast<unsigned long long>(counts.decade[0]));
+    }
+    for (u32 i = 1; i < SinglePrecisionCounts::kDecades; ++i) {
+        if (counts.decade[i] == 0) continue;
+        const i32 e = SinglePrecisionCounts::kFirstDecade + static_cast<i32>(i) - 1;
+        char label[48];
+        if (i == 1) {
+            std::snprintf(label, sizeof(label), "under 1e%d", e + 1);
+        } else if (i + 1 == SinglePrecisionCounts::kDecades) {
+            std::snprintf(label, sizeof(label), "1e%d and over", e);
+        } else {
+            std::snprintf(label, sizeof(label), "1e%d to 1e%d", e, e + 1);
+        }
+        std::printf("              %-22s %llu\n", label,
+                    static_cast<unsigned long long>(counts.decade[i]));
+    }
+}
+
+int run_field_single(const Options& options, const forge::Script& script, JobSystem& jobs) {
+    const i32 per = (script.settings.voxels_per_metre > 0) ? script.settings.voxels_per_metre
+                                                           : kVoxelsPerMetre;
+    const f64 voxel = 1.0 / static_cast<f64>(per);
+    // Half a voxel's diagonal: the distance from a voxel's centre to its furthest corner, and
+    // therefore the reach inside which a disagreement about the sign is a disagreement about a
+    // point that is on the surface rather than a point that is anywhere in particular.
+    const f64 surface_reach = 0.5 * std::sqrt(3.0) * voxel;
+
+    std::printf("field single  %s at %d voxels a metre%s\n",
+                options.clip_file.empty() ? default_clip_path().c_str()
+                                          : options.clip_file.c_str(),
+                per,
+                (options.clip_metre > 0) ? ", from --clip-metre"
+                                         : ", the resolution the clip is authored at");
+
+    // ---- what the mirror can and cannot walk -------------------------------------------------
+    //
+    // Asked first and separately, because "I could not" and "the answer is nought" must never be
+    // the same reply (trap 7). An op the mirror has not learned is named, once, and the run stops:
+    // a report of nought sign changes over a field the walk silently refused is the worst possible
+    // output this mode could produce.
+    forge::Op missing = forge::Op::Constant;
+    if (!script.field.mirror_covers(script.solid, &missing)) {
+        std::printf("covers        NO: the solid reaches `%s`, which the mirror does not "
+                    "implement; nothing here can be measured\n",
+                    forge::op_name(missing));
+        return 1;
+    }
+    usize rules_uncovered = 0;
+    std::string uncovered_names;
+    for (usize i = 0; i < script.paint.size(); ++i) {
+        forge::Op rule_missing = forge::Op::Constant;
+        const bool test_ok = script.field.mirror_covers(script.paint[i].test, &rule_missing);
+        bool place_ok = true;
+        if (test_ok && script.paint[i].has_place) {
+            place_ok = script.field.mirror_covers(script.paint[i].place, &rule_missing);
+        }
+        if (test_ok && place_ok) continue;
+        ++rules_uncovered;
+        if (uncovered_names.size() < 400) {
+            if (!uncovered_names.empty()) uncovered_names += ", ";
+            uncovered_names += "rule ";
+            uncovered_names += std::to_string(i);
+            uncovered_names += " (";
+            uncovered_names += forge::op_name(rule_missing);
+            uncovered_names += ")";
+        }
+    }
+    if (rules_uncovered > 0) {
+        std::printf("covers        NO: %zu of %zu paint rules reach an op the mirror does not "
+                    "implement: %s\n",
+                    rules_uncovered, script.paint.size(), uncovered_names.c_str());
+        return 1;
+    }
+    std::printf("covers        the solid and all %zu paint tests are ops the mirror implements\n",
+                script.paint.size());
+
+    // ---- the grid --------------------------------------------------------------------------
+    //
+    // The clip's own box on the authored lattice, exactly as `forge::sample` lays it out -- voxel
+    // CENTRES, half-open at the top -- and then strided until about the asked-for number of points
+    // is left. Centres and not corners because a point half way between two voxels is not a
+    // decision anything makes, and the whole question is about decisions.
+    const i64 lo[3] = {
+        static_cast<i64>(std::floor(script.settings.low.x * static_cast<f64>(per))),
+        static_cast<i64>(std::floor(script.settings.low.y * static_cast<f64>(per))),
+        static_cast<i64>(std::floor(script.settings.low.z * static_cast<f64>(per)))};
+    const i64 hi[3] = {
+        static_cast<i64>(std::floor(script.settings.high.x * static_cast<f64>(per))),
+        static_cast<i64>(std::floor(script.settings.high.y * static_cast<f64>(per))),
+        static_cast<i64>(std::floor(script.settings.high.z * static_cast<f64>(per)))};
+    i64 full[3];
+    for (u32 axis = 0; axis < 3; ++axis) full[axis] = std::max<i64>(hi[axis] - lo[axis], 0);
+    if (full[0] <= 0 || full[1] <= 0 || full[2] <= 0) {
+        std::printf("the clip's box is %lld x %lld x %lld voxels; there is nothing to walk\n",
+                    static_cast<long long>(full[0]), static_cast<long long>(full[1]),
+                    static_cast<long long>(full[2]));
+        return 1;
+    }
+    const u64 want = std::max<u64>(options.field_single_points, 8);
+    const f64 total_voxels = static_cast<f64>(full[0]) * static_cast<f64>(full[1]) *
+                             static_cast<f64>(full[2]);
+    i64 stride = static_cast<i64>(std::ceil(std::cbrt(total_voxels / static_cast<f64>(want))));
+    stride = std::max<i64>(stride, 1);
+    i64 count[3];
+    for (u32 axis = 0; axis < 3; ++axis) {
+        count[axis] = std::max<i64>((full[axis] + stride - 1) / stride, 1);
+    }
+    const u64 points = static_cast<u64>(count[0]) * static_cast<u64>(count[1]) *
+                       static_cast<u64>(count[2]);
+    std::printf("grid          the clip box is %lld x %lld x %lld voxels (%.2f x %.2f x %.2f m); "
+                "one point every %lld voxels on each axis gives %lld x %lld x %lld = %llu "
+                "points, %.4f m apart\n",
+                static_cast<long long>(full[0]), static_cast<long long>(full[1]),
+                static_cast<long long>(full[2]), static_cast<f64>(full[0]) * voxel,
+                static_cast<f64>(full[1]) * voxel, static_cast<f64>(full[2]) * voxel,
+                static_cast<long long>(stride), static_cast<long long>(count[0]),
+                static_cast<long long>(count[1]), static_cast<long long>(count[2]),
+                static_cast<unsigned long long>(points),
+                static_cast<f64>(stride) * voxel);
+    std::printf("surface       a sign change counts as AT THE SURFACE when |reference| < %.6f m, "
+                "which is half a voxel's diagonal at %d voxels a metre\n",
+                surface_reach, per);
+
+    const auto point_at = [&](u64 index) {
+        const i64 ix = static_cast<i64>(index % static_cast<u64>(count[0]));
+        const i64 iy = static_cast<i64>((index / static_cast<u64>(count[0])) %
+                                        static_cast<u64>(count[1]));
+        const i64 iz = static_cast<i64>(index / (static_cast<u64>(count[0]) *
+                                                 static_cast<u64>(count[1])));
+        return forge::Vec3{(static_cast<f64>(lo[0] + ix * stride) + 0.5) * voxel,
+                    (static_cast<f64>(lo[1] + iy * stride) + 0.5) * voxel,
+                    (static_cast<f64>(lo[2] + iz * stride) + 0.5) * voxel};
+    };
+
+    // ---- grid one: the open grid, over the whole box ------------------------------------------
+    //
+    // Unbiased over the clip's own volume, which is what says whether a sign change ever happens
+    // somewhere a surface is not. It is also, on this building, almost entirely AIR: the estate's
+    // box is a hundred and twenty-five metres by thirty-seven by a hundred and ten, and a grid of
+    // a quarter of a million points over it stands more than a metre apart. So it is reported with
+    // the count of its own points that came within half a voxel of a surface, and that count is
+    // the thing that says whether its nought means anything (trap 15).
+    SinglePrecisionCounts open;
+    // The same points again, kept apart: only those already inside half a voxel of a surface.
+    // A sign change cannot happen anywhere else, so this is the population the question is really
+    // about, and its |difference| distribution is what says how near the field came to flipping
+    // one even where it did not. Both grids feed it.
+    SinglePrecisionCounts at_surface;
+    std::mutex merge;
+    std::vector<u64> candidates;   // open points a surface could pass within reach of
+    const f64 cell_reach = 0.5 * std::sqrt(3.0) * static_cast<f64>(stride) * voxel;
+    const u64 open_began = now_ns();
+    jobs.parallel_for(static_cast<usize>(points), 64, [&](usize begin, usize end) {
+        SinglePrecisionCounts mine;
+        SinglePrecisionCounts mine_at_surface;
+        std::vector<u64> shell;
+        for (usize i = begin; i < end; ++i) {
+            const forge::Vec3 p = point_at(static_cast<u64>(i));
+            f64 ref = 0.0;
+            f64 single = 0.0;
+            u32 probe_deep = 0;
+            const bool probe_ok = script.field.mirror_eval(script.solid, p, ref, &probe_deep);
+            if (probe_deep > g_probe_deepest) g_probe_deepest = probe_deep;
+            if (!probe_ok ||
+                !script.field.mirror_eval_single(script.solid, p, single)) {
+                ++mine.refused;
+                continue;
+            }
+            mine.note(ref, single, p, surface_reach, 0);
+            if (std::abs(ref) < surface_reach) {
+                mine_at_surface.note(ref, single, p, surface_reach, 0);
+            }
+            // The field is a signed distance, so an answer smaller than the cell's own half
+            // diagonal is the only way a surface can be inside this cell at all.
+            if (std::abs(ref) < cell_reach) shell.push_back(static_cast<u64>(i));
+        }
+        std::lock_guard<std::mutex> lock(merge);
+        open.add(mine);
+        at_surface.add(mine_at_surface);
+        candidates.insert(candidates.end(), shell.begin(), shell.end());
+    });
+    const f64 open_ms = ns_to_ms(now_ns() - open_began);
+    std::sort(candidates.begin(), candidates.end());
+
+    // ---- grid two: the authored lattice where the surfaces actually are ----------------------
+    //
+    // The open grid cannot answer R12b's question on its own and saying so is most of the point.
+    // A sign change needs the two answers to straddle zero, so it can only happen where the
+    // reference answer is already smaller than the difference between them -- a few microns. A
+    // lattice point more than a metre from anything is never a candidate, however many of them
+    // there are, and a mode that walked only those would report nought sign changes on a field
+    // where every surface voxel flipped.
+    //
+    // So the budget is spent twice: once on the open grid above, and once HERE, on real voxel
+    // centres taken from the shell where the geometry is. Each candidate cell is projected onto
+    // the isosurface -- two Newton steps along the gradient of the double-precision answer, which
+    // is what a signed distance field is for -- snapped to the authored lattice, and the 3x3x3
+    // block of authored voxel centres around it is walked with both arms. The blocks are keyed on
+    // a lattice of threes so that two candidates landing on the same piece of wall produce ONE
+    // block and no voxel is counted twice.
+    //
+    // Every point in this arm is a voxel centre the sampler itself would ask at. What it is not is
+    // an unbiased sample of the building: it is deliberately concentrated where a decision is
+    // close, which is where the answer to "is f32 enough" lives.
+    SinglePrecisionCounts surface;
+    std::vector<std::array<i64, 3>> blocks;
+    u64 projections = 0;
+    u64 blocks_with_surface = 0;
+    f64 surface_ms = 0.0;
+    const u64 blocks_wanted = std::max<u64>(want / 27, 1);
+    if (!candidates.empty()) {
+        const u64 surface_began = now_ns();
+        // The candidates strided rather than the first N of them, so the blocks are spread over
+        // the whole building instead of over whichever corner the index order starts in.
+        const u64 candidate_stride =
+            std::max<u64>(static_cast<u64>(candidates.size()) / blocks_wanted, 1);
+        projections = (static_cast<u64>(candidates.size()) + candidate_stride - 1) /
+                      candidate_stride;
+        std::vector<std::array<i64, 3>> found;
+        std::mutex found_lock;
+        jobs.parallel_for(static_cast<usize>(projections), 8, [&](usize begin, usize end) {
+            std::vector<std::array<i64, 3>> mine;
+            for (usize i = begin; i < end; ++i) {
+                forge::Vec3 p = point_at(candidates[static_cast<usize>(i) * candidate_stride]);
+                bool ok = true;
+                for (u32 step = 0; step < 2 && ok; ++step) {
+                    f64 here = 0.0;
+                    if (!script.field.mirror_eval(script.solid, p, here, nullptr)) { ok = false; break; }
+                    // The normal by central differences at half a voxel, which is the step the
+                    // sampler's own normal is taken at.
+                    const f64 h = 0.5 * voxel;
+                    f64 g[3]{0, 0, 0};
+                    for (u32 axis = 0; axis < 3 && ok; ++axis) {
+                        forge::Vec3 a = p;
+                        forge::Vec3 b = p;
+                        f64* av = (axis == 0) ? &a.x : (axis == 1) ? &a.y : &a.z;
+                        f64* bv = (axis == 0) ? &b.x : (axis == 1) ? &b.y : &b.z;
+                        *av += h;
+                        *bv -= h;
+                        f64 up = 0.0;
+                        f64 down = 0.0;
+                        ok = script.field.mirror_eval(script.solid, a, up, nullptr) &&
+                             script.field.mirror_eval(script.solid, b, down, nullptr);
+                        g[axis] = (up - down) / (2.0 * h);
+                    }
+                    if (!ok) break;
+                    const f64 len = std::sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+                    if (!(len > 1e-12)) { ok = false; break; }
+                    p = {p.x - here * g[0] / len, p.y - here * g[1] / len,
+                         p.z - here * g[2] / len};
+                }
+                if (!ok) continue;
+                // The authored voxel the projection landed in, and then the block of three it
+                // belongs to. `floor` on both, so a negative coordinate is not rounded towards
+                // zero and half the building keyed onto the other half's blocks.
+                std::array<i64, 3> key{};
+                const f64 metres[3]{p.x, p.y, p.z};
+                bool inside = true;
+                for (u32 axis = 0; axis < 3; ++axis) {
+                    const i64 index =
+                        static_cast<i64>(std::floor(metres[axis] * static_cast<f64>(per)));
+                    if (index < lo[axis] || index >= hi[axis]) inside = false;
+                    key[axis] = static_cast<i64>(std::floor(static_cast<f64>(index) / 3.0));
+                }
+                if (!inside) continue;
+                mine.push_back(key);
+            }
+            std::lock_guard<std::mutex> lock(found_lock);
+            found.insert(found.end(), mine.begin(), mine.end());
+        });
+        std::sort(found.begin(), found.end());
+        found.erase(std::unique(found.begin(), found.end()), found.end());
+        blocks.swap(found);
+
+        std::atomic<u64> hit{0};
+        jobs.parallel_for(blocks.size(), 4, [&](usize begin, usize end) {
+            SinglePrecisionCounts mine;
+            SinglePrecisionCounts mine_at_surface;
+            u64 mine_hit = 0;
+            for (usize i = begin; i < end; ++i) {
+                bool any = false;
+                for (i64 dz = 0; dz < 3; ++dz) {
+                    for (i64 dy = 0; dy < 3; ++dy) {
+                        for (i64 dx = 0; dx < 3; ++dx) {
+                            const forge::Vec3 p{
+                                (static_cast<f64>(blocks[i][0] * 3 + dx) + 0.5) * voxel,
+                                (static_cast<f64>(blocks[i][1] * 3 + dy) + 0.5) * voxel,
+                                (static_cast<f64>(blocks[i][2] * 3 + dz) + 0.5) * voxel};
+                            f64 ref = 0.0;
+                            f64 single = 0.0;
+                            if (!script.field.mirror_eval(script.solid, p, ref, nullptr) ||
+                                !script.field.mirror_eval_single(script.solid, p, single)) {
+                                ++mine.refused;
+                                continue;
+                            }
+                            mine.note(ref, single, p, surface_reach, 0);
+                            if (std::abs(ref) < surface_reach) {
+                                mine_at_surface.note(ref, single, p, surface_reach, 0);
+                                any = true;
+                            }
+                        }
+                    }
+                }
+                if (any) ++mine_hit;
+            }
+            hit.fetch_add(mine_hit, std::memory_order_relaxed);
+            std::lock_guard<std::mutex> lock(merge);
+            surface.add(mine);
+            at_surface.add(mine_at_surface);
+        });
+        blocks_with_surface = hit.load(std::memory_order_relaxed);
+        surface_ms = ns_to_ms(now_ns() - surface_began);
+    }
+
+    // The solid's answer is both grids together: they are disjoint populations of the same
+    // lattice and each one is the other's blind spot.
+    SinglePrecisionCounts solid = open;
+    solid.add(surface);
+
+    // ---- the paint rules --------------------------------------------------------------------
+    //
+    // Asked at the SURFACE points, not at the open grid's, and that is a decision rather than a
+    // convenience: a paint rule is only ever evaluated where the sampler found matter, so a rule
+    // judged fifty metres up in the air is being judged where nothing asks it. Strided so that
+    // the number of RULE evaluations is about one budget rather than five hundred of them.
+    //
+    // Reported separately from the solid on purpose: a paint rule flipping changes a colour, a
+    // solid flipping changes geometry, and a mode that added the two would answer neither
+    // question. Sign is counted for the same reason it is on the solid -- it is what the shader's
+    // `<` will do -- but a paint rule's actual decision is `low <= value <= high`, so that is
+    // counted too, and the band is the one that reaches a player's eye.
+    SinglePrecisionCounts paint;
+    f64 paint_ms = 0.0;
+    u64 paint_points = 0;
+    const bool paint_from_surface = !blocks.empty();
+    if (!script.paint.empty()) {
+        const u64 supply = paint_from_surface ? static_cast<u64>(blocks.size()) : points;
+        // A quarter of the budget, measured in rule evaluations. Not an eighth and not all of it:
+        // one paint test costs an order of magnitude more than one solid evaluation on this clip,
+        // because `occlusion` asks its child fourteen times and `curvature` seven, and both of
+        // those children are the building. Left at a whole budget the paint arm is two thirds of
+        // the run for a twentieth of the points.
+        const u64 paint_budget =
+            std::max<u64>(want / (4 * std::max<u64>(script.paint.size(), 1)), 1);
+        const u64 paint_stride = std::max<u64>(supply / paint_budget, 1);
+        paint_points = std::max<u64>(supply / paint_stride, 1);
+        const u64 paint_began = now_ns();
+        jobs.parallel_for(static_cast<usize>(paint_points), 1, [&](usize begin, usize end) {
+            SinglePrecisionCounts mine;
+            for (usize i = begin; i < end; ++i) {
+                const u64 which = static_cast<u64>(i) * paint_stride;
+                // The centre voxel of the block, which is the one nearest where the projection
+                // put the surface.
+                const forge::Vec3 p =
+                    paint_from_surface
+                        ? forge::Vec3{
+                              (static_cast<f64>(blocks[static_cast<usize>(which)][0] * 3 + 1) +
+                               0.5) * voxel,
+                              (static_cast<f64>(blocks[static_cast<usize>(which)][1] * 3 + 1) +
+                               0.5) * voxel,
+                              (static_cast<f64>(blocks[static_cast<usize>(which)][2] * 3 + 1) +
+                               0.5) * voxel}
+                        : point_at(which);
+                for (usize r = 0; r < script.paint.size(); ++r) {
+                    const forge::PaintRule& rule = script.paint[r];
+                    f64 ref = 0.0;
+                    f64 single = 0.0;
+                    if (!script.field.mirror_eval(rule.test, p, ref, nullptr) ||
+                        !script.field.mirror_eval_single(rule.test, p, single)) {
+                        ++mine.refused;
+                        continue;
+                    }
+                    mine.note(ref, single, p, surface_reach, static_cast<u32>(r));
+                    const bool in_ref = ref >= rule.low && ref <= rule.high;
+                    const bool in_single = single >= rule.low && single <= rule.high;
+                    if (in_ref != in_single) ++mine.band_flips;
+                    // How near this evaluation stood to deciding the other way. A band edge at
+                    // +-1e30 is "this rule has no edge on that side" rather than an edge a long
+                    // way off, so it is not measured against.
+                    f64 to_edge = 1e300;
+                    if (rule.low > -1e29) to_edge = std::min(to_edge, std::abs(ref - rule.low));
+                    if (rule.high < 1e29) to_edge = std::min(to_edge, std::abs(ref - rule.high));
+                    if (to_edge < std::abs(ref - single)) ++mine.edge_close;
+                }
+            }
+            std::lock_guard<std::mutex> lock(merge);
+            paint.add(mine);
+        });
+        paint_ms = ns_to_ms(now_ns() - paint_began);
+    }
+    const f64 solid_ms = open_ms + surface_ms;
+
+    // ---- what it says ------------------------------------------------------------------------
+    const auto pct = [](u64 part, u64 whole) {
+        return (whole > 0) ? 100.0 * static_cast<f64>(part) / static_cast<f64>(whole) : 0.0;
+    };
+    std::printf("\n");
+    std::printf("open grid     %llu points in %.0f ms; %llu of them within half a voxel of a "
+                "surface (closest %.6g m); %llu CHANGE SIGN, %llu at the surface and %llu "
+                "deeper\n",
+                static_cast<unsigned long long>(open.points), open_ms,
+                static_cast<unsigned long long>(open.near_surface), open.closest,
+                static_cast<unsigned long long>(open.flips),
+                static_cast<unsigned long long>(open.flips_surface),
+                static_cast<unsigned long long>(open.flips_deep));
+    std::printf("surface grid  %llu candidate cells, %llu projected onto the isosurface, %zu "
+                "distinct 3x3x3 blocks of which %llu hold a voxel centre within half a voxel of "
+                "a surface\n",
+                static_cast<unsigned long long>(candidates.size()),
+                static_cast<unsigned long long>(projections), blocks.size(),
+                static_cast<unsigned long long>(blocks_with_surface));
+    std::printf("surface grid  %llu points in %.0f ms; %llu of them within half a voxel of a "
+                "surface (closest %.6g m); %llu CHANGE SIGN, %llu at the surface and %llu "
+                "deeper\n",
+                static_cast<unsigned long long>(surface.points), surface_ms,
+                static_cast<unsigned long long>(surface.near_surface), surface.closest,
+                static_cast<unsigned long long>(surface.flips),
+                static_cast<unsigned long long>(surface.flips_surface),
+                static_cast<unsigned long long>(surface.flips_deep));
+    std::printf("solid         %llu points in %.0f ms; %llu CHANGE SIGN (%.4f%%), of which %llu "
+                "are at the surface and %llu are deeper than that\n",
+                static_cast<unsigned long long>(solid.points), solid_ms,
+                static_cast<unsigned long long>(solid.flips), pct(solid.flips, solid.points),
+                static_cast<unsigned long long>(solid.flips_surface),
+                static_cast<unsigned long long>(solid.flips_deep));
+    if (solid.near_surface > 0) {
+        std::printf("solid         of the %llu points that were near a surface at all, %llu "
+                    "changed side (%.4f%%, one in %.0f)\n",
+                    static_cast<unsigned long long>(solid.near_surface),
+                    static_cast<unsigned long long>(solid.flips_surface),
+                    pct(solid.flips_surface, solid.near_surface),
+                    (solid.flips_surface > 0)
+                        ? static_cast<f64>(solid.near_surface) /
+                              static_cast<f64>(solid.flips_surface)
+                        : 0.0);
+    } else {
+        std::printf("solid         NO POINT CAME WITHIN HALF A VOXEL OF A SURFACE, so nought sign "
+                    "changes is a property of the grid and not of the field\n");
+    }
+    if (at_surface.points > 0) {
+        std::printf("at surface    worst difference %.6g m at (%.4f, %.4f, %.4f): reference "
+                    "%.9g, single %.9g; the reference answer got to %.6g m of zero\n",
+                    at_surface.worst, at_surface.worst_at.x, at_surface.worst_at.y,
+                    at_surface.worst_at.z, at_surface.worst_ref, at_surface.worst_single,
+                    at_surface.closest);
+    }
+    if (solid.refused > 0) {
+        std::printf("solid         WARNING %llu points the walk REFUSED and they are not counted "
+                    "as agreement\n",
+                    static_cast<unsigned long long>(solid.refused));
+    }
+    std::printf("solid worst   %.6g m at (%.4f, %.4f, %.4f): reference %.9g, single %.9g\n",
+                solid.worst, solid.worst_at.x, solid.worst_at.y, solid.worst_at.z, solid.worst_ref,
+                solid.worst_single);
+    if (solid.flips_deep > 0) {
+        std::printf("solid deepest a sign change %.6g m from the surface, at (%.4f, %.4f, %.4f) "
+                    "-- this one is not a tie\n",
+                    std::abs(solid.flip_deepest_ref), solid.flip_deepest_at.x,
+                    solid.flip_deepest_at.y, solid.flip_deepest_at.z);
+    }
+    print_single_decades("solid", solid);
+    if (at_surface.points > 0) {
+        // The one that decides the question. A flip needs |reference| to be smaller than the gap
+        // between the two arms, and |reference| over this population is spread across half a
+        // voxel -- so this distribution, read against 0.027 m, is the odds of one, and it is
+        // visible here in a way that no average of it could be.
+        print_single_decades("at surface", at_surface);
+    }
+
+    std::printf("\n");
+    if (script.paint.empty()) {
+        std::printf("paint         the clip has no paint rules\n");
+    } else {
+        std::printf("paint         %llu %s x %zu rules = %llu evaluations in %.0f ms\n",
+                    static_cast<unsigned long long>(paint_points),
+                    paint_from_surface ? "voxel centres taken from the surface grid, where the "
+                                         "sampler would actually ask a paint rule,"
+                                       : "open-grid points (no surface was found to ask at)",
+                    script.paint.size(), static_cast<unsigned long long>(paint.points), paint_ms);
+        std::printf("paint         %llu CHANGE SIGN (%.4f%%), of which %llu are at the surface "
+                    "and %llu are deeper; %llu change the rule's own low..high decision (%.4f%%)\n",
+                    static_cast<unsigned long long>(paint.flips), pct(paint.flips, paint.points),
+                    static_cast<unsigned long long>(paint.flips_surface),
+                    static_cast<unsigned long long>(paint.flips_deep),
+                    static_cast<unsigned long long>(paint.band_flips),
+                    pct(paint.band_flips, paint.points));
+        std::printf("paint         %llu evaluations stood nearer one of their rule's own band "
+                    "edges than the two arms stood to each other, which is the only place a band "
+                    "flip can happen\n",
+                    static_cast<unsigned long long>(paint.edge_close));
+        if (paint.refused > 0) {
+            std::printf("paint         WARNING %llu evaluations the walk REFUSED\n",
+                        static_cast<unsigned long long>(paint.refused));
+        }
+        const auto rule_name = [&](u32 index) {
+            return (index < script.paint_source.size()) ? script.paint_source[index].c_str()
+                                                        : "?";
+        };
+        std::printf("paint worst   %.6g at (%.4f, %.4f, %.4f) on rule %u `%s`: reference %.9g, "
+                    "single %.9g\n",
+                    paint.worst, paint.worst_at.x, paint.worst_at.y, paint.worst_at.z,
+                    paint.worst_rule, rule_name(paint.worst_rule), paint.worst_ref,
+                    paint.worst_single);
+        if (paint.flips_deep > 0) {
+            std::printf("paint deepest a sign change %.6g from zero on rule %u `%s`\n",
+                        std::abs(paint.flip_deepest_ref), paint.flip_deepest_rule,
+                        rule_name(paint.flip_deepest_rule));
+        }
+        print_single_decades("paint", paint);
+    }
+
+    // The gate. A sign change at the surface is a voxel that exists in one evaluator and not the
+    // other, which is what R12c would have to live with when a node derived on the card meets the
+    // same node sampled on the CPU, so it is worth an exit code rather than a paragraph.
+    const bool flipped_at_surface = solid.flips_surface > 0 || paint.flips_surface > 0;
+    const bool deep = solid.flips_deep > 0 || paint.flips_deep > 0;
+    const char* shape =
+        deep ? "MOVES A DECISION AWAY FROM A SURFACE, which is a precision failure and not a tie"
+             : flipped_at_surface
+                   ? "changes only points already within half a voxel of a surface, which is a "
+                     "tie and not a precision failure"
+                   : "changes no decision on either grid";
+    std::printf("\n");
+    // How deep the walk actually went, which is the OTHER thing a shader has to be sized for and
+    // the one nothing was reporting. A refusal and a disagreement are different answers and the
+    // stack is what separates them: `mirror_eval` returns false at `top >= kMirrorStack`, so a clip
+    // that outgrows the stack reports nought sign changes over nought points, which reads exactly
+    // like agreement unless the refusals are counted. See the REFUSED warnings above.
+    std::printf("stack         deepest the walk reached: %u frames of %u\n", g_probe_deepest,
+                forge::Field::kMirrorStack);
+    std::printf("verdict       f32 %s. Worst difference: solid %.6g m against a %.6f m voxel, "
+                "paint %.6g. Sign changes: solid %llu of %llu, paint %llu of %llu.\n",
+                shape, solid.worst, voxel, paint.worst,
+                static_cast<unsigned long long>(solid.flips),
+                static_cast<unsigned long long>(solid.points),
+                static_cast<unsigned long long>(paint.flips),
+                static_cast<unsigned long long>(paint.points));
+    // Non-zero when a sign change happens at the surface, so this is a gate and not only a report.
+    return flipped_at_surface ? 1 : 0;
+}
+
 // What the world's own stipple verdict costs, and whether the cheap way to take it is the same
 // answer. `--clean-world`.
 //
@@ -11118,6 +11824,11 @@ int run_clip_tool(const Options& options) {
     // node-sized samples against ONE whole-clip reference it takes itself, at the resolution the
     // level implies rather than at the file's.
     if (options.stipple_tiled) return run_stipple_tiled(options, script, jobs);
+
+    // R12b's last unknown, and it returns for the same reason as the two lines above: it never
+    // samples a voxel at all. It asks the field itself, twice, at the points a voxel decision is
+    // made at, and what it reports is how many of them the two answers put on different SIDES.
+    if (options.field_single) return run_field_single(options, script, jobs);
 
     // And the other half of R11d's verdict question: not whether the world can produce it, which
     // D629 and D642 settled, but what taking it from the world COSTS. Returns for the same reason
@@ -11542,7 +12253,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if ((!options.clip_file.empty() || options.sample_cost || options.stipple_tiled ||
-         options.clean_world) &&
+         options.field_single || options.clean_world) &&
         options.screenshot.empty()) {
         return ws::run_clip_tool(options);
     }
