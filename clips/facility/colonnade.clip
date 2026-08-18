@@ -1,0 +1,1185 @@
+# colonnade — the forecourt colonnade: two arms of Tuscan columns four deep round an oval court.
+# A FRAGMENT of clips/facility.clip. Its twin, clips/estate/colonnade.clip, is the standalone clip
+# this was converted from and is unchanged; the two are copies, not a move.
+#
+# SIX whole-clip statements are deleted here, because the manifest owns all of them: the
+# `_contract.clip` include (a second copy redefines every param and every material), `metre 16`,
+# `bounds`, `variation`, `origin` and `solid part_colonnade`.
+#
+# `metre 16` IS THE ONE THAT DIFFERS FROM THE OTHER SIX FRAGMENTS. This building was authored at
+# sixteen voxels a metre and the manifest samples at thirty-two. That is safe in this direction and
+# only this one: every feature that resolves at 1/16 m also resolves at 1/32, and this file's
+# smallest members were sized against the coarser voxel, so none can fall through. A fragment
+# authored FINER than the manifest would be the dangerous way round.
+#
+# WHERE IT STANDS — (0, 0, -29.00). Drawn with the centre of the oval at the origin and the facility
+# to the north (+z); the oval's centre lands at facility z = -29.00, the arms open northward toward
+# the great steps (which end at z = -15.70, x +-9.45), and the gate stands across z ~ -43.
+#
+# IT IS THE TIGHTEST FIT ON THE ESTATE. Translated it reaches z = -45.65 against the manifest's
+# `bounds` low of -46: THIRTY-FIVE CENTIMETRES, eleven voxels at metre 32. Its own weathering is
+# 0.16 and 0.14, so it holds -- but matter outside the bounds is not clipped, it is simply never
+# sampled, so anything added at the gate end comes back with a flat face and no error.
+#
+# EVERY SHAPE A RULE NAMES HAS A TRANSLATED TWIN, `<name>_at`, standing directly after the shape it
+# carries. A translate moves the stone and leaves every binding where it was drawn, so a rule keyed
+# on an untranslated shape paints a colonnade-shaped volume of air 29 m north of the colonnade --
+# and the material list still comes out with every coat at nearly the right share, because the paint
+# did land on something. `on=` is a shape like any other and takes the twin too. `below=` goes 0.02
+# to 0.035 with the translate, per clips/estate/BRIEF.md rule 5.
+#
+#
+# Bernini's embrace at the scale of a country palace. Two arms sweep out of the flanks of the
+# facility's great steps, close round an oval forecourt, and end in a gate; a hundred and
+# sixty-eight free-standing columns stand on twenty-one radial rays, four to a ray, carrying a
+# plain entablature and a balustrade with statues and urns on it.
+#
+# THIS IS A STANDALONE CLIP. It is not a fragment of clips/facility.clip and must not be added to
+# it. Open it on its own:
+#
+#     build\bin\WorldShaper.exe --clip-file clips\estate\colonnade.clip
+#
+# ------------------------------------------------------------------------------------------------
+# WHERE IT STANDS ON THE ESTATE
+#
+# Built in its own coordinates, with the centre of the oval at the origin, the facility to the
+# NORTH (+z) and the gate to the SOUTH (-z) — the same north as the estate's. To place it in the
+# facility's frame, add (0, 0, -29.00): the oval's centre is at facility z = -29.00, the arms open
+# northward toward the great steps (which end at facility z = -15.70, x +-9.45), and the gate
+# stands across facility z ~ -43. The site plan in clips/estate/BRIEF.md gives this building
+# "z -16 .. -40", 24 m of depth. AN OVAL 48.6 m WIDE CANNOT BE 24 m DEEP AND STILL BE AN OVAL, and
+# the brief's own 48 x 34 does not fit that row either. This one is 48.60 x 28.80 m on the outer
+# row — wider and shallower than the brief's suggestion, which is what makes it an EMBRACE of the
+# steps rather than a ring in front of them — and it reaches about three metres further south than
+# the table says. The triumphal gate at facility z ~ -44 stands just beyond it.
+#
+# The arms' north ends stop at x = +-12.39, which is 2.94 m clear of the great steps at +-9.45.
+#
+# ONE MORE SHIFT, AT THE VERY END OF THE FILE. `origin 0 -1.60 -7.20` moves the finished clip so
+# that a player spawning at 0,0,0 stands on the paving 7.20 m (16 M) north of the obelisk rather
+# than inside its plinth, which is what the middle of this clip is. So every number ABOVE is the
+# design frame, and the game's world coordinates are those less (0, 1.60, 7.20). Put the two
+# together and facility coordinates are world + (0, 1.60, -21.80).
+#
+# ------------------------------------------------------------------------------------------------
+# THE METRE, AND WHAT IT COSTS. AUTHORED AT metre 16, DELIBERATELY.
+#
+# A clip is a dense array over its whole bounds. This box is 53.10 x 18.45 x 31.50 m. At the
+# contract's metre 32 that is 1.01 THOUSAND MILLION cells — five gigabytes at the five bytes a
+# cell the game uses and rather more in the measuring tool — before a voxel of stone exists. At
+# metre 16 it is 127 million cells, which IS a scene. MEASURED, on four cores that thirteen other
+# builds were using at the same time:
+#
+#   metre  8    15.9 M cells    1.89 M voxels of matter    222 MB     63 s
+#   metre 16     127 M cells    15.1 M voxels of matter   1.74 GB    565 s
+#
+# Eight times the cells for nine times the time, so nothing here is quadratic — but 1.74 GB for
+# 127 M cells is THIRTEEN AND A HALF BYTES A CELL against the five the game's own array uses, and
+# metre 32 on this box would be a thousand million cells, two hours and fourteen gigabytes. That
+# is the whole argument for the estate being a family of clips rather than one, restated with this
+# building's own numbers.
+#
+# AND THE COMPONENT COUNT IS NOT ONE, AND THAT IS REPORTED RATHER THAN HIDDEN. At metre 16 it is
+# 465 components with 646 floating voxels out of 15,136,537 — four thousandths of one per cent —
+# and every floater is four or eight voxels of the matter this clip exists to put at the edge of
+# resolvable: a gilt spearhead 0.11 m across, a lip of the fountain coping, the raised hand of a
+# statue. THE STONE IS ONE PIECE: the largest component is 15,135,891 voxels, which is everything
+# but those specks. Four real breaks were found this way and fixed — 126 columns standing on
+# nothing (the frame sign, below), the fountain's upper bowl on a 0.060 m baluster neck, the gate's
+# crown over the hole up the middle of its own revolve, and the coping struck from the basin's own
+# radius so that it met it along a line rather than through a volume. If this number climbs back
+# into the thousands, one of those four has come back.
+#
+# WHAT metre 16 COSTS: a voxel is 0.0625 m. The gate's bars are 0.05 m, so they are SUB-VOXEL and
+# will come out ragged, broken or gone. THAT IS THE POINT AND THEY ARE NOT TO BE THICKENED — see
+# the fourth load below. The baluster necks (0.060) are the same case. Everything else in this
+# building is a large outdoor structure with no one-voxel feature in it: the smallest members that
+# matter are the guttae (0.060), the balusters (0.180 at the plinth) and the mutules (0.135 deep),
+# and the columns are 0.90 across. metre 16 is the right resolution for it and metre 32 is not
+# affordable for it. Checked at BOTH 8 and 16.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD — read this before touching a number.
+#
+# 1. THE LARGEST REPETITION IN THE PROJECT, IN DEPTH. A hundred and sixty-eight columns on
+#    twenty-one radial rays means that from almost anywhere on the ground you are looking DOWN a
+#    colonnade: a near shaft a metre across, a far shaft a few pixels across, and every size in
+#    between, in one frame, on one object. That is the continuous-detail promise stated as a
+#    picture — detail as a continuous function of how many pixels a thing covers, with no
+#    level-of-detail steps anywhere — and it is the scene where a step in that function cannot be
+#    hidden, because the eye walks along the row and any discontinuity travels with it. The rows
+#    are RADIAL: a column in row 1 lines up with its fellows in rows 2, 3 and 4 along a ray from
+#    the centre of the oval, so the alignment is exact from the middle of the court and shears
+#    away as you walk. Do not make the count smaller. The count is the load.
+#
+# 2. DEEP SHADOW WITH A BRIGHT FLOOR IN IT. The colonnade is ROOFED: 1.80 m of entablature over
+#    6.30 m of depth, from 6.84 to 8.64, open at both ends, standing over pale travertine paving in
+#    full sun. Every surface inside it — the north face of every shaft, the whole soffit, the
+#    hundred and fifty-six sunken coffers in it — is lit almost entirely by light that has
+#    bounced off the floor, and the bands of sun between the four rows are the brightest thing in
+#    the scene. It is the portico's problem twenty times over and out of doors.
+#
+# 3. IRREGULAR MASSES ON A SKYLINE. Forty-two statues 2.70 m tall and forty urns stand on the
+#    balustrade, plus two more statues on the gate piers: EIGHTY-FOUR separate irregular shapes
+#    against the sky, in four figure types turned to face the court, at a distance where each is a
+#    handful of pixels. Nothing else on the estate produces that. They are coarse on purpose —
+#    they are not sculpture, they are silhouettes.
+#
+# 4. THIN IRON AGAINST BRIGHT SKY. The gate's bars are 0.05 m and its scrollwork 0.05 m: ONE TO
+#    TWO VOXELS at metre 32 and SUB-VOXEL at metre 16, standing in an open gateway with nothing
+#    but sky behind them. THE GATE IS DELIBERATELY AT THE EDGE OF RESOLVABLE AND IS THERE TO FIND
+#    OUT WHAT HAPPENS TO IT. If it comes out dotted, striped or missing at metre 16, that is a
+#    measurement of the sampler, not a fault in the gate, and thickening it deletes the
+#    measurement.
+#
+# ------------------------------------------------------------------------------------------------
+# THE ORDER IS TUSCAN, AND IT IS NOT THE FACILITY'S.
+#
+# The facility is Ionic — 9 diameters, an Attic base, twenty-four flutes, volutes. A forecourt
+# colonnade in the same order competes with the building it serves, so this one is TUSCAN: 7
+# diameters, a plinth-and-torus base, a plain unfluted shaft, a cushion capital of an astragal,
+# an ovolo echinus and a square abacus. That is the correct classical answer — the outer order is
+# always the plainer one — and it is also a completely different set of shapes for the sampler:
+# no spiral, no polar fold, no 0.030 m fillet, and a very large number of surfaces of revolution.
+#
+# THE MODULE IS THE FACILITY'S, so the two buildings are the same size of thing:
+#
+#   D = 0.90   the column at its foot        M = 0.45   the unit everything is counted in
+#   column     7 D = 6.30   base 0.5 D, shaft 6 D, capital 0.5 D
+#   entabl.    D/4 x column = 1.575, taken as 1.80 (4 M)
+#   balustrade 2.4 M = 1.08
+#   bay        4.5 M = 2.025, measured as ARC along the outer row, so it is the same everywhere
+#   rows       4 M = 1.80 apart, radially: 0.90 m of daylight between two rows
+#   steps      0.18 rise, 0.32 run, without exception
+#
+# Three numbers in this file are constructions rather than dimensions, and each is named where it
+# occurs: the entasis arc (centre -85.973, 1.5002; radius 86.436) whose only job is to pass
+# through r(0) = 0.450 = M, r(5.40) = 0.375 = 5M/6 and a crown of 0.4625 a third of the way up;
+# the drain dish (a sphere of radius 1296) whose only job is to fall 0.18 = 0.4 M over the 21.60 m
+# of the court; and the ellipse itself, whose semi-axes 24.30 = 54 M and 14.40 = 32 M are module
+# numbers but whose polar radius between them is whatever the ellipse says it is.
+#
+# ------------------------------------------------------------------------------------------------
+# HOW IT IS BUILT, AND THE TWO THINGS THAT WOULD HAVE MADE IT UNOPENABLE
+#
+# The arms are drawn ONCE, on +x, and folded with `mirror axis=x`. Everything on them is one unit
+# drawn once and carried to twenty-six places by a rotation and a translation, which are
+# isometries and therefore exact and boxed.
+#
+#   NO `around`. A polar fold reports a distance larger than the truth near a sector boundary, so
+#   the field declares it infinitely slack, and infinite slack anywhere means the sampler can skip
+#   nothing ANYWHERE. _order.clip measured that at 85 million field calls for one column.
+#
+#   NO NON-UNIFORM `scale`. field.cpp gives a non-uniformly scaled node the box `everywhere()` —
+#   on purpose, because it under-reports distance and a cull reading its box would drop it — and
+#   an unbounded child makes its parent unbounded all the way up. An elliptical stylobate written
+#   as a scaled cylinder would have taken the box off this entire clip. So the ring is built the
+#   way a real one is: STRAIGHT SEGMENTS BETWEEN ADJACENT COLUMNS, twenty-six of them per arm,
+#   each overlapping its neighbours, with the mouldings run straight. Nothing here bends a
+#   moulding. The outer face is a true polygon and the joints are meant to be seen.
+#
+# The units are all the same size — 2.40 m of run, 1.08 m out from the chord and 6.30 m in — and
+# the generator that laid them out checks, for every one of the 84 column axes on an arm, that it
+# stands on a stylobate block and under an entablature block with its full 0.63 m plinth inside.
+# Adjacent blocks are 5-6 degrees apart, so at depth they overlap: there is no gap to fall through
+# and the inner edge undulates by 0.04 m, which is under a voxel.
+#
+# WHY THE ROWS SHEAR. The rows are offset along RAYS FROM THE CENTRE, and a ray of an ellipse is
+# not perpendicular to it except at the two apses — at the arm ends the ray is 28 degrees off the
+# normal. So the inner rows slide sideways relative to the outer one as you go out along the arm.
+# That is not an error; it is what a radial layout on an oval does, it is what Bernini's does, and
+# it is the whole visual effect. It is also why the blocks are plain rectangles of constant depth
+# rather than trapezoids: a constant perpendicular offset gives a clean parallel inner edge and
+# still swallows every sheared column, which was checked rather than assumed.
+
+
+# Overriding the contract, which is written for the facility's own box.
+
+# --- what the weather works on, and what the paving is patterned with --------------------------
+let colon_rustic  = stripes axis=y period=0.45 duty=0.22
+
+# ================================================================================================
+# THE TUSCAN ORDER — 6.30 m (7 D), drawn once at the origin, standing on y = 0
+# ================================================================================================
+#
+# THE BASE — 0.45 m (0.5 D). A square plinth, one large torus and the fillet over it. That is the
+# whole of a Tuscan base and the reason it is drawn as a section and revolved is the same reason
+# _order.clip gives: a stacked torus is a drum.
+#
+#   0.000 - 0.180   plinth   0.4 M   square, half-width 0.63 (1.4 M)
+#   0.180 - 0.360   torus    0.4 M   out to 0.585 (1.3 M)
+#   0.360 - 0.450   fillet   0.2 M   at 0.495 (1.1 M), 0.045 proud of the shaft
+let colon_base_core = box 0 0.18 -1   0.495 0.45 1
+let colon_base_tor  = bead 0.495 0.18   0.585 0.36
+let colon_base_sec  = union { colon_base_core colon_base_tor }
+let colon_base_turn = revolve { colon_base_sec } axis=y
+let colon_base_plin = box -0.63 0 -0.63   0.63 0.185 0.63 round=0.012
+let colon_tus_base  = union { colon_base_plin colon_base_turn }
+
+# THE SHAFT — 5.40 m (6 D), drawn from its own y = 0, unfluted, with entasis.
+#
+# 0.45 at the foot, 0.375 at the top (five-sixths, exactly), swelling 0.0375 over the straight
+# taper at a third of the height. The arc through those three points has its centre at
+# (-85.973, 1.5002) in the (radius, height) plane and a radius of 86.436. Those two are the
+# CONSTRUCTION and not dimensions; the three that are dimensions are 0.450 = M, 0.375 = 5M/6 and
+# 1.80 = 5.40/3.
+#
+# A Tuscan shaft is PLAIN. There are no flutes to leave a one-voxel fillet, and there is nothing
+# here to widen or to protect: this order's share of the load is the count and the roundness, not
+# thin matter.
+let colon_shaft_arc = cylinder -85.973 1.5002 0  r=86.436 h=4 axis=z
+let colon_shaft_bnd = box 0 0 -1   0.60 5.40 1
+let colon_shaft_sec = intersection { colon_shaft_bnd colon_shaft_arc }
+let colon_tus_shaft = revolve { colon_shaft_sec } axis=y
+
+# THE CAPITAL — 0.45 m (0.5 D), drawn from its own y = 0.
+#
+#   0.000 - 0.045   astragal, the necking ring, out to 0.4275
+#   0.045 - 0.090   neck, at the shaft's own 0.375
+#   0.090 - 0.270   echinus, an ovolo out to 0.5175 (1.15 M)
+#   0.270 - 0.315   fillet over it
+#   0.315 - 0.450   abacus, square, half-width 0.5625 (1.25 M)
+let colon_cap_core = box 0 0 -1   0.375 0.315 1
+let colon_cap_astr = bead  0.375 0.000   0.4275 0.045
+let colon_cap_ech  = ovolo 0.375 0.270   0.5175 0.090
+let colon_cap_fil  = fillet 0 0.270   0.5175 0.315
+let colon_cap_sec  = union { colon_cap_core colon_cap_astr colon_cap_ech colon_cap_fil }
+let colon_cap_turn = revolve { colon_cap_sec } axis=y
+let colon_cap_abac = box -0.5625 0.310 -0.5625   0.5625 0.45 0.5625 round=0.012
+let colon_tus_cap  = union { colon_cap_turn colon_cap_abac }
+
+# THE COLUMN, with a shoe: the plinth's own footprint sunk 0.05 into the stylobate and reaching
+# 0.05 up inside the plinth, so the join is certain however far the grain moves either surface.
+# One hundred and sixty-eight columns and one column 4 cm short of the ground is the fault that
+# `components 1` exists to catch.
+let colon_col_shoe = box -0.63 -0.05 -0.63   0.63 0.05 0.63 round=0.012
+let colon_column = union {
+    colon_tus_base
+    translate { colon_tus_shaft } 0 0.45 0
+    translate { colon_tus_cap } 0 5.85 0
+    colon_col_shoe
+}
+
+# ================================================================================================
+# THE BALUSTER — 0.675 m (1.5 M), and the URN — 1.34 m
+# ================================================================================================
+#
+# The neck is 0.060 across: one voxel at metre 16, two at metre 32. There are 160 of them on the
+# two arms and they are the thinnest stone in this building.
+let colon_bal_rod  = box 0 0.00 -1   0.030 0.675 1
+let colon_bal_low  = box 0 0.045 -1  0.036 0.135 1
+let colon_bal_foot = bead 0.036 0.045   0.081 0.135
+let colon_bal_vase = cyma_reversa 0.030 0.135   0.081 0.405
+let colon_bal_ast  = bead 0.030 0.405   0.045 0.435
+let colon_bal_cup  = cyma 0.030 0.435   0.063 0.585
+let colon_bal_top  = fillet 0 0.585   0.072 0.615
+let colon_bal_sec  = union { colon_bal_rod colon_bal_low colon_bal_foot colon_bal_vase
+                             colon_bal_ast colon_bal_cup colon_bal_top }
+let colon_bal_turn = revolve { colon_bal_sec } axis=y
+let colon_bal_plin = box -0.09 0 -0.09   0.09 0.075 0.09 round=0.008
+let colon_bal_cap  = box -0.081 0.60 -0.081   0.081 0.675 0.081 round=0.008
+let colon_baluster = union { colon_bal_turn colon_bal_plin colon_bal_cap }
+
+let colon_urn_stem  = box 0 0.135 -1   0.075 0.945 1
+let colon_urn_foot  = cyma_reversa 0.075 0.135   0.165 0.225
+let colon_urn_bwl_c = cylinder 0 0.585 0  r=0.27 h=2 axis=z
+let colon_urn_bwl_b = box 0 0.27 -1   0.30 0.79 1
+let colon_urn_bowl  = intersection { colon_urn_bwl_c colon_urn_bwl_b }
+let colon_urn_lip   = cyma 0.135 0.79   0.24 0.90
+let colon_urn_rim   = fillet 0 0.90   0.24 0.945
+let colon_urn_sec   = union { colon_urn_stem colon_urn_foot colon_urn_bowl
+                              colon_urn_lip colon_urn_rim }
+let colon_urn_turn  = revolve { colon_urn_sec } axis=y
+let colon_urn_plin  = box -0.18 0 -0.18   0.18 0.145 0.18 round=0.010
+let colon_urn_lid   = intersection { ellipsoid 0 0.94 0 rx=0.20 ry=0.225 rz=0.20
+                                     box -0.21 0.935 -0.21   0.21 1.16 0.21 }
+let colon_urn_fin   = union { capsule 0 1.13 0   0 1.22 0 r=0.030
+                              sphere 0 1.265 0 r=0.065 }
+let colon_urn = union { colon_urn_plin colon_urn_turn colon_urn_lid colon_urn_fin }
+
+# ================================================================================================
+# THE FIGURES — four of them, 2.70 m, coarse on purpose
+# ================================================================================================
+#
+# These are not sculpture and they are not trying to be. What they have to be is EIGHTY-FOUR
+# separate irregular masses standing against the sky at a distance where each covers a handful of
+# pixels, which is the one silhouette case nothing else on the estate produces. Each is nine or
+# ten primitives round a common core; each stands on its own 0.45 x 0.54 plinth; each is turned to
+# face the middle of the court where it is placed, and the four types are dealt round the twenty-
+# one stations of an arm so that no two neighbours are the same shape.
+let colon_fig_plin = box -0.225 0 -0.27   0.225 0.135 0.27 round=0.010
+let colon_fig_robe = ellipsoid 0 0.90 0 rx=0.32 ry=0.78 rz=0.26
+let colon_fig_hem  = ellipsoid 0 0.20 0 rx=0.34 ry=0.12 rz=0.29
+let colon_fig_wast = ellipsoid 0 1.62 0 rx=0.25 ry=0.20 rz=0.20
+let colon_fig_body = ellipsoid 0 2.00 0 rx=0.29 ry=0.32 rz=0.22
+let colon_fig_shld = capsule -0.25 2.24 0   0.25 2.24 0 r=0.125
+let colon_fig_neck = capsule 0 2.32 0   0 2.42 0 r=0.075
+let colon_fig_head = sphere 0 2.545 0 r=0.145
+let colon_fig_core = union { colon_fig_plin colon_fig_robe colon_fig_hem colon_fig_wast
+                             colon_fig_body colon_fig_shld colon_fig_neck colon_fig_head }
+
+# A: the right arm raised, the left gathering the robe
+let colon_fig_a_up = capsule 0.24 2.24 0.02   0.42 2.66 0.16 r=0.090
+let colon_fig_a_dn = capsule -0.24 2.20 0.02   -0.36 1.58 0.14 r=0.080
+let colon_fig_a_fl = ellipsoid -0.30 1.10 0.10 rx=0.13 ry=0.55 rz=0.10
+let colon_figure_a = union { colon_fig_core colon_fig_a_up colon_fig_a_dn colon_fig_a_fl }
+
+# B: the left arm raised with a palm, the right across the body
+let colon_fig_b_up = capsule -0.24 2.24 0.02   -0.40 2.62 0.10 r=0.090
+let colon_fig_b_pl = capsule -0.42 2.60 0.10   -0.50 3.02 0.16 r=0.065
+let colon_fig_b_ac = capsule 0.24 2.20 0.04   -0.02 1.86 0.22 r=0.078
+let colon_fig_b_fl = ellipsoid 0.28 1.20 -0.10 rx=0.13 ry=0.60 rz=0.10
+let colon_figure_b = union { colon_fig_core colon_fig_b_up colon_fig_b_pl
+                             colon_fig_b_ac colon_fig_b_fl }
+
+# C: cloaked, both arms down, a book held at the waist
+let colon_fig_c_cl = ellipsoid 0 1.90 -0.14 rx=0.36 ry=0.62 rz=0.20
+let colon_fig_c_la = capsule -0.24 2.18 0.04   -0.16 1.66 0.20 r=0.080
+let colon_fig_c_ra = capsule 0.24 2.18 0.04   0.16 1.66 0.20 r=0.080
+let colon_fig_c_bk = box -0.16 1.56 0.14   0.16 1.72 0.30 round=0.020
+let colon_figure_c = union { colon_fig_core colon_fig_c_cl colon_fig_c_la
+                             colon_fig_c_ra colon_fig_c_bk }
+
+# D: a staff in the right hand, the left thrown out
+let colon_fig_d_st = capsule 0.30 0.14 0.10   0.30 2.90 0.10 r=0.065
+let colon_fig_d_ra = capsule 0.24 2.20 0.02   0.30 2.02 0.10 r=0.078
+let colon_fig_d_la = capsule -0.24 2.22 0.02   -0.48 2.30 0.20 r=0.090
+let colon_fig_d_fl = ellipsoid -0.34 1.40 0.14 rx=0.14 ry=0.72 rz=0.11
+let colon_figure_d = union { colon_fig_core colon_fig_d_st colon_fig_d_ra
+                             colon_fig_d_la colon_fig_d_fl }
+
+# ================================================================================================
+# THE UNITS — one bay of stylobate, entablature and balustrade, drawn once, straight
+# ================================================================================================
+#
+# Local x runs ALONG the arm (2.40 m of it, so a 2.025 bay overlaps its neighbours by 0.1875 each
+# side), local z runs OUT from the chord of the outer row, and local y is the world's. Every one
+# of these is carried to twenty-six places by one rotation and one translation.
+
+# THE STYLOBATE — three risers of 0.18 and three runs of 0.32, on both faces.
+#
+#   y -0.10 .. 0.18   bottom step   z -6.94 .. 1.54
+#   y -0.10 .. 0.36   middle step   z -6.62 .. 1.22
+#   y -0.10 .. 0.54   top step      z -6.30 .. 0.90
+#
+# It reaches 0.10 below the ground so that it certainly meets it, and 6.30 (14 M) in from the
+# outer row's chord, which puts its inner edge 0.90 (2 M) inside the inner row where the ray is
+# the normal and further where it is not.
+let colon_sty_low = box -1.20 -0.10 -6.94   1.20 0.18 1.54 round=0.012
+let colon_sty_mid = box -1.20 -0.10 -6.62   1.20 0.36 1.22 round=0.012
+let colon_sty_top = box -1.20 -0.10 -6.30   1.20 0.54 0.90 round=0.012
+let colon_sty_unit = union { colon_sty_low colon_sty_mid colon_sty_top }
+
+# THE ENTABLATURE — 1.80 m (4 M), from 6.84 to 8.64, drawn from its own y = 0.
+#
+# A plain Doric-Tuscan section, divided in fortieths of its own height (0.045 = M/10):
+#
+#   0.000 - 0.270   first fascia          face at 0.360
+#   0.270 - 0.450   second fascia         face at 0.450
+#   0.450 - 0.540   taenia                face at 0.540, the plain projecting band
+#   0.540 - 1.080   frieze                face at 0.450
+#   1.080 - 1.170   bed mould, a cavetto  flaring 0.450 -> 0.630
+#   1.170 - 1.305   MUTULE BAND           face at 0.630, with two mutules out to 0.900
+#   1.305 - 1.620   corona                face at 0.945
+#   1.620 - 1.800   crowning cyma         0.945 -> 1.080
+#
+# The mutules are the Doric ones: flat blocks 0.63 wide under the corona, one over each column and
+# one over each intercolumniation, with THREE GUTTAE hanging 0.105 below each. A gutta is 0.090
+# across — a voxel and a half at metre 16 — and there are 312 of them on the two arms. They are the finest
+# matter in the stonework and they are meant to be at the edge of what survives.
+let colon_ent_core = box -1.20 -0.050 -6.30   1.20 1.800 0.360 round=0.012
+let colon_ent_fas2 = box -1.20 0.270 0.000   1.20 0.450 0.450 round=0.008
+let colon_ent_taen = box -1.20 0.450 0.000   1.20 0.540 0.540 round=0.008
+let colon_ent_frie = box -1.20 0.540 0.000   1.20 1.080 0.450
+let colon_ent_bedc = box -1.20 1.080 0.000   1.20 1.170 0.460
+let colon_ent_bed  = cavetto -1.20 1.080 0.450   1.20 1.170 0.630 run=x
+let colon_ent_mutb = box -1.20 1.170 0.000   1.20 1.305 0.630 round=0.008
+let colon_ent_coro = box -1.20 1.305 0.000   1.20 1.620 0.945 round=0.008
+let colon_ent_crnb = box -1.20 1.620 0.000   1.20 1.800 0.950
+let colon_ent_crn  = cyma -1.20 1.620 0.945   1.20 1.800 1.080 run=x
+
+# One mutule and its three guttae, at local x = 0; the pair sits at +-0.50625 (half the bay), so
+# one lands over a column and one over the gap between two.
+let colon_ent_mut1 = box -0.315 1.170 0.600   0.315 1.305 0.900 round=0.008
+let colon_ent_gut1 = cylinder 0 1.1400 0.750  r=0.045 h=0.15 axis=y
+let colon_ent_gut3 = repeat { colon_ent_gut1 } x=0.180 nx=1
+let colon_ent_mut  = union { colon_ent_mut1 colon_ent_gut3 }
+let colon_ent_muts = union { translate { colon_ent_mut } -0.50625 0 0
+                             translate { colon_ent_mut } 0.50625 0 0 }
+
+# THE INNER FACE. It cannot be a run of the same section — the section faces out and the inside of
+# a colonnade is a ceiling edge, not an elevation — so it gets a plain two-step lip: a corona and
+# a crowning fillet, both running the same 2.40 m straight.
+let colon_ent_icor = box -1.20 1.305 -6.57   1.20 1.620 -6.25 round=0.008
+let colon_ent_icrn = box -1.20 1.620 -6.43   1.20 1.800 -6.25 round=0.008
+
+let colon_ent_unit = union {
+    colon_ent_core colon_ent_fas2 colon_ent_taen colon_ent_frie
+    colon_ent_bedc colon_ent_bed colon_ent_mutb colon_ent_muts
+    colon_ent_coro colon_ent_crnb colon_ent_crn
+    colon_ent_icor colon_ent_icrn
+}
+
+# THE COFFERS. Three sunken panels in the soffit of every bay, 1.35 (3 M) square and 0.225 (M/2)
+# deep, on a pitch of 1.80 m through the depth: three to a bay, seventy-eight per arm. A coffer is the textbook soft-
+# occlusion gradient and these are in a ceiling that has no direct light on it at all.
+#
+# THEY ARE CUT FROM THE WHOLE RING AND NOT FROM ONE BLOCK. Adjacent blocks overlap by 0.375 m at
+# the outer face and by metres at the inner one, so a coffer cut out of its own block alone is
+# simply filled in again by its neighbour — sixty-six recesses that are not there, and nothing in
+# the numbers would have said so.
+let colon_ent_cof1 = box -0.675 -0.10 -5.175   0.675 0.175 -3.825 round=0.020
+let colon_ent_cof2 = box -0.675 -0.10 -3.375   0.675 0.175 -2.025 round=0.020
+let colon_ent_cof3 = box -0.675 -0.10 -1.575   0.675 0.175 -0.225 round=0.020
+let colon_ent_cofs = union { colon_ent_cof1 colon_ent_cof2 colon_ent_cof3 }
+
+# THE BALUSTRADE — 1.08 m (2.4 M), from 8.64 to 9.72, drawn from its own y = 0.
+#
+#   0.000 - 0.270   kerb, the full run
+#   0.270 - 0.945   the balusters, 0.675 (1.5 M) of them
+#   0.945 - 1.080   rail, the full run
+#
+# One station pier 0.36 wide at the +x end of the unit (which is the end nearer station i, since
+# the run is taken backwards -- see the frame note above), one mid-bay pier 0.27 wide in the
+# middle, and four balusters between them at 0.3375 and 0.675 either side of the middle. The
+# narrowest gap in it is 0.0675 — one voxel at metre 16.
+#
+# The URN stands on the mid-bay pier and is part of this unit, so there are forty of them per two
+# arms and they cost one line. The STATUE stands on the station pier and is placed separately,
+# because each one is turned to face the court and they are dealt round four types.
+let colon_blu_kerb = box -1.20 -0.050 0.420   1.20 0.270 1.110 round=0.010
+let colon_blu_rail = box -1.20 0.945 0.420   1.20 1.080 1.110 round=0.010
+let colon_blu_pier = box 0.8325 -0.050 0.390   1.1925 1.080 1.140 round=0.012
+let colon_blu_mid  = box -0.135 -0.050 0.390   0.135 1.080 1.140 round=0.012
+let colon_blu_b1   = translate { colon_baluster } -0.675 0.255 0.765
+let colon_blu_b2   = translate { colon_baluster } -0.3375 0.255 0.765
+let colon_blu_b3   = translate { colon_baluster } 0.3375 0.255 0.765
+let colon_blu_b4   = translate { colon_baluster } 0.675 0.255 0.765
+let colon_blu_urn  = translate { colon_urn } 0 1.030 0.765
+let colon_blu_unit = union {
+    colon_blu_kerb colon_blu_rail colon_blu_pier colon_blu_mid
+    colon_blu_b1 colon_blu_b2 colon_blu_b3 colon_blu_b4
+}
+let colon_urn_unit = colon_blu_urn
+
+# The terminal pier: the last station of an arm has no bay beyond it to carry its pier, so it gets
+# a short one of its own, 0.60 of run, lapping 0.49 into the last bay unit.
+let colon_blu_ekerb = box -0.30 -0.050 0.420   0.30 0.270 1.110 round=0.010
+let colon_blu_erail = box -0.30 0.945 0.420   0.30 1.080 1.110 round=0.010
+let colon_blu_epier = box -0.18 -0.050 0.390   0.18 1.080 1.140 round=0.012
+let colon_blu_end = union { colon_blu_ekerb colon_blu_erail colon_blu_epier }
+
+# ================================================================================================
+# THE EAST ARM — twenty-six placements of each unit, on the chords of the outer row
+# ================================================================================================
+#
+# Twenty bays, and three end caps at each end slid 0.90 apart along the run. The caps are there
+# because THE ROWS SHEAR: on the terminal ray the inner three columns stand up to 2.3 m past the
+# last bay's midpoint, measured along the chord, and without the caps three columns at each end of
+# each arm would have half a plinth on nothing. That was found by checking all 168 of them rather
+# than by looking at a picture.
+#
+# The caps then jut past the end ray, so the whole arm is cut back to a clean RADIAL end face
+# 1.35 m (3 M) beyond it. Two half-spaces do that, and the same two are taken off the stylobate
+# and the entablature. Every column's full 0.63 m plinth survives the cut — checked, all 168.
+let colon_cut_n = plane 0.7071068 0 -0.7071068 at=-1.3500000
+let colon_cut_s = plane 0.8424577 0 0.5387625 at=-1.3500000
+
+let colon_sty_00 = translate { rotate { colon_sty_unit } y=0.4602786 } 6.9760 0.0000 -13.8823
+let colon_sty_01 = translate { rotate { colon_sty_unit } y=0.4602786 } 7.8481 0.0000 -13.6600
+let colon_sty_02 = translate { rotate { colon_sty_unit } y=0.4602786 } 8.7202 0.0000 -13.4377
+let colon_sty_03 = translate { rotate { colon_sty_unit } y=0.4602786 } 9.5923 0.0000 -13.2154
+let colon_sty_04 = translate { rotate { colon_sty_unit } y=0.4506932 } 11.5375 0.0000 -12.6568
+let colon_sty_05 = translate { rotate { colon_sty_unit } y=0.4402429 } 13.4434 0.0000 -11.9769
+let colon_sty_06 = translate { rotate { colon_sty_unit } y=0.4286382 } 15.2974 0.0000 -11.1669
+let colon_sty_07 = translate { rotate { colon_sty_unit } y=0.4154938 } 17.0824 0.0000 -10.2155
+let colon_sty_08 = translate { rotate { colon_sty_unit } y=0.4002906 } 18.7750 0.0000 -9.1096
+let colon_sty_09 = translate { rotate { colon_sty_unit } y=0.3823359 } 20.3426 0.0000 -7.8345
+let colon_sty_10 = translate { rotate { colon_sty_unit } y=0.3607525 } 21.7387 0.0000 -6.3764
+let colon_sty_11 = translate { rotate { colon_sty_unit } y=0.3345973 } 22.8997 0.0000 -4.7284
+let colon_sty_12 = translate { rotate { colon_sty_unit } y=0.3033101 } 23.7444 0.0000 -2.9023
+let colon_sty_13 = translate { rotate { colon_sty_unit } y=0.2676132 } 24.1882 0.0000 -0.9439
+let colon_sty_14 = translate { rotate { colon_sty_unit } y=0.2301828 } 24.1743 0.0000 1.0625
+let colon_sty_15 = translate { rotate { colon_sty_unit } y=0.1946920 } 23.7047 0.0000 3.0151
+let colon_sty_16 = translate { rotate { colon_sty_unit } y=0.1637071 } 22.8387 0.0000 4.8315
+let colon_sty_17 = translate { rotate { colon_sty_unit } y=0.1378465 } 21.6617 0.0000 6.4683
+let colon_sty_18 = translate { rotate { colon_sty_unit } y=0.1165057 } 20.2537 0.0000 7.9152
+let colon_sty_19 = translate { rotate { colon_sty_unit } y=0.0987372 } 18.6776 0.0000 9.1799
+let colon_sty_20 = translate { rotate { colon_sty_unit } y=0.0836738 } 16.9786 0.0000 10.2762
+let colon_sty_21 = translate { rotate { colon_sty_unit } y=0.0706338 } 15.1890 0.0000 11.2188
+let colon_sty_22 = translate { rotate { colon_sty_unit } y=0.0591073 } 13.3315 0.0000 12.0208
+let colon_sty_23 = translate { rotate { colon_sty_unit } y=0.0591073 } 12.4928 0.0000 12.3474
+let colon_sty_24 = translate { rotate { colon_sty_unit } y=0.0591073 } 11.6542 0.0000 12.6741
+let colon_sty_25 = translate { rotate { colon_sty_unit } y=0.0591073 } 10.8156 0.0000 13.0007
+let colon_stylo_all = union {
+    colon_sty_00 colon_sty_01 colon_sty_02 colon_sty_03
+    colon_sty_04 colon_sty_05 colon_sty_06 colon_sty_07
+    colon_sty_08 colon_sty_09 colon_sty_10 colon_sty_11
+    colon_sty_12 colon_sty_13 colon_sty_14 colon_sty_15
+    colon_sty_16 colon_sty_17 colon_sty_18 colon_sty_19
+    colon_sty_20 colon_sty_21 colon_sty_22 colon_sty_23
+    colon_sty_24 colon_sty_25
+}
+let colon_stylo_east = difference { colon_stylo_all colon_cut_n colon_cut_s }
+
+let colon_ent_00 = translate { rotate { colon_ent_unit } y=0.4602786 } 6.9760 6.8400 -13.8823
+let colon_ent_01 = translate { rotate { colon_ent_unit } y=0.4602786 } 7.8481 6.8400 -13.6600
+let colon_ent_02 = translate { rotate { colon_ent_unit } y=0.4602786 } 8.7202 6.8400 -13.4377
+let colon_ent_03 = translate { rotate { colon_ent_unit } y=0.4602786 } 9.5923 6.8400 -13.2154
+let colon_ent_04 = translate { rotate { colon_ent_unit } y=0.4506932 } 11.5375 6.8400 -12.6568
+let colon_ent_05 = translate { rotate { colon_ent_unit } y=0.4402429 } 13.4434 6.8400 -11.9769
+let colon_ent_06 = translate { rotate { colon_ent_unit } y=0.4286382 } 15.2974 6.8400 -11.1669
+let colon_ent_07 = translate { rotate { colon_ent_unit } y=0.4154938 } 17.0824 6.8400 -10.2155
+let colon_ent_08 = translate { rotate { colon_ent_unit } y=0.4002906 } 18.7750 6.8400 -9.1096
+let colon_ent_09 = translate { rotate { colon_ent_unit } y=0.3823359 } 20.3426 6.8400 -7.8345
+let colon_ent_10 = translate { rotate { colon_ent_unit } y=0.3607525 } 21.7387 6.8400 -6.3764
+let colon_ent_11 = translate { rotate { colon_ent_unit } y=0.3345973 } 22.8997 6.8400 -4.7284
+let colon_ent_12 = translate { rotate { colon_ent_unit } y=0.3033101 } 23.7444 6.8400 -2.9023
+let colon_ent_13 = translate { rotate { colon_ent_unit } y=0.2676132 } 24.1882 6.8400 -0.9439
+let colon_ent_14 = translate { rotate { colon_ent_unit } y=0.2301828 } 24.1743 6.8400 1.0625
+let colon_ent_15 = translate { rotate { colon_ent_unit } y=0.1946920 } 23.7047 6.8400 3.0151
+let colon_ent_16 = translate { rotate { colon_ent_unit } y=0.1637071 } 22.8387 6.8400 4.8315
+let colon_ent_17 = translate { rotate { colon_ent_unit } y=0.1378465 } 21.6617 6.8400 6.4683
+let colon_ent_18 = translate { rotate { colon_ent_unit } y=0.1165057 } 20.2537 6.8400 7.9152
+let colon_ent_19 = translate { rotate { colon_ent_unit } y=0.0987372 } 18.6776 6.8400 9.1799
+let colon_ent_20 = translate { rotate { colon_ent_unit } y=0.0836738 } 16.9786 6.8400 10.2762
+let colon_ent_21 = translate { rotate { colon_ent_unit } y=0.0706338 } 15.1890 6.8400 11.2188
+let colon_ent_22 = translate { rotate { colon_ent_unit } y=0.0591073 } 13.3315 6.8400 12.0208
+let colon_ent_23 = translate { rotate { colon_ent_unit } y=0.0591073 } 12.4928 6.8400 12.3474
+let colon_ent_24 = translate { rotate { colon_ent_unit } y=0.0591073 } 11.6542 6.8400 12.6741
+let colon_ent_25 = translate { rotate { colon_ent_unit } y=0.0591073 } 10.8156 6.8400 13.0007
+let colon_entab_all = union {
+    colon_ent_00 colon_ent_01 colon_ent_02 colon_ent_03
+    colon_ent_04 colon_ent_05 colon_ent_06 colon_ent_07
+    colon_ent_08 colon_ent_09 colon_ent_10 colon_ent_11
+    colon_ent_12 colon_ent_13 colon_ent_14 colon_ent_15
+    colon_ent_16 colon_ent_17 colon_ent_18 colon_ent_19
+    colon_ent_20 colon_ent_21 colon_ent_22 colon_ent_23
+    colon_ent_24 colon_ent_25
+}
+let colon_cof_00 = translate { rotate { colon_ent_cofs } y=0.4602786 } 6.9760 6.8400 -13.8823
+let colon_cof_01 = translate { rotate { colon_ent_cofs } y=0.4602786 } 7.8481 6.8400 -13.6600
+let colon_cof_02 = translate { rotate { colon_ent_cofs } y=0.4602786 } 8.7202 6.8400 -13.4377
+let colon_cof_03 = translate { rotate { colon_ent_cofs } y=0.4602786 } 9.5923 6.8400 -13.2154
+let colon_cof_04 = translate { rotate { colon_ent_cofs } y=0.4506932 } 11.5375 6.8400 -12.6568
+let colon_cof_05 = translate { rotate { colon_ent_cofs } y=0.4402429 } 13.4434 6.8400 -11.9769
+let colon_cof_06 = translate { rotate { colon_ent_cofs } y=0.4286382 } 15.2974 6.8400 -11.1669
+let colon_cof_07 = translate { rotate { colon_ent_cofs } y=0.4154938 } 17.0824 6.8400 -10.2155
+let colon_cof_08 = translate { rotate { colon_ent_cofs } y=0.4002906 } 18.7750 6.8400 -9.1096
+let colon_cof_09 = translate { rotate { colon_ent_cofs } y=0.3823359 } 20.3426 6.8400 -7.8345
+let colon_cof_10 = translate { rotate { colon_ent_cofs } y=0.3607525 } 21.7387 6.8400 -6.3764
+let colon_cof_11 = translate { rotate { colon_ent_cofs } y=0.3345973 } 22.8997 6.8400 -4.7284
+let colon_cof_12 = translate { rotate { colon_ent_cofs } y=0.3033101 } 23.7444 6.8400 -2.9023
+let colon_cof_13 = translate { rotate { colon_ent_cofs } y=0.2676132 } 24.1882 6.8400 -0.9439
+let colon_cof_14 = translate { rotate { colon_ent_cofs } y=0.2301828 } 24.1743 6.8400 1.0625
+let colon_cof_15 = translate { rotate { colon_ent_cofs } y=0.1946920 } 23.7047 6.8400 3.0151
+let colon_cof_16 = translate { rotate { colon_ent_cofs } y=0.1637071 } 22.8387 6.8400 4.8315
+let colon_cof_17 = translate { rotate { colon_ent_cofs } y=0.1378465 } 21.6617 6.8400 6.4683
+let colon_cof_18 = translate { rotate { colon_ent_cofs } y=0.1165057 } 20.2537 6.8400 7.9152
+let colon_cof_19 = translate { rotate { colon_ent_cofs } y=0.0987372 } 18.6776 6.8400 9.1799
+let colon_cof_20 = translate { rotate { colon_ent_cofs } y=0.0836738 } 16.9786 6.8400 10.2762
+let colon_cof_21 = translate { rotate { colon_ent_cofs } y=0.0706338 } 15.1890 6.8400 11.2188
+let colon_cof_22 = translate { rotate { colon_ent_cofs } y=0.0591073 } 13.3315 6.8400 12.0208
+let colon_cof_23 = translate { rotate { colon_ent_cofs } y=0.0591073 } 12.4928 6.8400 12.3474
+let colon_cof_24 = translate { rotate { colon_ent_cofs } y=0.0591073 } 11.6542 6.8400 12.6741
+let colon_cof_25 = translate { rotate { colon_ent_cofs } y=0.0591073 } 10.8156 6.8400 13.0007
+let colon_coffers = union {
+    colon_cof_00 colon_cof_01 colon_cof_02 colon_cof_03
+    colon_cof_04 colon_cof_05 colon_cof_06 colon_cof_07
+    colon_cof_08 colon_cof_09 colon_cof_10 colon_cof_11
+    colon_cof_12 colon_cof_13 colon_cof_14 colon_cof_15
+    colon_cof_16 colon_cof_17 colon_cof_18 colon_cof_19
+    colon_cof_20 colon_cof_21 colon_cof_22 colon_cof_23
+    colon_cof_24 colon_cof_25
+}
+let colon_entab_east = difference { colon_entab_all colon_coffers colon_cut_n colon_cut_s }
+
+let colon_blu_00 = translate { rotate { colon_blu_unit } y=0.4602786 } 9.5923 8.6400 -13.2154
+let colon_blu_01 = translate { rotate { colon_blu_unit } y=0.4506932 } 11.5375 8.6400 -12.6568
+let colon_blu_02 = translate { rotate { colon_blu_unit } y=0.4402429 } 13.4434 8.6400 -11.9769
+let colon_blu_03 = translate { rotate { colon_blu_unit } y=0.4286382 } 15.2974 8.6400 -11.1669
+let colon_blu_04 = translate { rotate { colon_blu_unit } y=0.4154938 } 17.0824 8.6400 -10.2155
+let colon_blu_05 = translate { rotate { colon_blu_unit } y=0.4002906 } 18.7750 8.6400 -9.1096
+let colon_blu_06 = translate { rotate { colon_blu_unit } y=0.3823359 } 20.3426 8.6400 -7.8345
+let colon_blu_07 = translate { rotate { colon_blu_unit } y=0.3607525 } 21.7387 8.6400 -6.3764
+let colon_blu_08 = translate { rotate { colon_blu_unit } y=0.3345973 } 22.8997 8.6400 -4.7284
+let colon_blu_09 = translate { rotate { colon_blu_unit } y=0.3033101 } 23.7444 8.6400 -2.9023
+let colon_blu_10 = translate { rotate { colon_blu_unit } y=0.2676132 } 24.1882 8.6400 -0.9439
+let colon_blu_11 = translate { rotate { colon_blu_unit } y=0.2301828 } 24.1743 8.6400 1.0625
+let colon_blu_12 = translate { rotate { colon_blu_unit } y=0.1946920 } 23.7047 8.6400 3.0151
+let colon_blu_13 = translate { rotate { colon_blu_unit } y=0.1637071 } 22.8387 8.6400 4.8315
+let colon_blu_14 = translate { rotate { colon_blu_unit } y=0.1378465 } 21.6617 8.6400 6.4683
+let colon_blu_15 = translate { rotate { colon_blu_unit } y=0.1165057 } 20.2537 8.6400 7.9152
+let colon_blu_16 = translate { rotate { colon_blu_unit } y=0.0987372 } 18.6776 8.6400 9.1799
+let colon_blu_17 = translate { rotate { colon_blu_unit } y=0.0836738 } 16.9786 8.6400 10.2762
+let colon_blu_18 = translate { rotate { colon_blu_unit } y=0.0706338 } 15.1890 8.6400 11.2188
+let colon_blu_19 = translate { rotate { colon_blu_unit } y=0.0591073 } 13.3315 8.6400 12.0208
+let colon_blu_end_n = translate { rotate { colon_blu_end } y=0.0591073 } 12.3880 8.6400 12.3883
+let colon_balus_east = union {
+    colon_blu_00 colon_blu_01 colon_blu_02 colon_blu_03
+    colon_blu_04 colon_blu_05 colon_blu_06 colon_blu_07
+    colon_blu_08 colon_blu_09 colon_blu_10 colon_blu_11
+    colon_blu_12 colon_blu_13 colon_blu_14 colon_blu_15
+    colon_blu_16 colon_blu_17 colon_blu_18 colon_blu_19
+    colon_blu_end_n
+}
+
+let colon_urnp_00 = translate { rotate { colon_urn_unit } y=0.4602786 } 9.5923 8.6400 -13.2154
+let colon_urnp_01 = translate { rotate { colon_urn_unit } y=0.4506932 } 11.5375 8.6400 -12.6568
+let colon_urnp_02 = translate { rotate { colon_urn_unit } y=0.4402429 } 13.4434 8.6400 -11.9769
+let colon_urnp_03 = translate { rotate { colon_urn_unit } y=0.4286382 } 15.2974 8.6400 -11.1669
+let colon_urnp_04 = translate { rotate { colon_urn_unit } y=0.4154938 } 17.0824 8.6400 -10.2155
+let colon_urnp_05 = translate { rotate { colon_urn_unit } y=0.4002906 } 18.7750 8.6400 -9.1096
+let colon_urnp_06 = translate { rotate { colon_urn_unit } y=0.3823359 } 20.3426 8.6400 -7.8345
+let colon_urnp_07 = translate { rotate { colon_urn_unit } y=0.3607525 } 21.7387 8.6400 -6.3764
+let colon_urnp_08 = translate { rotate { colon_urn_unit } y=0.3345973 } 22.8997 8.6400 -4.7284
+let colon_urnp_09 = translate { rotate { colon_urn_unit } y=0.3033101 } 23.7444 8.6400 -2.9023
+let colon_urnp_10 = translate { rotate { colon_urn_unit } y=0.2676132 } 24.1882 8.6400 -0.9439
+let colon_urnp_11 = translate { rotate { colon_urn_unit } y=0.2301828 } 24.1743 8.6400 1.0625
+let colon_urnp_12 = translate { rotate { colon_urn_unit } y=0.1946920 } 23.7047 8.6400 3.0151
+let colon_urnp_13 = translate { rotate { colon_urn_unit } y=0.1637071 } 22.8387 8.6400 4.8315
+let colon_urnp_14 = translate { rotate { colon_urn_unit } y=0.1378465 } 21.6617 8.6400 6.4683
+let colon_urnp_15 = translate { rotate { colon_urn_unit } y=0.1165057 } 20.2537 8.6400 7.9152
+let colon_urnp_16 = translate { rotate { colon_urn_unit } y=0.0987372 } 18.6776 8.6400 9.1799
+let colon_urnp_17 = translate { rotate { colon_urn_unit } y=0.0836738 } 16.9786 8.6400 10.2762
+let colon_urnp_18 = translate { rotate { colon_urn_unit } y=0.0706338 } 15.1890 8.6400 11.2188
+let colon_urnp_19 = translate { rotate { colon_urn_unit } y=0.0591073 } 13.3315 8.6400 12.0208
+let colon_urns_east = union {
+    colon_urnp_00 colon_urnp_01 colon_urnp_02 colon_urnp_03
+    colon_urnp_04 colon_urnp_05 colon_urnp_06 colon_urnp_07
+    colon_urnp_08 colon_urnp_09 colon_urnp_10 colon_urnp_11
+    colon_urnp_12 colon_urnp_13 colon_urnp_14 colon_urnp_15
+    colon_urnp_16 colon_urnp_17 colon_urnp_18 colon_urnp_19
+}
+
+# The columns. Twenty-one rays, four to a ray, each one a `translate` of the same solid of
+# revolution: no rotation is needed, because a Tuscan column is the same from every side.
+let colon_c00_1 = translate { colon_column } 8.6113 0.5400 -13.4655
+let colon_c00_2 = translate { colon_column } 7.6416 0.5400 -11.9491
+let colon_c00_3 = translate { colon_column } 6.6718 0.5400 -10.4326
+let colon_c00_4 = translate { colon_column } 5.7020 0.5400 -8.9162
+let colon_c01_1 = translate { colon_column } 10.5733 0.5400 -12.9654
+let colon_c01_2 = translate { colon_column } 9.4357 0.5400 -11.5704
+let colon_c01_3 = translate { colon_column } 8.2982 0.5400 -10.1755
+let colon_c01_4 = translate { colon_column } 7.1606 0.5400 -8.7805
+let colon_c02_1 = translate { colon_column } 12.5016 0.5400 -12.3481
+let colon_c02_2 = translate { colon_column } 11.2210 0.5400 -11.0832
+let colon_c02_3 = translate { colon_column } 9.9404 0.5400 -9.8183
+let colon_c02_4 = translate { colon_column } 8.6597 0.5400 -8.5534
+let colon_c03_1 = translate { colon_column } 14.3852 0.5400 -11.6057
+let colon_c03_2 = translate { colon_column } 12.9843 0.5400 -10.4755
+let colon_c03_3 = translate { colon_column } 11.5833 0.5400 -9.3452
+let colon_c03_4 = translate { colon_column } 10.1824 0.5400 -8.2150
+let colon_c04_1 = translate { colon_column } 16.2095 0.5400 -10.7281
+let colon_c04_2 = translate { colon_column } 14.7085 0.5400 -9.7346
+let colon_c04_3 = translate { colon_column } 13.2075 0.5400 -8.7412
+let colon_c04_4 = translate { colon_column } 11.7065 0.5400 -7.7478
+let colon_c05_1 = translate { colon_column } 17.9552 0.5400 -9.7030
+let colon_c05_2 = translate { colon_column } 16.3716 0.5400 -8.8472
+let colon_c05_3 = translate { colon_column } 14.7880 0.5400 -7.9915
+let colon_c05_4 = translate { colon_column } 13.2045 0.5400 -7.1357
+let colon_c06_1 = translate { colon_column } 19.5949 0.5400 -8.5163
+let colon_c06_2 = translate { colon_column } 17.9440 0.5400 -7.7988
+let colon_c06_3 = translate { colon_column } 16.2932 0.5400 -7.0813
+let colon_c06_4 = translate { colon_column } 14.6424 0.5400 -6.3638
+let colon_c07_1 = translate { colon_column } 21.0903 0.5400 -7.1527
+let colon_c07_2 = translate { colon_column } 19.3856 0.5400 -6.5746
+let colon_c07_3 = translate { colon_column } 17.6810 0.5400 -5.9965
+let colon_c07_4 = translate { colon_column } 15.9764 0.5400 -5.4184
+let colon_c08_1 = translate { colon_column } 22.3872 0.5400 -5.6000
+let colon_c08_2 = translate { colon_column } 20.6410 0.5400 -5.1632
+let colon_c08_3 = translate { colon_column } 18.8948 0.5400 -4.7264
+let colon_c08_4 = translate { colon_column } 17.1486 0.5400 -4.2896
+let colon_c09_1 = translate { colon_column } 23.4122 0.5400 -3.8568
+let colon_c09_2 = translate { colon_column } 21.6362 0.5400 -3.5642
+let colon_c09_3 = translate { colon_column } 19.8601 0.5400 -3.2716
+let colon_c09_4 = translate { colon_column } 18.0840 0.5400 -2.9790
+let colon_c10_1 = translate { colon_column } 24.0767 0.5400 -1.9479
+let colon_c10_2 = translate { colon_column } 22.2825 0.5400 -1.8027
+let colon_c10_3 = translate { colon_column } 20.4884 0.5400 -1.6576
+let colon_c10_4 = translate { colon_column } 18.6942 0.5400 -1.5124
+let colon_c11_1 = translate { colon_column } 24.2998 0.5400 0.0601
+let colon_c11_2 = translate { colon_column } 22.4998 0.5400 0.0557
+let colon_c11_3 = translate { colon_column } 20.6998 0.5400 0.0512
+let colon_c11_4 = translate { colon_column } 18.8998 0.5400 0.0468
+let colon_c12_1 = translate { colon_column } 24.0489 0.5400 2.0649
+let colon_c12_2 = translate { colon_column } 22.2555 0.5400 1.9109
+let colon_c12_3 = translate { colon_column } 20.4621 0.5400 1.7569
+let colon_c12_4 = translate { colon_column } 18.6687 0.5400 1.6030
+let colon_c13_1 = translate { colon_column } 23.3605 0.5400 3.9654
+let colon_c13_2 = translate { colon_column } 21.5859 0.5400 3.6641
+let colon_c13_3 = translate { colon_column } 19.8113 0.5400 3.3629
+let colon_c13_4 = translate { colon_column } 18.0367 0.5400 3.0617
+let colon_c14_1 = translate { colon_column } 22.3170 0.5400 5.6976
+let colon_c14_2 = translate { colon_column } 20.5729 0.5400 5.2524
+let colon_c14_3 = translate { colon_column } 18.8288 0.5400 4.8071
+let colon_c14_4 = translate { colon_column } 17.0848 0.5400 4.3618
+let colon_c15_1 = translate { colon_column } 21.0064 0.5400 7.2389
+let colon_c15_2 = translate { colon_column } 19.3046 0.5400 6.6525
+let colon_c15_3 = translate { colon_column } 17.6028 0.5400 6.0660
+let colon_c15_4 = translate { colon_column } 15.9010 0.5400 5.4796
+let colon_c16_1 = translate { colon_column } 19.5011 0.5400 8.5915
+let colon_c16_2 = translate { colon_column } 17.8538 0.5400 7.8658
+let colon_c16_3 = translate { colon_column } 16.2066 0.5400 7.1401
+let colon_c16_4 = translate { colon_column } 14.5594 0.5400 6.4144
+let colon_c17_1 = translate { colon_column } 17.8541 0.5400 9.7683
+let colon_c17_2 = translate { colon_column } 16.2750 0.5400 8.9043
+let colon_c17_3 = translate { colon_column } 14.6959 0.5400 8.0404
+let colon_c17_4 = translate { colon_column } 13.1168 0.5400 7.1764
+let colon_c18_1 = translate { colon_column } 16.1032 0.5400 10.7842
+let colon_c18_2 = translate { colon_column } 14.6076 0.5400 9.7826
+let colon_c18_3 = translate { colon_column } 13.1120 0.5400 8.7810
+let colon_c18_4 = translate { colon_column } 11.6164 0.5400 7.7794
+let colon_c19_1 = translate { colon_column } 14.2748 0.5400 11.6535
+let colon_c19_2 = translate { colon_column } 12.8804 0.5400 10.5151
+let colon_c19_3 = translate { colon_column } 11.4861 0.5400 9.3768
+let colon_c19_4 = translate { colon_column } 10.0917 0.5400 8.2385
+let colon_c20_1 = translate { colon_column } 12.3882 0.5400 12.3882
+let colon_c20_2 = translate { colon_column } 11.1154 0.5400 11.1154
+let colon_c20_3 = translate { colon_column } 9.8426 0.5400 9.8426
+let colon_c20_4 = translate { colon_column } 8.5698 0.5400 8.5698
+let colon_cols_east = union {
+    colon_c00_1 colon_c00_2 colon_c00_3 colon_c00_4
+    colon_c01_1 colon_c01_2 colon_c01_3 colon_c01_4
+    colon_c02_1 colon_c02_2 colon_c02_3 colon_c02_4
+    colon_c03_1 colon_c03_2 colon_c03_3 colon_c03_4
+    colon_c04_1 colon_c04_2 colon_c04_3 colon_c04_4
+    colon_c05_1 colon_c05_2 colon_c05_3 colon_c05_4
+    colon_c06_1 colon_c06_2 colon_c06_3 colon_c06_4
+    colon_c07_1 colon_c07_2 colon_c07_3 colon_c07_4
+    colon_c08_1 colon_c08_2 colon_c08_3 colon_c08_4
+    colon_c09_1 colon_c09_2 colon_c09_3 colon_c09_4
+    colon_c10_1 colon_c10_2 colon_c10_3 colon_c10_4
+    colon_c11_1 colon_c11_2 colon_c11_3 colon_c11_4
+    colon_c12_1 colon_c12_2 colon_c12_3 colon_c12_4
+    colon_c13_1 colon_c13_2 colon_c13_3 colon_c13_4
+    colon_c14_1 colon_c14_2 colon_c14_3 colon_c14_4
+    colon_c15_1 colon_c15_2 colon_c15_3 colon_c15_4
+    colon_c16_1 colon_c16_2 colon_c16_3 colon_c16_4
+    colon_c17_1 colon_c17_2 colon_c17_3 colon_c17_4
+    colon_c18_1 colon_c18_2 colon_c18_3 colon_c18_4
+    colon_c19_1 colon_c19_2 colon_c19_3 colon_c19_4
+    colon_c20_1 colon_c20_2 colon_c20_3 colon_c20_4
+}
+
+# The statues, one on the station pier of every unit, dealt round the four types and each turned
+# to face the middle of the court. `colon_fig_*` face +z, so the turn takes +z to the inward ray.
+let colon_stat_00 = translate { rotate { colon_figure_a } y=-0.0397214 } 8.8002 9.6700 -14.2068
+let colon_stat_01 = translate { rotate { colon_figure_b } y=-0.0493068 } 10.8064 9.6700 -13.6940
+let colon_stat_02 = translate { rotate { colon_figure_c } y=-0.0597571 } 12.7820 9.6700 -13.0599
+let colon_stat_03 = translate { rotate { colon_figure_d } y=-0.0713618 } 14.7166 9.6700 -12.2952
+let colon_stat_04 = translate { rotate { colon_figure_a } y=-0.0845062 } 16.5966 9.6700 -11.3879
+let colon_stat_05 = translate { rotate { colon_figure_b } y=-0.0997094 } 18.4033 9.6700 -10.3230
+let colon_stat_06 = translate { rotate { colon_figure_c } y=-0.1176641 } 20.1098 9.6700 -9.0820
+let colon_stat_07 = translate { rotate { colon_figure_d } y=-0.1392475 } 21.6768 9.6700 -7.6439
+let colon_stat_08 = translate { rotate { colon_figure_a } y=-0.1654027 } 23.0460 9.6700 -5.9889
+let colon_stat_09 = translate { rotate { colon_figure_b } y=-0.1966899 } 24.1341 9.6700 -4.1100
+let colon_stat_10 = translate { rotate { colon_figure_c } y=-0.2323868 } 24.8367 9.6700 -2.0347
+let colon_stat_11 = translate { rotate { colon_figure_d } y=-0.2698172 } 25.0592 9.6700 0.1529
+let colon_stat_12 = translate { rotate { colon_figure_a } y=-0.3053080 } 24.7688 9.6700 2.3237
+let colon_stat_13 = translate { rotate { colon_figure_b } y=-0.3362929 } 24.0165 9.6700 4.3590
+let colon_stat_14 = translate { rotate { colon_figure_c } y=-0.3621535 } 22.9003 9.6700 6.1925
+let colon_stat_15 = translate { rotate { colon_figure_d } y=-0.3834943 } 21.5181 9.6700 7.8075
+let colon_stat_16 = translate { rotate { colon_figure_a } y=-0.4012628 } 19.9462 9.6700 9.2137
+let colon_stat_17 = translate { rotate { colon_figure_b } y=-0.4163262 } 18.2383 9.6700 10.4298
+let colon_stat_18 = translate { rotate { colon_figure_c } y=-0.4293662 } 16.4319 9.6700 11.4750
+let colon_stat_19 = translate { rotate { colon_figure_d } y=-0.4408927 } 14.5526 9.6700 12.3662
+let colon_stat_20 = translate { rotate { colon_figure_a } y=-0.4408927 } 12.6656 9.6700 13.1011
+let colon_stats_east = union {
+    colon_stat_00 colon_stat_01 colon_stat_02 colon_stat_03
+    colon_stat_04 colon_stat_05 colon_stat_06 colon_stat_07
+    colon_stat_08 colon_stat_09 colon_stat_10 colon_stat_11
+    colon_stat_12 colon_stat_13 colon_stat_14 colon_stat_15
+    colon_stat_16 colon_stat_17 colon_stat_18 colon_stat_19
+    colon_stat_20
+}
+
+# THE FOLD. Everything above is drawn on +x only and appears on both sides here. `mirror` folds
+# the coordinate rather than copying, so it is exact and it costs one node; and it is bound per
+# category rather than once for the whole arm so that every paint rule below can name one of them.
+let colon_stylobate = mirror { colon_stylo_east } axis=x
+let colon_stylobate_at = translate { colon_stylobate } 0 0 -29.00   # the twin the rules name
+let colon_entab     = mirror { colon_entab_east } axis=x
+let colon_entab_at = translate { colon_entab } 0 0 -29.00   # the twin the rules name
+let colon_balus     = mirror { colon_balus_east } axis=x
+let colon_balus_at = translate { colon_balus } 0 0 -29.00   # the twin the rules name
+let colon_urns      = mirror { colon_urns_east } axis=x
+let colon_urns_at = translate { colon_urns } 0 0 -29.00   # the twin the rules name
+let colon_columns   = mirror { colon_cols_east } axis=x
+let colon_columns_at = translate { colon_columns } 0 0 -29.00   # the twin the rules name
+let colon_statues   = mirror { colon_stats_east } axis=x
+let colon_statues_at = translate { colon_statues } 0 0 -29.00   # the twin the rules name
+
+# ================================================================================================
+# THE GROUND, THE PAVING AND THE RADIATING PATTERN
+# ================================================================================================
+#
+# A slab of lawn under the whole box, 0.90 m thick — the same thickness and for the same reason as
+# the facility's site, which shipped once with a ground thinner than the displacement applied to it
+# and came out full of holes. Everything in this clip stands on it, which is what makes
+# `components 1` mean something here.
+#
+# Over it: a gravel apron round the colonnade, and inside that the paved court, 21.60 m (48 M)
+# across and FALLING 0.18 (0.4 M) TO A DRAIN AT THE CENTRE. The fall is struck with a sphere of
+# radius 1296 whose lowest point sits at -0.18 and which passes through y = 0 at exactly 21.60 —
+# 1296 is a construction, not a dimension: it is 21.60 squared over twice 0.18.
+let colon_ground = box -26.55 -0.90 -16.65   26.55 0.00 14.85
+let colon_ground_at = translate { colon_ground } 0 0 -29.00   # the twin the rules name
+let colon_grav_out = cylinder 0 -0.14 0  r=27.90 h=0.32 axis=y
+let colon_grav_in  = cylinder 0 -0.14 0  r=21.55 h=0.50 axis=y
+let colon_gravel = difference { colon_grav_out colon_grav_in }
+let colon_gravel_at = translate { colon_gravel } 0 0 -29.00   # the twin the rules name
+
+let colon_pave_slab = cylinder 0 -0.27 0  r=21.60 h=0.60 axis=y
+let colon_pave_dish = sphere 0 1295.82 0 r=1296
+
+# FOUR DRAINS round the foot of the obelisk, where the dish is deepest: a recess cut out of the
+# paving with an iron grating of five bars 0.045 across laid over it. Thin matter lying FLAT in the
+# brightest part of the scene, which is the opposite lighting case from the gate.
+let colon_drain_hole = box -0.36 -0.54 -0.36   0.36 -0.10 0.36
+let colon_drain_holes = mirror { mirror { translate { colon_drain_hole } 2.70 0 2.70 } axis=x } axis=z
+let colon_drain_bar = box -0.40 -0.24 -0.0225   0.40 -0.18 0.0225
+let colon_drain_bars = repeat { colon_drain_bar } z=0.135 nz=2
+let colon_drains = mirror { mirror { translate { colon_drain_bars } 2.70 0 2.70 } axis=x } axis=z
+let colon_drains_at = translate { colon_drains } 0 0 -29.00   # the twin the rules name
+
+let colon_paving = difference { colon_pave_slab colon_pave_dish colon_drain_holes }
+let colon_paving_at = translate { colon_paving } 0 0 -29.00   # the twin the rules name
+
+# THE RADIATING PATTERN, as geometry rather than as a pattern, because the language has no
+# angular one: twenty-four sectors of 7.5 degrees each, on a pitch of 15, cut out of the paving.
+# Seven of them are drawn from due east to due north and the other seventeen are the two mirrors
+# of those, exactly the way _order.clip lays out twenty-four flutes and for the same reason — a
+# `mirror` is a fold and is exact, and `around` would take the box off the clip.
+#
+# Each sector is the intersection of two half-spaces through the centre. They are infinite, so
+# they are intersected with the paving before anything is painted with them: a paint rule must
+# name a shape of MINE, and an unbounded half-space names everybody's.
+let colon_sec_0 = intersection { plane -0.0654031 0 -0.9978589 at=0   plane -0.0654031 0 0.9978589 at=0 }
+let colon_sec_1 = intersection { plane 0.1950903 0 -0.9807853 at=0   plane -0.3214395 0 0.9469301 at=0 }
+let colon_sec_2 = intersection { plane 0.4422887 0 -0.8968727 at=0   plane -0.5555702 0 0.8314696 at=0 }
+let colon_sec_3 = intersection { plane 0.6593458 0 -0.7518398 at=0   plane -0.7518398 0 0.6593458 at=0 }
+let colon_sec_4 = intersection { plane 0.8314696 0 -0.5555702 at=0   plane -0.8968727 0 0.4422887 at=0 }
+let colon_sec_5 = intersection { plane 0.9469301 0 -0.3214395 at=0   plane -0.9807853 0 0.1950903 at=0 }
+let colon_sec_6 = intersection { plane 0.9978589 0 -0.0654031 at=0   plane -0.9978589 0 -0.0654031 at=0 }
+let colon_sec_q = union { colon_sec_0 colon_sec_1 colon_sec_2 colon_sec_3 colon_sec_4 colon_sec_5 colon_sec_6 }
+let colon_sectors = mirror { mirror { colon_sec_q } axis=x } axis=z
+let colon_pave_rays = intersection { colon_sectors colon_paving }
+let colon_pave_rays_at = translate { colon_pave_rays } 0 0 -29.00   # the twin the rules name
+
+# Two bands of travertine across the rays, at 6.30 and 12.60 (14 M and 28 M) from the centre.
+let colon_ring_a = difference { cylinder 0 -0.27 0 r=6.75 h=0.62 axis=y
+                                cylinder 0 -0.27 0 r=6.30 h=0.80 axis=y }
+let colon_ring_b = difference { cylinder 0 -0.27 0 r=13.05 h=0.62 axis=y
+                                cylinder 0 -0.27 0 r=12.60 h=0.80 axis=y }
+let colon_pave_rings = intersection { union { colon_ring_a colon_ring_b } colon_paving }
+let colon_pave_rings_at = translate { colon_pave_rings } 0 0 -29.00   # the twin the rules name
+
+# ================================================================================================
+# THE OBELISK — 14.40 m (32 M) of porphyry on a granite plinth, with a gilt finial
+# ================================================================================================
+#
+#   -0.18 - 0.27    first step      half-width 2.025 (4.5 M)
+#    0.27 - 0.72    second step     half-width 1.575 (3.5 M)
+#    0.72 - 1.62    the die         half-width 1.125 (2.5 M)
+#    1.62 - 1.80    the cap         half-width 1.350 (3 M)
+#    1.80 -14.40    the shaft       0.675 (1.5 M) at the foot, 0.450 (M) at the top
+#   14.40 -16.20    the pyramidion  0.450 to a point
+#
+# The taper is four planes rather than a scale, because a non-uniform scale reports its distance
+# short and field.cpp gives it no box at all. A plane is exact and free.
+let colon_ob_s1 = box -2.025 -0.18 -2.025   2.025 0.27 2.025 round=0.015
+let colon_ob_s2 = box -1.575 0.27 -1.575   1.575 0.72 1.575 round=0.015
+let colon_ob_die = box -1.125 0.72 -1.125   1.125 1.62 1.125 round=0.015
+let colon_ob_cap = box -1.350 1.62 -1.350   1.350 1.80 1.350 round=0.015
+let colon_ob_plinth = union { colon_ob_s1 colon_ob_s2 colon_ob_die colon_ob_cap }
+let colon_ob_plinth_at = translate { colon_ob_plinth } 0 0 -29.00   # the twin the rules name
+
+let colon_ob_px = plane 0.9998406 0.0178543 0 at=0.7070301
+let colon_ob_pz = plane 0 0.0178543 0.9998406 at=0.7070301
+let colon_ob_taper = mirror { mirror { intersection { colon_ob_px colon_ob_pz } } axis=x } axis=z
+let colon_ob_band = box -0.70 1.75 -0.70   0.70 14.40 0.70
+let colon_ob_shaft = intersection { colon_ob_band colon_ob_taper }
+let colon_ob_qx = plane 0.9701425 0.2425356 0 at=3.9290771
+let colon_ob_qz = plane 0 0.2425356 0.9701425 at=3.9290771
+let colon_ob_pyrm = mirror { mirror { intersection { colon_ob_qx colon_ob_qz } } axis=x } axis=z
+let colon_ob_pband = box -0.50 14.35 -0.50   0.50 16.20 0.50
+let colon_ob_pyr = intersection { colon_ob_pband colon_ob_pyrm }
+let colon_obelisk = union { colon_ob_shaft colon_ob_pyr }
+let colon_obelisk_at = translate { colon_obelisk } 0 0 -29.00   # the twin the rules name
+let colon_ob_finial = union { sphere 0 16.20 0 r=0.180
+                              capsule 0 16.33 0   0 16.56 0 r=0.055 }
+let colon_ob_finial_at = translate { colon_ob_finial } 0 0 -29.00   # the twin the rules name
+
+# ================================================================================================
+# THE FOUNTAINS — two, on the cross axis of the oval, at x = +-13.50 (30 M)
+# ================================================================================================
+#
+# A granite basin 3.15 m (7 M) across the rim with a moulded coping, brim-full; a baluster stem out
+# of the middle of it carrying an upper bowl, and a jet. The water is the only transmissive
+# horizontal surface in this clip and there are two of them, either side of the obelisk, so a ray
+# leaving one at a grazing angle has the colonnade to reflect and the other has the sky.
+let colon_ftn_out = cylinder 0 0.36 0  r=3.150 h=0.90 axis=y
+let colon_ftn_in  = cylinder 0 0.45 0  r=2.700 h=0.90 axis=y
+let colon_ftn_rim = cavetto 3.060 0.720   3.330 0.810
+let colon_ftn_cop = revolve { colon_ftn_rim } axis=y
+let colon_ftn_bwl = difference { colon_ftn_out colon_ftn_in }
+# The stem is NOT a balustrade baluster. That was the first version and its neck is 0.060 across,
+# which is half a voxel at metre 8 and one at metre 16, so the whole upper bowl came back as a
+# 568-voxel floating component: the balustrade's thin matter is the right kind of thin matter on
+# a balustrade and the wrong kind holding up a basin of water. This one is 0.27 across at its
+# waist -- four voxels at metre 16 -- and it is a turned profile of its own.
+let colon_ftn_sec = union { box 0 0.00 -1   0.135 0.66 1
+                            bead 0.135 0.000   0.225 0.135
+                            cyma 0.135 0.405   0.270 0.660 }
+let colon_ftn_bal = revolve { colon_ftn_sec } axis=y
+let colon_ftn_stm = union { cylinder 0 0.40 0 r=0.540 h=0.80 axis=y
+                            translate { colon_ftn_bal } 0 0.72 0 }
+let colon_ftn_uo  = cylinder 0 1.485 0 r=0.900 h=0.45 axis=y
+let colon_ftn_ui  = cylinder 0 1.620 0 r=0.720 h=0.45 axis=y
+let colon_ftn_up  = difference { colon_ftn_uo colon_ftn_ui }
+let colon_ftn_jet = capsule 0 1.30 0   0 2.34 0 r=0.090
+let colon_ftn_dry = union { colon_ftn_bwl colon_ftn_cop colon_ftn_stm colon_ftn_up colon_ftn_jet }
+let colon_ftn_wet = union { cylinder 0 0.33 0 r=2.710 h=0.78 axis=y
+                            cylinder 0 1.5375 0 r=0.715 h=0.285 axis=y }
+let colon_ftn_base = cylinder 0 -0.20 0 r=3.150 h=0.60 axis=y
+let colon_ftn_unit = union { colon_ftn_dry colon_ftn_base }
+
+let colon_fount_e = translate { colon_ftn_unit } 13.50 0 0
+let colon_fountains = mirror { colon_fount_e } axis=x
+let colon_fountains_at = translate { colon_fountains } 0 0 -29.00   # the twin the rules name
+let colon_water_e = translate { colon_ftn_wet } 13.50 0 0
+let colon_water = mirror { colon_water_e } axis=x
+let colon_water_at = translate { colon_water } 0 0 -29.00   # the twin the rules name
+
+# ================================================================================================
+# THE GATE — two rusticated granite piers and the thin matter of this building between them
+# ================================================================================================
+#
+# The piers stand on the last ray of each arm, over the terminal column, 2.70 m (6 M) square and
+# rusticated with a groove every 0.45 — a `displace` by a stripe pattern of my own, which is what
+# rustication is. They rise 6.30 (the column's own height) to a cornice, and each carries a
+# statue.
+#
+# Between them: 14.52 m of clear opening and an iron screen in it. The bars are 0.05 m square on a
+# pitch of 0.225 (M/2), the scrollwork is a 0.05 m tube, the rails are 0.09, and every bar is
+# tipped with a gilt spearhead. AT metre 16 A BAR IS FOUR FIFTHS OF A VOXEL. It is meant to be. It
+# stands in an open gateway with the sky behind it and nothing else in this clip asks the sampler
+# that question.
+let colon_gp_core = box 7.2613 -0.10 -14.8155   9.9613 6.30 -12.1155 round=0.020
+let colon_gp_rust = displace { colon_gp_core colon_rustic } amount=-0.075
+let colon_gp_cap = box 7.0813 6.30 -14.9955   10.1413 6.75 -11.9355 round=0.015
+let colon_gp_plin = box 8.2513 6.72 -13.8255   8.9713 7.02 -13.1055 round=0.012
+let colon_gp_east = union { colon_gp_rust colon_gp_cap colon_gp_plin }
+let colon_gate_piers = mirror { colon_gp_east } axis=x
+let colon_gate_piers_at = translate { colon_gate_piers } 0 0 -29.00   # the twin the rules name
+let colon_gp_stat_e = translate { rotate { colon_figure_a } y=0.5 } 8.6113 6.97 -13.4655
+let colon_gate_statues = mirror { colon_gp_stat_e } axis=x
+let colon_gate_statues_at = translate { colon_gate_statues } 0 0 -29.00   # the twin the rules name
+
+# The screen, on z = -13.4655, from x = -7.4863 to 7.4863.
+let colon_gt_sill = box -7.4863 -0.30 -13.9155   7.4863 0.18 -13.0155 round=0.015
+let colon_gt_bar = box -0.025 0.135 -13.4905   0.025 4.05 -13.4405
+let colon_gt_bars = repeat { colon_gt_bar } x=0.225 nx=32
+let colon_gt_r1 = box -7.4863 0.135 -13.5105   7.4863 0.270 -13.4205
+let colon_gt_r2 = box -7.4863 2.025 -13.5105   7.4863 2.160 -13.4205
+let colon_gt_r3 = box -7.4863 2.970 -13.5105   7.4863 3.105 -13.4205
+let colon_gt_r4 = box -7.4863 3.915 -13.5105   7.4863 4.050 -13.4205
+let colon_gt_stile = box -0.045 0.135 -13.5105   0.045 4.50 -13.4205
+let colon_gt_stiles = union { colon_gt_stile
+                              translate { colon_gt_stile } 2.9250 0 0
+                              translate { colon_gt_stile } -2.9250 0 0
+                              translate { colon_gt_stile } 5.8500 0 0
+                              translate { colon_gt_stile } -5.8500 0 0
+                              translate { colon_gt_stile } 7.4863 0 0
+                              translate { colon_gt_stile } -7.4863 0 0 }
+
+# The scrollwork: a logarithmic spiral 0.05 m across — the same 0.05 as the bars — in two rows
+# that each reach from one rail to the next, so the whole screen is one piece of iron rather than
+# a raft of loose curls. Thirteen to a row, and each one is the same node repeated.
+let colon_gt_scr = spiral 0 0 -13.4655  r=0.4725 tighten=0.42 tube=0.025 turns=2.0 axis=z
+let colon_gt_scr_a = translate { colon_gt_scr } 0 2.5875 0
+let colon_gt_scr_row = repeat { colon_gt_scr_a } x=1.125 nx=6
+let colon_gt_scr_b = translate { colon_gt_scr } 0 3.5325 0
+let colon_gt_scr_rowb = repeat { colon_gt_scr_b } x=1.125 nx=6
+let colon_gt_scrolls = union { colon_gt_scr_row colon_gt_scr_rowb }
+
+# The coat of arms over the meeting of the leaves: a shield on a cartouche, with a crown over it.
+let colon_gt_shield = intersection { ellipsoid 0 4.86 -13.4655 rx=0.72 ry=0.90 rz=0.09
+                                     box -0.72 4.14 -13.5855   0.72 5.31 -13.3455 }
+let colon_gt_arms_bar = box -0.09 4.00 -13.5255   0.09 4.68 -13.4055
+let colon_gt_crn_neck = box -0.18 5.10 -13.5405   0.18 5.34 -13.3905 round=0.010
+let colon_gt_crn_core = cylinder 0 5.46 -13.4655 r=0.150 h=0.42 axis=y
+let colon_gt_crown = union { colon_gt_crn_neck colon_gt_crn_core
+                             revolve 0 5.26 -13.4655 { cavetto 0.135 0.00   0.45 0.41 } axis=y
+                             sphere 0 5.76 -13.4655 r=0.150 }
+let colon_gt_arms = union { colon_gt_shield colon_gt_arms_bar colon_gt_crown }
+
+# The gilt: a spearhead on every bar, and the coat of arms.
+let colon_gt_tip = cone 0 3.94 -13.4655  r=0.055 h=0.38 axis=y
+let colon_gt_tips = repeat { colon_gt_tip } x=0.225 nx=32
+let colon_gate_gilt = union { colon_gt_tips colon_gt_arms }
+let colon_gate_gilt_at = translate { colon_gate_gilt } 0 0 -29.00   # the twin the rules name
+let colon_gate_iron = union { colon_gt_bars colon_gt_r1 colon_gt_r2 colon_gt_r3 colon_gt_r4
+                              colon_gt_stiles colon_gt_scrolls }
+let colon_gate_iron_at = translate { colon_gate_iron } 0 0 -29.00   # the twin the rules name
+let colon_gate_sill = colon_gt_sill
+let colon_gate_sill_at = translate { colon_gate_sill } 0 0 -29.00   # the twin the rules name
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+#
+# NO `displace` GRAIN OVER THE WHOLE OF IT, and that is a decision rather than an omission. The
+# facility's manifest ends with `displace { hollowed grain_fine } amount=0.012`; at THIS clip's
+# metre 16 that is 0.19 of a voxel, and the tool drops it and says so, because a displacement too
+# small to move a surface is exactly large enough to dither one — the black-pepper speckle
+# clip_script.cpp has a page about. Anything large enough to survive metre 16 (0.032 m) is over
+# half the thickness of a baluster neck and would eat the balusters. So the surface here comes
+# from `variation` and from the two weathering statements, whose own deformations (0.050 and
+# 0.0405) are above the cutoff on purpose.
+let colon_built = union {
+    colon_ground colon_gravel colon_paving colon_drains
+    colon_stylobate colon_columns colon_entab colon_balus colon_urns colon_statues
+    colon_ob_plinth colon_obelisk colon_ob_finial
+    colon_fountains colon_water
+    colon_gate_piers colon_gate_statues colon_gate_sill colon_gate_iron colon_gate_gilt
+}
+
+let colon_assembly = colon_built
+let part_colonnade = translate { colon_assembly } 0 0 -29.00
+
+
+# ================================================================================================
+# THE TWO WALKING PROBES — and this building is the tightest thing on the estate
+# ================================================================================================
+#
+#     ./build/clipcheck clips/estate/colonnade.clip --metre 16 --part colon_probe_in
+#     ./build/clipcheck clips/estate/colonnade.clip --metre 16 --part colon_probe_walk
+#
+# Neither is unioned into the part. Each is the volume a person sweeps — 0.60 m across, which is
+# the player's own width, and 2.10 m of head starting 0.05 above the stylobate's top step — placed
+# on the two routes this building has. They are taken against `part_colonnade` and not against the
+# weathered solid, for the reason the campanile's probe gives: the two weathering coats move the
+# surface by up to 0.05 and the clearances here are 0.02, so the geometry is the honest measure and
+# the coats are inside the margin.
+#
+# WHAT THE NUMBERS ARE, because they are the answer to "can a person get in" and they are tighter
+# than anything else on this estate. The shaft is 0.90 at the foot and swells to 0.926 at the
+# entasis crown 1.95 m up, which is exactly chest height for somebody standing on the stylobate:
+#
+#   ALONG a walk, between two rows          1.80 centres  -  0.926  =  0.874 m clear
+#   ACROSS the outer row, between two rays  2.025 centres -  0.926  =  1.099 m clear
+#   ACROSS the INNER row, between two rays  1.573 centres -  0.926  =  0.647 m clear
+#
+# The last of those is the way IN from the court, and it is the tightest passage on the estate: a
+# person 0.60 across gets through it with 23 mm either side. It is not a fault to be fixed by
+# moving a column — the four rows at 4 M and the bay at 4.5 M of arc on the OUTER row are the
+# module, and a radial layout on an oval shortens every inner bay by the ratio of the radii, which
+# is what makes the rows shear and is the whole visual effect this part exists for. It is a fact
+# about the building that belongs in writing, and the probe is what keeps it true.
+#
+# THE PROBE STARTS AT 1.00 AND NOT AT 0.59, AND THE FIRST DRAFT OF IT IS WHY. Written from 0.05
+# over the stylobate it came back with 0.151 m3 in seven pieces, every one of them between y 0.538
+# and 1.038 — which is not a wall, it is the COLUMN BASES. A Tuscan base is wider than its shaft
+# by construction: the plinth is 1.26 SQUARE to 0.185, the torus 1.17 round to 0.36, the fillet
+# 0.99 to 0.45. So the clear width between two rows is not one number, it is four, and only the
+# last of them is what a body meets:
+#
+#   0.54 .. 0.73   between the plinths   1.80 - 1.26 = 0.54 m     (0.185 tall — a step, not a wall)
+#   0.73 .. 0.90   between the tori      1.80 - 1.17 = 0.63 m
+#   0.90 .. 0.99   between the fillets   1.80 - 0.99 = 0.81 m
+#   0.99 and up    between the shafts    1.80 - 0.926 = 0.874 m
+#
+# Every one of those bases is under the 0.55 m riser a person climbs, so a person walking a colonnade
+# walks OVER the bases and their body is in the 0.874 band. That is what the probe measures, and it
+# is why its floor is at 1.00 — the honest question is whether a body passes, not whether a boot
+# clears a plinth it is standing on.
+#
+# THE WAY IN, midway between the rays at stations 11 and 12, where the ray IS the ellipse's normal
+# and the squeeze is therefore at its worst. The two midpoints are (24.174, 1.063) and
+# (18.784, 0.825), and the line through them passes 3 mm from the centre of the oval — so the
+# corridor is a box on +x turned by the mid-bearing, 2.524 degrees = 0.007011 turns, and `rotate`
+# with a NEGATIVE turn carries +x toward +z.
+let colon_probe_in = intersection {
+    part_colonnade
+    rotate { box 18.20 1.00 -0.30   24.90 3.10 0.30 } y=-0.007011
+}
+
+# THE WALK, between rows two and three at the same station, running along the arc for three bays.
+# 21.60 is the mid radius between the columns at 22.50 and 20.70.
+let colon_probe_walk = intersection {
+    part_colonnade
+    box 21.30 1.00 -1.30   21.90 3.10 1.30
+}
+
+# --- paint --------------------------------------------------------------------------------------
+#
+# Base coat first, then the ground, then everything standing on it, in the order a later coat
+# should cover an earlier one. Every rule names one of MY OWN shapes and every one says
+# `below=0.035`, never `below=0`. There is no manifest grain over this clip, but the two weathering
+# statements below displace the surface by up to 0.050 m, and a test at zero misses every voxel
+# that displacement made — which leaves a pale rind of the base coat over the weathered work and
+# looks exactly like weathering rather than like the paint failing to reach the surface.
+paint limestone
+
+paint lawn       where=colon_ground_at      below=0.035
+paint gravel     where=colon_gravel_at      below=0.035
+
+paint travertine where=colon_paving_at      below=0.035
+paint granite    where=colon_pave_rays_at   below=0.035
+paint travertine where=colon_pave_rings_at  below=0.035
+paint iron       where=colon_drains_at      below=0.035
+
+paint granite    where=colon_stylobate_at   below=0.035
+paint travertine where=colon_columns_at     below=0.035
+paint travertine where=colon_entab_at       below=0.035
+paint travertine where=colon_balus_at       below=0.035
+paint limestone  where=colon_urns_at        below=0.035
+paint limestone  where=colon_statues_at     below=0.035
+
+paint granite    where=colon_ob_plinth_at   below=0.035
+paint porphyry   where=colon_obelisk_at     below=0.035
+paint gilt       where=colon_ob_finial_at   below=0.035
+
+paint granite    where=colon_fountains_at   below=0.035
+paint water      where=colon_water_at       below=0.035
+
+paint granite    where=colon_gate_piers_at  below=0.035
+paint granite    where=colon_gate_sill_at   below=0.035
+paint limestone  where=colon_gate_statues_at below=0.035
+paint iron       where=colon_gate_iron_at   below=0.035
+paint gilt       where=colon_gate_gilt_at   below=0.035
+
+# --- weather --------------------------------------------------------------------------------------
+#
+# This is the most exposed structure on the estate: a free-standing stone screen with weather on
+# every side of every column and nothing over it but a balustrade. So it is weathered — LIGHTLY,
+# and every statement names a shape OF MINE with `on=`, never bare. Without `on=` weathering works
+# on the whole clip: it would bleach the lawn, scour the gate and sand the drain gratings along
+# with whatever it was meant for, because the coats it adds are keyed on a value rather than on a
+# place and they go on after everything painted above.
+#
+# TWO STATEMENTS AND NOT FIVE, AND THE REASON IS MEASURED. Weathering wraps the whole solid in a
+# `displace` whose pattern asks the solid for its own curvature and occlusion, and each of those
+# samples the field several times over. The statements CHAIN: the second one's shape is the first
+# one's displaced solid, so the cost compounds. Five of them cost this clip 33.2 s of CPU at
+# metre 4 against 2.8 s with the `weather` lines deleted — TWELVE TIMES, for the same geometry —
+# and clip_script.cpp has the facility's own version of this number (2.4 s against 623 s). Two is
+# what surface.clip uses on a bigger building, and two is what this uses.
+#
+# The DEFORMATION a weather statement applies is set by its `scale=` and not by its amount —
+# desert scours by 0.05 x scale, overgrown swells by 0.045 x scale — and at metre 16 anything
+# under 0.03125 m is dropped as dither with a warning. So the scales are 1.00 and 0.90: below
+# about 0.7 the deformation vanishes, and much above 1.1 the scour starts taking the balusters,
+# whose necks are 0.060.
+weather desert    0.16 scale=1.00 seed=13 on=colon_entab_at
+weather overgrown 0.14 scale=0.90 seed=59 on=colon_stylobate_at
+
+
+# --- where the origin is ---------------------------------------------------------------------
+#
+# The player spawns at 0,0,0, and the middle of this clip is the inside of an obelisk's plinth.
+# So the spawn is moved 7.20 m (16 M) north of the obelisk, standing on the paving looking down
+# the court at the gate. `origin` and not a translate: it carries the paint rules and the bounds
+# with the stone, which a translate round the solid does not.

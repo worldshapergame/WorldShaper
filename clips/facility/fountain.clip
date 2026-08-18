@@ -1,0 +1,1124 @@
+# fountain — the north garden: a baroque water parterre, its fountain group, and its cascade.
+# A FRAGMENT of clips/facility.clip. Its twin, clips/estate/fountain.clip, is unchanged.
+#
+# FIVE whole-clip statements are deleted here: the `_contract.clip` include, `metre 32`, `bounds`,
+# `variation` and `solid part_fountain`. The manifest owns all of them.
+#
+# THE VARIATION CARRIED A BUDGET AND THAT IS WORTH NAMING. This file's own line was
+# `variation colour=0.05 rough=0.10 seed=61 budget=1400000` -- a heavier spread than the facility's
+# 0.030 / 0.070 seed=17, with a budget sized for this building's voxel count alone. The manifest's
+# variation governs now, so the water and the travertine vary LESS here than in the standalone twin.
+# That is a real difference between the two files, not an oversight: a per-fragment variation is not
+# something the format has.
+#
+# WHERE IT STANDS — (0, 0, 26.55). The origin is the centre of the fountain basin, at facility
+# z = +26.55 (26.55 = 59 M), so the clip's own z -10.35 .. +11.70 lands on facility z 16.20 .. 38.25,
+# inside the band the site plan reserves and both ends on the module. The facility is SOUTH (-z) and
+# the cascade NORTH (+z): you come out of the building and the water comes down towards you.
+#
+# EVERY SHAPE A RULE NAMES HAS A TRANSLATED TWIN, `<name>_at`, standing directly after the shape it
+# carries -- which is the only placement that works here, because this file interleaves its rules
+# with its definitions and a single block of twins at the first rule referred to shapes that were
+# not bound yet. `below=` goes 0.02 to 0.035, per clips/estate/BRIEF.md rule 5.
+#
+#
+# A standalone clip. It is NOT a fragment of clips/facility.clip and must never be added to it: it
+# has its own bounds, its own ground and its own origin, and it is opened on its own —
+#
+#     build\bin\WorldShaper.exe --clip-file clips\estate\fountain.clip
+#
+# ------------------------------------------------------------------------------------------------
+# WHERE IT STANDS
+#
+# On the estate's site plan (clips/estate/BRIEF.md) the fountain court is "on the axis, north of the
+# building, z 16 .. 40". North is +z, the facility faces south, its ground is y = 0.
+#
+# This clip's origin is the CENTRE OF THE FOUNTAIN BASIN, which stands at facility coordinates
+#
+#     x = 0.00,   y = 0.00,   z = +26.55        (26.55 = 59 M)
+#
+# so the clip's own z -10.35 .. +11.70 lands on facility z 16.20 .. 38.25 — inside the band the site
+# plan reserves, and both ends on the module. The facility is to the SOUTH (-z) and the cascade is
+# at the NORTH (+z), which is the way round a garden of this century is always laid out: you come
+# out of the building, the water comes down the hill towards you.
+#
+# ------------------------------------------------------------------------------------------------
+# THE SIZE FIX, AND WHICH ONE I TOOK
+#
+# The brief's suggested court — 32.40 x 24.30 m, a 36 x 14 x 30 m clip — is 495 M cells at metre 32
+# and about 2.5 GB. That is the facility's own box and a little worse, and the facility's box is
+# already described in _contract.clip as the reason the estate had to be split into separate files
+# in the first place. The brief offers two ways out: shrink the court, or author at metre 16.
+#
+# I SHRANK THE COURT AND KEPT metre 32, which is what the brief prefers and is the right call here
+# for a reason specific to this part rather than for tidiness. Everything this file exists to put
+# under load is one or two voxels across at metre 32 and does not exist at all at metre 16:
+#
+#     the annular veils falling off both shells      0.045 m   =  1.4 voxels at 32,  0.7 at 16
+#     the conch jets and the crown jet               0.09-0.10 =  3 voxels,          1.5
+#     the crown's four falling strands               0.07      =  2.2 voxels,        1.1
+#     the lantern frames                             0.05      =  1.6 voxels,        0.8
+#     the tritons' fingers, arms and conch whorls    0.07-0.19 =  2 to 6 voxels,     1 to 3
+#
+# A veil of water that is half a voxel thick is not a thin refracting sheet, it is speckle. The
+# whole of load note 1 below would have been thrown away to save memory that shrinking the lawn
+# saves just as well.
+#
+# So the court is 27.00 x 20.25 m of laid-out garden (60 M x 45 M) inside a box of
+#
+#     bounds  -14.40 -0.90 -10.35    14.40 8.10 11.70          28.80 x 9.00 x 22.05 m
+#
+# = 5,715 m3, and the sampler makes it 921 x 288 x 706 = 187.2 M cells at metre 32: 0.87 GB in the
+# game's five bytes a cell, against the facility's 2.8. It fits. (`clipcheck` itself peaks at 2.44 GB
+# on it — the measuring tool holds more than the clip does. The measured block at the bottom of this
+# header has the figures.) The box is cut to the garden plus half a metre on three sides and to the
+# cascade's own back on the fourth, for the same reason _contract.clip cuts its own: a generous
+# margin of lawn is the most expensive nothing there is.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD. Four things, and the first two are the reason it was asked for.
+#
+#   1. THE FIRST REAL BODY OF MOVING-SHAPED WATER IN THE PROJECT.
+#
+#      `water` is ior 1.33, rough 24, opacity 110, and every use of it in this repository until now
+#      has been a flat pond — site.clip's two reflecting basins, 14.6 m2 of horizontal surface, and
+#      site.clip says in its own header that a flat basin is all its bounds could afford.
+#
+#      This file puts water IN THE AIR, as solids, in four different shapes:
+#
+#        - four CONCH JETS, one from each triton, each a pair of smoothly-joined capsules 0.10 m
+#          across that rise out of the conch and then fall three and a half metres into the basin.
+#          A thin refracting cylinder with sky behind it and stone beyond that.
+#        - the CROWN JET rising 1.3 m off the gilt finial, 0.10 across, with four falling strands
+#          0.07 across curving back down into the upper shell.
+#        - two ANNULAR VEILS, one spilling off each shell: a `shell` of a `cone`, 0.045 m thick —
+#          ONE AND A HALF VOXELS at metre 32 — hanging as a complete cone of water, 2.4 m across at
+#          the foot of the upper one and 4.4 m at the foot of the lower. The sun goes through one of
+#          these and out the other side.
+#        - three CASCADE SHEETS, the same construction on a half cylinder, falling off the lip of
+#          each cascade basin into the one below.
+#
+#      And all of it stands over BASINS OF THE SAME MATERIAL, which is the part that makes it hard
+#      rather than merely thin: a ray can refract into a veil, out of it, into the basin under it
+#      and out again — four dielectric interfaces and a caustic on a travertine floor, outdoors, in
+#      daylight. Nothing in this repository has asked for that.
+#
+#      THEY ARE FROZEN, AND THAT IS THE HONEST WORD FOR IT. This engine has no fluid simulation and
+#      is not going to have one. A jet built as a solid of `water` is a still photograph of a jet,
+#      and a still photograph of a jet is a real refracting body of water in the air, which is
+#      exactly what the renderer needs to be shown and cannot be shown by a pond. Do not read these
+#      as a promise of animation.
+#
+#   2. A LARGE FLAT SPECULAR SURFACE THAT IS NOT A MIRROR.
+#
+#      The basin is 10.80 m across (24 M) and 0.27 m deep, brimming, with the water at y = 0.405 and
+#      the coping at 0.45. That is 78 m2 of pan, of which some 55 is open water round the mount —
+#      nearly four times site.clip's two reflecting basins put together — outdoors, under open sky,
+#      with a complicated stone group standing in the middle of it.
+#
+#      IT IS LARGE AND SHALLOW ON PURPOSE AND MUST STAY THAT WAY. At the far kerb, ten metres off,
+#      the grazing angle puts Fresnel near one and the surface is a mirror of the obelisks and the
+#      cascade; two metres from a standing camera it is near 0.02 and the surface is nearly clear
+#      down to a pale travertine floor 0.27 m under it. That whole sweep is present in ONE FRAME
+#      across ONE SURFACE, which is the thing a single test render can be made to show and a small
+#      basin cannot. The floor is painted travertine and not granite for the reason site.clip
+#      learned the hard way: with nothing worth seeing underneath, a tinted dielectric renders as a
+#      flat dark slate rectangle and the refraction is wasted.
+#
+#   3. FIGURES: IRREGULAR MASSES WITH LIMBS.
+#
+#      Four tritons, back to back on a rocky mount, blowing conches. That is four bodies, eight
+#      arms, four heads, four tails and four spiral conch shells, every one of them a union of
+#      rounded solids joined with `smooth=0.07` and separated from its neighbour by gaps of a few
+#      centimetres. It is the case a distance field is worst at — many small solids, narrow gaps,
+#      no large flat anything — and it is where `smooth=` joins, `skip_slack` and the union's
+#      bounding boxes are all tested at once. The measured cost is at the bottom of this header.
+#
+#   4. CLIPPED BOX AND GRAVEL: DENSE SMALL-SCALE GEOMETRY WITH NO FLAT FACES.
+#
+#      The parterre is four beds of scrollwork box hedge 0.45 m high — rings, arcs and a border
+#      following the bed's own outline — displaced by a `cells` field so it is foliage and not a
+#      green box, with gravel in two colours between them and lawn outside. Hundreds of metres of
+#      curved hedge and a surface with no large feature at all: exactly the case where a coarse
+#      summary of far geometry has nothing to hold on to, which is the OPPOSITE problem from the
+#      colonnade's columns and is standing on the same estate.
+#
+# ------------------------------------------------------------------------------------------------
+# THE MODULE. D = 0.90, M = 0.45, out of _contract.clip, and every dimension below is a multiple or
+# a simple fraction of M. Where a number is not, it is a CONSTRUCTION rather than a dimension and it
+# is named as one where it occurs. There are four:
+#
+#   - the obelisk's four face planes and its pyramidion's four, whose offsets are the arithmetic of
+#     passing a plane through two module points (see THE OBELISKS);
+#   - the veil cones' apex heights, which are where a 1-in-6 batter struck through a module rim
+#     happens to close (see THE WATER);
+#   - the stair runs, which are 0.32 by the brief's own rule and not by the module;
+#   - 0.045 = M/10 and 0.09 = M/5, used throughout for thin matter, exactly as site.clip does.
+#
+# THE FIGURES ARE MODELLED AND ARE NOT ON THE MODULE, and that is deliberate rather than a lapse.
+# The four tritons, the grotesque mask, the urn's profile and the lantern are the same kind of object
+# as `fittings.clip`'s statue, whose numbers are anatomy — a shoulder is 0.32 across because that is
+# what a shoulder is. Where they MEET the building they are on the module: every one of them stands
+# on, or is buried in, a surface whose height is in the level table below.
+#
+# ------------------------------------------------------------------------------------------------
+# LEVELS
+#
+#   -0.90   the bottom of the ground slab
+#    0.00   the court: paving, gravel, lawn. The datum.
+#    0.135  the floor of every basin
+#    0.405  THE WATER LEVEL, everywhere, and the `level=` the sea weathering is given
+#    0.45   the coping of the main basin and of the cascade's foot trough  (1 M)
+#    0.54   the perimeter walk, three risers of 0.18 above the court
+#    0.90   the lip of the cascade's lower basin                          (2 M)
+#    1.35   the top of the perimeter terrace wall                         (3 M)
+#    1.80   the lip of the cascade's middle basin, and the north terrace   (4 M)
+#    2.70   the lip of the cascade's top basin, and the niche floor        (6 M)
+#    3.15   the lower shell of the fountain group                          (7 M)
+#    4.50   the top of the cascade wall                                   (10 M)
+#    4.95   the upper shell of the fountain group                         (11 M)
+#    7.20   the top of the crown jet                                      (16 M)
+#    7.65   the tip of an obelisk                                         (17 M)
+#
+# ------------------------------------------------------------------------------------------------
+# MEASURED, and this is the number load note 3 promised.
+#
+# `./build/clipcheck clips/estate/fountain.clip --metre 32`, on a four-core machine, clipcheck
+# running two worker threads, with thirteen other agents sampling their own clips on the same box.
+# The elapsed figure is therefore an UPPER BOUND under contention and not a clean one; the counts
+# are exact.
+#
+#     sampled box   921 x 288 x 706 = 187.2 M cells
+#     volume        32,718,635 voxels   998.5 m3   17.47% of the box
+#     surface       2,391,068 faces     2,335 m2
+#     components    17, largest 32,718,619, SIXTEEN stray voxels in the whole clip
+#     paint         no `never fired` line: all nineteen of this file's rules and all seven coats the
+#                   three weatherings add painted something
+#     elapsed       606 s
+#     peak memory   2.44 GB in clipcheck. The clip itself is 187.2 M cells at the game's five bytes
+#                   a cell = 0.87 GB; the rest is the measuring tool's own component and despeckle
+#                   arrays, and it is worth knowing before running this on a small machine.
+#
+# The sixteen strays are fourteen single voxels along the rustication grooves on the cascade's face
+# and two on the tops of the box hedges. Both are the honest signature of a surface authored below
+# the voxel; both were 150 before the two changes written up at the cascade wall and the parterre.
+#
+# MEASURE THIS FRAGMENT AT 16 OR 32 AND NOT AT 8. At metre 8 it reports 62 components and 604 stray
+# voxels, and 528 of those are the four conch jets: a jet is 0.10 across, which is eight tenths of a
+# voxel at metre 8, so it samples as a dotted line that touches neither the conch it leaves nor the
+# water it lands in. At metre 16 that is 63 components and 132 voxels, at metre 32 it is 17 and 16.
+# It is the same resolution artefact site.clip's note describes for the order's baluster neck, on a
+# part whose whole subject is matter one voxel across.
+#
+# Material shares, by voxel:
+#
+#     granite 32.8   lawn 28.8   tuff 10.6   travertine 6.9   WATER 5.11   gravel 4.0
+#     sand 3.5 (the desert coat)   boxwood 2.2   weed 1.6 (the sea coat)   porphyry 1.6
+#     gravel_red 1.4   marble 0.8   the rest 0.8
+#
+# **WATER IS 1,671,772 VOXELS, 5.11 PER CENT OF EVERY VOXEL IN THE CLIP.** That is the claim in load
+# note 1 made checkable, and it is a volume share rather than a surface one — most of it is the great
+# basin, and the veils, jets and strands are a few tens of thousands of voxels of that total spread
+# through the air over it.
+#
+# THE COST OF THE FOUR FIGURES, taken with a control arm rather than argued about. Same box
+# (7.8 x 3.5 x 7.8 m), same metre 32, the mount built both times, the tritons the only difference:
+#
+#     the rocky mount alone                    2.74 s, 2.89 s     1,492,176 voxels
+#     the mount with the four tritons on it    4.09 s, 4.30 s     1,552,716 voxels
+#
+# Half as much again in time for four per cent more matter. That is what a union of forty-eight
+# rounded solids joined at `smooth=0.07`, with narrow gaps between them, costs a distance field — and
+# it is the number to watch if `skip_slack` or the union's box culling is ever touched.
+# ------------------------------------------------------------------------------------------------
+
+
+
+# The one material the contract does not have. The parterre needs gravel in TWO colours, because a
+# broderie is read by the contrast between the beds and the walks and not by the box alone, and the
+# contract's `gravel` is the pale one. Declared rather than borrowed: `terracotta` is a fired clay
+# at rough 220 and would read as tile, and crushed brick is neither.
+material gravel_red rgb=158,104,78 rough=250
+
+# The foliage grain for the box hedge and the rock grain for the mount and the rusticated wall.
+# Named here so that every hedge in this garden is the same clipped bush and every rock is the same
+# rock, which is the seam site.clip warns about.
+let fc_leaf  = cells size=0.10 seed=83
+let fc_rock  = fbm size=0.28 octaves=4 seed=91
+
+
+# ================================================================================================
+# THE GROUND
+# ================================================================================================
+#
+# One slab over the whole footprint, 0.90 m thick — the same thickness and for the same reason as
+# site.clip's: weathering and the leaf displacement both move surfaces, and a ground thinner than
+# what is displaced into it comes out full of holes. Everything in this file stands on it and it is
+# what makes the clip one component.
+
+let fc_ground = box -14.40 -0.90 -10.35   14.40 0.00 11.70
+let fc_ground_at = translate { fc_ground } 0 0 26.55   # the twin the rules name
+
+
+# ================================================================================================
+# THE BASIN — 10.80 m across (24 M), brimming, 0.27 deep
+# ================================================================================================
+#
+#   kerb block    r 5.40 (12 M),  y -0.45 .. 0.45
+#   pan cut       r 4.95 (11 M),  floor at y 0.135, bottom arris coved by 0.06
+#   coping        a bead round the outer face, out to 5.625, y 0.135 .. 0.405
+#   water         r 4.995,        y 0.09 .. 0.405
+#
+# The water is 0.045 WIDER than the pan and reaches 0.045 BELOW its floor, so it is inside the stone
+# rather than balanced on it — a voxel and a half of overlap at metre 32, which no displacement can
+# open. site.clip made exactly this mistake first time round and the report did not show it.
+
+let fc_basin_block = cylinder 0 0     0  r=5.40  h=0.90  axis=y
+let fc_basin_pan   = round { cylinder 0 0.825 0 r=4.89 h=1.26 axis=y } by=0.06
+let fc_cope_sec    = bead 5.40 0.135   5.625 0.405
+let fc_basin_cope  = revolve { fc_cope_sec } axis=y
+
+let fc_basin_stone = round {
+    difference { union { fc_basin_block fc_basin_cope } fc_basin_pan }
+} by=0.01
+
+let fc_basin_water = cylinder 0 0.2475 0  r=4.995 h=0.315 axis=y
+
+
+# ================================================================================================
+# THE PAVED APRON — travertine, with a granite ring, r 5.40 .. 8.55
+# ================================================================================================
+#
+# Flush with the court, so it adds no silhouette and costs no memory beyond the ground it is cut
+# out of — it is a paint region and a shape to hang the desert weathering on, which is what an
+# apron is. The granite ring at r 7.65 .. 8.10 is a single course laid round the basin, the thing
+# that stops 6 m of pale stone reading as a car park.
+
+let fc_apron      = cylinder 0 -0.18 0  r=8.55 h=0.54 axis=y
+let fc_apron_at = translate { fc_apron } 0 0 26.55   # the twin the rules name
+let fc_apron_band = difference {
+    cylinder 0 -0.18 0  r=8.10 h=0.56 axis=y
+    cylinder 0 -0.18 0  r=7.65 h=0.60 axis=y
+}
+let fc_apron_band_at = translate { fc_apron_band } 0 0 26.55   # the twin the rules name
+
+
+# ================================================================================================
+# THE FOUNTAIN GROUP
+# ================================================================================================
+#
+# A rocky mount of tuff standing in the basin, four tritons of marble seated on it back to back
+# blowing conches, and up the middle a stem carrying a shell basin, a second smaller shell and a
+# gilt finial. Read the load note at the top: the figures are not here to be good sculpture, they
+# are here to be large irregular masses with limbs.
+#
+# --- the mount ----------------------------------------------------------------------------------
+#
+# A base disc sunk into the basin floor, a central mass, and one lobe per triton, smooth-joined at
+# 0.18 and then displaced by `fc_rock` so it is rock and not four balls in a bag. The lobe travels
+# with the triton (it is rotated by the same four rotations), so each figure sits on its own rock.
+
+let fc_mount_disc  = cylinder 0 0.30 0  r=2.70 h=0.90 axis=y
+let fc_mount_core  = ellipsoid 0 1.00 0  rx=1.35 ry=1.30 rz=1.35
+let fc_mount_lobe  = ellipsoid 2.52 0.55 0  rx=1.20 ry=0.80 rz=1.10
+
+let fc_lobe_n = fc_mount_lobe
+let fc_lobe_e = rotate { fc_mount_lobe } y=0.25
+let fc_lobe_s = rotate { fc_mount_lobe } y=0.50
+let fc_lobe_w = rotate { fc_mount_lobe } y=0.75
+
+let fc_mount_mass = union smooth=0.18 {
+    fc_mount_disc fc_mount_core fc_lobe_n fc_lobe_e fc_lobe_s fc_lobe_w
+}
+let fc_mount = displace { fc_mount_mass fc_rock } amount=-0.05
+
+# --- one triton, facing +x ----------------------------------------------------------------------
+#
+# Seated on his rock at radius 2.34, leaning outward, both hands to a conch held at the mouth, tail
+# coiling down into the water. Everything overlaps its neighbour and the whole figure is joined at
+# `smooth=0.07`, which is the fillet a sculptor leaves and is also the thing being measured.
+
+let fc_tr_torso = capsule 2.34 1.35 0    2.70 2.16 0   r=0.32
+let fc_tr_neck  = capsule 2.70 2.20 0    2.83 2.45 0   r=0.11
+let fc_tr_head  = sphere  2.83 2.55 0  r=0.20
+let fc_tr_arm_a = capsule 2.70 2.12  0.27   3.06 2.61  0.18  r=0.095
+let fc_tr_arm_b = capsule 2.70 2.12 -0.27   3.06 2.61 -0.18  r=0.095
+let fc_tr_hand_a = sphere 3.04 2.62  0.15  r=0.085
+let fc_tr_hand_b = sphere 3.04 2.62 -0.15  r=0.085
+
+# THE CONCH IS A LOGARITHMIC SPIRAL, because a conch is one. `spiral` sweeps a tube along
+# r = a k^theta and reports a true distance, so a whorl 0.14 across is four voxels of real shell
+# rather than four voxels of guess. Axis z, so it winds in the x-y plane and is seen edge-on from
+# the walk — which is the way round that shows the whorls.
+let fc_tr_shell = spiral 3.06 2.66 0  r=0.19 tighten=0.52 tube=0.07 turns=1.9 axis=z
+let fc_tr_horn  = capsule 3.02 2.63 0    3.38 3.02 0   r=0.09
+
+let fc_tr_tail_a = capsule 2.34 1.35 0     2.16 0.72 0.45  r=0.26
+let fc_tr_tail_b = capsule 2.16 0.72 0.45  2.79 0.45 0.81  r=0.19
+let fc_tr_fluke  = ellipsoid 3.06 0.50 0.99  rx=0.30 ry=0.07 rz=0.22
+
+let fc_triton = union smooth=0.07 {
+    fc_tr_torso fc_tr_neck fc_tr_head
+    fc_tr_arm_a fc_tr_arm_b fc_tr_hand_a fc_tr_hand_b
+    fc_tr_shell fc_tr_horn
+    fc_tr_tail_a fc_tr_tail_b fc_tr_fluke
+}
+
+let fc_triton_n = fc_triton
+let fc_triton_e = rotate { fc_triton } y=0.25
+let fc_triton_s = rotate { fc_triton } y=0.50
+let fc_triton_w = rotate { fc_triton } y=0.75
+let fc_tritons  = union { fc_triton_n fc_triton_e fc_triton_s fc_triton_w }
+
+# --- the stem, the two shells and the finial ------------------------------------------------------
+#
+# Each shell is a rounded disc with a rounded dish taken out of it, which is two nodes and gives a
+# rim that tapers from 0.27 at the widest point to 0.09 at the lip — three voxels at metre 32, and
+# the edge the veil falls off.
+#
+#   lower shell   widest r 1.80 at y 2.79 .. 2.97,  lip 3.15,  dish floor 2.88
+#   upper shell   widest r 0.90 at y 4.59 .. 4.77,  lip 4.95,  dish floor 4.68
+
+# A REVOLVED PROFILE NEEDS A CORE ALL THE WAY UP OR IT IS A TUBE. A moulding section is a ring —
+# `bead 0.24 2.10 0.42 2.40` is solid between radius 0.24 and 0.42 and NOTHING inside 0.24 — so a
+# stem written as core, bead, core with a gap between the two cores comes out hollow at the bead and
+# the whole thing above it is a separate component. That is what happened here and to the urn, and
+# `components` is the only thing that says so. The first box below runs the full height.
+let fc_stem_lo_sec = union {
+    box   0 1.90 -1   0.26 2.85 1
+    box   0 1.90 -1   0.34 2.10 1
+    bead  0.24 2.10   0.42 2.40
+}
+let fc_stem_lo = revolve { fc_stem_lo_sec } axis=y
+
+let fc_shell_lo_body = round { cylinder 0 2.88 0  r=1.62 h=0.18 axis=y } by=0.18
+let fc_shell_lo_dish = round { cylinder 0 3.15 0  r=1.44 h=0.36 axis=y } by=0.09
+let fc_shell_lo = round {
+    difference { fc_shell_lo_body fc_shell_lo_dish }
+} by=0.01
+let fc_shell_lo_water = cylinder 0 2.975 0  r=1.575 h=0.29 axis=y
+
+let fc_stem_up_sec = union {
+    box   0 3.05 -1   0.18 4.55 1
+    box   0 3.05 -1   0.24 3.25 1
+    bead  0.16 3.25   0.30 3.55
+}
+let fc_stem_up = revolve { fc_stem_up_sec } axis=y
+
+let fc_shell_up_body = round { cylinder 0 4.68 0  r=0.72 h=0.18 axis=y } by=0.18
+let fc_shell_up_dish = round { cylinder 0 4.95 0  r=0.54 h=0.36 axis=y } by=0.09
+let fc_shell_up = round {
+    difference { fc_shell_up_body fc_shell_up_dish }
+} by=0.01
+let fc_shell_up_water = cylinder 0 4.83 0  r=0.675 h=0.30 axis=y
+
+let fc_fin_stem = cylinder 0 4.98 0  r=0.11 h=0.80 axis=y
+let fc_fin_ball = sphere   0 5.49 0  r=0.18
+let fc_fin_cone = cone     0 5.58 0  r=0.12 h=0.45 axis=y
+let fc_finial   = union smooth=0.02 { fc_fin_stem fc_fin_ball fc_fin_cone }
+let fc_finial_at = translate { fc_finial } 0 0 26.55   # the twin the rules name
+
+
+# ================================================================================================
+# THE WATER, AS MATTER
+# ================================================================================================
+#
+# Read load note 1 first. Every solid in this section is `water`, is FROZEN, and overlaps both the
+# thing it leaves and the thing it lands in by at least 0.04 m — a jet that starts three centimetres
+# above its conch is what `components` catches and there are a dozen chances to make that mistake
+# here.
+#
+# --- the two annular veils ------------------------------------------------------------------------
+#
+# A sheet of water spilling off a circular rim IS a cone, so a veil is the `shell` of a `cone`, cut
+# to the height it falls through. 0.045 thick, which is 1.4 voxels at metre 32 and 0.7 of one at
+# metre 16 — see the size note at the top for why the court shrank rather than the resolution.
+#
+# THE APEX HEIGHTS ARE A CONSTRUCTION, NOT A DIMENSION. Both veils are struck at a batter of one in
+# six, which is the fall a sheet of water actually takes off a rim of this size; the apex is then
+# wherever a 1-in-6 line through the rim closes on the axis, and the cone's `r` and `h` are that
+# arithmetic done once. Veil A leaves the upper shell 0.02 inside its widest ring and lands in the
+# lower shell's water; veil B leaves the lower shell 0.02 inside ITS widest ring and lands in the
+# basin. Both are cut at the top INSIDE the stone they leave, so neither can float.
+
+# EACH VEIL ENDS WELL UNDER THE SURFACE IT LANDS ON, not level with it. Cut at the waterline both
+# of them came back as separate components: the water they fall into is 0.27 deep, a coarse sample
+# puts two cell centres in it, and a veil whose lowest cell sits above both of them touches nothing.
+# Veil A ends 0.22 into the lower shell's water and veil B 0.27 into the basin's.
+
+let fc_veil_a_cone = cone 0 2.85 0  r=1.188 h=7.13 axis=y
+let fc_veil_a = intersection {
+    shell { fc_veil_a_cone } thickness=0.045
+    box -1.30 2.90 -1.30   1.30 4.75 1.30
+}
+
+let fc_veil_b_cone = cone 0 0.10 0  r=2.2467 h=13.48 axis=y
+let fc_veil_b = intersection {
+    shell { fc_veil_b_cone } thickness=0.045
+    box -2.35 0.14 -2.35   2.35 2.95 2.35
+}
+
+# --- the crown jet and its four falling strands -----------------------------------------------------
+#
+# The jet starts inside the finial's spike, where the spike is still 0.088 across, so its whole
+# cross-section is in stone at the bottom. The strands start inside the jet and end inside the upper
+# shell's water. Four written out rather than mirrored twice, because a mirror in x and a mirror in
+# z would fold the same pair back onto itself and give two.
+
+let fc_jet_crown = capsule 0 5.70 0   0 7.20 0  r=0.05
+let fc_strand_a  = capsule 0 7.11 0    0.63 4.80 0     r=0.035
+let fc_strand_b  = capsule 0 7.11 0   -0.63 4.80 0     r=0.035
+let fc_strand_c  = capsule 0 7.11 0    0    4.80 0.63  r=0.035
+let fc_strand_d  = capsule 0 7.11 0    0    4.80 -0.63 r=0.035
+let fc_crown = union smooth=0.03 {
+    fc_jet_crown fc_strand_a fc_strand_b fc_strand_c fc_strand_d
+}
+
+# --- the four conch jets ---------------------------------------------------------------------------
+#
+# Two capsules smooth-joined at 0.10, which is an arc: up and out of the conch to an apex 3.60 from
+# the axis, then down 3.5 m into the basin. The lower end reaches y 0.14 — a quarter of a metre UNDER
+# the surface of water that is only 0.315 deep, for the reason given at the veils: an end that stops
+# at the waterline is an end that touches nothing at a coarse sample. Rotated with its triton.
+
+let fc_jet_rise = capsule 3.34 2.98 0   3.96 3.60 0  r=0.05
+let fc_jet_fall = capsule 3.96 3.60 0   4.50 0.14 0  r=0.05
+let fc_jet_one  = union smooth=0.10 { fc_jet_rise fc_jet_fall }
+
+let fc_jet_n = fc_jet_one
+let fc_jet_e = rotate { fc_jet_one } y=0.25
+let fc_jet_s = rotate { fc_jet_one } y=0.50
+let fc_jet_w = rotate { fc_jet_one } y=0.75
+let fc_jets  = union { fc_jet_n fc_jet_e fc_jet_s fc_jet_w }
+
+
+# ================================================================================================
+# THE CASCADE — at the head of the court, on the axis
+# ================================================================================================
+#
+# A rusticated wall 7.20 wide (16 M) and 4.50 high (10 M) with a grotto niche in the middle, three
+# half-round basins stepping down out of it, water sheeting over each lip, and a foot trough at
+# court level to catch it. Flanked by two flights of ten risers up to the north terrace.
+#
+#   wall           x -3.60 .. 3.60    z 9.00 .. 11.70    y -0.45 .. 4.50
+#   niche          r 1.35 ON the face at z 9.00, floor 2.70, barrel to 3.15, semi-dome to 4.50,
+#                  1.35 deep, mouth 2.70 wide
+#   top basin      r 1.80 (4 M)   lip 2.70 (6 M)
+#   middle basin   r 2.25 (5 M)   lip 1.80 (4 M)
+#   lower basin    r 2.70 (6 M)   lip 0.90 (2 M)
+#   foot trough    r 3.60 (8 M)   coping 0.45, water 0.405 — the same level as the great basin
+#
+# Every basin is centred on z = 9.00, the wall's own face, and cut to its southern half, so the
+# three of them stack like a wedding cake against the wall and each one's lip stands clear of the
+# one below it by 0.45.
+
+# THE RUSTICATION IS CUT, NOT DISPLACED, AND THAT IS A MEASUREMENT RATHER THAN A PREFERENCE.
+# `displace { wall ashlar }` is the obvious way to rusticate and it was the first way this was
+# written. Measured on this wall alone at metre 32, everything else held:
+#
+#     displace by the contract's `ashlar`, amount 0.05      31 components,  40 stray voxels
+#     the same at 0.035 / 0.025 / 0.045 / 0.09              41 / 59 / 37 / 21
+#     displace by `courses` (a stripe, one axis)             1 component,    0
+#     joints cut as real boxes                              10 components,   9
+#
+# `bricks` is a discontinuous field that steps in TWO axes, so displacing by it puts a cliff in the
+# distance field along every block corner, and a sampler asked at a cliff produces isolated cells.
+# `courses` steps in one axis and is clean, which is the control that says it is the corners and not
+# the amplitude — turning the amount down made it WORSE, which is the opposite of what a noise
+# problem does. So the joints are 0.05 m grooves subtracted from the face on a 0.90 x 0.45 grid, and
+# the only displacement left is a continuous `fbm` for the tuff's own coarseness.
+let fc_casc_block = box -3.60 -0.45 9.00   3.60 4.50 11.70
+let fc_rust_bed  = repeat { box -3.70 -0.025 8.92   3.70 0.025 9.07 } y=0.45 ny=10
+let fc_rust_perp = repeat { box -0.025 -0.60 8.92   0.025 4.60 9.07 } x=0.90 nx=4
+let fc_casc_cut  = difference { fc_casc_block fc_rust_bed fc_rust_perp }
+let fc_casc_face = displace { fc_casc_cut fc_rock } amount=-0.02
+
+# THE NICHE IS CENTRED ON THE WALL'S OWN FACE, z = 9.00, and not behind it. A cylinder whose axis
+# stands behind the face crosses it at a shallow angle and leaves a feather edge of wall at each end
+# of the chord: 26 stray voxels along x = +-1.12 in the measurement above, and nothing else in the
+# report says a word about it. With the axis ON the face the surface meets the plane at a right
+# angle, the mouth is 2.70 wide with a clean vertical arris, and the niche is 1.35 deep with 1.35 of
+# wall behind it. The clipping box is what turns a whole cylinder and sphere into a niche.
+let fc_casc_niche = intersection {
+    union {
+        cylinder 0 2.925 9.00  r=1.35 h=0.45 axis=y
+        sphere   0 3.15  9.00  r=1.35
+    }
+    box -1.40 2.60 8.90   1.40 4.60 10.50
+}
+let fc_casc_wall = round {
+    difference { fc_casc_face fc_casc_niche }
+} by=0.01
+
+# The mask: a travertine grotesque on the back of the niche, spouting into the top basin. It stands
+# on a slab that reaches back into the wall's own stone, so it is carved out of the grotto rather
+# than hung in it.
+let fc_mask_slab = box -0.45 2.70 10.25   0.45 3.70 10.90
+let fc_mask_head = ellipsoid 0 3.15 9.95  rx=0.42 ry=0.46 rz=0.40
+let fc_mask_brow = capsule -0.30 3.32 9.62    0.30 3.32 9.62   r=0.09
+let fc_mask_nose = capsule  0 3.20 9.56       0 3.02 9.54      r=0.08
+let fc_mask_jaw  = ellipsoid 0 2.90 9.68  rx=0.30 ry=0.16 rz=0.20
+let fc_mask_lip  = capsule -0.16 2.99 9.58    0.16 2.99 9.58   r=0.08
+let fc_mask_horn_a = capsule  0.34 3.44 9.80   0.54 3.66 9.98  r=0.08
+let fc_mask_horn_b = capsule -0.34 3.44 9.80  -0.54 3.66 9.98  r=0.08
+let fc_mask = union smooth=0.05 {
+    fc_mask_slab fc_mask_head fc_mask_brow fc_mask_nose fc_mask_jaw fc_mask_lip
+    fc_mask_horn_a fc_mask_horn_b
+}
+
+# --- the basins ------------------------------------------------------------------------------------
+#
+# Each is a rounded half disc with a rounded dish taken out, cut to z <= 9.00 by the wall's own
+# plane. Written as a difference against a box rather than as an intersection with a half space so
+# the cut face is flush with the wall and nothing pokes out behind it.
+
+# TWO CUTS AND NOT ONE. The stone basins are cut at z = 9.10 so each one runs 0.10 INTO the wall's
+# face — the wall is displaced by the rustication and a basin cut flush with it would come away
+# wherever the ashlar joint happens to fall. The WATER is cut at 9.00, flush, because water painted
+# 0.10 into the wall is a band of water on the masonry and paint is the last coat.
+let fc_casc_north = box -4.05 -0.90 9.10   4.05 6.00 12.00
+let fc_casc_wet   = box -4.05 -0.90 9.00   4.05 6.00 12.00
+
+let fc_cb_top_body = round { cylinder 0 2.43 9.00 r=1.62 h=0.18 axis=y } by=0.18
+let fc_cb_top_dish = round { cylinder 0 2.70 9.00 r=1.44 h=0.36 axis=y } by=0.09
+let fc_cb_top = difference { fc_cb_top_body fc_cb_top_dish fc_casc_north }
+let fc_cb_top_water = difference {
+    cylinder 0 2.53 9.00  r=1.575 h=0.29 axis=y
+    fc_casc_wet
+}
+
+let fc_cb_mid_body = round { cylinder 0 1.53 9.00 r=2.07 h=0.18 axis=y } by=0.18
+let fc_cb_mid_dish = round { cylinder 0 1.80 9.00 r=1.89 h=0.36 axis=y } by=0.09
+let fc_cb_mid = difference { fc_cb_mid_body fc_cb_mid_dish fc_casc_north }
+let fc_cb_mid_water = difference {
+    cylinder 0 1.63 9.00  r=2.025 h=0.29 axis=y
+    fc_casc_wet
+}
+
+let fc_cb_low_body = round { cylinder 0 0.63 9.00 r=2.52 h=0.18 axis=y } by=0.18
+let fc_cb_low_dish = round { cylinder 0 0.90 9.00 r=2.34 h=0.36 axis=y } by=0.09
+let fc_cb_low = difference { fc_cb_low_body fc_cb_low_dish fc_casc_north }
+let fc_cb_low_water = difference {
+    cylinder 0 0.73 9.00  r=2.475 h=0.29 axis=y
+    fc_casc_wet
+}
+
+# The foot trough, at the court's own water level, catching the lowest sheet.
+let fc_cf_block = difference {
+    cylinder 0 0 9.00  r=3.60 h=0.90 axis=y
+    fc_casc_north
+}
+let fc_cf_pan = round { cylinder 0 0.825 9.00 r=3.09 h=1.26 axis=y } by=0.06
+let fc_cf_stone = round { difference { fc_cf_block fc_cf_pan } } by=0.01
+let fc_cf_water = difference {
+    cylinder 0 0.2475 9.00  r=3.195 h=0.315 axis=y
+    fc_casc_wet
+}
+
+# --- the three sheets ------------------------------------------------------------------------------
+#
+# Water going over a straight lip falls very nearly vertically, so a cascade sheet is the `shell` of
+# a CYLINDER rather than of a cone — 0.045 thick, hugging each basin's widest ring and falling to
+# the water in the basin below. Each one's top is 0.06 inside the stone it leaves.
+
+let fc_sheet_top = intersection {
+    shell { cylinder 0 2.00 9.00 r=1.79 h=4.00 axis=y } thickness=0.045
+    box -1.85 1.68 3.00   1.85 2.52 9.00
+}
+let fc_sheet_mid = intersection {
+    shell { cylinder 0 1.10 9.00 r=2.24 h=4.00 axis=y } thickness=0.045
+    box -2.30 0.78 3.00   2.30 1.62 9.00
+}
+let fc_sheet_low = intersection {
+    shell { cylinder 0 0.30 9.00 r=2.69 h=4.00 axis=y } thickness=0.045
+    box -2.75 0.14 3.00   2.75 0.72 9.00
+}
+
+# The mask's spout: from its mouth down into the top basin's water. It starts inside the lip and
+# ends 0.10 under the surface.
+let fc_spout = capsule 0 2.99 9.54   0 2.50 8.70  r=0.055
+
+let fc_casc_waters = union {
+    fc_cb_top_water fc_cb_mid_water fc_cb_low_water fc_cf_water
+    fc_sheet_top fc_sheet_mid fc_sheet_low fc_spout
+}
+
+
+# ================================================================================================
+# THE NORTH TERRACE AND THE TWO FLIGHTS
+# ================================================================================================
+#
+# The terrace stands at 1.80 (4 M) either side of the cascade wall, with a parapet on its south edge
+# carrying four of the urns, and is reached by two flights of TEN RISERS OF 0.18 AND A RUN OF 0.32 —
+# the brief's numbers, without exception, which is 1.80 of rise in 3.20 of run.
+#
+# `stairs` puts its first tread's top one rise above the bottom of its own box and climbs toward +z,
+# so the box's foot is at y = 0.00 exactly and a separate plinth buries the flight in the ground.
+
+# THE CUT FOR THE WALL IS 3.50 AND THE WALL IS 3.60, so the terrace runs 0.10 INTO it rather than up
+# against it. An exact abutment is the one join the brief says never to write, and here it would have
+# been the worst place for one: the wall's face is displaced by the rustication, so a butt joint
+# there opens and closes along its own length.
+let fc_terrace = difference {
+    box -13.50 -0.45 9.00   13.50 1.80 11.70
+    box  -3.50 -0.90 8.90    3.50 6.00 12.00
+}
+# MIRRORED, and it was not at first, which put four urns on a parapet that only existed on the east
+# side and four more standing on air. Nothing about a floating urn shows up anywhere except in
+# `components`.
+let fc_terr_parapet = mirror { box 5.40 1.70 9.00   13.50 2.70 9.45 } axis=x
+
+let fc_stair_e   = stairs 3.60 0.00 5.80   5.40 1.80 9.10  run=0.32 rise=0.18
+let fc_stair_e_f = box 3.60 -0.45 5.80   5.40 0.09 9.10
+let fc_stairs    = mirror { union { fc_stair_e fc_stair_e_f } } axis=x
+
+
+# ================================================================================================
+# THE PARTERRE — four beds of clipped box in scrollwork, gravel in two colours
+# ================================================================================================
+#
+# One quadrant is drawn and folded twice. The bed is a rectangle with the apron's own circle taken
+# out of its inner corner, so its inner edge is an arc concentric with the basin — which is what a
+# parterre round a round basin actually looks like, and it comes free out of one `difference`.
+#
+#   bed    x 6.30 .. 11.70   z 1.35 .. 8.55   less the disc of r 8.55 about the origin
+#   centre x 9.00 (20 M)     z 4.95 (11 M)
+#
+# THE BOX IS REAL MATTER. The border follows the bed's own outline as a `shell` of its prism cut to
+# the hedge's height, the scrollwork is ring walls and a cross bar, and the whole thing is then
+# displaced by `fc_leaf` so its surface is foliage. A green box would have exercised nothing; this
+# is load note 4.
+
+let fc_bed_prism = difference {
+    box 6.30 -2.00 1.35   11.70 2.00 8.55
+    cylinder 0 0 0  r=8.55 h=8.00 axis=y
+}
+let fc_hedge_band = box 6.10 -0.09 1.15   11.90 0.45 8.75
+
+let fc_bed_border = intersection {
+    shell { fc_bed_prism } thickness=0.18
+    fc_hedge_band
+}
+
+# The scroll: a big ring about the bed's centre, a C either side of it, four small volutes at the
+# corners of the bed, and a bar on the bed's own diagonal joining them. Each ring wall is two
+# cylinders, which is exact and cheap; a `spiral` would have been prettier and is a round tube, and
+# a round tube cannot be a hedge 0.45 tall.
+let fc_ring_big = difference {
+    cylinder 9.00 0 4.95  r=1.665 h=8.00 axis=y
+    cylinder 9.00 0 4.95  r=1.485 h=8.00 axis=y
+}
+let fc_ring_a = difference {
+    cylinder 9.00 0 2.70  r=0.99 h=8.00 axis=y
+    cylinder 9.00 0 2.70  r=0.81 h=8.00 axis=y
+}
+let fc_ring_b = difference {
+    cylinder 9.00 0 7.20  r=0.99 h=8.00 axis=y
+    cylinder 9.00 0 7.20  r=0.81 h=8.00 axis=y
+}
+let fc_ring_c = difference {
+    cylinder 10.35 0 4.95  r=0.72 h=8.00 axis=y
+    cylinder 10.35 0 4.95  r=0.54 h=8.00 axis=y
+}
+let fc_ring_d = difference {
+    cylinder 7.65 0 4.95  r=0.72 h=8.00 axis=y
+    cylinder 7.65 0 4.95  r=0.54 h=8.00 axis=y
+}
+let fc_scroll_bar = box 8.91 -2.00 2.25   9.09 2.00 7.65
+
+let fc_scroll = intersection {
+    union { fc_ring_big fc_ring_a fc_ring_b fc_ring_c fc_ring_d fc_scroll_bar }
+    fc_hedge_band
+}
+
+# The leaf displacement goes INSIDE the two folds, not outside them, for the reason site.clip gives
+# at length: `cells` is a function of world position and knows nothing about x = 0, so displacing
+# the assembled four beds gives each one a different bush and the garden stops being symmetric.
+let fc_bed_hedge = displace {
+    union { fc_bed_border fc_scroll } fc_leaf
+} amount=-0.033
+
+let fc_hedges = mirror { mirror { fc_bed_hedge } axis=x } axis=z
+let fc_hedges_at = translate { fc_hedges } 0 0 26.55   # the twin the rules name
+
+# The bed's own gravel field, for painting: the same prism cut to a slab at ground level.
+let fc_bed_field = intersection {
+    fc_bed_prism
+    box 6.30 -0.45 1.35   11.70 0.09 8.55
+}
+let fc_bed_fields = mirror { mirror { fc_bed_field } axis=x } axis=z
+
+# The red gravel goes inside the big ring and inside the two Cs, which is what makes a broderie read
+# as a pattern rather than as a hedge on gravel.
+let fc_red_field = intersection {
+    union {
+        cylinder 9.00 0 4.95  r=1.485 h=8.00 axis=y
+        cylinder 9.00 0 2.70  r=0.81  h=8.00 axis=y
+        cylinder 9.00 0 7.20  r=0.81  h=8.00 axis=y
+    }
+    box 6.30 -0.45 1.35   11.70 0.09 8.55
+}
+let fc_red_fields = mirror { mirror { fc_red_field } axis=x } axis=z
+let fc_red_fields_at = translate { fc_red_fields } 0 0 26.55   # the twin the rules name
+
+
+# ================================================================================================
+# THE OBELISKS — 7.20 m of porphyry on a granite plinth, one at the centre of each quarter
+# ================================================================================================
+#
+# THE FOUR FACE PLANES ARE A CONSTRUCTION. An obelisk is a square shaft with a batter, and there is
+# no tapered prism in the language, so each face is a `plane` and the shaft is what the four of them
+# and a box leave. The arithmetic, done once:
+#
+#   the +x face passes through (0.45, 0.45) and (0.30, 7.20) in (half-width, height)
+#   its direction is therefore (-0.15, 6.75), so its outward normal is (6.75, 0.15)
+#   `plane` normalises the normal but not the offset, so the offset is the distance along the UNIT
+#   normal from the origin to a point on the face:
+#       0.45 * 6.75/6.7516665 + 0.45 * 0.15/6.7516665 = 0.459886
+#
+# The pyramidion is the same construction through (0.30, 7.20) and the apex (0, 7.65):
+#       normal (0.45, 0.30), unit length 0.5408327
+#       0.30 * 0.45/0.5408327 + 7.20 * 0.30/0.5408327 = 4.243450
+#
+# Two module numbers each — 0.45 and 0.30 of half-width, 0.45 and 7.20 of height — and the offsets
+# are what passing a straight line through them costs. Everything else on the obelisk is on the
+# module: the plinth is 1.80 square (4 M) and 0.90 tall (2 M), the die is 1.35 (3 M), and the tip
+# that is gilt is the top 0.45 (1 M).
+
+let fc_ob_plinth = box -0.90 -0.45 -0.90   0.90 0.45 0.90  round=0.02
+let fc_ob_die    = box -0.675 0.40 -0.675  0.675 0.72 0.675 round=0.02
+
+let fc_ob_face_e = plane  6.75 0.15 0     at=0.459886
+let fc_ob_face_w = plane -6.75 0.15 0     at=0.459886
+let fc_ob_face_n = plane  0 0.15 6.75     at=0.459886
+let fc_ob_face_s = plane  0 0.15 -6.75    at=0.459886
+let fc_ob_shaft = intersection {
+    box -0.60 0.66 -0.60   0.60 7.22 0.60
+    fc_ob_face_e fc_ob_face_w fc_ob_face_n fc_ob_face_s
+}
+
+let fc_ob_pyr_e = plane  0.45 0.30 0    at=4.243450
+let fc_ob_pyr_w = plane -0.45 0.30 0    at=4.243450
+let fc_ob_pyr_n = plane  0 0.30 0.45    at=4.243450
+let fc_ob_pyr_s = plane  0 0.30 -0.45   at=4.243450
+let fc_ob_tip = intersection {
+    box -0.40 7.16 -0.40   0.40 7.66 0.40
+    fc_ob_pyr_e fc_ob_pyr_w fc_ob_pyr_n fc_ob_pyr_s
+}
+
+let fc_ob_stone = round { union { fc_ob_plinth fc_ob_die fc_ob_shaft } } by=0.01
+
+let fc_ob_stone_q = translate { fc_ob_stone } 9.00 0 4.95
+let fc_ob_tip_q   = translate { fc_ob_tip }   9.00 0 4.95
+let fc_ob_stones  = mirror { mirror { fc_ob_stone_q } axis=x } axis=z
+let fc_ob_tips    = mirror { mirror { fc_ob_tip_q }   axis=x } axis=z
+let fc_ob_tips_at = translate { fc_ob_tips } 0 0 26.55   # the twin the rules name
+
+
+# ================================================================================================
+# THE PERIMETER — a walk three risers up, a terrace wall, and the steps down into the parterre
+# ================================================================================================
+#
+#   wall     outer edge, 0.45 thick, top at 1.35 (3 M)
+#   walk     inside it, top at 0.54 — three risers of 0.18 above the court
+#   steps    three risers of 0.18 and a run of 0.32, on the axis at the south entrance and one
+#            flight halfway along each side walk
+#
+# The south wall is broken on the axis for x -2.70 .. 2.70, which is where a person comes in from
+# the facility, and the great flight lands in the middle of it.
+
+let fc_wall_s = box -13.50 -0.45 -9.90   13.50 1.35 -9.45
+let fc_wall_e = box  13.05 -0.45 -9.90   13.50 1.35  9.00
+let fc_gateway = box -2.70 -0.50 -10.00   2.70 2.00 -9.35
+
+# The walk runs 0.05 UNDER the wall rather than up to its face, on both runs. Two boxes that share a
+# plane are one solid to a sampler and two to anything that moves a surface afterwards.
+let fc_walk_s = box -13.50 -0.45 -9.50   13.50 0.54 -8.10
+let fc_walk_e = box  11.70 -0.45 -9.50   13.10 0.54  9.00
+
+# The axis flight: two intermediate treads between the walk at 0.54 and the court at 0.00, each
+# 0.18 down and 0.32 further north, overlapping the one behind by 0.05.
+let fc_step_s1 = box -2.70 -0.45 -8.15   2.70 0.36 -7.78
+let fc_step_s2 = box -2.70 -0.45 -7.83   2.70 0.18 -7.46
+
+# The side flights, running in x for the same reason: they lead off the side walk into the parterre.
+let fc_step_e1 = box 11.38 -0.45 -1.35   11.75 0.36 1.35
+let fc_step_e2 = box 11.06 -0.45 -1.35   11.43 0.18 1.35
+
+let fc_perim_half = union {
+    fc_wall_e fc_walk_s fc_walk_e fc_step_s1 fc_step_s2 fc_step_e1 fc_step_e2
+}
+let fc_perimeter = round {
+    union { difference { fc_wall_s fc_gateway } mirror { fc_perim_half } axis=x }
+} by=0.01
+
+
+# ================================================================================================
+# THE URNS — eight of marble, four on the terrace wall and four on the cascade parapet
+# ================================================================================================
+#
+# Drawn once at its own origin as a revolved section plus a bowl, and placed four times with a fold.
+# The foot is a `cavetto` and the lip a `torus`, which is what tells an urn from a vase.
+
+let fc_urn_sec = union {
+    box     0 0.00 -1   0.20 0.12 1
+    box     0 0.00 -1   0.10 0.50 1
+    cavetto 0.20 0.12   0.10 0.32
+    bead    0.10 0.36   0.16 0.48
+}
+let fc_urn_foot = revolve { fc_urn_sec } axis=y
+let fc_urn_bowl = ellipsoid 0 0.72 0  rx=0.29 ry=0.30 rz=0.29
+let fc_urn_neck = cylinder  0 1.00 0  r=0.21 h=0.16 axis=y
+let fc_urn_lip  = torus     0 1.08 0  ring=0.21 tube=0.05 axis=y
+let fc_urn_pin  = cylinder  0 1.10 0  r=0.05 h=0.20 axis=y
+let fc_urn_ball = sphere    0 1.22 0  r=0.09
+let fc_urn = union smooth=0.03 {
+    fc_urn_foot fc_urn_bowl fc_urn_neck fc_urn_lip fc_urn_pin fc_urn_ball
+}
+
+# EACH ONE IS SUNK 0.15 INTO THE WALL IT STANDS ON, not 0.04. At 0.04 all eight came back as
+# floating components: the plinth is a cone-footed revolve whose bottom is a disc 0.40 across, and
+# four centimetres of overlap is a third of a voxel at metre 8 and disappears entirely once the
+# weathering has moved the wall's top surface. The brief's 0.05 is a minimum, not a target.
+let fc_urn_a = translate { fc_urn }  4.50 1.20 -9.675
+let fc_urn_b = translate { fc_urn } 12.15 1.20 -9.675
+let fc_urn_c = translate { fc_urn }  6.75 2.55  9.225
+let fc_urn_d = translate { fc_urn } 11.70 2.55  9.225
+let fc_urns = mirror { union { fc_urn_a fc_urn_b fc_urn_c fc_urn_d } } axis=x
+
+
+# ================================================================================================
+# THE LANTERNS — twelve of bronze along the walks, with a lamp in each
+# ================================================================================================
+#
+# The frame is a `shell` of a hexagonal prism 0.05 thick — a voxel and a half at metre 32, and the
+# only thin metal in this clip. The flame is a sphere of `lamp` big enough to touch the frame's own
+# floor, so nothing floats inside a hollow box.
+
+let fc_lan_post  = cylinder 0 0.80 0  r=0.06 h=1.60 axis=y
+let fc_lan_foot  = cone     0 -0.05 0 r=0.16 h=0.36 axis=y
+let fc_lan_knop  = sphere   0 1.60 0  r=0.10
+let fc_lan_case  = shell { prism 0 1.86 0 r=0.20 h=0.48 sides=6 axis=y } thickness=0.05
+let fc_lan_roof  = cone     0 2.08 0  r=0.24 h=0.26 axis=y
+let fc_lan_tip   = sphere   0 2.30 0  r=0.05
+let fc_lan_metal = union {
+    fc_lan_post fc_lan_foot fc_lan_knop fc_lan_case fc_lan_roof fc_lan_tip
+}
+# The flame is 0.36 across inside a frame whose inner face is 0.35, so it presses into the glazing
+# bars on every side and cannot be a floating ball in a hollow box — which is what a lamp inside a
+# `shell` is if you size it by eye.
+let fc_lan_flame = sphere 0 1.80 0  r=0.18
+
+let fc_lan_p1 = translate { fc_lan_metal }  3.60 0.50 -8.55
+let fc_lan_p2 = translate { fc_lan_metal }  9.00 0.50 -8.55
+let fc_lan_p3 = translate { fc_lan_metal } 12.60 0.50 -7.20
+let fc_lan_p4 = translate { fc_lan_metal } 12.60 0.50 -2.70
+let fc_lan_p5 = translate { fc_lan_metal } 12.60 0.50  2.70
+let fc_lan_p6 = translate { fc_lan_metal } 12.60 0.50  7.20
+let fc_lanterns = mirror {
+    union { fc_lan_p1 fc_lan_p2 fc_lan_p3 fc_lan_p4 fc_lan_p5 fc_lan_p6 }
+} axis=x
+let fc_lanterns_at = translate { fc_lanterns } 0 0 26.55   # the twin the rules name
+
+let fc_lan_f1 = translate { fc_lan_flame }  3.60 0.50 -8.55
+let fc_lan_f2 = translate { fc_lan_flame }  9.00 0.50 -8.55
+let fc_lan_f3 = translate { fc_lan_flame } 12.60 0.50 -7.20
+let fc_lan_f4 = translate { fc_lan_flame } 12.60 0.50 -2.70
+let fc_lan_f5 = translate { fc_lan_flame } 12.60 0.50  2.70
+let fc_lan_f6 = translate { fc_lan_flame } 12.60 0.50  7.20
+let fc_flames = mirror {
+    union { fc_lan_f1 fc_lan_f2 fc_lan_f3 fc_lan_f4 fc_lan_f5 fc_lan_f6 }
+} axis=x
+let fc_flames_at = translate { fc_flames } 0 0 26.55   # the twin the rules name
+
+
+# ================================================================================================
+# ASSEMBLY
+# ================================================================================================
+#
+# Grouped by MATERIAL as well as by thing, because every paint rule below has to name one of these
+# and a rule keyed on a shape is settled for a whole block by the sampler where one keyed on a
+# pattern is not.
+
+let fc_stone_granite = union {
+    fc_basin_stone fc_cf_stone fc_perimeter fc_stairs fc_terrace fc_terr_parapet
+    fc_ob_stones
+}
+let fc_stone_granite_at = translate { fc_stone_granite } 0 0 26.55   # the twin the rules name
+let fc_stone_tuff = union { fc_mount fc_casc_wall }
+let fc_stone_tuff_at = translate { fc_stone_tuff } 0 0 26.55   # the twin the rules name
+let fc_stone_marble = union {
+    fc_tritons fc_shell_lo fc_shell_up fc_stem_lo fc_stem_up fc_urns
+}
+let fc_stone_marble_at = translate { fc_stone_marble } 0 0 26.55   # the twin the rules name
+let fc_stone_travertine = union { fc_mask fc_cb_top fc_cb_mid fc_cb_low }
+let fc_stone_travertine_at = translate { fc_stone_travertine } 0 0 26.55   # the twin the rules name
+
+let fc_waters = union {
+    fc_basin_water fc_shell_lo_water fc_shell_up_water
+    fc_veil_a fc_veil_b fc_crown fc_jets
+    fc_casc_waters
+}
+let fc_waters_at = translate { fc_waters } 0 0 26.55   # the twin the rules name
+
+let fc_assembly = union {
+    fc_ground
+    fc_stone_granite fc_stone_tuff fc_stone_marble fc_stone_travertine
+    fc_finial fc_ob_tips
+    fc_hedges
+    fc_lanterns fc_flames
+    fc_waters
+}
+let part_fountain = translate { fc_assembly } 0 0 26.55
+
+
+
+# ================================================================================================
+# PAINT — later coats cover earlier ones, so this reads from the ground upward
+# ================================================================================================
+#
+# Every rule names one of THIS FILE'S OWN shapes and every one says `below=0.035`, never `below=0`,
+# because the leaf and rock displacements and the three weatherings all move surfaces outward and a
+# test at zero misses the voxels that displacement made. That leaves a pale rind over the work and
+# it looks exactly like weathering.
+
+paint lawn        where=fc_ground_at          below=0.035
+
+# The walks. One slab over the whole laid-out court, then the beds' own gravel over it, then the red
+# inside the scrolls.
+let fc_court_field = box -13.50 -0.45 -9.45   13.50 0.09 9.00
+let fc_court_field_at = translate { fc_court_field } 0 0 26.55   # the twin the rules name
+paint gravel      where=fc_court_field_at     below=0.035
+paint gravel_red  where=fc_red_fields_at      below=0.035
+
+# The two grass plats on the cross axis, between the beds and outside the apron — which is what the
+# brief means by lawn "outside them". Without these the only grass in the clip is the strip beyond
+# the terrace wall, and a parterre with no green in it at all is a gravel yard with hedges on it.
+let fc_plat_e = box 8.55 -0.45 -1.35   11.70 0.09 1.35
+let fc_plats  = mirror { fc_plat_e } axis=x
+let fc_plats_at = translate { fc_plats } 0 0 26.55   # the twin the rules name
+paint lawn        where=fc_plats_at           below=0.035
+
+paint travertine  where=fc_apron_at           below=0.035
+paint granite     where=fc_apron_band_at      below=0.035
+
+paint boxwood     where=fc_hedges_at          below=0.035
+
+paint granite     where=fc_stone_granite_at   below=0.035
+paint tuff        where=fc_stone_tuff_at      below=0.035
+paint travertine  where=fc_stone_travertine_at below=0.035
+paint marble      where=fc_stone_marble_at    below=0.035
+
+# The obelisks: porphyry over the granite of their own plinths, and the top 0.45 gilt.
+let fc_ob_shaft_q  = translate { fc_ob_shaft } 9.00 0 4.95
+let fc_ob_shafts   = mirror { mirror { fc_ob_shaft_q } axis=x } axis=z
+let fc_ob_shafts_at = translate { fc_ob_shafts } 0 0 26.55   # the twin the rules name
+paint porphyry    where=fc_ob_shafts_at       below=0.035
+paint gilt        where=fc_ob_tips_at         below=0.035
+paint gilt        where=fc_finial_at          below=0.035
+
+paint bronze      where=fc_lanterns_at        below=0.035
+paint lamp        where=fc_flames_at          below=0.035
+
+# THE BASIN FLOOR IS TRAVERTINE AND NOT GRANITE, and it is painted AFTER the granite kerb so it
+# wins. Read load note 2: at every angle shallow enough for the surface to reflect strongly what it
+# reflects is the sky and the obelisks, so most of what this surface is asked to show comes THROUGH
+# it, and what is under it has to be worth seeing. site.clip's basin path-traced as a flat dark
+# slate rectangle until its floor was made pale.
+let fc_basin_floor = cylinder 0 -0.15 0  r=4.95 h=0.60 axis=y
+let fc_basin_floor_at = translate { fc_basin_floor } 0 0 26.55   # the twin the rules name
+let fc_cf_floor    = difference {
+    cylinder 0 -0.15 9.00  r=3.15 h=0.60 axis=y
+    fc_casc_north
+}
+let fc_cf_floor_at = translate { fc_cf_floor } 0 0 26.55   # the twin the rules name
+paint travertine  where=fc_basin_floor_at     below=0.035
+paint travertine  where=fc_cf_floor_at        below=0.035
+
+# The water last, so every jet, veil and sheet wins over whatever stone it passes through — which is
+# the right way round: a sheet of water running over a rock is water.
+paint water       where=fc_waters_at          below=0.035
+
+
+# ================================================================================================
+# WEATHER — three coats, and every one is scoped ON A BOX-SHAPED SHAPE, never on a part
+# ================================================================================================
+#
+# `weather on=<shape>` is priced by the complexity of the shape and the coats it adds are asked per
+# voxel: site.clip measured the same coat over the same stone at 1,453 ms scoped on four boxes and
+# 574,333 ms scoped on its own stonework. So each scope below is one box, or a difference of two
+# cylinders, and nothing else.
+#
+#   sea        the lime line and the stain every fountain has, on the kerb and the waterline of the
+#              great basin. `level=` is 0.405, THE WATER LEVEL — that is the whole of what `sea`
+#              needs to know and getting it wrong puts the tide mark in the wrong place.
+#              The scope is an ANNULUS from r 4.95 outward, so it takes the coping and the inside
+#              face of the kerb and stops before the basin floor and the water surface: a green
+#              basin is not a weathered one.
+#   overgrown  the grotto and the rusticated wall behind the cascade, where it never dries.
+#   desert     the apron, lightly. Sun bleach on the up-facing paving and a little grit in the
+#              joints, at 0.07 — this is a garden in use, not a ruin.
+
+# TWO RINGS AND NOT ONE SOLID DISC, for the same reason the grotto's scope is a skin: a scope that
+# contains the whole kerb puts `weed` through 85,000 voxels of its middle, because `cavity` reads 1
+# for anything buried. The wide ring is the outer face and the coping — the stain that runs down a
+# fountain's outside — and the narrow one is 0.30 of height at the waterline on the inside face,
+# which is where the lime line actually is.
+let fc_wz_basin = union {
+    difference {
+        cylinder 0 0.135 0  r=6.30 h=1.35 axis=y
+        cylinder 0 0.135 0  r=5.30 h=2.00 axis=y
+    }
+    difference {
+        cylinder 0 0.40  0  r=5.06 h=0.30 axis=y
+        cylinder 0 0.40  0  r=4.90 h=0.40 axis=y
+    }
+}
+let fc_wz_basin_at = translate { fc_wz_basin } 0 0 26.55   # the twin the rules name
+# AND ONE OF THE THREE COATS `sea` ADDS CAN NEVER FIRE HERE, WHICH IS CORRECT AND IS WRITTEN DOWN
+# RATHER THAN CHASED. `clipcheck --metre 8` reports "1 of 26 rules was asked and MATCHED NO VOXEL",
+# and splitting the three weathering statements into separate arms puts it in this one. It is
+# BARNACLE. The coat's test is `below x smoothstep(cells)` against a threshold of 0.55 - 0.4a =
+# 0.454, and `below` is a smoothstep from the tide line DOWN over 0.9 x scale = 0.63 m — so it only
+# reaches 1 at 0.63 m under the water. This basin is 0.27 m deep and its floor is 0.135, which puts
+# `below` at 0.39 at the deepest point in the clip: under the threshold everywhere, always.
+#
+# The right answer is to leave it. Barnacles do not grow in a garden fountain, and `sea` is here for
+# the other two coats — the salt line above the water and the weed in the joints below it, both of
+# which fire. Raising the amount to 0.40 or dropping the scale to 0.35 would light the coat and put
+# shellfish in fresh water; the coat costs nothing but the evaluation, and the arithmetic is here so
+# that the next person meets it as a decision rather than as a mystery.
+weather sea 0.24 scale=0.7 seed=31 level=0.405 on=fc_wz_basin_at
+
+# THE GROTTO SCOPE IS A SKIN AND A HOLLOW, NOT THE WALL. Every weathering test reads `cavity`, and
+# `cavity` is 1 for a voxel that is merely buried — so a scope box drawn round the whole 7.2 x 2.7 m
+# wall put lichen through the middle of the masonry, 15,695 voxels of it, none of which anybody can
+# ever see. The first box is the face and the second is the inside of the niche, which is where a
+# grotto is actually wet.
+let fc_wz_grotto = union {
+    box -3.60 0.45 8.85    3.60 4.50 9.25
+    box -1.40 2.60 8.95    1.40 4.55 10.45
+}
+let fc_wz_grotto_at = translate { fc_wz_grotto } 0 0 26.55   # the twin the rules name
+weather overgrown 0.22 scale=0.9 seed=47 on=fc_wz_grotto_at
+
+# THE APRON SCOPE IS 0.16 m TALL, AND THAT IS THE WHOLE OF WHAT MAKES `desert` "LIGHT".
+# Measured: scoped on a box 0.45 deep, the drift coat came out on ELEVEN PER CENT of every voxel in
+# the clip. The reason is not the amount — it is that `drift` reads `0.5*up + 0.5*cavity + a height
+# term`, `cavity` is 1 for any buried voxel, and `up` is the gradient's y component, which inside a
+# slab still points at the nearest surface. So the whole upper half of the ground slab tests as a
+# sheltered up-facing hollow and takes the sand. Cutting the scope to a skin two voxels either side
+# of the paving leaves the coat where a coat belongs and takes it off 40,000 voxels of buried
+# nothing.
+let fc_wz_apron = box -8.55 -0.10 -8.55   8.55 0.06 8.55
+let fc_wz_apron_at = translate { fc_wz_apron } 0 0 26.55   # the twin the rules name
+weather desert 0.10 scale=0.8 seed=53 on=fc_wz_apron_at
+
+
+# ================================================================================================
+# NO TWO VOXELS ALIKE
+# ================================================================================================
+#
+# A garden is the worst place in the world for repetition: gravel, lawn and clipped box are three
+# surfaces with no large feature at all, and without this they are three flat colours over 400 m2.
+

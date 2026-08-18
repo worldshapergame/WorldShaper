@@ -103,6 +103,9 @@ include "facility/campanile.clip"
 include "facility/grotto.clip"
 include "facility/theatre.clip"
 include "facility/pavilion.clip"
+include "facility/colonnade.clip"
+include "facility/fountain.clip"
+include "facility/orangery.clip"
 
 # --- assembly ------------------------------------------------------------------------------------
 
@@ -300,7 +303,8 @@ let hollowed = difference {
 # not in `inside`: they stand outside the block, no void in this manifest is meant to reach them,
 # and passing them through the door-and-window difference could only ever remove something by
 # accident. Each brings its own ground and its own weathering and takes nothing away from anybody.
-let grounds = union { part_campanile part_grotto part_theatre part_pavilion }
+let grounds = union { part_campanile part_grotto part_theatre part_pavilion
+                     part_colonnade part_fountain part_orangery }
 
 let furnished = union { hollowed  difference { part_fittings void_doors void_windows }  part_terrace  grounds }
 

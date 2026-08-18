@@ -1,0 +1,758 @@
+# The orangery — a baroque winter house for the citrus of the parterre.
+# A FRAGMENT of clips/facility.clip. Its twin, clips/estate/orangery.clip, is unchanged.
+#
+# FOUR whole-clip statements are deleted here: the `_contract.clip` include, `metre 32`, `bounds`
+# and `solid part_orangery`. This file declared no `variation` and no `origin`, so unlike its
+# neighbours it loses nothing else.
+#
+# WHERE IT STANDS — (42.30, 0.90, -5.25), which is this file's own header asking for it in as many
+# words: *"translate this clip by x + 42.30, y + 0.90, z - 5.25"*. THE y IS THE ONE TO NOTICE. Every
+# other estate building is carried in the ground plane and this one is lifted 0.90 m, because it
+# sits on the east terrace rather than on the lawn. A reader checking the vectors against the site
+# plan will find this the only row with a height in it, and it is not a typo.
+#
+# IT IS THE TIGHTEST FIT IN x. Translated it reaches x = 72.00 against the manifest's `bounds` high
+# of 72.5 -- half a metre, sixteen voxels at metre 32. Its own weathering is 0.05 and 0.04 so it
+# holds, but matter outside the bounds is never sampled rather than clipped, so anything added to
+# its east end comes back with a flat face and no error.
+#
+# EVERY SHAPE A RULE NAMES HAS A TRANSLATED TWIN, `<name>_at`, standing directly after the shape it
+# carries, height included. `below=` goes 0.02 to 0.035, per clips/estate/BRIEF.md rule 5.
+#
+#
+# Twenty-one bays of round-headed glazing facing south, a barrel vault of plaster over a hall
+# 57.60 x 9.00 m, a water rill down the middle of a travertine floor, and twenty-one citrus in
+# tubs standing on the bay. It is the east terrace of the estate.
+#
+# WHERE IT STANDS, when these are one day stamped into one world: the estate's north is +z, east
+# is +x, and the facility occupies x -16..16, z -7.5..7.5 with its ground at y = 0 and its main
+# floor at 1.80. This building belongs on the EAST TERRACE, x 24 .. 60, z -12 .. 0, facing south.
+# It is drawn here in its own coordinates, centred on x = 0, so the placement is:
+#
+#     translate this clip by  x + 42.30,  y + 0.90,  z - 5.25
+#
+# which lands its whole box on z -12.00 .. -0.15, inside the strip the site plan reserves, and puts
+# its 57.60 m front on x 13.50 .. 71.10 — a shade wider than the 24 .. 60 the table gives it,
+# because twenty-one bays of 2.70 plus a closing pier is 57.60 and the module decides the length,
+# not the table. Its terrace ground lands on the facility's y = 0 and its floor 0.90 above that,
+# five risers of 0.18.
+#
+# ================================================================================================
+# WHAT THIS FILE PUTS UNDER LOAD
+# ================================================================================================
+#
+# 1. MORE GLASS THAN EVERYTHING ELSE IN THIS PROJECT PUT TOGETHER. `glass` is ior 1.5 at opacity
+#    64. Twenty-one openings, each one sheet of pane 0.045 thick — one and a half voxels — divided
+#    by iron into 126 lights: 2,646 lights in the wall, of which the door takes 36, so 2,610 panes
+#    over 211 m2 of glazing and 422 m2 of refracting interface, all of it in one plane. The
+#    facility's fifty-six windows carry 140 m2 between them and no single wall of it carries more
+#    than a tenth of what this one does. Every pane refracts, every pane reflects, and the light
+#    that reaches the blind north wall 9 m behind has been through two interfaces and nothing
+#    else. Nothing here has ever been asked that.
+#
+# 2. A GLAZING BAR IS ONE VOXEL. Every bar in this building is 0.030 m across the pane, which is
+#    0.96 of a voxel at metre 32, and there are 630 of them — 105 vertical, 357 horizontal, 21 on
+#    the springing, 105 radial in the fanlights and 42 struck as rings — cutting 4,725 separate
+#    pane edges in front of the brightest thing in the scene, with another 110 in the flue
+#    grilles. DO NOT WIDEN THEM. 0.030 is M/15, the same number the facility's flutes and glazing
+#    bars use, and it is deliberate: this is the thin-matter case at the exact resolution where it
+#    stops being reliable. Nothing here is weathered that has a bar in it, for the same reason.
+#
+#    THE SECTION HAS NEVER BEEN TOUCHED AND MUST NOT BE. Two things about the bars WERE settled by
+#    measurement rather than by taste — how deep they are, and where the pane sits in them — and
+#    both are written out where the geometry is, with the counts that decided them. Neither changes
+#    what the light meets across a pane, which is 0.030 of iron and 0.96 of a voxel. If a future
+#    sampler hands this building back broken, that is the answer it exists to give: say so, and do
+#    not widen anything.
+#
+# 3. CAUSTICS ON WATER AND STONE. A rill of still `water` at ior 1.33, 0.90 wide and 51.30 long,
+#    on the centre line of a hall whose entire south wall is glass, with a round basin at each end.
+#    Light that has refracted through a pane, crossed 4 m of hall, met the water and refracted
+#    again is a two-interface caustic thrown on a pale travertine floor. There is no other water in
+#    this project with a wall of glass over it.
+#
+# 4. A LONG SHALLOW SPACE LIT ENTIRELY FROM ONE LONG SIDE. 57.60 by 7.20 m inside, glass on the
+#    south, blind ashlar on the north, and a plaster barrel vault to carry the bounce. The gradient
+#    from the glazing to the back wall is 7 m and it repeats twenty-one times, so any per-bay
+#    variation in the indirect term reads as a beat down the length of the room. The vault is
+#    penetrated by forty-two lunettes, one over each bay on each side, which is where that beat
+#    will show first.
+#
+# Also, incidentally and because an orangery is one: eleven `iron` flue grilles of nine bars each
+# in the back wall, every one opening into a hollow 0.35 m deep reached through a 0.06 m slot.
+#
+# ================================================================================================
+# THE SIZE OF IT, COUNTED RATHER THAN ASSUMED
+# ================================================================================================
+#
+# A clip is a DENSE array over its bounds. The box below is 59.40 x 11.85 x 11.85 m, which at
+# thirty-two voxels to the metre is 1901 x 380 x 379 = 273,782,020 cells, which is what the sampler
+# reports: about 1.4 GB at the game's five bytes a cell, and 3.6 GB measured in `clipcheck`, where
+# the sample, the copy it despeckles and the connectivity map are all live at once. That is the same
+# order as the facility's 582 M and it is the price of the one thing this building is for.
+#
+# WHAT IT ACTUALLY MEASURES, at metre 32 and with the two bar decisions below in place. THESE FOUR
+# LINES WERE TAKEN BEFORE THE TREES WERE REPLACED and are left standing because they are the only
+# metre 32 figures this building has, and a metre 32 run is eighteen minutes of a shared machine:
+#
+#     volume      65,408,402 voxels   1,996 m3   23.89% of the box
+#     surface     6,684,182 faces     6,527 m2
+#     components  5 — one building of 65,408,398 voxels and four single strays
+#     cost        1,110 s and 3.6 GB peak, on a machine several other builds were sharing
+#
+# The four strays are single cells at the foot of four of the twenty-one terracotta pots. A pot
+# sampled on its own at metre 32 is one component with nothing floating, so they are the thin-feature
+# rescue meeting a revolved arris at this grid offset, not a fault in the pot. Every one of the
+# thousands of glazing bars is attached.
+#
+# WHAT THE TREES DID TO IT, at metre 8, interleaved four rounds either side so that a neighbouring
+# build cannot be mistaken for a result — minima, and CPU beside wall because the same command
+# measured 12 s and 60 s an hour apart on this machine:
+#
+#                        wall      cpu      volume       surface    components
+#     sphere trees       34.6 s    11.3 s   1,038,878    394,250    1, none floating
+#     citrus_a / _b      35.1 s    11.4 s   1,023,290    393,150    1, none floating
+#
+# One per cent of CPU for twenty-one trees that have branches. Neither arm has an idle paint rule
+# under `clipcheck`'s repaired diagnostic — which reports `never asked` and `never matched`
+# separately and had never printed once before it was fixed, so this is the first run of this
+# building where a rule that matched nothing would have said so. The tree costs are in
+# `clips/_trees.clip`; each tree alone is 1.7x the sphere it replaced, on CPU, at metre 32.
+#
+# A NUMBER TAKEN AT METRE 16 IS ABOUT A DIFFERENT BUILDING, because at metre 16 a bar 0.030 across
+# is under half a voxel and does not exist. The metre 16 figures quoted below the bars are quoted
+# on purpose and only for one thing: fragmentation, which is worst where the feature is finest, so
+# the coarse sample is the harsh test of it and the one worth iterating on.
+#
+# ================================================================================================
+# THE MODULE
+# ================================================================================================
+#
+# D = 0.90, M = 0.45, bay = 2.70, all from the contract. Every number below is a multiple or a
+# simple fraction of one of them:
+#
+#   plan      21 openings of 1.80 (4 M) + 20 piers of 0.90 (2 M) + 2 end walls of 0.90  = 57.60
+#             depth 9.00 (20 M) = 0.90 front wall + 7.20 hall + 0.90 back wall
+#   levels    -0.90 terrace     0.00 floor      0.45 sill      2.70 door head
+#              6.30 springing   7.20 arch crown 8.10 cornice and vault springing
+#              8.55 parapet     9.45 pediment apex           9.90 vault crown (intrados)
+#   glazing   1.62 x 5.67 clear, divided 6 x 18 on a 0.27 (0.6 M) x 0.315 (0.7 M) grid,
+#             plus a fanlight of six sectors and three rings = 126 lights to an opening
+#
+# ONE NUMBER IN THE BRIEF COULD NOT BE HAD AND IS WRITTEN HERE RATHER THAN FUDGED. The brief asks
+# for the round heads to spring at 6.30 and crown at 8.10. A semicircle on an opening 1.80 wide has
+# a radius of 0.90 and cannot rise more than 0.90, so springing at 6.30 crowns at 7.20 and nowhere
+# else; 8.10 would need an opening 3.60 wide, which the 2.70 bay does not have. So the heads spring
+# at 6.30 and crown at 7.20, and 8.10 is kept as what the brief's second use of it means — the top
+# of the entablature and the springing of the vault. The module decided it, which is the rule.
+#
+# ================================================================================================
+
+include "../_trees.clip"
+
+
+# ================================================================================================
+# THE GROUND IT STANDS ON
+# ================================================================================================
+
+let or_terrace = box -29.70 -1.35 -6.75   29.70 -0.90 5.10
+let or_terrace_at = translate { or_terrace } 42.30 0.90 -5.25   # the twin the rules name
+let or_gravel  = box -12.15 -1.30 -6.75   12.15 -0.85 -5.30
+let or_gravel_at = translate { or_gravel } 42.30 0.90 -5.25   # the twin the rules name
+let or_podium  = box -29.25 -0.95 -5.40   29.25  0.00 4.95 round=0.01
+let or_podium_at = translate { or_podium } 42.30 0.90 -5.25   # the twin the rules name
+
+# Five risers of 0.18 and five runs of 0.32, which is the contract's stair and nothing else. The
+# flight climbs in +z, which is the way `stairs` builds, and laps 0.05 into the breakfront.
+let or_steps = stairs -4.95 -0.95 -6.50   4.95 0.00 -4.90  run=0.32 rise=0.18
+let or_steps_at = translate { or_steps } 42.30 0.90 -5.25   # the twin the rules name
+
+# ================================================================================================
+# THE FOUR WALLS
+# ================================================================================================
+#
+# A closed ring: the glazed front on the south, a blind back, and two blind ends. The front is one
+# slab from end to end and the twenty-one openings are cut out of it, which is what makes the piers
+# between them piers rather than twenty-one separate posts.
+
+let or_front  = box -28.80 -0.90 -4.50   28.80 8.10 -3.60 round=0.01
+let or_back   = box -28.80 -0.90  3.60   28.80 8.10  4.50 round=0.01
+let or_end_w  = box -28.80 -0.90 -4.50  -27.90 8.10  4.50 round=0.01
+let or_end_e  = box  27.90 -0.90 -4.50   28.80 8.10  4.50 round=0.01
+
+# The centre three bays break forward 0.45 and carry the pediment.
+let or_break  = box -4.50 -0.90 -4.95   4.50 8.10 -4.40 round=0.01
+
+# --- the two band courses ----------------------------------------------------------------------
+#
+# The sill course at 0.45 and the impost course at the springing, each a closed ring 0.18 deep and
+# 0.09 proud of the face, hollowed so the ring is a band and not a slab.
+
+let or_sill = difference {
+    box -28.89 0.225 -4.59   28.89 0.45 4.59 round=0.01
+    box -27.85 0.18  -3.55   27.85 0.50 3.55
+}
+let or_impost = difference {
+    box -28.89 6.12 -4.59   28.89 6.30 4.59 round=0.01
+    box -27.85 6.08 -3.55   27.85 6.34 3.55
+}
+let or_break_sill = box -4.59 0.225 -5.04   4.59 0.45 -4.40 round=0.01
+let or_break_imp  = box -4.59 6.12  -5.04   4.59 6.30 -4.40 round=0.01
+
+# --- the entablature, 7.20 to 8.10 ---------------------------------------------------------------
+#
+# Three bands, not one: an architrave 0.225 out, a frieze standing BACK of it, and a corona 0.18
+# out over both. A flush one is a wall.
+
+let or_entab = difference {
+    union {
+        box -28.89 7.20  -4.59   28.89 7.425 4.59 round=0.01
+        box -28.85 7.425 -4.55   28.85 7.875 4.55 round=0.01
+        box -28.98 7.875 -4.68   28.98 8.10  4.68 round=0.01
+    }
+    box -27.85 7.15 -3.55   27.85 8.15 3.55
+}
+let or_break_entab = union {
+    box -4.59 7.20  -5.04   4.59 7.425 -4.40 round=0.01
+    box -4.55 7.425 -5.00   4.55 7.875 -4.40 round=0.01
+    box -4.68 7.875 -5.13   4.68 8.10  -4.40 round=0.01
+}
+
+# The blocking course above the cornice, which hides where the roof springs.
+let or_parapet = difference {
+    box -28.89 8.10 -4.59   28.89 8.55 4.59 round=0.01
+    box -28.40 8.05 -4.10   28.40 8.60 4.10
+}
+
+# ================================================================================================
+# THE PEDIMENT OVER THE CENTRE
+# ================================================================================================
+#
+# Span 9.00, rise 1.35 (3 M). The contract's span/9 is the rule for the great pediment over a
+# portico; drawn at it a 9 m pediment is 1.00 high and reads as a line, so this takes the same
+# licence windows.clip takes over a window and steepens it to 3 M. A half space folded in x is the
+# gable, and `plane` measures its offset along a UNIT normal, so both numbers below are the height
+# they mark divided by sqrt(1.09) = 1.04403065:
+#
+#     apex    9.45 / 1.04403065 = 9.0514590
+#     soffit  9.18 / 1.04403065 = 8.7928450
+
+let or_ped_gable = mirror { plane 0.3 1 0 at=9.0514590 } axis=x
+let or_ped_soff  = mirror { plane 0.3 1 0 at=8.7928450 } axis=x
+let or_ped_mass  = intersection { box -4.68 8.05 -5.13   4.68 9.50 -4.40   or_ped_gable }
+let or_ped_in    = intersection { box -4.70 8.03 -5.15   4.70 9.52 -4.38   or_ped_soff }
+let or_ped_rake  = difference { or_ped_mass or_ped_in }
+let or_ped_tymp  = intersection { or_ped_in  box -4.68 8.05 -4.95   4.68 9.50 -4.40 }
+let or_pediment  = union { or_ped_rake or_ped_tymp }
+
+# The gilt sunburst in the tympanum. `around` repeats about an axis through the ORIGIN and reports
+# no bounds at all, so the fan is struck at the origin, caught in a box it already fits inside —
+# without that box nothing in the clip can ever settle and the sampler walks every voxel of a
+# 274-million-cell array — and then lifted onto the tympanum face at z = -4.95.
+let or_sb_ray  = box 0.225 -0.036 -5.06   0.54 0.036 -4.93
+let or_sb_fan  = intersection {
+    around { or_sb_ray } count=16 axis=z
+    box -0.60 -0.60 -5.07   0.60 0.60 -4.92
+}
+let or_sb_disc = cylinder 0 0 -4.995 r=0.27 h=0.14 axis=z
+let or_sunburst = translate { union { or_sb_fan or_sb_disc } } 0 8.60 0
+let or_sunburst_at = translate { or_sunburst } 42.30 0.90 -5.25   # the twin the rules name
+
+# ================================================================================================
+# THE HOLLOW: THE HALL AND THE VAULT
+# ================================================================================================
+#
+# The vault is a true semicircle of radius 4.50 (10 M) about the line z = 0, y = 5.40 (12 M). That
+# one circle does all of it: it stands exactly at 8.10 where it crosses the wall faces at z = +-3.60
+# — sqrt(4.50^2 - 3.60^2) = 2.70 — and it crowns at 9.90, which is the contract's column head. The
+# rise from springing to crown is 1.80, 4 M. Nothing was chosen; the module chose.
+
+let or_hall_low   = box -27.90 0.00 -3.60   27.90 8.10 3.60
+let or_hall_vault = intersection {
+    cylinder 0 5.40 0 r=4.50 h=55.80 axis=x
+    box -27.90 8.05 -3.60   27.90 9.95 3.60
+}
+let or_hall = union { or_hall_low or_hall_vault }
+
+# The shell of it, 0.45 thick: plaster on the soffit, lead on the back.
+let or_roofshell = difference {
+    intersection {
+        cylinder 0 5.40 0 r=4.95 h=57.60 axis=x
+        box -28.80 8.05 -4.50   28.80 10.40 4.50
+    }
+    cylinder 0 5.40 0 r=4.50 h=58.00 axis=x
+}
+let or_roofshell_at = translate { or_roofshell } 42.30 0.90 -5.25   # the twin the rules name
+let or_roof_lead = difference { or_roofshell  cylinder 0 5.40 0 r=4.725 h=58.00 axis=x }
+let or_roof_lead_at = translate { or_roof_lead } 42.30 0.90 -5.25   # the twin the rules name
+
+# THE TWO GABLE ENDS, AND THEY WERE MISSING. The hall's void stops at x = +-27.90 and the shell is
+# 0.45 of curved plaster with nothing behind it, so above the end walls the last 0.90 m of vault
+# stood over open air and the building was open to the sky at both ends. `components` does not catch
+# a hole — it catches a piece that has come off — which is why this was found by reading the
+# construction and not by the gate. The end wall is carried up to the extrados and the vault is
+# stopped against solid stone.
+let or_gable_w = intersection {
+    box -28.80 8.05 -4.50  -27.90 10.40 4.50
+    cylinder 0 5.40 0 r=4.95 h=57.60 axis=x
+}
+let or_gable_e = intersection {
+    box  27.90 8.05 -4.50   28.80 10.40 4.50
+    cylinder 0 5.40 0 r=4.95 h=57.60 axis=x
+}
+
+# --- the lunettes ---------------------------------------------------------------------------
+#
+# One over every bay on both sides: a cylindrical penetration of radius 0.675 (1.5 M) springing at
+# 8.10 in the plane of the wall face and dying into the vault where its crown at 8.775 meets the
+# intrados, which is at |z| = 2.976. It stops at z = 3.55 rather than 3.60 because the extrados at
+# 3.60 is 8.797 and a lunette crowning at 8.775 would otherwise cut a slot through the roof.
+let or_lun_unit = intersection {
+    cylinder 0 8.10 3.175 r=0.675 h=0.75 axis=z
+    box -0.72 8.05 2.75   0.72 8.85 3.60
+}
+let or_lunettes = repeat { mirror { or_lun_unit } axis=z } x=2.70 nx=10
+
+# ================================================================================================
+# THE FLOOR, THE RILL AND THE BASINS
+# ================================================================================================
+
+let or_floor = box -27.95 -0.45 -3.65   27.95 0.00 3.65 round=0.01
+let or_floor_at = translate { or_floor } 42.30 0.90 -5.25   # the twin the rules name
+
+# The granite grid in the travertine: a paint key, not geometry, so its boxes may stand 0.02 above
+# the floor to be sure the rule reaches the surface voxels the final grain pushes outward.
+let or_grid_x = repeat { box -0.015 -0.20 -3.65   0.015 0.02 3.65 } x=1.35 nx=21
+let or_grid_z = repeat { box -27.95 -0.20 -0.015   27.95 0.02 0.015 } z=1.35 nz=2
+let or_floor_grid = intersection { union { or_grid_x or_grid_z }  or_floor }
+let or_floor_grid_at = translate { or_floor_grid } 42.30 0.90 -5.25   # the twin the rules name
+
+# The rill: 0.90 wide (2 M), 0.15 deep, on the centre line, with a round basin of radius 1.35 at
+# each end. Cut from the floor, and filled to 0.12.
+let or_rill_cut  = box -25.65 -0.15 -0.45   25.65 0.02 0.45
+let or_basin_cut = mirror { cylinder 25.65 -0.14 0 r=1.35 h=0.32 axis=y } axis=x
+let or_water_rill  = box -25.65 -0.15 -0.45   25.65 -0.03 0.45
+let or_water_basin = mirror { cylinder 25.65 -0.165 0 r=1.35 h=0.27 axis=y } axis=x
+let or_water = union { or_water_rill or_water_basin }
+let or_water_at = translate { or_water } 42.30 0.90 -5.25   # the twin the rules name
+
+# ================================================================================================
+# ONE OPENING, DRAWN AT THE ORIGIN OF ITS BAY
+# ================================================================================================
+#
+#   0.450  sill top, opening foot
+#   0.630  head of the sash's bottom rail — the foot of the glass
+#   0.945 .. 5.985   seventeen bar lines at 0.315, giving eighteen courses of light
+#   6.300  springing: the impost, and the springing bar
+#   7.155  crown of the glass
+#   7.200  crown of the opening
+#
+# The opening is 1.80 x 6.75 and the clear glazed field 1.62 x 5.67, divided six across on 0.27
+# and eighteen up on 0.315. That is 108 lights, and the fanlight adds three rings by six sectors
+# for 18 more: 126 to an opening, 2,646 in the building.
+#
+# It is built three times over, exactly as windows.clip builds its fifty-six: once as the hole, once
+# as metal and once as glass, and the three are placed as parallel repeats at the foot of the file,
+# because a paint rule has to name a shape that is only the thing it paints. The field is a graph,
+# so a subtree named three times is one subtree.
+
+# --- the hole -----------------------------------------------------------------------------------
+#
+# Cut from z -5.00, which is clear in front of the breakfront's face at -4.95, through to -3.55
+# inside the hall. In front of the twenty bays that do not break forward that first half metre is
+# already air and the cut costs nothing.
+let or_cut_unit = union {
+    box -0.90 0.45 -5.00   0.90 6.30 -3.55
+    intersection {
+        cylinder 0 6.30 -4.275 r=0.90 h=1.50 axis=z
+        box -0.95 6.30 -5.00   0.95 7.25 -3.55
+    }
+}
+
+# --- the sash frame, 0.09 in section, set in the middle of the wall ------------------------------
+let or_gz_fr_out = union {
+    box -0.90 0.45 -4.11   0.90 6.30 -3.93
+    intersection {
+        cylinder 0 6.30 -4.02 r=0.90 h=0.18 axis=z
+        box -0.95 6.30 -4.12   0.95 7.25 -3.92
+    }
+}
+let or_gz_fr_in = union {
+    box -0.81 0.63 -4.20   0.81 6.31 -3.84
+    intersection {
+        cylinder 0 6.30 -4.02 r=0.81 h=0.40 axis=z
+        box -0.85 6.29 -4.25   0.85 7.25 -3.80
+    }
+}
+let or_gz_frame = difference { or_gz_fr_out or_gz_fr_in }
+
+# --- the pane -------------------------------------------------------------------------------
+#
+# ONE SHEET, not 126 of them, and the bars are laid across it — which is how windows.clip does it
+# and is the only way the lights can be a voxel apart without every pane being its own island: 2,646
+# separate panes of glass at metre 32 would be 2,646 separate components, every one of them held on
+# by a bar it cannot reliably touch. It laps 0.045 inside the frame all round so the two are one
+# solid, and the iron is painted after the glass so a bar reads over the pane it holds.
+#
+# IT IS REBATED AT THE BACK OF THE BAR AND THAT IS WHY THE BUILDING IS ONE PIECE. Set in the middle
+# of the bar's depth — 0.030 of iron proud of it on each face, which is where it started — the
+# building came back at metre 32 in 2,939 pieces with 16,732 voxels floating. Every one of those
+# pieces was a chain of cells the sampler's thin-feature rescue had promoted just behind a bar,
+# where the bar's own cells do not reach and the pane's single layer of cells does not reach either,
+# so the promoted chain had nothing on any of its six faces.
+#
+# Moving the SAME 0.045 pane to sit flush with the bar's inner face — which is what a rebate is, and
+# what real glazing does — puts those cells inside the pane instead of behind it. Measured on a
+# one-bay probe at metre 32, in half a second a time, before it was paid for on the whole building:
+#
+#     pane 0.045 in the middle of the bar    159 pieces      pane 0.090 spanning it    139 pieces
+#     pane 0.045 rebated at the back           1 piece       bar 0.240 deep              5 pieces
+#
+# Nothing was widened and nothing was thickened to get that. The pane is 0.045 — a voxel and a half
+# — and the bar is 0.030 across, as they were.
+let or_gz_glass = union {
+    box -0.855 0.585 -3.975   0.855 6.30 -3.93
+    intersection {
+        cylinder 0 6.30 -3.9525 r=0.855 h=0.045 axis=z
+        box -0.90 6.25 -3.98   0.90 7.20 -3.925
+    }
+}
+
+# --- the bars: 0.030 across the pane, and 0.180 (0.4 M) deep -------------------------------------
+#
+# THE SECTION IS 0.030 AND IS NOT NEGOTIABLE; THE DEPTH WAS, AND IT WAS MEASURED. windows.clip sinks
+# its bars 0.0225 into the pane and stands them 0.06 proud, which is 0.0825 of depth, and at that
+# depth this building came back in 1,215 pieces at metre 16 with 3,302 voxels floating. The cause is
+# `thin_feature_here` in the sampler: a cell whose centre is outside a sub-voxel feature but within a
+# cell diagonal of it is promoted to solid, and where the nearest surface is an ARRIS the promoted
+# cell sits diagonally off the bar — one z layer in front of it, in the open reveal, touching
+# nothing. A bar only 0.0825 deep occupies one layer of voxels, so it has nothing to offer those
+# cells to hold on to.
+#
+# So the bar is 0.180 deep, flush with the sash on both faces, and passes right THROUGH the pane
+# rather than stopping inside it — which is what a glazing bar rebated for glass on both faces
+# actually is. Deepening it costs the test nothing: the section the light sees across the pane is
+# still 0.030, which is 0.96 of a voxel at metre 32, and that is the number this building is for.
+# It cost the fragments almost everything: 1,215 pieces became 37 at 0.150 deep and 1 at 0.180.
+# The rest of the answer is under the pane, which is rebated at the back of this bar and not set in
+# the middle of it.
+let or_gz_barv = repeat { box -0.015 0.585 -4.11   0.015 6.345 -3.93 } x=0.27 nx=2
+let or_gz_barh = translate {
+    repeat { box -0.855 -0.015 -4.11   0.855 0.015 -3.93 } y=0.315 ny=8
+} 0 3.465 0
+let or_gz_barsp = box -0.855 6.285 -4.11   0.855 6.315 -3.93
+
+# The fanlight. The rays are struck at the origin and carried up to the centre of the arch, because
+# `rotate` turns about the origin and nowhere else, and the whole fan is caught in a box it already
+# fits inside for the reason written over the sunburst: a rotation reports no bounds, and a clip
+# with an unbounded child in it settles nothing anywhere.
+let or_gz_ray  = box 0 -0.015 -4.11   0.855 0.015 -3.93
+let or_gz_ray1 = rotate { or_gz_ray } z=0.0833333
+let or_gz_ray2 = rotate { or_gz_ray } z=0.1666667
+let or_gz_ray3 = rotate { or_gz_ray } z=0.25
+let or_gz_rays = intersection {
+    translate { mirror { union { or_gz_ray1 or_gz_ray2 or_gz_ray3 } } axis=x } 0 6.30 0
+    box -0.88 6.28 -4.12   0.88 7.17 -3.92
+}
+
+# The two rings, cut as the difference of two cylinders rather than struck as a torus, so that a
+# curved bar is the same 0.030 across and the same 0.180 deep as a straight one. A torus of tube
+# 0.015 is round in section and would have stopped 4 mm short of the pane on both faces.
+let or_gz_arc1 = intersection {
+    difference {
+        cylinder 0 6.30 -4.02 r=0.285 h=0.18 axis=z
+        cylinder 0 6.30 -4.02 r=0.255 h=0.24 axis=z
+    }
+    box -0.30 6.28 -4.12   0.30 6.60 -3.92
+}
+let or_gz_arc2 = intersection {
+    difference {
+        cylinder 0 6.30 -4.02 r=0.555 h=0.18 axis=z
+        cylinder 0 6.30 -4.02 r=0.525 h=0.24 axis=z
+    }
+    box -0.57 6.28 -4.12   0.57 6.87 -3.92
+}
+
+let or_gz_metal = union {
+    or_gz_frame or_gz_barv or_gz_barh or_gz_barsp or_gz_rays or_gz_arc1 or_gz_arc2
+}
+
+# --- the dressing on the face: archivolt and keystone --------------------------------------------
+#
+# A band 0.225 (M/2) wide carried round the head, 0.09 proud of the wall face, and a keystone whose
+# soffit is cut off by the same arc — which is what a keystone does and what tells it from a block
+# stuck on. The taper is the line half-width = 0.18 at 7.02 and 0.225 at 7.425, which is
+# x - 0.1111111 y = -0.60, and `plane` measures along a unit normal so the offset is
+# -0.60 / sqrt(1.01234568) = -0.5963.
+let or_arv_unit = difference {
+    intersection {
+        cylinder 0 6.30 -4.545 r=1.125 h=0.09 axis=z
+        box -1.16 6.30 -4.60   1.16 7.47 -4.49
+    }
+    cylinder 0 6.30 -4.60 r=0.90 h=0.60 axis=z
+}
+let or_key_side = mirror { plane 1 -0.1111111 0 at=-0.5963 } axis=x
+let or_key_unit = difference {
+    intersection { box -0.24 7.02 -4.68   0.24 7.425 -4.45  or_key_side }
+    cylinder 0 6.30 -4.70 r=0.90 h=1.20 axis=z
+}
+let or_dress = repeat { union { or_arv_unit or_key_unit } } x=2.70 nx=10
+
+# ================================================================================================
+# TWENTY-ONE OF EACH
+# ================================================================================================
+#
+# `repeat` folds into the nearest cell and its `nx` counts copies EITHER SIDE, so nx=10 on a period
+# of 2.70 is twenty-one bays from x = -27.00 to 27.00. Every child below is narrower than 2.70,
+# which is what the repeat needs to be able to bound itself.
+
+let or_cuts_bays = repeat { or_cut_unit } x=2.70 nx=10
+let or_glaz_all  = repeat { union { or_gz_metal or_gz_glass } } x=2.70 nx=10
+
+# --- the door in the centre bay -------------------------------------------------------------
+#
+# The middle opening comes down to the floor and its lower 2.70 is a pair of oak leaves — 2.70 of
+# head height, which is over the 2.40 a door has to give. The glazing is cut away to make room for
+# it and a transom put across at 2.70 so that what is left of the sash stands on something.
+let or_cut_door  = box -0.90 0.00 -5.00   0.90 0.50 -3.55
+let or_door_zone = box -0.95 -0.10 -4.30   0.95 2.70 -3.85
+
+# The leaves fill the opening to the jamb at 0.90 rather than stopping at 0.855: the void is the cut
+# minus the joinery, so a leaf narrower than its opening leaves a 45 mm slot of daylight down each
+# side of the door for the whole 2.70 of its height.
+let or_dr_leaf   = difference {
+    box 0.015 0.00 -4.05   0.90 2.70 -3.93 round=0.01
+    union {
+        box 0.135 0.27 -4.06   0.735 1.17 -4.005
+        box 0.135 1.35 -4.06   0.735 2.43 -4.005
+    }
+}
+let or_dr_leaves  = mirror { or_dr_leaf } axis=x
+let or_dr_leaves_at = translate { or_dr_leaves } 42.30 0.90 -5.25   # the twin the rules name
+let or_dr_transom = box -0.90 2.655 -4.11   0.90 2.79 -3.93 round=0.008
+let or_dr_bead    = box -0.03 0.00 -4.065   0.03 2.70 -3.92
+let or_dr_handle  = mirror { torus 0.63 1.35 -4.04 ring=0.135 tube=0.027 axis=z } axis=x
+let or_dr_hinge   = mirror {
+    union {
+        box 0.72 0.36 -4.062   0.90 0.54 -3.92
+        box 0.72 2.16 -4.062   0.90 2.34 -3.92
+    }
+} axis=x
+let or_dr_bronze  = union { or_dr_bead or_dr_handle or_dr_hinge }
+let or_dr_bronze_at = translate { or_dr_bronze } 42.30 0.90 -5.25   # the twin the rules name
+let or_door       = union { or_dr_leaves or_dr_transom or_dr_bronze }
+
+let or_glazing = difference { or_glaz_all or_door_zone }
+let or_glass   = difference { repeat { or_gz_glass } x=2.70 nx=10  or_door_zone }
+let or_glass_at = translate { or_glass } 42.30 0.90 -5.25   # the twin the rules name
+let or_bars    = difference { repeat { or_gz_metal } x=2.70 nx=10  or_door_zone }
+
+# ================================================================================================
+# THE FLUES — which is what an orangery is technically for
+# ================================================================================================
+#
+# Eleven of them at 5.40 in the back wall: a recess 0.45 into a 0.90 wall, 0.35 of it left behind a
+# grille of nine bars 0.030 wide on a 0.09 pitch — so every one is a hollow that light can only
+# reach through eight slots 0.06 m wide, which is the deep-hollow case at its most awkward.
+
+let or_fl_cut   = box -0.45 0.225 3.55   0.45 1.125 4.05
+let or_fl_frame = difference {
+    box -0.495 0.18 3.555   0.495 1.17 3.705 round=0.008
+    box -0.405 0.27 3.50    0.405 1.08 3.75
+}
+let or_fl_bars  = repeat { box -0.015 0.225 3.555   0.015 1.125 3.705 } x=0.09 nx=4
+let or_fl_rail  = box -0.45 0.66 3.555   0.45 0.69 3.705
+let or_fl_unit  = union { or_fl_frame or_fl_bars or_fl_rail }
+
+let or_flue_cuts    = repeat { or_fl_cut }  x=5.40 nx=5
+let or_flue_grilles = repeat { or_fl_unit } x=5.40 nx=5
+
+# ================================================================================================
+# THE CITRUS
+# ================================================================================================
+#
+# Twenty-one trees on the bay: eleven in oak Versailles caisses with iron straps on the south side
+# of the rill at 5.40, and ten in terracotta pots on the north side, set between them.
+#
+# THEY USED TO BE A CYLINDER WITH A BALL ON IT, and the ball was `sphere 0 2.79 0 r=0.855`. One
+# perfect sphere of leaves per tree, twenty-one of them, every one identical and every one exactly
+# round — which at 3.1 cm voxels is a lollipop drawn at enough resolution to see that it is a
+# lollipop. The trees now come from `clips/_trees.clip`, which is where the construction and the
+# measurements that settled it are written; what matters here is only how they are placed.
+#
+# THE CAISSES CARRY `citrus_a` AND THE POTS CARRY `citrus_b`, which is the point of there being
+# two. Down the length of the hall the eye sees eleven of one tree alternating with ten of
+# another, at different heights, leaning different ways, with different numbers of oranges — so
+# the row reads as a row of trees. Twenty-one copies of one tree reads as wallpaper, and did.
+#
+# Both stand on their own y = 0 with the root 0.10 below it, so `0.675` is the one number needed:
+# it buries the foot in the solid of the tub and brings the stem out of the clay at 0.855 (the pot
+# rim) and out of the oak at 0.810 (the caisse lid), with about 0.9 m of clear stem above that.
+
+let or_tree_a_wood  = translate { citrus_a_wood }  0 0.675 0
+let or_tree_a_leaf  = translate { citrus_a_leaf }  0 0.675 0
+let or_tree_a_fruit = translate { citrus_a_fruit } 0 0.675 0
+let or_tree_a = union { or_tree_a_wood or_tree_a_leaf or_tree_a_fruit }
+
+let or_tree_b_wood  = translate { citrus_b_wood }  0 0.675 0
+let or_tree_b_leaf  = translate { citrus_b_leaf }  0 0.675 0
+let or_tree_b_fruit = translate { citrus_b_fruit } 0 0.675 0
+let or_tree_b = union { or_tree_b_wood or_tree_b_leaf or_tree_b_fruit }
+
+let or_cs_body  = box -0.54 -0.05 -0.54   0.54 0.81 0.54 round=0.02
+let or_cs_post  = box  0.495 -0.05 0.495   0.63 1.035 0.63 round=0.015
+let or_cs_posts = mirror { mirror { or_cs_post } axis=x } axis=z
+let or_cs_ball  = sphere 0.5625 1.08 0.5625 r=0.09
+let or_cs_balls = mirror { mirror { or_cs_ball } axis=x } axis=z
+let or_cs_strap_a = difference {
+    box -0.5625 0.135 -0.5625   0.5625 0.225 0.5625
+    box -0.495  0.10  -0.495    0.495  0.26  0.495
+}
+let or_cs_strap_b = difference {
+    box -0.5625 0.54 -0.5625   0.5625 0.63 0.5625
+    box -0.495  0.50 -0.495    0.495  0.67 0.495
+}
+let or_cs_wood = union { or_cs_body or_cs_posts or_cs_balls }
+let or_cs_iron = union { or_cs_strap_a or_cs_strap_b }
+let or_cs_unit = union { or_cs_wood or_cs_iron or_tree_a }
+
+# The pot, drawn once as a section and turned: a foot, a core, a convex flare swelling out to the
+# rim, and the rim itself. Exact, and four lines rather than a stack of cylinders.
+let or_pt_prof = union {
+    box 0 -0.05  -1   0.585 0.135 1
+    box 0  0.135 -1   0.54  0.765 1
+    ovolo 0.72 0.72   0.54 0.135
+    box 0  0.72  -1   0.765 0.855 1
+}
+let or_pt_body = revolve 0 0 0 { or_pt_prof } axis=y
+let or_pt_unit = union { or_pt_body or_tree_b }
+
+let or_caisses = translate { repeat { or_cs_unit } x=5.40 nx=5 } 0 0 -1.80
+let or_pots    = mirror {
+    translate { repeat { or_pt_unit } x=5.40 nx=2 } 13.50 0 1.80
+} axis=x
+
+let or_caisse_wood = translate { repeat { union { or_cs_wood } } x=5.40 nx=5 } 0 0 -1.80
+let or_caisse_wood_at = translate { or_caisse_wood } 42.30 0.90 -5.25   # the twin the rules name
+let or_caisse_iron = translate { repeat { union { or_cs_iron } } x=5.40 nx=5 } 0 0 -1.80
+let or_pot_clay    = mirror {
+    translate { repeat { or_pt_body } x=5.40 nx=2 } 13.50 0 1.80
+} axis=x
+let or_pot_clay_at = translate { or_pot_clay } 42.30 0.90 -5.25   # the twin the rules name
+
+let or_trunks = union {
+    translate { repeat { or_tree_a_wood } x=5.40 nx=5 } 0 0 -1.80
+    mirror { translate { repeat { or_tree_b_wood } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
+}
+let or_trunks_at = translate { or_trunks } 42.30 0.90 -5.25   # the twin the rules name
+let or_leaves = union {
+    translate { repeat { or_tree_a_leaf } x=5.40 nx=5 } 0 0 -1.80
+    mirror { translate { repeat { or_tree_b_leaf } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
+}
+let or_leaves_at = translate { or_leaves } 42.30 0.90 -5.25   # the twin the rules name
+let or_fruit = union {
+    translate { repeat { or_tree_a_fruit } x=5.40 nx=5 } 0 0 -1.80
+    mirror { translate { repeat { or_tree_b_fruit } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
+}
+let or_fruit_at = translate { or_fruit } 42.30 0.90 -5.25   # the twin the rules name
+let or_tubs = union { or_caisses or_pots }
+
+# ================================================================================================
+# PUTTING IT TOGETHER
+# ================================================================================================
+#
+# The void is the cut MINUS the joinery, exactly as windows.clip does it, and that one line is what
+# makes a building of four and a half thousand one-voxel bars come back as ONE component: every bar,
+# every ring and every pane stands on wall the void did not take away, so nothing in the glazing can
+# float however the sampler rounds it.
+
+let or_metal = union { or_bars or_dr_transom or_flue_grilles or_caisse_iron }
+let or_metal_at = translate { or_metal } 42.30 0.90 -5.25   # the twin the rules name
+
+let or_fittings = union { or_glazing or_door }
+
+let or_stone = union {
+    or_terrace or_podium or_steps
+    or_front or_back or_end_w or_end_e or_break
+    or_gable_w or_gable_e
+    or_sill or_impost or_break_sill or_break_imp
+    or_entab or_break_entab or_parapet
+    or_dress or_pediment
+    or_roofshell
+    or_floor
+}
+
+let or_void = union {
+    or_hall
+    difference { union { or_cuts_bays or_cut_door }  or_fittings }
+    difference { or_flue_cuts  or_flue_grilles }
+    or_rill_cut or_basin_cut
+    or_lunettes
+}
+
+let or_assembly = union {
+    difference { or_stone or_void }
+    or_fittings
+    or_flue_grilles
+    or_water
+    or_tubs
+    or_sunburst
+}
+let part_orangery = translate { or_assembly } 42.30 0.90 -5.25
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Every rule names a shape of this file's own and every one is `below=0.035`, never 0, because a
+# voxel that only exists because the final grain pushed the surface outward sits OUTSIDE the shape
+# its rule names, and a test at zero misses it and leaves a pale rind over the whole building.
+#
+# Later rules win, so the order is the order of covering: ground, then structure, then what is set
+# into it, and the glass before the iron so that a bar reads over the pane it holds.
+
+paint limestone
+
+paint lawn        where=or_terrace_at     below=0.035
+paint gravel      where=or_gravel_at      below=0.035
+paint granite     where=or_podium_at      below=0.035
+paint granite     where=or_steps_at       below=0.035
+paint travertine  where=or_floor_at       below=0.035
+paint granite     where=or_floor_grid_at  below=0.035
+
+paint plaster     where=or_roofshell_at   below=0.035
+paint lead        where=or_roof_lead_at   below=0.035
+
+paint water       where=or_water_at       below=0.035
+
+paint terracotta  where=or_pot_clay_at    below=0.035
+paint oak         where=or_caisse_wood_at below=0.035
+paint bark        where=or_trunks_at      below=0.035
+paint citrus      where=or_leaves_at      below=0.035
+paint orange      where=or_fruit_at       below=0.035
+
+paint glass       where=or_glass_at       below=0.035
+paint iron        where=or_metal_at       below=0.035
+paint oak         where=or_dr_leaves_at   below=0.035
+paint bronze      where=or_dr_bronze_at   below=0.035
+paint gilt        where=or_sunburst_at    below=0.035
+
+# ================================================================================================
+# WEATHER
+# ================================================================================================
+#
+# Both scoped, and scoped to shapes with NO THIN MATTER IN THEM. A weathering deformation is
+# multiplied by an inside-ness mask of the shape it is given, so anything standing inside that
+# shape's volume moves with it — and 0.045 m of movement is one and a half times the width of a
+# glazing bar. So the stone that weathers is the end walls, the parapet and the back wall ABOVE the
+# flues, and the ground; the glazed front and the grilles are named by nothing and stay sharp.
+
+let or_weather_stone = union {
+    or_end_w or_end_e or_parapet
+    box -28.80 4.50 3.60   28.80 8.10 4.50
+}
+let or_weather_stone_at = translate { or_weather_stone } 42.30 0.90 -5.25   # the twin the rules name
+
+weather desert    0.05 scale=0.9 seed=13 on=or_weather_stone_at
+weather overgrown 0.04 scale=1.2 seed=29 on=or_terrace_at
+
