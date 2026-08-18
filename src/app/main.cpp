@@ -169,24 +169,22 @@ struct Options {
     // rule: this runs while somebody is playing and taking every core sharpens the world by
     // stuttering it. Overridable so that the size of that choice is measured rather than assumed.
     u32 refine_workers = 0;
-    // R12: the ladder samples its nodes on the CARD, behind `--gpu-sample`, and it is OFF.
+    // R12: the ladder samples its nodes on the CARD, and it is ON. `--cpu-sample` is the control arm
+    // and is the state every figure recorded before R12 was measured in.
     //
-    // **Measured before it was defaulted, which is why it is off.** Matched 45-second arms, estate,
-    // outdoor camera, same batch: the card delivered 87,680 nodes against the CPU's 66,432 — 1.30x,
-    // and a dispatch of 128 nodes is **40-60 ms of the card**, once a frame, against a frame the
-    // renderer wants in 17. A sampler that sharpens the world a third faster by taking two thirds of
-    // every frame is not a trade this project makes: `09-performance-budgets.md` treats a budget as
-    // a bug rather than a trade-off. `--refine-batch 2048` LOSES THE DEVICE outright — a dispatch
-    // past the driver's watchdog — which is the same fact at the other end.
+    // **It was off for one commit and the user turned it on, and the trade is theirs rather than
+    // ours.** The measurement put to them was the honest one: the card delivers about a third more
+    // nodes a second, and a dispatch is tens of milliseconds of a frame the renderer wants in 17, so
+    // the world sharpens faster and the picture is slower while it does. Asked whether a sharp world
+    // was worth a slower one arriving, they said yes. `09-performance-budgets.md` is about budgets
+    // nobody chose; this one was chosen, out loud, by the person the budgets are for.
     //
-    // What it costs is measured too, and it is not the pipeline: `--gpu-visits` counts **4,158 node
-    // visits a cell** against a field of 18,250, so the box cull is working and the walk is simply
-    // long. The CPU wins its ground back by evaluating about ten times FEWER points — that is what
-    // `descend` is — and the card will beat it properly when it settles boxes the same way.
-    //
-    // `--cpu-sample` is the default and stays spelled, because it is what every figure recorded
-    // before R12 was measured in and a script should be able to say so out loud.
-    bool cpu_sample = true;
+    // Two things that are NOT part of that trade and are engineering rather than preference:
+    // `FieldSampler::kSafeBoxes` caps what one dispatch may carry, because past the driver's
+    // watchdog the device is LOST rather than slow, and the CPU arm remains the automatic fallback
+    // for a machine with no card, a shader that will not compile, or a field too big to upload —
+    // each of which says so in the log by name rather than quietly sampling somewhere else.
+    bool cpu_sample = false;
     // The thin-feature rescue on the card, off. The control arm for the one part of the per-voxel
     // definition that costs eight extra evaluations at every cell near a surface.
     bool gpu_rescue = true;
@@ -2123,6 +2121,13 @@ private:
     u64 gpu_check_type_ = 0;
     u64 gpu_check_solid_ = 0;
     u64 gpu_check_mask_ = 0;
+    // What the CPU's descent cost over the same nodes, so the size of the settle it does -- and
+    // therefore the size of the prize for putting one on the card -- is a measurement rather than
+    // an inference from two throughput figures.
+    u64 gpu_check_cpu_asked_ = 0;
+    u64 gpu_check_cpu_settled_ = 0;
+    u64 gpu_check_cpu_shape_ = 0;
+    u64 gpu_check_cpu_paint_ = 0;
     bool gpu_check_reported_ = false;
     void gpu_check_node(const RefineJob& job);
     void gpu_check_report();
@@ -3243,6 +3248,16 @@ void Application::gpu_check_node(const RefineJob& job) {
     ++gpu_check_nodes_;
 
     const forge::SampleResult expect = forge::sample(refine_plan_, job.settings, nullptr, {});
+    // What the CPU's descent did NOT have to ask about, which is the whole of its advantage and the
+    // size of the prize for putting the same settle on the card. `voxels_settled` is cells decided
+    // in bulk from one reading at a box centre; `voxels_asked` is cells that came all the way down
+    // to one voxel. The card asks about all 512 of them, because that is the per-voxel definition
+    // the descent is an optimisation of — so this ratio is what a settle would buy, measured on the
+    // nodes the ladder actually picked rather than reasoned about from a throughput figure.
+    gpu_check_cpu_asked_ += expect.voxels_asked;
+    gpu_check_cpu_settled_ += expect.voxels_settled;
+    gpu_check_cpu_shape_ += expect.shape_evaluations;
+    gpu_check_cpu_paint_ += expect.paint_evaluations;
     const Clip& mine = job.result->clip;
     const Clip& theirs = expect.clip;
     if (theirs.size[0] != mine.size[0] || theirs.size[1] != mine.size[1] ||
@@ -3304,6 +3319,36 @@ void Application::gpu_check_report() {
                 (gpu_check_solid_ == 0 && gpu_check_type_ == 0 && gpu_check_mask_ == 0)
                     ? "The two evaluators agree."
                     : "THE TWO EVALUATORS DISAGREE — the card is not building the CPU's world.");
+    // THE NUMBER THAT KILLED THE NEXT STAGE BEFORE IT WAS BUILT, and it is the reason this line
+    // exists.
+    //
+    // The card asks the field about every one of a node's 512 cells, and the plan said the way to
+    // beat it was to give the card `forge::sample`'s descent — settle whole boxes from one reading
+    // at a centre, walk single voxels only near a surface. That is a real optimisation of a whole
+    // building and it is worth NOTHING on the nodes the ladder picks, because the ladder only ever
+    // picks nodes that straddle a surface (`box_may_hold_matter` refuses the rest), and a node is
+    // eight cells a side. Every cell of one is near the surface. **`voxels_asked` comes back as the
+    // whole cell count**: the descent bottoms out at single voxels everywhere and settles nothing.
+    //
+    // `voxels_settled` is NOT the complement of that and must not be read as one — a single voxel
+    // that settles empty is counted in both, at sample.cpp:718 and again at :753. Reported anyway,
+    // because a number this file quotes is a number the next person will quote back.
+    if (gpu_check_cells_ > 0) {
+        WS_LOG_INFO("clip",
+                    "gpu check, what a settle would be worth: over the same {} cells the CPU's "
+                    "descent came down to a single voxel {} times ({:.1f}% of them) and made {} "
+                    "shape evaluations, {:.2f} a cell, plus {} paint. A settle on the card is worth "
+                    "the cells it does NOT ask about, and that is {}",
+                    gpu_check_cells_, gpu_check_cpu_asked_,
+                    100.0 * static_cast<f64>(gpu_check_cpu_asked_) /
+                        static_cast<f64>(gpu_check_cells_),
+                    gpu_check_cpu_shape_,
+                    static_cast<f64>(gpu_check_cpu_shape_) / static_cast<f64>(gpu_check_cells_),
+                    gpu_check_cpu_paint_,
+                    (gpu_check_cpu_asked_ >= gpu_check_cells_)
+                        ? "NONE OF THEM — do not build it"
+                        : "worth measuring before building");
+    }
 }
 
 void Application::ensure_field_on_card() {
@@ -3584,9 +3629,22 @@ bool Application::start_refinement() {
     // which is what `best` was. The census beside the settle line is the gate: "neither" must stay
     // at nought, because it counts nodes refused by nothing at all.
     const u32 finest = refine_finest_level();
-    const usize batch_size = (options_.refine_batch > 0)
-                                 ? std::min<usize>(options_.refine_batch, kShortlistMax / 4)
-                                 : kRefineBatch;
+    usize batch_size = (options_.refine_batch > 0)
+                           ? std::min<usize>(options_.refine_batch, kShortlistMax / 4)
+                           : kRefineBatch;
+    // A DISPATCH MAY NOT OUTLIVE THE DRIVER'S WATCHDOG, and this is the one place that can be
+    // guaranteed from.
+    //
+    // `--refine-batch 2048` on the card returned `VK_ERROR_DEVICE_LOST` and a page of `fault type 4`
+    // on its very first dispatch (D677): a batch is one `vkCmdDispatch`, a node of the estate is
+    // tens of milliseconds of it, and Windows resets a device that does not come back inside about
+    // two seconds. A slow frame is a slow frame; a lost device is the game gone, mid-session, with
+    // whatever the player was building.
+    //
+    // So the ceiling is on the SUBMISSION rather than on the flag. Anyone measuring a larger batch
+    // is measuring the picker, which still sees the number they asked for; what the card is handed
+    // is capped here, and `FieldSampler::kSafeBoxes` is where the arithmetic for the number is.
+    if (gpu_sampling()) batch_size = std::min<usize>(batch_size, FieldSampler::kSafeBoxes);
     const usize kShortlist = std::min(batch_size * 8, kShortlistMax);
     usize short_at[kShortlistMax];
     f64 short_rank[kShortlistMax];

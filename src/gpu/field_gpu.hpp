@@ -114,6 +114,17 @@ public:
     // divided by 512.
     static constexpr u32 kMaxBoxes = 2048;
 
+    // ...and how many the ladder is allowed to hand over at once, which is a different number and a
+    // safety limit rather than a capacity.
+    //
+    // A batch is ONE `vkCmdDispatch`, and a node of the estate is tens of milliseconds of it.
+    // Windows resets a device that has not come back inside about two seconds; `--refine-batch 2048`
+    // duly returned `VK_ERROR_DEVICE_LOST` on its first dispatch (D677). 256 nodes measured at
+    // 117 ms on the estate's worst camera, which is a sixteenth of the watchdog and leaves room for
+    // a card slower than this one and a clip heavier than this one. A lost device is not a slow
+    // frame — it is the game gone mid-session, with whatever the player was building.
+    static constexpr u32 kSafeBoxes = 256;
+
     // Record and submit. `boxes` must be at most kMaxBoxes. Returns false if a batch is already in
     // flight, which the caller treats as "come back next frame".
     bool submit(const std::vector<GpuSampleBoxRecord>& boxes);

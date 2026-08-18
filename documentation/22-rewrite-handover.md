@@ -602,7 +602,7 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### START HERE — 2026-08-18 (later still): R12 is built, it is right, and it is 1.30x
+#### START HERE — 2026-08-18 (later still): R12 is built, it is right, and it is ON at 1.30x
 
 **The ask was the LADDER, not the launch.** *"speed up the world loading after launching the world by
 100x"*, and then, unprompted, the correction that decides what the work is: *"dont do cold runs, its
@@ -616,29 +616,44 @@ R12a and R12b. The gate is `--gpu-sample-check N`, which samples the nodes **the
 picked** a second time on the CPU and compares them cell for cell: on the estate, 48 nodes and
 24,576 cells, **0 differ in matter, 0 in material, 0 in the clip mask.**
 
-**And it is off**, behind `--gpu-sample`. Matched 45-second arms, estate, `0,10,-60,90,-6`, same
-batch: the card 87,680 nodes, the CPU 66,432 — **1.30x** — for **35–60 ms of the card per dispatch**,
-once a frame, against a frame the renderer wants in 17. `--refine-batch 2048` loses the device
-outright. A third more nodes for two thirds of every frame is not a trade this project makes.
+**And it is ON, because the user chose the trade (D678).** Matched 45-second arms, estate,
+`0,10,-60,90,-6`, same batch: the card 87,680 nodes, the CPU 66,432 — **1.30x** — for **35–60 ms of
+the card per dispatch**, once a frame, against a frame the renderer wants in 17. Both halves of that
+were put to them in one sentence and the answer was *"do it, yes its worth it"*. `--cpu-sample` is
+the control arm. What is NOT theirs to choose is `FieldSampler::kSafeBoxes`, which caps a submission
+at 256 nodes whatever `--refine-batch` says: `--refine-batch 2048` loses the DEVICE, which is the
+game gone mid-session rather than a slow frame, and nobody can see that one coming.
 
 **What to do next, and it is not a guess.** `--gpu-visits` counts what no clock can separate: a cell
 **walks 4,158 nodes of an 18,250-node field**. So the box cull is working and the walk is simply
 long — and the CPU's whole advantage is that it evaluates about **ten times fewer points**, which is
 what `forge::sample`'s `descend` is. In order:
 
-1. **THE DESCENT, ON THE CARD.** One workgroup per node, 512 threads, a settle in shared memory at
-   the node, its eight octants and its sixty-four sub-boxes, then per-cell only for what still
-   straddles a surface. `prune_root`, `prune_slack` and `slack` are already in the `SamplePlan` and
-   only need uploading; using the global `prune_slack` rather than `slack_here`'s per-part figure
-   settles less often and never wrongly, so it is safe to start conservative. **Expected to recover
-   most of the CPU's 10x and put the card at 6–8x**, which is where it can be defaulted on.
-2. **Then compile the field FOR the card.** 4,158 visits a cell is a property of the clip's
-   expression, not of the shader: seven buildings joined by translates, and wide unions folded into
-   chains of four. Fold transform chains into the leaves, and build the hierarchy over wide unions
-   that `Field::Accelerator` already knows how to make — D675 counted **19 of 209** unions with one.
-   **This is the other half of the hundredfold and neither half reaches it alone.**
-3. **A dispatch may not outlive the driver's watchdog.** Whatever the batch becomes, split the
-   submission. Losing the device is not a slow frame, it is the game gone.
+~~1. **THE DESCENT, ON THE CARD.**~~ **REFUTED — do not build it. D678.** The gate already samples
+   the same nodes both ways, so it was asked directly instead of inferred from two throughput
+   figures: over 24,576 cells of nodes the LADDER picked, the CPU's descent came down to a single
+   voxel **24,576 times — 100% of them** — and made 1.14 shape evaluations a cell. A settle saves
+   the cells it does not ask about, and that is none of them. The ladder only picks nodes that
+   straddle a surface (`box_may_hold_matter` refuses the rest) and a node is eight cells a side, so
+   every cell of one is near the surface. The descent's saving is real and is spent BEFORE the
+   ladder hands anything over.
+
+1. **THE FIELD WALK, and it makes BOTH arms faster.** With the settle out of the picture the two
+   arms do comparable work per cell and what is left is the walk: **4,158 node visits a cell over
+   about two evaluations of an 18,250-node field**, which is ~2,000 nodes an evaluation, and the CPU
+   walks the same tree. **The named suspect is already measured: D675 counted 923 of those nodes
+   (25%) carrying NO BOX**, and an ancestor of an unbounded node cannot be bounded either, so a
+   quarter of the tree can never be culled. Beside it, `Field::combine` folds a wide union into a
+   chain of four-child nodes and only **19 of 209** wide unions carry an accelerator. **Start by
+   finding out why 923 nodes have no box.** Unlike the descent this has a number in front of it
+   rather than behind it, and it speeds the CPU arm by the same factor.
+2. **Then the frame on the card.** `FieldFrame` is fifteen words and only six of them are used by
+   the ops that carry the walk; `fold`, `lean`, `axes`, `neighbours` and `scale` belong to `repeat`,
+   `scatter` and `revolve` alone. A 96-frame stack is 5.8 KB of scratch a lane and the walk is the
+   thing reading it. Splitting the cold half onto a small side stack is contained, and the gate
+   proves it. **Worth about 2x and it is the cheapest thing on this list.**
+3. **A dispatch may not outlive the driver's watchdog.** `kSafeBoxes` holds that today. Whatever the
+   batch becomes, split the SUBMISSION rather than raising the cap.
 
 **Three things that outlive their diffs, and cost real time to find:**
 

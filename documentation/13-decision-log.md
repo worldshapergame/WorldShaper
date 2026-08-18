@@ -9619,3 +9619,83 @@ what the gate compares against. Written down because the next person will meet t
 | D677 | **A GLSL helper containing a call is a COPY of everything it calls** | fault | Seventeen stacks: glslc 5.8 s → 0.7, SPIR-V 1.05 MB → 286 KB |
 | D677 | **`atan(0,0)` is undefined in GLSL where C++ answers 0** | fault | Reachable on the axis of any revolve; a NaN takes the whole building |
 | D677 | **A hundredfold is the descent AND compiling the field for the card** | honesty | 1.30x is what one of the two halves buys, measured |
+
+## D678 — the card sampler is ON because the user chose the trade, and D677's next step is refuted
+
+Two things, and the second is a correction of the entry directly above it.
+
+### The trade was put to the user and they took it
+
+D677 shipped R12 switched off, and the reason given was honest: the card delivers about a third more
+nodes a second, and a dispatch is tens of milliseconds of a frame the renderer wants in 17, so the
+world sharpens faster and the picture is slower while it does. That is a trade about how the game
+FEELS, which is not an engineering call — so it was put to the person the game is for, in one
+sentence, with both halves of it. *"do it, yes its worth it."*
+
+**`--gpu-sample` is therefore the default and `--cpu-sample` is the control arm.**
+`09-performance-budgets.md` is about budgets nobody chose; this one was chosen out loud.
+
+**One thing that is NOT part of that trade and is engineering rather than preference.**
+`FieldSampler::kSafeBoxes` caps what one submission may carry, at 256 nodes — measured at 117 ms on
+the estate's worst camera, a sixteenth of the driver's watchdog. `--refine-batch` still means what it
+says to the picker; what reaches the card is clamped. Past the watchdog the device is **lost**, not
+slow, and that is the game gone mid-session with whatever somebody was building. A player cannot
+choose that trade because a player cannot see it coming.
+
+### And D677's own "next step" is wrong, measured on the nodes it is about
+
+D677 says, twice, in the entry and in `21-renderer-rewrite.md`: the next step is to give the card
+`forge::sample`'s **descent** — settle whole boxes from one reading at their centre, walk single
+voxels only near a surface — and that it should recover "most of the CPU's 10x". The 10x was inferred
+from two throughput figures, which is exactly the move this file exists to stop.
+
+**The gate now measures it directly, because it already samples the same nodes both ways:**
+
+| over 24,576 cells of 48 nodes the LADDER picked | |
+|---|---|
+| cells the CPU's descent came down to a single voxel | **24,576 — 100% of them** |
+| CPU shape evaluations | 28,080, **1.14 a cell** |
+| CPU paint evaluations | **152**, which is nothing |
+| what a settle on the card would save | **nothing at all** |
+
+**The descent is a real optimisation of a whole building and it is worth nought on a node.** The
+ladder only ever picks nodes that straddle a surface — `box_may_hold_matter` refuses the rest before
+they are ever enlisted — and a node is eight cells a side. Every cell of one is near the surface, so
+the descent bottoms out at single voxels everywhere and settles nothing. The saving R11a and D622
+measured is real and is spent *before* the ladder hands anything over.
+
+**And a counter that reads like the complement of that and is not.** `voxels_settled` came back equal
+to the cell count as well, which looks like "everything settled" beside "nothing settled" and is
+neither: a single voxel that settles empty is counted at `sample.cpp:718` as a single AND at `:753`
+as settled. The two overlap and only `voxels_asked` answers the question. Trap 7 in a pair of
+counters that have both been in the code since R11a.
+
+### So where the time actually is, and both arms pay it
+
+With the settle out of the picture the two arms do comparable work per cell — the CPU 1.14 shape
+evaluations, the card about two — and the card wins only 1.30x because it is roughly 15x quicker per
+node visit against five threads. What is left is the walk itself:
+
+**4,158 node visits a cell, over about two evaluations, of an 18,250-node field.** That is ~2,000
+nodes visited per single evaluation, and **the CPU walks the same tree**. So this is not a shader
+problem and not a GPU problem. It is the clip's expression, and cutting it makes BOTH arms faster.
+
+The named suspect is already in this log. D675: **923 of the estate's field nodes (25%) carry no
+box**, and an ancestor of an unbounded node cannot be bounded either, so a quarter of the tree can
+never be culled and every path through it is walked in full. Beside it: `Field::combine` folds a wide
+union into a chain of four-child nodes, and D675 counted only **19 of 209** wide unions with an
+accelerator over them.
+
+**That is the next stage, and unlike the descent it has a number in front of it rather than behind
+it: find out why 923 nodes have no box.** Two things follow from doing it that the descent could
+never have offered — it speeds the CPU arm up by the same factor, and it is the same lever whether
+the sampler runs on a card or not.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D678 | **The card sampler is ON; the user took the trade** | decision | A sharper world sooner against a slower picture while it fills, put to them in one sentence |
+| D678 | **A dispatch is capped at `kSafeBoxes` = 256 whatever `--refine-batch` says** | decision | Past the watchdog the device is lost, not slow, and nobody can choose that trade |
+| D678 | **D677's "give the card the descent" is refuted** | fault | 100% of the ladder's cells come down to a single voxel; a settle saves nothing |
+| D678 | **A 10x inferred from two throughput figures is not a measurement** | honesty | The gate already sampled both ways and could have been asked directly |
+| D678 | **`voxels_settled` and `voxels_asked` OVERLAP and only the second answers this** | fault | A single voxel that settles empty is counted in both, since R11a |
+| D678 | **The cost is the field walk, ~2,000 nodes an evaluation, and BOTH arms pay it** | decision | 923 of 18,250 nodes carry no box (D675); that is the next stage |
