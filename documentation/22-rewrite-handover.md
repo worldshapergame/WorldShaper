@@ -670,10 +670,31 @@ to reach them. **D672 is the entry; read it before touching any of this.**
 
 **What is left, in order:**
 
-1. **Three buildings are not in**: `colonnade`, `fountain`, `orangery`. Their worktrees exist under
-   `.claude/worktrees/` and are empty — the branches point at `main` with nothing on them. The
-   conversion is mechanical and D672 describes it in five steps; the vectors are already in
-   `_contract.clip`'s site table, and the bounds already hold all seven.
+1. ~~**Three buildings are not in**: `colonnade`, `fountain`, `orangery`.~~ **DONE — the estate is
+   seven buildings.** `colonnade` at (0, 0, -29.00), `fountain` at (0, 0, 26.55), `orangery` at
+   (42.30, 0.90, -5.25). The manifest parses clean and the census reads **630 paint rules, 57
+   placed, 8 asked at every solid voxel**, so the three add no unbounded rules; 1,275 eight-metre
+   seeds and 401 ms to playable.
+
+   **Three things the conversion taught, and the first two will catch the next person:**
+
+   - **A single block of translated twins does not work.** `fountain.clip` interleaves its rules
+     with its definitions, so twins gathered at the first rule named shapes that were not bound
+     yet — 1,360 parse errors. **Each twin must stand directly after the shape it carries.** That
+     placement holds for every file; the gathered block only happened to work on the campanile.
+   - **The `part_` binding is often multi-line.** `fountain` and `orangery` bind theirs to a
+     multi-line `union`, and a line-wise rewrite put a `let` inside a brace block. Extraction has
+     to be brace-balanced.
+   - **Two margins are thin, and matter outside `bounds` is never sampled rather than clipped** —
+     so a building that outgrows the box comes back with a flat face and NO error. The colonnade
+     reaches z **-45.65** against a low of **-46** (0.35 m, eleven voxels at metre 32) and the
+     orangery x **72.00** against **72.5** (0.50 m). Their weathering is 0.16/0.14 and 0.05/0.04,
+     so both hold today. Both headers say so.
+
+   `colonnade` is authored at `metre 16` against a `metre 32` manifest. That is the safe direction
+   and only that one — a feature that resolves at 1/16 m also resolves at 1/32, and its smallest
+   members were sized against the coarser voxel. A fragment authored FINER than the manifest is the
+   dangerous way round.
 
 2. **`surface.clip` weathers buildings thirty metres away, and this is not fixed.** Its rules are
    keyed on FIELDS, not places, and `max { zone field }` is a union over fields rather than an
