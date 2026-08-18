@@ -2084,6 +2084,19 @@ private:
     // The clip's paint rules, worked out once (D614). A node sample that re-derived a hundred and
     // thirty-nine of them would spend longer arriving than sampling.
     forge::SamplePlan refine_plan_;
+    // ...and what is IN it, said out loud, because until D675 the game never once reported this.
+    //
+    // `rules_per_voxel` is the number that decides what a load costs: a rule the planner can settle
+    // for neither a box nor a region is asked at EVERY SOLID VOXEL of the building. The rest are
+    // bounded and cost nothing outside their own box. So the per-voxel cost of a clip is roughly
+    // this count, and a clip that grows unbounded rules gets slower everywhere at once rather than
+    // where the rules are -- which is exactly the shape of `surface.clip` weathering buildings
+    // thirty metres away (D672), seen from the sampler's side instead of the painter's.
+    //
+    // It was reported only under `--sample-cost`, a mode that samples the whole building node by
+    // node and takes minutes on the estate, so the one figure that explains a slow load was behind
+    // the slowest thing in the repository.
+    void log_the_plan(const char* what) const;
     // The clip's own bounds, kept because `refine_script_->settings` is overwritten with each
     // node's box before it is sampled and would otherwise be the last node rather than the clip.
     forge::Vec3 refine_bounds_low_{0, 0, 0};
@@ -3973,6 +3986,20 @@ bool Application::refine_node_of(const NodeKey& key, RefineNode& out) const {
 
 // Eight children in the parent's place. The list is the ladder's whole state, so this is the only
 // thing that ever adds to it.
+void Application::log_the_plan(const char* what) const {
+    const forge::SamplePlan& plan = refine_plan_;
+    // The share is the point of the line, not the count. Twelve unbounded rules of twelve is a clip
+    // that costs the same everywhere; twelve of two hundred is a clip that mostly does not.
+    const f64 share = plan.rules_total > 0
+                          ? 100.0 * static_cast<f64>(plan.rules_per_voxel) /
+                                static_cast<f64>(plan.rules_total)
+                          : 0.0;
+    WS_LOG_INFO("clip",
+                "{}: {} paint rules, {} placed, {} asked at EVERY solid voxel ({:.0f}%) -- the "
+                "last number is what a voxel costs",
+                what, plan.rules_total, plan.rules_placed, plan.rules_per_voxel, share);
+}
+
 u32 Application::split_refine_node(usize at) {
     const NodeKey parent = refine_regions_[at].key;
     RefineNode children[8];
@@ -4237,6 +4264,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
     refine_script_ = std::make_unique<forge::Script>(std::move(script));
     refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
                                       refine_script_->paint);
+    log_the_plan("resumed");
     // What the world on disk is already at: the coarse rung it was built with. A cached world may
     // hold sharpened boxes as well, which resume_refinement marks below.
     refine_coarse_per_metre_ = refine_script_->settings.voxels_per_metre;
@@ -4849,6 +4877,7 @@ void Application::build_world() {
                 refine_script_ = std::make_unique<forge::Script>(std::move(script));
                 refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
                                                   refine_script_->paint);
+                log_the_plan("the ladder");
                 refine_coarse_per_metre_ = refine_script_->settings.voxels_per_metre;
                 seed_refine_nodes(*refine_script_);
                 WS_LOG_INFO("clip",

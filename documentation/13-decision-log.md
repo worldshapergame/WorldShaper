@@ -9357,3 +9357,58 @@ user would be promising a multiple, which §5 already warns against by name.
 | D674 | **Coverage and resolution are one quantity, because the paste inflates to fill the box** | fault | Capping resolution without changing the box shattered the room into floating blocks |
 | D674 | **`clips/sampler.clip` gates `--refine-all` and cannot gate the footprint rule** | honesty | Every node of it is inside 8 m, so the rung is 32 whatever the rule does |
 | D674 | **A hundredfold on the load is R12 and nothing short of it** | honesty | 7.6 µs a voxel is field evaluation; the pixel rule already minimises the voxel count |
+
+## D675 — the clip says what it costs now, and the two obvious savings were already banked
+
+Following D674's *"where is the load time actually"*, two candidate levers were named and both are
+gone within an hour of measuring rather than a session each. **The entry is short because the work
+was short, and it was short because of one log line.**
+
+### The lever that was already pulled
+
+R11a's headline is quoted everywhere as the thing to fix: *"85% of what a node pays is `sample()`
+re-deriving every rule's slack and box on every call"* — an empty node at 0.213 ms on 139 rules
+against 0.012 ms on four. **That is a PRE-D614 figure.** D614 split `plan_sample` off, the ladder
+has sampled through one shared `refine_plan_` ever since (`main.cpp` line ~3031), and R11a's own
+table already records the result in the column beside it: an empty node at the leaf is **0.017 ms**,
+not 0.213. The saving is twelve-fold and it was taken eleven days ago.
+
+**What made this quotable for eleven days is that the sentence and the table are in the same
+document and only the sentence is memorable.** A figure that has been superseded by the change
+described two paragraphs above it is worse than no figure.
+
+### The lever that was not there
+
+The second candidate was unbounded paint rules — a rule the planner can settle for neither a box nor
+a region is asked at **every solid voxel**, and D672's open fault is `surface.clip` weathering
+buildings thirty metres away, which is the same shape of mistake seen from the painter's side. If the
+estate had grown a pile of those, every voxel in every building would be paying for all of them.
+
+It has not. The estate is **553 paint rules, 42 placed, and 8 asked at every solid voxel — 1%.** The
+planner is bounding 545 of 553. Whatever `surface.clip` is doing wrong to the *paint*, it is not
+doing it to the *cost*.
+
+### So the line, which is the whole change
+
+    clip  the ladder: 553 paint rules, 42 placed, 8 asked at EVERY solid voxel (1%)
+
+Printed where the plan is built, on both paths — the ladder's and the resume's. It existed already
+and only under `--sample-cost`, **a mode that samples the whole building node by node and takes
+minutes on the estate, so the one figure that explains a slow load was behind the slowest thing in
+the repository.** The share matters more than the count: 8 of 553 is a clip that mostly does not pay
+for its rules, and 8 of 8 would be a clip that pays for all of them everywhere.
+
+### What is left, stated so nobody re-derives it
+
+A batch is ~65,536 voxels in ~500 ms — **7.6 µs a voxel**. The per-box settle means a voxel only
+EVALUATES the rules that survive `state[i]`; the 553-entry scan itself is a byte compare each, about
+2% of that. So what is left is the field evaluations, each a walk of a 3,744-node tree, and neither
+scheduling nor caching nor bounding touches them. **A hundredfold is R12 and nothing short of it**,
+which is what D674 already concluded from the other end.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D675 | **The clip's rule census is printed on every load** | decision | 8 of 553 took an hour to establish and would have taken a session |
+| D675 | **R11a's 85% is a pre-D614 figure and must stop being quoted** | fault | The split was taken eleven days ago; the same table records 0.017 ms beside the 0.213 |
+| D675 | **A superseded figure beside its own correction is worse than no figure** | honesty | Both are in R11a's section; only the sentence gets remembered |
+| D675 | **Unbounded paint rules are not the estate's cost** | honesty | 545 of 553 are bounded, so `surface.clip`'s fault is visual and not a load cost |
