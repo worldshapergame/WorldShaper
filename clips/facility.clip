@@ -86,6 +86,21 @@ include "facility/fittings.clip"
 # said one weathering coat where there should have been thirteen.
 include "facility/surface.clip"
 
+# --- the rest of the estate ----------------------------------------------------------------------
+#
+# The facility is not one building. Everything above this line is the neoclassical block at the
+# centre; everything below it is another building on the same ground, each authored as its own
+# standalone clip in its own coordinates and carried here by the one translate named in its file.
+# The vectors, and the three that had to change for collisions, are the table in _contract.clip.
+#
+# INCLUDED AFTER surface.clip ON PURPOSE, and the reason is that this changes nothing above it.
+# The paint stacks in include order, so anything inserted between two of the building's own
+# fragments moves the building's colours. These are appended instead: every rule in surface.clip
+# is scoped (17 `paint ... where=`, 2 `weather ... on=`) and every one of those scopes is a box
+# inside the block's own footprint, x +/-16.875, z -16.5 .. 8.55 -- so the building's weathering
+# cannot reach out here, and these fragments' own coats cannot reach back.
+include "facility/campanile.clip"
+
 # --- assembly ------------------------------------------------------------------------------------
 
 let shell = union {
@@ -107,9 +122,9 @@ let built = union { shell inside }
 # rooms themselves — each expose one shape named `<part>_void`, and they are all taken away
 # here, in one place, where the order is visible.
 #
-# TWENTY-SEVEN PARTS AND TWELVE VOIDS, AND EVERY ONE OF EACH IS ACCOUNTED FOR. Fourteen parts in
-# `shell`, eleven in `inside`, part_fittings and part_terrace joined below: twenty-seven, which is
-# every `part_` bound in clips/facility/, each named exactly once. Twelve `void_` are bound and
+# TWENTY-EIGHT PARTS AND TWELVE VOIDS, AND EVERY ONE OF EACH IS ACCOUNTED FOR. Fourteen parts in
+# `shell`, eleven in `inside`, part_fittings and part_terrace joined below, and one in `grounds`:
+# twenty-eight, which is every `part_` bound in clips/facility/, each named exactly once. Twelve `void_` are bound and
 # twelve are subtracted here, so there is no void without a part and no part whose void is left
 # out. The three parts that expose no void say so in their own files, in as many words:
 # surface.clip ("there is no void_surface"), terrace.clip ("it removes nothing from anybody") and
@@ -276,7 +291,13 @@ let hollowed = difference {
 # today — the terrace would survive being put anywhere in this assembly. It stays here because the
 # argument is about what a future void may reach, not about what today's do, and the crypt is the
 # standing proof that a void reaches further than its name suggests.
-let furnished = union { hollowed  difference { part_fittings void_doors void_windows }  part_terrace }
+# The other buildings of the estate, joined for the same reason part_terrace is joined here and
+# not in `inside`: they stand outside the block, no void in this manifest is meant to reach them,
+# and passing them through the door-and-window difference could only ever remove something by
+# accident. Each brings its own ground and its own weathering and takes nothing away from anybody.
+let grounds = union { part_campanile }
+
+let furnished = union { hollowed  difference { part_fittings void_doors void_windows }  part_terrace  grounds }
 
 # --- surface --------------------------------------------------------------------------------------
 #
