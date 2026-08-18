@@ -1,0 +1,224 @@
+#version 450
+// R12: a node of the render tree, filled with voxels by the card instead of by a worker thread.
+//
+// # What this replaces, and why a hundredfold has to come from here
+//
+// The ladder that fills the world in while somebody is playing asks `forge::sample` for one node at
+// a time, and a node is eight voxels a side at every level. Measured: **~65,536 voxels in ~500 ms,
+// 7.6 µs a voxel** (D674), and that figure is field evaluation — a walk of a several-thousand-node
+// expression tree, per voxel, against hundreds of paint rules, on about five of the machine's
+// threads. Every scheduling fault around it has already been found and fixed: D622 took three waits
+// out and was worth 4.8x, D619 took a starvation out and was worth another 3x, and what is left is
+// not waiting. **D674 and D675 both concluded, from opposite ends, that a hundredfold is R12 and
+// nothing short of it.** This is R12.
+//
+// # It brute-forces every cell, and that is not a regression
+//
+// `forge::sample` descends: it settles whole boxes from one evaluation at their centre plus a
+// Lipschitz slack, and only walks single voxels near a surface. That descent is an OPTIMISATION of
+// a per-voxel definition, and the per-voxel definition is what this shader computes. So the card
+// does more evaluations than the CPU did and finishes far sooner, because 512 cells of a node are
+// 512 lanes rather than 512 iterations — and because the cull the descent uses to skip children is
+// still here, per node, in `ws_box_away_sq`.
+//
+// It also means the two can be compared voxel for voxel, which is the whole gate: `--gpu-sample-
+// check` samples the same nodes both ways and counts the cells that differ. D200k, and R1a's
+// standard before it: *"one field evaluator, mirrored, or two renderers compute the world two
+// ways."*
+//
+// # The per-voxel definition, exactly as `descend` reaches it at a single cell
+//
+// Three things about that path are easy to get subtly wrong and all three are copied deliberately:
+//
+//   **A single cell has a radius of NOUGHT, not half a voxel.** `box_centre` measures over the
+//   sample points rather than over the cube, and says so in its own header. So every `radius` term
+//   in the descent's tests — the rule-box cull, the band's span — is zero here, which is what makes
+//   the settle tests collapse into the plain comparisons below.
+//
+//   **The bounds shape gets no thin-feature rescue at a single cell.** The rescue appears in the
+//   partly-covered *box* branch and not in the single-cell one. A cell whose bounds centre is
+//   outside is simply not part of the clip.
+//
+//   **A rule the descent could settle bypasses its own facing test.** See `GpuPaintRule::slack`.
+//
+// # What is NOT here, and where it still happens
+//
+// `apply_variation` and `forge::despeckle` are judgements over a finished clip rather than over a
+// voxel — the first draws per-voxel colour variation from a hash of the cell, the second decides
+// what is a deliberate stipple from a material's share of the whole clip's surface — so they stay
+// on the host, over the block this hands back. R11b measured why the second cannot move: 29 of 297
+// nodes come out different when the pass runs on a node rather than on the box around it.
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#include "field_types.glsl"
+#include "field_leaf.glsl"
+#include "field_walk.glsl"
+
+// Eight voxels a side, at every level. `forge::kNodeVoxels`, and the reason the dispatch is a flat
+// index with no prefix sum over the batch.
+#define WS_NODE_VOXELS 8u
+#define WS_NODE_CELLS  512u
+
+// The furthest a surface can be from a cell's centre and still pass through that cell, in voxels.
+// `kHalfCellDiagonal` in src/forge/sample.cpp, handed in as `field_push.half_cell` so that one
+// constant lives in one place (D204) — it is the reach of the rescue below and the distance a box
+// has to be clear by before the CPU may settle it empty, and those two disagreeing cost D613.
+
+// Is there a feature here too thin for the grid to hold?
+//
+// `thin_feature_here` in src/forge/sample.cpp, transliterated. A mullion half a voxel wide never
+// covers a cell centre, so no centre reports it and it is not thinned but deleted outright — this
+// is what keeps it. Asked only of cells that are outside but within half a cell diagonal, so it
+// costs a shell around the surface and nothing anywhere else.
+bool thin_feature_here(vec3 p, float outside_by, float voxel) {
+    // Which way is out. Central differences over a quarter of a voxel are steady enough for a
+    // direction even where the field is not smooth.
+    const float h = voxel * 0.25;
+    vec3 away = vec3(field_eval(field_push.root, vec3(p.x + h, p.y, p.z)) -
+                         field_eval(field_push.root, vec3(p.x - h, p.y, p.z)),
+                     field_eval(field_push.root, vec3(p.x, p.y + h, p.z)) -
+                         field_eval(field_push.root, vec3(p.x, p.y - h, p.z)),
+                     field_eval(field_push.root, vec3(p.x, p.y, p.z + h)) -
+                         field_eval(field_push.root, vec3(p.x, p.y, p.z - h)));
+    const float len = length(away);
+    if (len < 1.0e-12) return false;
+    away /= len;
+
+    // Just inside the surface. Nothing solid that way means the field was near zero here for some
+    // other reason and there is no feature to rescue.
+    const float reach = outside_by + voxel * 0.05;
+    const vec3 within = p - away * reach;
+    if (field_eval(field_push.root, within) > 0.0) return false;
+
+    // And a whole voxel further in. Still solid means a wall, and a wall does not need rescuing —
+    // this is what keeps the flat faces of the building exactly where they were. Out the far side
+    // means the whole feature is thinner than the grid can hold, and it is kept.
+    return field_eval(field_push.root, within - away * voxel) > 0.0;
+}
+
+// How far a point is from a rule's box, squared. Nought inside it, and nought for the infinite box.
+float rule_box_away_sq(uint rule, vec3 p) {
+    const float lx = paint_rules.items[rule].lo[0];
+    if (lx <= -1.0e29 || paint_rules.items[rule].hi[0] >= 1.0e29) return 0.0;
+    const vec3 lo = vec3(lx, paint_rules.items[rule].lo[1], paint_rules.items[rule].lo[2]);
+    const vec3 hi = vec3(paint_rules.items[rule].hi[0], paint_rules.items[rule].hi[1],
+                         paint_rules.items[rule].hi[2]);
+    const vec3 d = max(max(lo - p, p - hi), vec3(0.0));
+    return dot(d, d);
+}
+
+float piece_away_sq(uint piece, vec3 p) {
+    const float lx = rule_pieces.items[piece].lo[0];
+    if (lx <= -1.0e29 || rule_pieces.items[piece].hi[0] >= 1.0e29) return 0.0;
+    const vec3 lo = vec3(lx, rule_pieces.items[piece].lo[1], rule_pieces.items[piece].lo[2]);
+    const vec3 hi = vec3(rule_pieces.items[piece].hi[0], rule_pieces.items[piece].hi[1],
+                         rule_pieces.items[piece].hi[2]);
+    const vec3 d = max(max(lo - p, p - hi), vec3(0.0));
+    return dot(d, d);
+}
+
+// The surface normal by central differences, over a whole voxel, exactly as `Field::normal_at` is
+// called from `paint_solid`. Six evaluations, paid only where a rule asks for a facing.
+vec3 normal_at(vec3 p, float step) {
+    const vec3 g = vec3(field_eval(field_push.root, vec3(p.x + step, p.y, p.z)) -
+                            field_eval(field_push.root, vec3(p.x - step, p.y, p.z)),
+                        field_eval(field_push.root, vec3(p.x, p.y + step, p.z)) -
+                            field_eval(field_push.root, vec3(p.x, p.y - step, p.z)),
+                        field_eval(field_push.root, vec3(p.x, p.y, p.z + step)) -
+                            field_eval(field_push.root, vec3(p.x, p.y, p.z - step)));
+    const float len = length(g);
+    return (len > 0.0) ? (g / len) : vec3(0.0);
+}
+
+void main() {
+    const uint gid = gl_GlobalInvocationID.x;
+    const uint box = gid / WS_NODE_CELLS;
+    if (box >= field_push.box_count) return;
+    const uint cell = gid % WS_NODE_CELLS;
+
+    const ivec3 within = ivec3(cell & 7u, (cell >> 3u) & 7u, (cell >> 6u) & 7u);
+    const float voxel = sample_boxes.items[box].voxel;
+    const ivec3 lo = ivec3(sample_boxes.items[box].lo[0], sample_boxes.items[box].lo[1],
+                           sample_boxes.items[box].lo[2]);
+    // Sampled at the CENTRE of each voxel rather than its corner. `SampleSettings::sample_at_centre`
+    // says why: a surface through the middle of a cell either fills it or does not, and asking at
+    // the corner biases every surface half a voxel the same way — a clip a voxel narrow on two
+    // sides and a voxel wide on the other two.
+    const vec3 p = (vec3(lo + within) + 0.5) * voxel;
+
+    uint inside = 1u;
+    uint type = 0u;   // kAir
+
+    // Is this cell part of the clip at all? A cell outside the bounds shape is none of the clip's
+    // business and its mask stays clear, which is a different thing from a cell that is inside the
+    // clip and empty — the second says "stamping should clear whatever is there".
+    if (field_push.has_bounds != 0u && field_eval(field_push.bounds, p) > 0.0) {
+        out_types.items[gid] = 0u;
+        out_inside.items[gid] = 0u;
+        return;
+    }
+
+    const float dc = field_eval(field_push.root, p);
+    bool rescued = false;
+    if (dc > 0.0 && dc < voxel * field_push.half_cell &&
+        (field_push.flags & WS_FIELD_FLAG_NO_RESCUE) == 0u) {
+        rescued = thin_feature_here(p, dc, voxel);
+    }
+    if (!rescued && dc > 0.0) {
+        out_types.items[gid] = 0u;
+        out_inside.items[gid] = inside;
+        return;
+    }
+
+    // Solid. Every rule in order, last match wins, exactly as `paint_solid` walks them.
+    bool have_normal = false;
+    vec3 normal = vec3(0.0);
+    for (uint i = 0u; i < field_push.rule_count; ++i) {
+        // Nowhere near the only place this rule could apply, so it does not, and no evaluation is
+        // needed to know it. This is the difference between asking every rule at every voxel and
+        // asking the two or three that could possibly be true here.
+        if (rule_box_away_sq(i, p) > 0.0) continue;
+        const uint from = paint_rules.items[i].piece_from;
+        const uint to = paint_rules.items[i].piece_to;
+        if (from != to) {
+            bool near_a_piece = false;
+            for (uint piece = from; piece < to && !near_a_piece; ++piece) {
+                near_a_piece = piece_away_sq(piece, p) <= 0.0;
+            }
+            if (!near_a_piece) continue;
+        }
+
+        const float value = field_eval(paint_rules.items[i].test, p);
+        const float low = paint_rules.items[i].low;
+        const float high = paint_rules.items[i].high;
+        if (value < low || value > high) continue;
+
+        // Only a rule the descent could settle for NOTHING reaches the facing test — see
+        // GpuPaintRule::slack. A rule with a finite slack is settled from its band alone and
+        // `paint_solid` applies it without asking which way the surface faces.
+        if (paint_rules.items[i].slack >= 1.0e30) {
+            const uint axis = paint_rules.items[i].facing_axis;
+            if (axis < 3u) {
+                if (!have_normal) {
+                    normal = normal_at(p, voxel);
+                    have_normal = true;
+                }
+                const float component = ws_axis_of(normal, axis);
+                const float want = paint_rules.items[i].facing_min;
+                if (want >= 0.0) { if (component < want) continue; }
+                else             { if (component > want) continue; }
+            }
+        }
+        type = paint_rules.items[i].type;
+    }
+
+    // A cell with matter in it and no rule that matched is still matter. It would be worse to drop
+    // it silently than to give it the first type asked for, because a hole in a wall is harder to
+    // notice than a wrong colour.
+    if (type == 0u && field_push.rule_count > 0u) type = field_push.first_type;
+
+    out_types.items[gid] = type;
+    out_inside.items[gid] = inside;
+}
