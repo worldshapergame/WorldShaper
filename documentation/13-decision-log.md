@@ -10381,3 +10381,52 @@ and that is a decision for whoever authors the estate rather than for whoever wr
 | D686 | **One second buys two-metre voxels, and a doorway is two metres** | honesty | There is no grain that is both instant and a building |
 | D686 | **Eight levers measured; the load is linear in how much clip there is** | honesty | The table above; nothing else anybody has found moves it |
 | D686 | **337 ms filling around you, or 22 s of half-metre blocks — both ends measured** | decision | Everything between them is a dial somebody can choose |
+
+## D687 — R12c priced before it was built, and it is a slideshow until the field gets cheaper
+
+The user described R12c in their own words — *"all the voxels it loads are fake and only the voxels
+truly affected are baked into real voxels dynamically"* — and it is the plan's own next stage. Before
+building it, it was priced, using a counter the engine already had.
+
+### The arithmetic
+
+R12c is: where the descent reaches a node the pool has not built (`node_level_of(...) == 0u` in
+`node.glsl`) and reports a miss, evaluate the field there instead. **So the number of misses a frame
+is the number of field evaluations a frame**, near enough — and one evaluation of the estate costs
+**~0.84 µs** on this card (D681), because a point walks ~8,231 nodes of an 18,250-node expression.
+
+The feedback buffer already counts misses. It samples one pixel in four.
+
+**Enclosed camera, cold, peak over the run: 368,876 nodes wanted.** At four pixels each and 0.84 µs
+an evaluation, that is **1,239 ms of card per frame** — and that is the FLOOR, before a single march
+step is counted, because a ray that derives and carries on derives more than once.
+
+**A settled frame wants 7.** That is why the peak had to be tracked rather than the last frame: a run
+that wants a million and a run that wants seven both settle at seven, and the settle line is the only
+place a total was ever printed.
+
+### What it means, and it is not "no"
+
+**R12c is not viable at the estate's current field cost and is not far off at a plausible one.**
+
+| if one evaluation cost | a frame costs |
+|---|---|
+| 0.84 µs (today) | 1,239 ms — a slideshow |
+| 84 ns (10x cheaper) | 124 ms — 8 fps, still wrong |
+| 28 ns (30x cheaper) | 41 ms — playable |
+
+**So R12c is gated on the field compiler**, which is the one lever the eight-attempt ledger (D686)
+never touched: rewriting the estate's expression shallower rather than evaluating it faster. That
+puts a number on what the compiler has to achieve for the stage above it to exist — **about 30x** —
+which is a far more useful thing to hand a compiler than "make it faster".
+
+And it reframes the whole search. Eight attacks failed at making the SAMPLER faster. The one target
+that matters is now specific: **the cost of asking the field one question**, and everything the user
+wants — instant arrival, full detail, no bake — hangs off that single number.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D687 | **R12c would cost 1,239 ms a frame at today's field cost** | decision | 368,876 nodes wanted at the peak, x4 pixels, x0.84 µs, before march steps |
+| D687 | **It needs the field ~30x cheaper to be playable, not more** | decision | 41 ms a frame at 28 ns an evaluation |
+| D687 | **The peak had to be tracked; the settled frame wants 7** | fault | A run that wants a million and one that wants seven both settle at seven |
+| D687 | **R12c is gated on the field compiler, which is the lever nobody has tried** | decision | Eight attacks on the sampler; none on the expression's shape |

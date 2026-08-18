@@ -2748,6 +2748,7 @@ private:
     u64 frame_counter_ = 0;
     u32 last_feedback_ = 0;
     u32 last_feedback_truncated_ = 0;
+    u64 feedback_peak_ = 0;
     // Miss reports for a place the world has nothing at. See the note where it is counted.
     u32 last_feedback_phantom_ = 0;
 
@@ -6197,6 +6198,13 @@ void Application::stream(f64 seconds) {
     const std::vector<FeedbackEntry>& wanted = feedback_.read(swapchain_.frame_index());
     last_feedback_ = feedback_.last_reported();
     last_feedback_truncated_ = feedback_.last_truncated();
+    // The PEAK, because the settled frame is not the interesting one and it is the only one the
+    // settle line can see. R12c's bill is what a frame costs when NOTHING is built — the first
+    // frame after a world opens — and by the time anything reports a total the misses have gone to
+    // nought. A run that reports 7 nodes wanted and a run that reports a million both settle at 7.
+    const u64 asked_for = static_cast<u64>(last_feedback_) +
+                          static_cast<u64>(last_feedback_truncated_);
+    if (asked_for > feedback_peak_) feedback_peak_ = asked_for;
 
 
     // The reports, in one pass.
@@ -9771,6 +9779,25 @@ int Application::play(const Options& options) {
             }
             if (!refine_regions_.empty()) {
                 WS_LOG_INFO("frame", "ladder: {}", refine_census());
+                // WHAT R12c WOULD COST, from the one counter that already answers it.
+                //
+                // R12c is "the marcher derives rather than stops": where the descent reaches a node
+                // the pool has not built and reports a miss (`node_level_of(...) == 0u` in
+                // node.glsl), it would evaluate the field there instead. So the number of misses a
+                // frame IS the number of field evaluations a frame, near enough — and one
+                // evaluation of the estate costs about 0.84 µs on this card (D681), because a point
+                // walks ~8,231 nodes of an 18,250-node expression.
+                //
+                // The buffer is sampled one pixel in four and truncates rather than growing, so a
+                // saturated report is the interesting case and `truncated` is what says so. Printed
+                // here rather than measured by building R12c first, because the arithmetic decides
+                // whether R12c is a frame or a slideshow before anybody writes it.
+                WS_LOG_INFO("frame",
+                            "R12c's bill: {} nodes wanted at the PEAK, {} over the buffer at the end "
+                            "holds — at ~0.84 us an evaluation that is ~{:.0f} ms of card a frame "
+                            "before any march steps are counted",
+                            feedback_peak_, last_feedback_truncated_,
+                            static_cast<f64>(feedback_peak_) * 4.0 * 0.00084);
                 // What a player is actually standing in front of. The line above says which nodes
                 // are still coarse; this one says what the FINISHED ones came out at, against how
                 // far away they are, which is the only form of the question anybody can look at.
