@@ -602,6 +602,47 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — three stages landed, and the compiler needs ONE change before it can be wired
+
+`forge::compile_field` is in, gated, and **bit-exact near every surface** — 1.20x on the cost of
+asking the field a point (11.68 µs → 9.92). **Nothing calls it yet, and it cannot be called as it
+stands.**
+
+**The blocker, and it is one signature.** `compile_field(in, root, ...)` takes ONE root and remaps
+every node index. A `Script` has many: `script.solid`, `script.settings.bounds`, and every paint
+rule's `test` and `place`. Compile from the solid alone and all of those point at whatever now
+occupies their old index — a building painted from the wrong shapes, silently, with no error. So
+the wiring is NOT one line at `build_bounds()`; it is `compile_field` taking a SET of roots and
+returning the remapped set, then `clip_script.cpp` handing it all of them.
+
+**Do that first and gate it with the existing content hash**: `clips/sampler.clip --refine-all
+--no-despeckle` must still answer `a7660d52378d3c27` at 1,430,152 voxels, both arms.
+
+**And know what 1.20x is worth before spending a day on it.** D687 prices R12c — the stage that
+gives the user everything they asked for — at 1,239 ms a frame, and it needs the field about **30x**
+cheaper to be playable. The compiler is 1.20x of that 30x. Its own report says where the rest is not:
+the transform fold, the obvious rewrite, MEASURES 0.86x, for the third instance of one mistake
+(D637, D682, and now this) — a change that cuts node COUNT and raises node VISITS.
+
+**R2b is finished and ships OFF, and its finding is worth more than its code.** The mechanism needs
+no card: the marcher clamps its descent target, so the finest level a ray at a distance can address
+is knowable from the CPU, and it was pinned against the ladder's own split loop at every metre from
+1 to 4000. But at 1280x800 the marcher addresses a leaf out to 250 m and **nothing on either named
+camera is that far**, so both arms are identical and it costs the sweep 3x its line for nothing. It
+is on `worktree-agent-a3a69700bcbb4b874`, dormant behind `NodePoolBudget::subpixel_rule`.
+
+**And it refutes a recorded finding: D621's "the pool holds eight times what it settles at" is NOT
+sub-pixel detail.** The witness reads nought through an entire cold load on the CONTROL arm, and the
+262,144-leaf pinning could not be reproduced at all — that run peaked at ~800 leaves. Whatever D621
+saw is scene- or era-specific and wants re-taking before anyone builds against it.
+
+**One decision is owed:** `NodeView::pixel_angle` is a field nothing fills in, so the pool falls back
+to a 1280x800 constant. Conservative at or below 1280 lines and **unsafe above** — at 4K rays address
+finer nodes than the constant admits. One line in `main.cpp`, and it must land before R2b is ever
+switched on.
+
+---
+
 #### START HERE — six stages are HALF WRITTEN on branches, and the service killed all six
 
 Six agents were dispatched at the user's request, one per missing stage, each in its own worktree on
