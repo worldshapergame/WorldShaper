@@ -400,6 +400,38 @@ struct Options {
     // pulled towards the number it was seeded from.
     bool sun_confidence = true;
 
+    // R5b's temporal half: the sun's estimator is a mean that FORGETS at one fixed rate.
+    //
+    // On, and `--no-face-ema` is the control arm -- bit-exact, because with it clear the pass writes
+    // no mean at all and the counters are the windowed count halved at `kFaceWindow` that every
+    // build before this one carried. The mean lives in one new word of the light record and the
+    // COUNTERS are written from it, so not one reader of the sun changes: see `face_sun_ema_step`
+    // in shaders/face_terms.glsl for why it cannot be kept in the counters themselves (D293's
+    // sentence, one representation along) and why writing them back is what keeps four readers
+    // out of this.
+    bool face_ema = true;
+
+    // ...and how many UNANIMOUS shadow rays a face takes before it stops casting at the sun. 0 is
+    // `--no-face-rest` and is every build before this one.
+    //
+    // A settled face spends one unbounded march every `face_stride` frames re-measuring a sun that
+    // `make_node_push` hands the card as a compile-time constant, for the life of the face. That is
+    // kSkyConverged's argument word for word, and the asymmetry -- only the SHADOWED extreme rests,
+    // never the fully lit one -- is R9i's: a lit face that stopped casting would be a sealed room
+    // filling with sunlight as the pool sheds, which is the biggest open fault in this renderer and
+    // is not one to open a second door into. See kFaceSunRest in shaders/face_terms.glsl.
+    u32 face_rest = 64;
+
+    // R9h: a light path may name the one cell that stopped it and the one face it landed on, never
+    // more than one entry per node per window.
+    //
+    // On, and `--no-light-name-cap` is the control arm. The last clause of that rule has always been
+    // true of the CELL -- `node_seen` and D431 -- and has never been true of the FACE: R9a's request
+    // is throttled per GATHERING FACE, so a room whose far rays all land on one wall puts one entry
+    // per ray into a feedback buffer the streamer shares. D589 measured R9h's other two thirds and
+    // found both needed nothing; this is the third.
+    bool light_name_cap = true;
+
     // An edit reopens a face's LAMP term only where it can stand between that face and a fitting.
     //
     // On, because off is the reported bug: the lamps were reopened over the sun's sixteen-metre box,
@@ -1315,6 +1347,23 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         // is every build before this one. It travels in the light probe buffer rather than in
         // the push block, which is exactly full -- see kProbeSunSeed in shaders\node.glsl.
         options.sun_seed = static_cast<u32>(std::atoll(argv[++i]));
+    } else if (arg == "--no-face-ema") {
+        // R5b's temporal half, off: the sun's counters are the windowed count halved at
+        // `kFaceWindow` that every build before this one carried, and the pass writes no mean.
+        // Bit-exact rather than nearly -- nothing reads the word it stops writing.
+        options.face_ema = false;
+    } else if (arg == "--no-face-rest") {
+        // ...and its other half, off: no face ever stops casting at the sun, which is every build
+        // before this one. A number rather than a switch as well -- `--face-rest N` sweeps it,
+        // because how many unanimous rays are enough is the whole of the trade this makes.
+        options.face_rest = 0;
+    } else if (arg == "--face-rest" && i + 1 < argc) {
+        options.face_rest = static_cast<u32>(std::atoll(argv[++i]));
+    } else if (arg == "--no-light-name-cap") {
+        // R9h's control arm: R9a's face request is bounded per gathering face alone, exactly as it
+        // has been since R9a landed, and a wall that a thousand rays land on is named a thousand
+        // times.
+        options.light_name_cap = false;
     } else if (arg == "--no-sun-confidence") {
         // R5b's control arm: a face's own sun ratio is believed the moment it has one sample,
         // which is the state every figure taken before this was measured in. The shading pass
@@ -1619,6 +1668,15 @@ void print_help() {
         "                        ray, rather than being blended towards the coarse face over it\n"
         "                        until it has four. R5b's control arm, and the state every figure\n"
         "                        before it was measured in\n"
+        "  --no-face-ema         the sun's counters are the windowed count halved at 256 samples,\n"
+        "                        rather than a mean that forgets at one fixed rate. R5b's temporal\n"
+        "                        control arm, and it is bit-exact\n"
+        "  --face-rest N         unanimous shadow rays a face takes before it stops casting at the\n"
+        "                        sun (default 64; --no-face-rest is 0, which is never). Only the\n"
+        "                        fully SHADOWED extreme rests -- a lit face goes on paying, because\n"
+        "                        geometry arriving in front of it is R9i\n"
+        "  --no-light-name-cap   a gathering ray names the face it landed on however many other\n"
+        "                        rays named the same face this window. R9h's control arm\n"
         "  --no-lamp-edit-scope  an edit reopens the lamp term of every face within sixteen metres\n"
         "                        again, rather than only those it can stand in the light of. The\n"
         "                        control arm for the flicker while building\n"
@@ -8567,6 +8625,10 @@ void Application::record_frame(f32 time_seconds) {
         params.r5[3] = 0.0f;
         params.r4[0] = options_.reflected_image ? 1.0f : 0.0f;
         params.r4[1] = options_.dispersion ? 1.0f : 0.0f;
+        params.r5b[0] = options_.face_ema ? 1.0f : 0.0f;
+        params.r5b[1] = static_cast<f32>(options_.face_rest);
+        params.r5b[2] = options_.light_name_cap ? 1.0f : 0.0f;
+        params.r5b[3] = 0.0f;
         params.r4[2] = 0.0f;
         params.r4[3] = 0.0f;
 
@@ -9121,6 +9183,13 @@ void Application::record_frame(f32 time_seconds) {
             // words 1 up to but not including the stride.
             vkCmdFillBuffer(cmd, light_probe_.buffer(), sizeof(u32),
                             (kProbeSecondaryStride - 1) * sizeof(u32), 0u);
+            // ...and the three counters PAST the word map, which need a fill of their own for the
+            // reason the bounds above are named rather than counted: words 32-35 are the host's,
+            // and one fill across them would race the updates that write them. Everything past
+            // these three is R9h's stamp table, which is the card's and persists between frames --
+            // it is a window of frame numbers, so clearing it would be clearing the thing it is.
+            vkCmdFillBuffer(cmd, light_probe_.buffer(), kLightProbeWords * sizeof(u32),
+                            kProbeExtraCounters * sizeof(u32), 0u);
             VkMemoryBarrier2 probe_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
             probe_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
             probe_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -9868,10 +9937,16 @@ int Application::play(const Options& options) {
         // one, which is the only word here that is a measurement of a different face: it is what a
         // reader falls back towards while this face has too few shadow rays of its own to be
         // believed (R5b, kFaceSunStandIn).
-        // kFaceLightWords in shaders/face_terms.glsl is the same twenty-one, and the shader bounds
-        // its writes against this length because a disagreement here is a write into whatever the
-        // allocator placed next (D332).
-        if (!face_light_.create(device_, 21 * (face_buffers_.provisional_base() +
+        // ...and one more after that for R5b's temporal half: this face's own sun visibility as a
+        // mean that forgets, at the precision the counters cannot hold between visits.
+        // The figure used to be a bare `21` here beside a comment naming the shader, so the two
+        // could only be held together by somebody reading both. It is `kFaceLightWords` in
+        // gpu/render_params.hpp now, mirroring kFaceLightWords in shaders/face_terms.glsl, and
+        // tests/test_sun_confidence.cpp reads the shader's line and holds it against this one --
+        // because the shader bounds its writes against this length, so a disagreement is a face
+        // pass that silently writes nothing rather than a write into whatever the allocator placed
+        // next (D332). Silent is still the wrong failure.
+        if (!face_light_.create(device_, kFaceLightWords * (face_buffers_.provisional_base() +
                                                FaceBuffers::provisional_count()))) {
             WS_LOG_FATAL("app", "could not create the face light buffer");
             return 1;
@@ -9936,7 +10011,7 @@ int Application::play(const Options& options) {
         // And the gathering ray's own counters, which are not per slot at all: one word a QUESTION,
         // over the whole dispatch. See kLightProbeWords in shaders/node.glsl for the word map and
         // for why word 0 is the host's and the rest are the card's.
-        if (!light_probe_.create(device_, kLightProbeWords, "light probe")) {
+        if (!light_probe_.create(device_, kLightProbeTotalWords, "light probe")) {
             WS_LOG_FATAL("app", "could not create the light probe buffer");
             return 1;
         }

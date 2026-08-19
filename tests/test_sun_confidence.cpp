@@ -33,6 +33,7 @@
 #include <string>
 
 #include "core/types.hpp"
+#include "gpu/render_params.hpp"
 #include "world/face_store.hpp"
 
 using namespace ws;
@@ -199,4 +200,178 @@ TEST_CASE("nought is a legal stand-in and is not the same word as no stand-in at
     CHECK((fully_shadowed & kFaceSunKnown) != 0u);
     CHECK((never_written & kFaceSunKnown) == 0u);
     CHECK(unpack(fully_shadowed) == doctest::Approx(0.0));
+}
+
+// ---- R5b's temporal half: the mean that forgets, and the face that stops paying ----------------
+//
+// Appended at the end of the file rather than beside the ramp, so nothing above this line moves.
+//
+// These pin the ARITHMETIC and the figures that live in more than one file, which is what the tests
+// above exist for and is the half that rots in silence. Whether the composite reads the right word
+// for the right face still needs a graphics card and an eye.
+
+namespace {
+
+// `face_sun_ema_step` in shaders/face_terms.glsl.
+f64 ema_step(f64 ema, f64 sample, u32 samples, u32 memory) {
+    const u32 n = samples < memory ? samples : memory;
+    return ema + (sample - ema) / static_cast<f64>(n < 1 ? 1 : n);
+}
+
+// `face_sun_counters`: the count a reader sees, written back from the mean.
+u32 lit_from(u32 samples, f64 ema) {
+    const f64 clamped = ema < 0.0 ? 0.0 : (ema > 1.0 ? 1.0 : ema);
+    const u32 lit = static_cast<u32>(clamped * static_cast<f64>(samples) + 0.5);
+    return lit < samples ? lit : samples;
+}
+
+// `face_sun_resting`.
+bool resting(u32 samples, u32 lit, bool ignorant, u32 rest) {
+    return rest != 0 && !ignorant && samples >= rest && lit == 0;
+}
+
+}   // namespace
+
+TEST_CASE("the mean's memory is the window it replaces, in both files that say so") {
+    const std::string terms = shader_text("face_terms.glsl");
+    CHECK(shader_uint(terms, "kFaceSunMemory") == kFaceWindow);
+    // The word it lives in is the one past the stand-in, and the record is one longer for it. The
+    // HOST allocates that array, and if the two disagree the shader's own bound (D332) makes the
+    // whole face pass write nothing at all -- which is safe and silent, and silent is the wrong
+    // failure. So the figure is one constant in gpu/render_params.hpp and this holds it against
+    // the shader's line.
+    CHECK(shader_uint(terms, "kFaceSunEma") == 21u);
+    CHECK(shader_uint(terms, "kFaceLightWords") == kFaceLightWords);
+    CHECK(kFaceLightWords == 22u);
+    // ...and it is the word AFTER the stand-in rather than a second meaning for it, which is D553's
+    // standing warning: the stand-in is cleared on every visit that does not need it, and a mean
+    // sharing that word would be cleared with it.
+    CHECK(shader_uint(terms, "kFaceSunStandIn") + 1u == shader_uint(terms, "kFaceSunEma"));
+    // R9h's table and its three counters, whose place in the probe buffer the host allocates and
+    // clears and the shader indexes.
+    // Sized against the WINDOW and not the frame: `secondary_period` is 64 frames and the
+    // facility's enclosed camera has ~1,830 rays a frame due to name something, so a window is
+    // ~117,000 keys. At 64Ki slots the load factor is 1.8, and the first measurement of this
+    // reported 83% of rays as repeats when most of them were collisions.
+    CHECK(kFaceNameStamps == (1u << 18));
+    CHECK(kFaceNameStamps > 4u * 117000u / 2u);
+    CHECK(kProbeNamesAsked == kLightProbeWords);
+    CHECK(kProbeSunResting < kProbeNameStampBase);
+    CHECK(kProbeNameStampBase == kLightProbeWords + kProbeExtraCounters);
+    CHECK(kLightProbeTotalWords == kProbeNameStampBase + kFaceNameStamps);
+}
+
+TEST_CASE("below the memory the mean IS the cumulative mean, so nothing converging is disturbed") {
+    // The claim `--no-face-ema` is a control arm for: a face that has not reached the memory reads
+    // exactly what it read before, because an average whose alpha is 1/samples is the average.
+    // Walked out sample by sample against the counters the pass would have written anyway.
+    const bool samples[] = {true, false, false, true, false, false, false, true,
+                            false, false, true, false, false, false, false, false};
+    f64 ema = 0.0;
+    u32 n = 0;
+    u32 lit = 0;
+    for (const bool s : samples) {
+        n += 1;
+        lit += s ? 1 : 0;
+        ema = (n == 1) ? (s ? 1.0 : 0.0) : ema_step(ema, s ? 1.0 : 0.0, n, kFaceWindow);
+        // The mean and the count agree at every step...
+        CHECK(ema == doctest::Approx(static_cast<f64>(lit) / static_cast<f64>(n)));
+        // ...and so does the count the pass writes back from it.
+        CHECK(lit_from(n, ema) == lit);
+    }
+}
+
+TEST_CASE("past the memory it forgets at one fixed rate rather than in a sawtooth") {
+    // The whole of what the temporal half buys. A face that has watched a shadow for its whole
+    // window and is now told, every ray, that it is lit.
+    const u32 memory = kFaceWindow;
+
+    f64 ema = 0.0;
+    u32 ema_rays = 0;
+    while (ema < 0.5 && ema_rays < 100000) {
+        ema = ema_step(ema, 1.0, memory + 1, memory);
+        ema_rays += 1;
+    }
+
+    // The counter, which halves at the window and so is worth 1/129 straight after a halve and
+    // 1/256 straight before one. Same start, same samples.
+    u32 n = memory;
+    u32 lit = 0;
+    u32 count_rays = 0;
+    while (static_cast<f64>(lit) / static_cast<f64>(n) < 0.5 && count_rays < 100000) {
+        if (n >= memory) { n >>= 1; lit >>= 1; }
+        n += 1;
+        lit += 1;
+        count_rays += 1;
+    }
+
+    // Both get there. What differs is that the counter's rate DEPENDS on where in its window the
+    // change landed and the mean's does not, which is the "rather than jumping" half of R5b's
+    // sentence and is why this is not a tuning knob.
+    CHECK(count_rays > 0);
+    // The half-life of a mean with memory N is N ln 2, so reaching a half from nought is that --
+    // and it is the same figure whenever the change arrives, which is the whole claim.
+    CHECK(static_cast<f64>(ema_rays) ==
+          doctest::Approx(static_cast<f64>(memory) * std::log(2.0)).epsilon(0.02));
+}
+
+TEST_CASE("a mean that has forgotten is written back at the precision the counters have") {
+    // The counters carry the mean quantised to 1/samples, which is exactly the precision they
+    // carried before -- so the write-back cannot be what makes a face noisier. The mean itself is
+    // kept at sixteen bits between visits, which is where the precision the counters cannot hold
+    // survives from one ray to the next.
+    for (const u32 n : {2u, 8u, 64u, 128u, kFaceWindow}) {
+        for (u32 k = 0; k <= n; ++k) {
+            const f64 exact = static_cast<f64>(k) / static_cast<f64>(n);
+            CHECK(lit_from(n, exact) == k);
+            // ...and it never spells a count the pair cannot hold, which would read as a face more
+            // than fully lit.
+            CHECK(lit_from(n, exact) <= n);
+        }
+    }
+    CHECK(lit_from(16, 2.0) == 16u);
+    CHECK(lit_from(16, -1.0) == 0u);
+}
+
+TEST_CASE("only the shadowed extreme rests, and ignorance is never a rest") {
+    const u32 rest = 64;
+
+    // A face that has taken sixty-four rays at the sun and reached it on none is finished. The
+    // posterior mean of a fraction after n unanimous misses is about 1/(n+2), so this is a claim
+    // that the true answer is under 0.015 -- under what the counters can even represent.
+    CHECK(resting(rest, 0, false, rest));
+    CHECK(1.0 / static_cast<f64>(rest + 2) < 4.0 / static_cast<f64>(kFaceWindow));
+
+    // A face that has taken sixty-four and reached the sun on all of them is NOT, and that
+    // asymmetry is R9i rather than caution: geometry arriving in front of it is the sealed room
+    // that fills with sunlight as the pool sheds, and a face that had stopped would never hear.
+    CHECK(!resting(rest, rest, false, rest));
+    // Nor is anything in between, at either end.
+    CHECK(!resting(rest, 1, false, rest));
+    CHECK(!resting(rest, rest - 1, false, rest));
+
+    // A face whose last ray was stopped by a cell the pool has not built is unanimous about the
+    // TREE and not about the light. Resting on that is how a hole in residency becomes a permanent
+    // shadow, so the ignorance bit refuses it however many rays it has taken.
+    CHECK(!resting(rest, 0, true, rest));
+    CHECK(!resting(4096, 0, true, rest));
+
+    // Below the threshold nothing rests, and `--no-face-rest` is a threshold of nought, which is
+    // every build before this one.
+    CHECK(!resting(rest - 1, 0, false, rest));
+    CHECK(!resting(4096, 0, false, 0));
+}
+
+TEST_CASE("an edit puts a resting face back to work, which is what makes a chisel visible") {
+    // D373: an announced edit keeps a face's answer and drops it to `kFaceEditSeed` = 8 samples.
+    // Eight is below the rest threshold, so a room that had gone quiet starts casting again on the
+    // exact frame the host says so -- which is the only thing that CAN relight it, and is why the
+    // rest is allowed at all.
+    const u32 rest = 64;
+    const u32 after_an_edit = 8;
+    CHECK(after_an_edit < rest);
+    CHECK(!resting(after_an_edit, 0, false, rest));
+    // ...and it is at `kFaceEager`, so it is shaded every frame until it has caught up rather than
+    // one frame in `face_stride`.
+    CHECK(after_an_edit >= kFaceEager);
 }
