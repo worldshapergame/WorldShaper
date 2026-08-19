@@ -12821,3 +12821,54 @@ not fixed. A sun ray crossing two panes is coloured by the first only.
 | D718 | **A coarse stop is re-cast the old way** | correctness | Above level 0 there is no `type_id` to ask, and stopping would draw part-glass as a wall |
 | D718 | **The picture is not gated and the entry says so** | honesty | The same-arm floor on this scene is larger than the effect |
 | D718 | **A scene with no stacked case cannot test stacking** | trap | Two panes side by side; no ray crossed two of them |
+
+---
+
+## D719 — The lag spike on placing voxels is R11h sampling the cut on the main thread
+
+**2026-08-19.** Reported from playing: *"placing voxels now takes a lot more lag spike"*, then
+*"the lag spike from placing voxels is bigger the bigger the amount of the voxels placed is"*.
+
+**The instrument that should have found it pointed straight past it.** The `chisel` line times the op
+and the undo capture; the `large edit` line times apply, bounds and announce. **Both run after
+`presample_for_edit` has already returned**, so a nine-second freeze printed as `apply 0.607, undo
+capture 0.405`. Splitting this function's own timer is what named it: a four-metre carve into the
+facility is **8,854 ms = sample 8,836 + paste 17**, over 3,757 nodes.
+
+### Two cheaper answers, both refuted by their own control arm
+
+- **Refuse nodes the WORLD says are empty.** 8,849 ms → 149. And **610,623 voxels changed → 248**,
+  because the nodes it refused were precisely the un-streamed building the cut was meant to bite
+  into. That is D697's *"the far chisel carves what the near one carves, byte for byte"* destroyed by
+  the fix for its own cost. An emptiness test on the world cannot see geometry that has not arrived.
+- **Collapse 3,757 samples into one over the union.** Correct to the brick and **seven times SLOWER**
+  — 64,507 ms against 8,825. The per-node path runs across the whole pool and one box is one thread.
+  **The cost is not per-call overhead. It is the sampling, and it is irreducible.**
+
+### So it is not made cheaper, it is taken off the frame
+
+`demand_sample_of` marks the ladder's node and lets the ordinary pick, split and paste do the work —
+and that paste path is `deliver_refinement`, **which already replays the op log over everything it
+lands**. R11h's own comment says the ladder *"never REACHES a surface sixty metres away that nothing
+is looking at, so the replay never happens"*; a demand is exactly the thing that makes it reach. **The
+replay was always there. What R11h had to supply was the arrival**, and it supplied it by doing the
+sampler's work on the main thread. **8,610 ms → 74.7 ms** on the frame of the cut.
+
+### What is not gated, and it is the important part
+
+The cut lands on the coarse world and sharpens as nodes arrive, so R11h's byte-for-byte gate is met
+at the fixed point rather than instantly — **and no fixed point was reached to prove it.** The
+facility gives up settling after 30,000 frames (D695); at 20,000 the arms are simply at different
+points in streaming, **2,494,623 solid voxels against 3,238,820**, the synchronous arm permanently
+ahead because it delivered 3,757 nodes' worth at edit time. On `clips/beam_test.clip`, which settles,
+both arms reach **8 chunks, 2,205,931 solid voxels, 17,096 of 17,096 nodes, content
+`72338decf2e10896`** — but the pre-sample is inert on that clip, so what that gates is that the
+change is inert where the feature is. `--sync-edit-presample` is R11h exactly as it shipped.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D719 | **A timer that starts after the slow thing reports the fast thing** | trap | Nine seconds printed as `apply 0.607` because both existing lines begin after this function returns |
+| D719 | **An emptiness test on the WORLD cannot see un-streamed geometry** | trap | 610,623 voxels carved became 248, which is R11h's whole guarantee |
+| D719 | **One big sample is slower than many small ones here** | measurement | 64,507 ms against 8,825: per-node runs on the pool, one box runs on one thread |
+| D719 | **The work moves to the ladder, which already replays the op log** | design | R11h supplied arrival by doing the sampler's job on the main thread; a demand supplies it properly |
+| D719 | **The convergence is NOT gated and the entry says so** | honesty | The facility cannot settle in one run, and the clip that can does not exercise the feature |

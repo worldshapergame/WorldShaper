@@ -5328,3 +5328,72 @@ for mask* (`stale_masks`, D516) asks whether a **child mask** matches the world 
 allowed to look, as against what it finds when it gets there. A wrong bit there is either a phantom
 request every frame for ever (D133) or geometry no feedback will ever ask for, and it is invisible
 to the other two. Read all three before concluding the tree is healthy.
+
+## §5.1 — NINE THINGS A PLAYER REPORTED ON 2026-08-19 AND WHAT IS KNOWN ABOUT EACH
+
+Two are fixed and pushed. **Seven are open, and every one of them is a report from playing rather
+than a theory.** They are written here with what was actually established, so the next session starts
+from evidence rather than from the sentence.
+
+**FIXED.**
+
+1. **"placing voxels now takes a lot more lag spike" / "bigger the bigger the amount of the voxels
+   placed"** — D719. `presample_for_edit` on the main thread: **8,610 ms for a four-metre carve.**
+   Now a `demand_sample_of` per node, **74.7 ms.** Two cheaper fixes were refuted by their own
+   control arms first; both are written into the comment. **Not gated at the fixed point** — see
+   D719's last section, and that is the one thing to finish about it.
+2. **"remove the plain english document"** — gone, with every reference rewritten. Do not recreate
+   it. The explanation to the user is the reply itself.
+
+**OPEN, and roughly in the order the evidence is clearest.**
+
+3. **"theres still lines when you move on materials that arent pure mirrors like silver, the slower
+   you move the thinner the lines are."** This is **D703's cap**, and R4f left it in place
+   deliberately and said so: it still does `(1 - share)` of the answer, which is 18% on chrome and
+   **98% on a surface like silver**, because `share` is the pixel's own ray and a rough lobe earns
+   almost none of it. So R4f fixed the mirror and left exactly the material this report names.
+   D714's own note says what it needs: *"the writer in `shade_faces.comp` and the reader in
+   `resolve.comp` have to change together, and a writer and reader that disagree is D598."*
+   **The measurement to reproduce it already exists** — R4f's moving-camera gate, consecutive frames
+   of a `--fly` over a surface of known roughness, 13.77 of 255 uncapped against 6.17.
+
+4. **"things on reflections have the lowest quality."** A reflected ray reads a face out of the store
+   with `reflect_face_diffuse`, and a face the primary pass never claimed has nothing in it — so it
+   falls back to a folded average. R4f made the reflected ray CLAIM the face it lands on (R9a,
+   throttled on the primary's lattice) and measured the off-screen set growing 0 → 33,931, but it is
+   a convergence and the first frames are the average. Also `reflect.glsl:458` widens the cone by the
+   lobe at every bounce, which is correct for a rough surface and is worth checking is not firing on
+   a mirror.
+
+5. **"placing or erasing voxels on voxels you placed visually removes the node that was affected"**
+   and **"inconsistencies with undo and redo where voxels are erased."** These are very likely one
+   fault and it is the most serious on the list — it loses a player's work. Nothing was established
+   about it this session. It wants an op-log reproduction rather than a look at the renderer:
+   `--edit` twice at the same box with `--edit-frame`, then undo, and compare content hashes.
+
+6. **"the sky seen on mirrors is still not exactly the same."** R4f made the reflected sky
+   `sky_radiance`, the composite's own function, and subtracted the sun's disc from it because
+   `face_lobe_sun` puts the disc back analytically. **That subtraction is the first suspect** — it is
+   a deliberate difference between the sky a mirror sees and the sky above you, and it may be
+   removing more than the disc. The patch R4f handed back for `pt_sky.glsl` (a `disc` parameter and a
+   `sky_environment` wrapper) is in D714 and was never applied; applying it makes the difference
+   explicit and testable instead of a subtraction inside `reflect_escaped`.
+
+7. **"the clouds we see on mirrors ... look better because they dont have the glitchy pixelated
+   dithering at their edges that was never fixed."** This is a report about the PRIMARY view, not
+   about reflections: the reflection's clouds are marched fresh per ray at 16 steps, and the
+   primary's come out of a per-pixel history. **The dither is in the primary path and the reflection
+   accidentally demonstrates what it should look like** — which is as good a control arm as anyone
+   is going to get handed.
+
+8. **"the loading screen should load the entire clip until if i want to click enter the world now."**
+   Note that `no_coarse_paste` **defaults to true** (D642/R11d) and has since long before R11i — so
+   the up-front build has been off by default for some time and the button did not cause it. What
+   the player is asking for is the full build back as the default, with the button as the way out of
+   it. That is a one-line default with a very large consequence: `--coarse-paste` on the facility is
+   **403,803 ms** to `everything ready` (D717). It needs a decision, not a patch.
+
+9. **"there doesnt seem to be cache saving when opening a new world."** Related to 8: the up-front
+   cache write at `main.cpp` is gated on `coarse <= 1 && !stop_for_button`, and with no up-front
+   build there is nothing worth writing there. D717's design is that the world is kept **on the way
+   out** (D673) instead. Whether that is firing is not established.
