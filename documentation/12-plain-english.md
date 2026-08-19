@@ -3664,3 +3664,41 @@ the digit.
 With the rule switched off, the same room causes thousands of pointless constructions, **steals a
 third of the effort away from the things you can actually see**, and produces a *different world every
 single time you run it*.
+
+## Looking at things is much faster now, especially at high resolution
+
+Everything else in this rewrite has been moved off the screen — light, shadows, reflections are all
+worked out per *surface* now, so they cost the same however many pixels you are running. **The one
+thing left that still cost more the higher you set the resolution was the very first step**: firing
+one ray per pixel to find out what that pixel is looking at.
+
+The fix has been in the design notes since near the beginning and was never built. Instead of every
+ray setting off from your eye and feeling its way forward, the screen is divided into 8×8 blocks and
+a handful of *coarse* rays go first, at sixteen times the width. They cannot say what you are
+looking at — but they can say, cheaply, **"nothing whatsoever can be in the first forty metres"**.
+Then all sixty-four fine rays in that block start forty metres out.
+
+At 4K, measured against the same scene with the feature off:
+
+| looking at | before | after | |
+|---|---|---|---|
+| outdoors | 16.8 ms | **1.2 ms** | 14× faster |
+| close to the building | 15.1 ms | **2.0 ms** | 7.7× |
+| the sky | 12.5 ms | **2.3 ms** | 5.4× |
+| the middle distance | 4.7 ms | **0.9 ms** | 5.2× |
+| far away | 0.95 ms | 0.81 ms | 1.2× |
+| very distant | 0.56 ms | **0.76 ms** | *slower* |
+
+The last row is honest and expected: when the ray was already trivial, the coarse pass is just extra
+work. It is a fraction of a millisecond either way.
+
+It also uses **last frame's** distances as a second hint, which is a well-known trick with a
+well-known failure — a stale hint can start a ray *past* a surface and punch a hole in the wall. So
+it never gets to decide on its own: the game takes whichever of the two is nearer, and the coarse
+pass is guaranteed safe. A wrong guess can therefore only cost a little speed. It can never cost you
+a wall.
+
+**One thing I am still checking**: on the camera inside the rotunda at 4K, a *different* pass got
+more expensive when this was switched on, and the explanation offered for it turned out to be wrong
+when I read the code. It may well be that pass simply getting more work done in the time the ray
+pass gave back. That is a measurement I need a quiet machine for.

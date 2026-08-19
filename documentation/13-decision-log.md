@@ -11062,3 +11062,132 @@ the cut is the building for ever.
 | D697 | **An edit samples what it is about to cut, synchronously, before it cuts** | change | The replay needs a later paste to ride on and a 60 m surface never gets one |
 | D697 | **The pre-sample is a box in metres, never an entry in the ladder's list** | trap | Deliveries write back by index; a reordered list lands one node's voxels in another's record |
 | D697 | **The gate hashes whole BRICKS, not the edit box** | instrument | A carve fills its box with air in every arm, so the box agreed to the digit across a 6,624-voxel difference |
+
+---
+
+## D698 — R7a and R7b: the primary ray starts where a coarse ray has proved nothing can be
+
+**2026-08-19.** The beam pre-pass has been carried in `04-rendering.md` §1 since Stage 3 and never
+built. It is built.
+
+### One ray per tile CORNER, and four corners is enough for a reason rather than by hope
+
+`shaders/beam.comp` marches one coarse ray per 8x8 tile **corner** at sixteen pixel widths;
+`visibility.comp` takes the **smallest** of its tile's four corners and passes it as `node_march`'s
+`start_t` — R5d's mechanism, so the eye stays the origin and the detail clock, the world clip and the
+returned `t` are all still eye-relative.
+
+**Why four corners covers the tile:** `node.glsl` walks a cell of `2^floor(log2(t·angle·lens.z))`,
+which is strictly wider than half its argument, so a cone of sixteen pixel widths gives a cell
+strictly wider than the tile at that distance — and **a cell at least as wide as the tile that
+overlaps it must contain one of its corners**, one axis at a time. Past `beam_trust`
+(`16/pixel_angle` voxels: 625 m at 1440p, 936 m at 4K) `kNodeMaxDetail` stops the cell growing while
+the tile keeps widening, so the start is not allowed to move further.
+
+**`occlude_unknown` is ON for the beam**, and it has to be: a cell the world has and the pool has not
+built is **matter** to the coarse ray, or the beam hands a full-resolution ray a start past a building
+that has not streamed — and the building is then a hole with nothing left to ask for it.
+
+### R7b: the previous frame is a PROPOSAL, the beam is the BOUND, and the minimum is the safety property
+
+Reprojection is the better start distance and it is also a way to draw a hit that is not there. So it
+never decides: **`start = min(beam, temporal)`**, and because the beam is conservative by
+construction, a stale reprojection, a wrong basis, a deleted surface or a teleported camera **can only
+make a frame slower**. It earns its place exactly where the coarse rays are weakest — a tile whose
+four corners all miss and whose middle does not.
+
+### The gather, not the march, was the cost — twenty times the pass it was helping
+
+R7b reads one depth texel per screen pixel however it is arranged, and **the arrangement was the whole
+expense**. A TILE at a time, each lane walking its own 8x8 block, put thirty-two cache lines under one
+instruction on a dispatch of sixteen thousand threads with nothing to hide the latency: **1.605 and
+1.811 ms at 1280x800, against 0.072 ms for the coarse march it was attached to.** Read a ROW at a time
+— one column per lane, eight private minima, eight shared atomics instead of sixty-four — and it is
+**0.084–0.139 ms**. What changed about the answer is only which pixels a corner's number covers: its
+own tile rather than the 8x8 centred on it, and a tile still takes the smallest of its four corners,
+so its own tile is always among them — **a superset, which can only make the proposal smaller.**
+
+### And the depth image was being thrown away every frame
+
+It sat in the loop that discards `visibility_image_` and `render_target_`, which is right for an image
+every frame overwrites in full and cost nothing while nobody read it. **R7b's only input is the
+PREVIOUS frame's depth, and `UNDEFINED` is a licence for the driver to discard it.** Discarded once
+now, carried GENERAL to GENERAL after, with the write-after-read against this frame's visibility pass
+named in the beam's own barrier rather than assumed.
+
+### What it is worth, at one resolution, arm to arm
+
+Primary visibility at **4K**, world frozen, arms interleaved:
+
+| view | beam on | beam off | |
+|---|---|---|---|
+| outdoor | **1.18** | 16.81 | 14.0x |
+| close | **1.96** | 15.07 | 7.7x |
+| sky | **2.32** | 12.49 | 5.4x |
+| mid | **0.89** | 4.65 | 5.2x |
+| far | 0.81 | 0.95 | 1.2x |
+| distant | 0.76 | **0.56** | **1.35x SLOWER** |
+
+The beam's own cost is 0.019–0.348 ms across the seven cameras. At `distant` the ray was already
+trivial and the beam is a net cost.
+
+**The stage's stated gate — 4K within 1.6x of 1440p — is met at `close` (1.25) and `mid` (1.56) and
+nowhere else, on either arm.** That ratio is the weakest number here and it is worth saying why: it
+divides two runs taken minutes apart on a machine with five other agents on it, and the OFF column's
+1.14 at `enclosed` is an artefact of a contended 1440p run rather than a passing result. **The
+arm-to-arm comparison at one resolution is the strong number and the ratio is not.**
+
+### Two things left open, and the second is the one to watch
+
+**The enclosed camera at 4K is the one cell with no matched pair.** Every optimisation in this
+rewrite has broken the enclosed room first, and it is the case the origin sits inside.
+
+**The FACES pass is not neutral between the arms**: 13.4 ms with the beam on against 7.4 off at 4K
+enclosed, repeatedly, on a pass R7 does not touch.
+
+**The explanation offered with it is refuted by the change's own code, and that is worth writing down
+so nobody spends an afternoon on it.** The guess was `occlude_unknown`'s residency stamps keeping
+more geometry resident. `shaders/beam.comp` passes `report`, `report_used` and `report_face` **all
+false**, and says so in its own comment: *a beam ray has no pixel: it claims no face, names no node
+to residency and asks the world for nothing.* **The beam cannot be holding anything resident, because
+it never names anything.**
+
+Two candidates remain and neither is measured. The primary rays may claim faces in a different order
+or at a different moment, which changes the store's population without changing the picture. Or —
+and this one would invert the reading entirely — **the faces pass may simply be getting more done**:
+with primary visibility 5–14x faster the pass starts earlier in the frame, and a pass that converges
+more faces costs more milliseconds while doing more work rather than the same work slower. The
+agent's own interleaved set points that way, giving the beam **11.3–12.0 ms against 13.5–13.9** at 4K
+enclosed — the beam ahead on exactly the camera this note is about.
+
+**So it is an open measurement and not a known regression**, and it is the integrator's to take on a
+quiet machine, which this one was not.
+
+**One more correction made on the way in**, and it is the same class as the one D695 needed: the
+comment for `beam_trust` gave its distances as **625 m at 1440p and 936 m at 4K**, and both are the
+aspect ratio out. `beam_pixel_angle()` correctly divides by `resolution.y`; the arithmetic in the
+comment had been done from the WIDTH. 16/pixel_angle at 1440 lines is 11,520 voxels, which at 32 to
+the metre is **360 m**, and at 4K **540 m**. The code was right and only the prose was wrong — but
+"1440p" meaning 1440 lines to one reader and 2560 columns to another is exactly how this slip
+happens, so the correction is left visible in the file rather than made silently.
+
+### No R7 figure is a settled figure, and the reason is the ladder rather than the renderer
+
+`--settle` waits for refinement to have nothing left to do. The ladder grows the world every run —
+**42,650 → 44,652 → 47,578 leaves over three consecutive runs** — and writes what it grew back into
+the clip cache, so **the fixed point recedes** and a scripted run reaches its deadline and photographs
+frame 0. So R7 was measured with the world **frozen**: a private `%LOCALAPPDATA%` restored from one
+pristine cache before every launch, `--refine-batch 1`, arms interleaved, and the sample with the
+lowest `faces` kept because `faces` is an independent witness of load. Every row carries its content
+hash. **The figures are comparable with each other and with nothing else in this repository.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D698 | **One coarse ray per tile CORNER, and the tile takes the minimum of four** | R7a | A cell at least as wide as the tile that overlaps it must contain one of its corners |
+| D698 | **`occlude_unknown` is ON for the beam** | build | An unbuilt cell must be matter, or the beam starts a ray past a building that has not streamed |
+| D698 | **`start = min(beam, temporal)` — the beam bounds, the reprojection proposes** | R7b | A wrong reprojection can then only cost time, never a surface |
+| D698 | **The temporal gather was 20x the march it was helping, and the fix was reading a ROW** | fault | 1.605 ms against 0.072; row-at-a-time is 0.084–0.139 |
+| D698 | **The depth image was transitioned out of UNDEFINED every frame** | fault | R7b's only input is the previous frame's, and UNDEFINED licenses the driver to discard it |
+| D698 | **14.0x outdoors and 1.35x SLOWER at distant, at 4K** | measurement | Where the ray was already trivial the beam is a net cost |
+| D698 | **The faces pass moves 7.4 → 13.4 ms at 4K enclosed and the offered cause is refuted** | honesty | The beam names nothing to residency — `report`, `report_used`, `report_face` all false. Open measurement, not a known regression |
+| D698 | **No R7 figure is settled, because the ladder's fixed point recedes** | trap | 42,650 → 44,652 → 47,578 leaves over three runs; measured with the world frozen instead |

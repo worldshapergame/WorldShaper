@@ -67,7 +67,14 @@ float beam_cone_angle() {
 // a cell bigger than 128 voxels the cell stops growing while the tile goes on widening -- and the
 // "a cell at least as wide as the tile contains a corner" argument stops holding. That distance is
 // where `kBeamCone * t * pixel_angle` reaches 2 * kBeamCellMax, which is `16 / pixel_angle`
-// voxels: 625 m at 1440p and 936 m at 4K.
+// voxels: **360 m at 1440p and 540 m at 4K**, at 32 voxels to the metre.
+//
+// Those two figures read 625 m and 936 m until they were checked. The formula was right and the
+// arithmetic under it had been done from the screen's WIDTH while `beam_pixel_angle()` above
+// correctly divides by `resolution.y` -- so both were out by exactly the aspect ratio. Worth
+// leaving the correction visible rather than silent, because the two ways of reading "1440p" are
+// what makes this class of slip so easy: 11,520 voxels at 1440 lines is 360 m, and 2560 columns
+// would have made it 640.
 //
 // Beyond it the beam is not refused -- it is simply not allowed to move the start any further, so
 // a ray past that range marches exactly as it does today.
