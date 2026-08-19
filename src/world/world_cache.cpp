@@ -217,6 +217,60 @@ bool chunk_coord_less(const ChunkCoord& a, const ChunkCoord& b) {
 bool chunk_is_live(const Chunk* chunk) { return chunk != nullptr && !chunk->empty(); }
 bool brick_is_live(const Brick* brick) { return brick != nullptr && !brick->empty(); }
 
+// Every voxel of a world put through a table of "the id I had -> the id this file means".
+//
+// Data-loss case 2, and it is the whole building rather than one brick of it. See the block at
+// the reader's type table below for why the two tables can differ at all; this is what is done
+// about it. Only ever called when they DO differ, which is why it can afford to be a walk of the
+// world: in the ordinary case the reading run interned in the same order as the writing one, the
+// map is the identity, and none of this runs.
+void remap_world_types(World& world, const std::vector<VoxelTypeId>& remap, JobSystem* jobs) {
+    const std::vector<ChunkCoord> coords = world.sorted_chunk_coords();
+    std::vector<Chunk*> chunks;
+    chunks.reserve(coords.size());
+    // On this thread: the world's map is not safe to insert into from several. Every one of these
+    // already exists, so nothing is created here.
+    for (const ChunkCoord& coord : coords) chunks.push_back(&world.chunk_for_write(coord));
+
+    const auto work = [&](usize from, usize to) {
+        VoxelTypeId decoded[kBrickVoxels];
+        const u32 axis = static_cast<u32>(kChunkBricks);
+        for (usize i = from; i < to; ++i) {
+            Chunk& chunk = *chunks[i];
+            for (u32 bz = 0; bz < axis; ++bz) {
+                for (u32 by = 0; by < axis; ++by) {
+                    for (u32 bx = 0; bx < axis; ++bx) {
+                        const Brick* brick = chunk.brick(bx, by, bz);
+                        if (brick == nullptr) continue;
+                        if (brick->uniform()) {
+                            const VoxelTypeId was = brick->uniform_value();
+                            const VoxelTypeId now = (was < remap.size()) ? remap[was] : was;
+                            if (now != was) chunk.brick_for_write(bx, by, bz).fill(now);
+                            continue;
+                        }
+                        brick->decode(decoded);
+                        bool changed = false;
+                        for (u32 v = 0; v < static_cast<u32>(kBrickVoxels); ++v) {
+                            const VoxelTypeId was = decoded[v];
+                            const VoxelTypeId now = (was < remap.size()) ? remap[was] : was;
+                            if (now == was) continue;
+                            decoded[v] = now;
+                            changed = true;
+                        }
+                        if (changed) chunk.brick_for_write(bx, by, bz).assign(decoded);
+                    }
+                }
+            }
+            chunk.mark_modified();
+        }
+    };
+    if (jobs != nullptr && chunks.size() > 1) {
+        jobs->parallel_for(chunks.size(), 1, work);
+    } else {
+        work(0, chunks.size());
+    }
+}
+
 // Every chunk of a world that holds something, in the canonical order.
 std::vector<ChunkCoord> live_chunk_coords(const World& world) {
     std::vector<ChunkCoord> out = world.sorted_chunk_coords();
@@ -232,6 +286,18 @@ constexpr u16 brick_slot(u32 bx, u32 by, u32 bz) {
     return static_cast<u16>((bx << 10) | (by << 5) | bz);
 }
 
+// Is `inner` wholly inside `outer`? Both inclusive of their corners.
+bool box_contains(const CachedEditBox& outer, const CachedEditBox& inner) {
+    for (u32 axis = 0; axis < 3; ++axis) {
+        if (inner.low[axis] < outer.low[axis] || inner.high[axis] > outer.high[axis]) return false;
+    }
+    return true;
+}
+
+// One chunk index of a voxel coordinate, clamped so an op at the far end of a 64-bit world does
+// not overflow the range walk below.
+i64 chunk_index_of(i64 voxel) { return chunk_of(voxel); }
+
 }  // namespace
 
 u64 world_cache_key(const std::string& source_text, i32 voxels_per_metre, u64 build_stamp) {
@@ -243,7 +309,60 @@ u64 world_cache_key(const std::string& source_text, i32 voxels_per_metre, u64 bu
     return h;
 }
 
-bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache) {
+std::vector<CachedEditBox> edit_boxes_from_ops(const std::vector<Op>& ops) {
+    std::vector<CachedEditBox> out;
+    out.reserve(std::min(ops.size(), kMaxEditBoxes));
+    usize refused = 0;
+    for (const Op& op : ops) {
+        Op box = op;
+        box.normalise();   // corners in either order; a box is a box whichever way it was cut
+        CachedEditBox named;
+        named.low[0] = box.x0;
+        named.low[1] = box.y0;
+        named.low[2] = box.z0;
+        named.high[0] = box.x1;
+        named.high[1] = box.y1;
+        named.high[2] = box.z1;
+
+        // Exact duplicates and boxes already covered. A chisel held down produces the same box
+        // many times over, and an undo of a stroke is the stroke's own box again -- neither adds
+        // anything to "which bricks were touched", which is the only question this list answers.
+        //
+        // Backwards, and only over the tail: a full pairwise containment test is quadratic in the
+        // length of an evening, and the boxes that repeat are the ones that repeat immediately.
+        // What this misses is a box covered by something written an hour earlier, which costs two
+        // bytes and never costs a building.
+        bool covered = false;
+        const usize look_back = out.size() < 64 ? out.size() : 64;
+        for (usize i = 0; i < look_back; ++i) {
+            if (box_contains(out[out.size() - 1 - i], named)) {
+                covered = true;
+                break;
+            }
+        }
+        if (covered) continue;
+
+        if (out.size() >= kMaxEditBoxes) {
+            ++refused;
+            continue;
+        }
+        out.push_back(named);
+    }
+    if (refused > 0) {
+        // Said out loud, because what it means is that the file no longer knows about some of
+        // what somebody did. Everything those ops CHANGED is still in the difference; what is
+        // lost is only the part a difference cannot see.
+        WS_LOG_WARN("cache",
+                    "{} of {} edits are past the {} the file will name; their changes are still "
+                    "written, but a brick they touched and left agreeing with the clip is not",
+                    refused, ops.size(), kMaxEditBoxes);
+    }
+    return out;
+}
+
+bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache,
+                       WorldCacheWritten* written) {
+    if (written != nullptr) *written = WorldCacheWritten{};
     if (cache.world == nullptr || cache.types == nullptr) return false;
 
     // A world differenced against itself is empty by construction, so this would write a file
@@ -409,6 +528,7 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
             std::memcpy(out.data() + count_at, &bricks, sizeof(bricks));
             written_bricks += bricks;
         }
+        if (written != nullptr) written->bricks_written = written_bricks;
     } else {
         // ---- R11f: the difference from what the clip builds ---------------------------------
         //
@@ -443,6 +563,57 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
         const std::vector<ChunkCoord> world_live = live_chunk_coords(*cache.world);
         std::vector<ChunkCoord> all = world_live;
         all.insert(all.end(), base_live.begin(), base_live.end());
+
+        // AND EVERY CHUNK A NAMED BOX REACHES, WHETHER OR NOT ANYTHING IS IN IT — data-loss
+        // case 1, and it is the named-box guarantee failing in exactly the place it was written
+        // for.
+        //
+        // A named box says "somebody's hands were here, write these bricks down whatever they
+        // hold", and the whole reason it exists is the swing through open air: no difference to
+        // see, nothing but the box to say it happened. But the walk below was over the chunks the
+        // two worlds have BETWEEN them, so a swing in a chunk neither of them has anything in --
+        // a chisel in an empty field, the last carve out of a demolished outbuilding -- reached no
+        // chunk in the list and was written nowhere. The file came back saying nothing about it,
+        // "the file does not mention it" means "leave the clip's answer alone", and the day the
+        // clip grows something there the swing is filled in.
+        //
+        // What it costs is two bytes a brick over the boxes a person actually named, in chunks
+        // that hold nothing: an empty chunk with a chisel-sized box in it is a handful of slots.
+        // A chunk that ends up with no clearings and no writes is skipped further down exactly as
+        // before, so an over-large box in empty space still writes nothing per brick it does not
+        // reach.
+        //
+        // Bounded, because a box is somebody else's number: a `fill` from a console covers as many
+        // chunks as it likes and this list is walked once per chunk. Past the bound the empty
+        // chunks are dropped and said out loud -- nothing that EXISTS is ever dropped, because
+        // every live chunk of either world is already in the list above.
+        constexpr usize kMaxNamedEmptyChunks = 1u << 16;
+        usize named_chunks = 0;
+        bool named_chunks_clipped = false;
+        for (const CachedEditBox& box : cache.edited) {
+            const i64 cx0 = chunk_index_of(box.low[0]), cx1 = chunk_index_of(box.high[0]);
+            const i64 cy0 = chunk_index_of(box.low[1]), cy1 = chunk_index_of(box.high[1]);
+            const i64 cz0 = chunk_index_of(box.low[2]), cz1 = chunk_index_of(box.high[2]);
+            for (i64 cz = cz0; cz <= cz1 && !named_chunks_clipped; ++cz) {
+                for (i64 cy = cy0; cy <= cy1 && !named_chunks_clipped; ++cy) {
+                    for (i64 cx = cx0; cx <= cx1; ++cx) {
+                        if (++named_chunks > kMaxNamedEmptyChunks) {
+                            named_chunks_clipped = true;
+                            break;
+                        }
+                        all.push_back(ChunkCoord{cx, cy, cz});
+                    }
+                }
+            }
+            if (named_chunks_clipped) break;
+        }
+        if (named_chunks_clipped) {
+            WS_LOG_WARN("cache",
+                        "the named edit boxes span more than {} chunks; the ones neither the world "
+                        "nor its clip has anything in are not written",
+                        kMaxNamedEmptyChunks);
+        }
+
         std::sort(all.begin(), all.end(), chunk_coord_less);
         all.erase(std::unique(all.begin(), all.end()), all.end());
 
@@ -472,8 +643,11 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
         std::vector<u8> writes;
         for (const ChunkCoord& coord : all) {
             const Chunk* chunk = cache.world->chunk(coord);
-            if (!chunk_is_live(chunk)) continue;   // an emptied chunk is already in `gone`
             const Chunk* base = cache.baseline->chunk(coord);
+            // An emptied chunk is already in `gone` and is written there whole. A chunk live in
+            // NEITHER world is not skipped, and that is data-loss case 1: it is where a named box
+            // in empty space lands, and the loop below writes its clearings.
+            if (!chunk_is_live(chunk) && chunk_is_live(base)) continue;
 
             // Which named edit boxes reach into this chunk at all, so the per-brick test below is
             // against a handful of boxes rather than the whole log.
@@ -492,7 +666,7 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
             for (u32 bz = 0; bz < axis; ++bz) {
                 for (u32 by = 0; by < axis; ++by) {
                     for (u32 bx = 0; bx < axis; ++bx) {
-                        const Brick* mine = chunk->brick(bx, by, bz);
+                        const Brick* mine = (chunk != nullptr) ? chunk->brick(bx, by, bz) : nullptr;
                         const Brick* theirs = (base != nullptr) ? base->brick(bx, by, bz) : nullptr;
                         const bool mine_live = brick_is_live(mine);
                         const bool theirs_live = brick_is_live(theirs);
@@ -549,6 +723,12 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
             ++changed_chunks;
         }
         std::memcpy(out.data() + changed_at, &changed_chunks, sizeof(changed_chunks));
+        if (written != nullptr) {
+            written->bricks_written = written_bricks;
+            written->bricks_cleared = cleared_bricks;
+            written->bricks_left_to_the_clip = kept_bricks;
+            written->chunks_fingerprinted = static_cast<u32>(base_live.size());
+        }
         WS_LOG_INFO("cache",
                     "'{}' as the clip plus its edits: {} bricks written, {} cleared, {} left to "
                     "the clip; {} chunks fingerprinted, {} edit boxes named{}",
@@ -722,6 +902,118 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         if (!in.ok) return false;
         std::memcpy(types.data(), p, type_count * sizeof(VoxelType));
     }
+    // ---- R11f data-loss case 2: the baseline's ids and the file's ids ----------------------
+    //
+    // `adopt` REPLACES the type table, and in edit-only mode that table is not the only thing in
+    // the room. The baseline is a world the reading run built for itself, out of the reading run's
+    // own table, and every voxel in it is an id into THAT table. Adopt a different one over the
+    // top and nothing fails: every voxel still has an id, every id still names a record, and the
+    // whole building comes back wearing somebody else's materials -- the marble floor as brick,
+    // the glass as lead -- with no warning anywhere.
+    //
+    // It is not a hypothetical ordering either. A type id is the order things were interned in,
+    // interning is driven by the order the sampler meets materials, and the sampler meets them in
+    // the order the camera asked for boxes. Two runs of one clip from two cameras can hand back
+    // the same world with the ids permuted, which is the case this reader was written assuming
+    // could not happen. (The test file's own note said as much: "this is an assumption, not a
+    // guarantee".)
+    //
+    // So the file's table is authoritative -- its brick payloads are written in its own ids -- and
+    // the BASELINE is moved to meet it. Records the file has no equivalent for are appended rather
+    // than dropped, because a clip that has grown a material since the file was written is the
+    // ordinary reason for the tables to differ, and dropping it would take the new matter's colour
+    // with it.
+    //
+    // Costs nothing when the tables agree, which is nearly always: the check below is one pass
+    // over the reading run's own table comparing records, and it stops at the first difference.
+    std::vector<VoxelTypeId> type_remap;
+    bool types_moved = false;
+    if (cache.mode == WorldCacheMode::EditOnly && cache.types->type_count() > 0) {
+        const VoxelTypeTable& mine = *cache.types;
+        const u32 old_count = mine.type_count();
+        const auto file_visual = [&](const VoxelType& t) -> const VisualRecord* {
+            return (t.visual < visuals.size()) ? &visuals[t.visual] : nullptr;
+        };
+        const auto file_behaviour = [&](const VoxelType& t) -> const BehaviourRecord* {
+            return (t.behaviour < behaviours.size()) ? &behaviours[t.behaviour] : nullptr;
+        };
+
+        bool identical = old_count <= types.size();
+        for (u32 i = 0; identical && i < old_count; ++i) {
+            const VisualRecord* v = file_visual(types[i]);
+            const BehaviourRecord* b = file_behaviour(types[i]);
+            identical = v != nullptr && b != nullptr && *v == mine.visual_of(i) &&
+                        *b == mine.behaviour_of(i);
+        }
+
+        if (!identical) {
+            std::unordered_map<u64, std::vector<u32>> visual_by_hash;
+            std::unordered_map<u64, std::vector<u32>> behaviour_by_hash;
+            for (u32 i = 0; i < static_cast<u32>(visuals.size()); ++i) {
+                visual_by_hash[visuals[i].content_hash()].push_back(i);
+            }
+            for (u32 i = 0; i < static_cast<u32>(behaviours.size()); ++i) {
+                behaviour_by_hash[behaviours[i].content_hash()].push_back(i);
+            }
+            std::unordered_map<u64, u32> type_by_pair;
+            type_by_pair.reserve(types.size() * 2 + 1);
+            for (u32 i = 0; i < static_cast<u32>(types.size()); ++i) {
+                type_by_pair.emplace((static_cast<u64>(types[i].visual) << 32) | types[i].behaviour,
+                                     i);
+            }
+
+            type_remap.resize(old_count);
+            for (u32 i = 0; i < old_count; ++i) {
+                const VisualRecord& want_visual = mine.visual_of(i);
+                const BehaviourRecord& want_behaviour = mine.behaviour_of(i);
+                u32 visual_id = kAirVisual;
+                bool found = false;
+                for (u32 candidate : visual_by_hash[want_visual.content_hash()]) {
+                    if (visuals[candidate] == want_visual) {
+                        visual_id = candidate;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    visual_id = static_cast<u32>(visuals.size());
+                    visuals.push_back(want_visual);
+                    visual_by_hash[want_visual.content_hash()].push_back(visual_id);
+                }
+                u32 behaviour_id = kAirBehaviour;
+                found = false;
+                for (u32 candidate : behaviour_by_hash[want_behaviour.content_hash()]) {
+                    if (behaviours[candidate] == want_behaviour) {
+                        behaviour_id = candidate;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    behaviour_id = static_cast<u32>(behaviours.size());
+                    behaviours.push_back(want_behaviour);
+                    behaviour_by_hash[want_behaviour.content_hash()].push_back(behaviour_id);
+                }
+                const u64 pair = (static_cast<u64>(visual_id) << 32) | behaviour_id;
+                auto slot = type_by_pair.find(pair);
+                if (slot == type_by_pair.end()) {
+                    const u32 fresh = static_cast<u32>(types.size());
+                    types.push_back(VoxelType{visual_id, behaviour_id});
+                    slot = type_by_pair.emplace(pair, fresh).first;
+                }
+                type_remap[i] = slot->second;
+                if (type_remap[i] != i) types_moved = true;
+            }
+            if (types_moved) {
+                WS_LOG_WARN("cache",
+                            "'{}' was written against a type table interned in another order than "
+                            "this run's; moving the clip's world onto the file's {} types before "
+                            "laying the edits over it",
+                            path, types.size());
+            }
+        }
+    }
+
     cache.types->adopt(std::move(visuals), std::move(behaviours), std::move(types));
 
     const u32 material_count = in.pod<u32>();
@@ -852,6 +1144,25 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         }
         if (!in.ok) return false;
 
+        // THE BASELINE BECOMES THE WORLD FIRST, and then it is moved onto the file's type table
+        // if the two were interned in different orders -- both before a single hash is compared.
+        //
+        // The order matters and it used to be the other way round. A permuted type table changes
+        // every chunk hash in the baseline, so the check would report the whole world in
+        // disagreement and blame the clip for a difference that is only a numbering. Worse, the
+        // report would be the only sign of it: the read went ahead, and what came back was the
+        // building in somebody else's materials. See the type-table block above.
+        //
+        // Pointing `baseline` at `world` is the ordinary path and the difference lands in place; a
+        // separate baseline is copied, which costs a world and is the caller's choice to make.
+        if (cache.baseline != cache.world) {
+            cache.baseline->for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
+                if (chunk.empty()) return;
+                cache.world->chunk_for_write(coord) = chunk;
+            });
+        }
+        if (types_moved) remap_world_types(*cache.world, type_remap, jobs);
+
         // A hash per chunk is every voxel of the baseline read once, so it goes wide when there
         // is a pool to go wide on. One byte of answer per chunk rather than an atomic: the ranges
         // are disjoint and the sum is trivial afterwards.
@@ -859,7 +1170,7 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         std::vector<u8> disagrees(fingerprint, 0u);
         const auto verify = [&](usize from, usize to) {
             for (usize i = from; i < to; ++i) {
-                disagrees[i] = (cache.baseline->chunk_hash(expect[i]) != expect_hash[i]) ? 1u : 0u;
+                disagrees[i] = (cache.world->chunk_hash(expect[i]) != expect_hash[i]) ? 1u : 0u;
             }
         };
         if (jobs != nullptr && fingerprint > 1) {
@@ -877,7 +1188,7 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         named.reserve(static_cast<usize>(fingerprint) * 2 + 1);
         for (const ChunkCoord& coord : expect) named.emplace(coord, static_cast<u8>(0));
         u32 unexpected = 0;
-        cache.baseline->for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
+        cache.world->for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
             if (chunk.empty()) return;
             if (named.find(coord) == named.end()) ++unexpected;
         });
@@ -896,16 +1207,6 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         }
         WS_LOG_INFO("cache", "checked the clip's world against '{}' in {:.0f} ms ({} chunks)", path,
                     ns_to_ms(now_ns() - verify_began), fingerprint);
-
-        // The baseline becomes the world, unless it already is it. Pointing `baseline` at `world`
-        // is the ordinary path and the difference lands in place; a separate baseline is copied,
-        // which costs a world and is the caller's choice to make.
-        if (cache.baseline != cache.world) {
-            cache.baseline->for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
-                if (chunk.empty()) return;
-                cache.world->chunk_for_write(coord) = chunk;
-            });
-        }
 
         // Chunks the clip fills and the saved world does not.
         const u32 gone_count = in.pod<u32>();

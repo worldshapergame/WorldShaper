@@ -24,6 +24,7 @@
 #include "forge/clip_script.hpp"
 #include "forge/sample.hpp"
 #include "game/clip.hpp"
+#include "world/history.hpp"
 #include "world/ledger.hpp"
 #include "world/op.hpp"
 #include "world/property.hpp"
@@ -64,10 +65,14 @@ struct Side {
     VoxelTypeId wood = 0;
     VoxelTypeId marble = 0;
 
-    // Interned in a fixed order at both ends, which is what makes the type ids in one end's
-    // baseline mean the same thing as the ids in the other end's file. See the note at the top of
-    // "a baseline interned in another order" below: this is an assumption, not a guarantee.
-    void make_types() {
+    // The same three materials, and `reordered` interns them the other way round.
+    //
+    // A type id is the order things were interned in, nothing more. Two runs of one clip that met
+    // its materials in a different order -- a different camera, a different box sampled first --
+    // hand back the same building with its ids permuted. That used to be an assumption here
+    // ("this is an assumption, not a guarantee") and it is now a case: see "a baseline interned in
+    // another order comes back in its own materials" below.
+    void make_types(bool reordered = false) {
         BehaviourRecord rock{};
         rock.material = 1;
         rock.tags.add(tags.find("stone"));
@@ -78,6 +83,12 @@ struct Side {
         BehaviourRecord cut{};
         cut.material = 3;
 
+        if (reordered) {
+            marble = types.intern(colour(240, 240, 230), cut);
+            wood = types.intern(colour(90, 60, 30), timber);
+            stone = types.intern(colour(120, 120, 120), rock);
+            return;
+        }
         stone = types.intern(colour(120, 120, 120), rock);
         wood = types.intern(colour(90, 60, 30), timber);
         marble = types.intern(colour(240, 240, 230), cut);
@@ -648,22 +659,330 @@ TEST_CASE("a carve through air the clip agrees about is still a carve") {
 }
 
 // ============================================================================================
+// The two data-loss cases that were still open, and the op log that closes the first of them
+// ============================================================================================
+
+TEST_CASE("the op log is what names the edits, and the boxes it gives keep them") {
+    // DATA-LOSS CASE 1. The format could always carry named boxes; NOTHING PRODUCED ANY. Both of
+    // the edits below leave the saved world byte-identical to the clip's, so the difference has
+    // nothing at all to write, and the only record that either happened is the op log.
+    Scratch file("ws_test_edits_from_oplog.world");
+    const u64 key = world_cache_key("a clip", 32, 47);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+
+    OpLog log;
+    const auto edit = [&](const Op& op) {
+        apply_op(wrote.world, op, wrote.ledger);
+        log.append(op);
+    };
+    // A brick broken and put straight back with the clip's own stone.
+    edit(Op::fill_box(10, 1, 16, 16, 16, 23, 23, 23, kAir, MatterReason::PlayerBreak));
+    edit(Op::fill_box(11, 1, 16, 16, 16, 23, 23, 23, wrote.stone, MatterReason::PlayerPlace));
+    // And a swing through open air beside the wall.
+    edit(Op::fill_box(12, 1, 200, 200, 200, 207, 207, 207, kAir, MatterReason::PlayerBreak));
+    REQUIRE(wrote.world.content_hash() == wrote.clip_world.content_hash());
+
+    const std::vector<CachedEditBox> named = edit_boxes_from_ops(log.ops());
+    CHECK(named.size() == 2);   // the refill names the carve's own box again and is dropped
+
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.clip_world;
+    out.edits_named = true;
+    out.edited = named;
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    // The clip has moved under the file: that brick is wood now, and there is matter where the
+    // swing was.
+    Side read;
+    read.make_types();
+    build_clip_world(read.world, read.ledger, read.stone, read.wood, /*flavour=*/true);
+    apply_op(read.world,
+             Op::fill_box(20, 1, 196, 196, 196, 211, 211, 211, read.stone,
+                          MatterReason::Generation),
+             read.ledger);
+    WorldCache in = read.handle();
+    in.baseline = &read.world;
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+
+    CHECK(read.world.get(20, 20, 20) == read.stone);      // the person's stone, kept
+    CHECK(read.world.get(203, 203, 203) == kAir);         // the swing, kept
+    CHECK(read.world.get(198, 198, 198) == read.stone);   // the clip's new matter beside it
+}
+
+TEST_CASE("an op log becomes boxes: normalised, deduplicated, and nothing merged") {
+    OpLog log;
+    log.append(Op::fill_box(1, 1, 10, 10, 10, 17, 17, 17, kAir, MatterReason::PlayerBreak));
+    log.append(Op::fill_box(2, 1, 10, 10, 10, 17, 17, 17, 7, MatterReason::PlayerPlace));
+    log.append(Op::fill_box(3, 1, 17, 17, 17, 10, 10, 10, kAir, MatterReason::PlayerBreak));
+    log.append(Op::set_voxel(4, 1, -4, -4, -4, 7, MatterReason::PlayerPlace));
+    log.append(Op::fill_box(5, 1, 12, 12, 12, 14, 14, 14, 7, MatterReason::PlayerPlace));
+
+    const std::vector<CachedEditBox> boxes = edit_boxes_from_ops(log.ops());
+    REQUIRE(boxes.size() == 2);
+    CHECK(boxes[0].low[0] == 10);
+    CHECK(boxes[0].high[0] == 17);
+    // A single voxel is a box of one, and it has to be: a set_voxel is somebody's hands too.
+    CHECK(boxes[1].low[0] == -4);
+    CHECK(boxes[1].high[0] == -4);
+
+    // And NOTHING is merged. Two carves at opposite ends of a building stay two boxes: a bounding
+    // box over them would name every brick between and put the whole building back in the file,
+    // which is this feature upside down.
+    OpLog far_apart;
+    far_apart.append(Op::fill_box(1, 1, 0, 0, 0, 7, 7, 7, kAir, MatterReason::PlayerBreak));
+    far_apart.append(
+        Op::fill_box(2, 1, 4000, 4000, 4000, 4007, 4007, 4007, kAir, MatterReason::PlayerBreak));
+    const std::vector<CachedEditBox> two = edit_boxes_from_ops(far_apart.ops());
+    REQUIRE(two.size() == 2);
+    CHECK(two[1].low[0] == 4000);
+
+    CHECK(edit_boxes_from_ops({}).empty());
+}
+
+TEST_CASE("a swing through air in a chunk neither world has anything in is still a carve") {
+    // DATA-LOSS CASE 2 IN THE WRITER, and it is the named-box guarantee failing exactly where it
+    // was written for. The walk that writes the difference went over the chunks the saved world
+    // and the clip's world have BETWEEN them, so a named box in a chunk neither of them has
+    // anything in reached no chunk at all and was written nowhere.
+    Scratch file("ws_test_edits_empty_chunk_carve.world");
+    const u64 key = world_cache_key("a clip", 32, 43);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    // Voxel 5000 is chunk 19 on every axis, and neither world has a chunk there. The chisel meets
+    // nothing, changes nothing, and leaves no difference of any kind.
+    apply_op(wrote.world,
+             Op::fill_box(10, 1, 5000, 5000, 5000, 5007, 5007, 5007, kAir,
+                          MatterReason::PlayerBreak),
+             wrote.ledger);
+    REQUIRE(wrote.world.content_hash() == wrote.clip_world.content_hash());
+    REQUIRE_FALSE(wrote.world.has_chunk(ChunkCoord{19, 19, 19}));
+
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.clip_world;
+    out.edits_named = true;
+    out.edited = {box_of(5000, 5000, 5000, 5007, 5007, 5007)};
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    // A clip that has since grown a tower exactly there.
+    Side read;
+    read.make_types();
+    build_clip_world(read.world, read.ledger, read.stone, read.wood);
+    apply_op(read.world,
+             Op::fill_box(20, 1, 4990, 4990, 4990, 5020, 5020, 5020, read.stone,
+                          MatterReason::Generation),
+             read.ledger);
+    WorldCache in = read.handle();
+    in.baseline = &read.world;
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+
+    CHECK(read.world.get(5003, 5003, 5003) == kAir);         // the swing, kept
+    CHECK(read.world.get(4995, 4995, 4995) == read.stone);   // the tower beside it
+    const WorldStats after = read.world.stats();
+    CHECK(after.empty_bricks == 0);
+    CHECK(after.empty_chunks == 0);
+}
+
+TEST_CASE("a baseline interned in another order comes back in its own materials") {
+    // DATA-LOSS CASE 3, and it is the whole building rather than one brick of it. The file's type
+    // table is adopted over whatever the reading run had; the baseline is a world the reading run
+    // built out of ITS table, and every voxel in it is an id into that one. Adopt a table interned
+    // in another order and nothing fails -- every voxel still has an id, every id still names a
+    // record, and the building comes back wearing somebody else's materials.
+    Scratch file("ws_test_edits_reordered.world");
+    const u64 key = world_cache_key("a clip", 32, 41);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    apply_op(wrote.world,
+             Op::fill_box(10, 1, -12, -12, -12, 11, 11, 11, kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+    apply_op(wrote.world,
+             Op::fill_box(11, 1, -30, -30, -30, -25, -25, -25, wrote.marble,
+                          MatterReason::PlayerPlace),
+             wrote.ledger);
+
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.clip_world;
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    // The reading run met its materials in the other order, so its stone is not the file's stone.
+    Side read;
+    read.make_types(/*reordered=*/true);
+    REQUIRE(read.stone != wrote.stone);
+    build_clip_world(read.world, read.ledger, read.stone, read.wood);
+    WorldCache in = read.handle();
+    in.baseline = &read.world;
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+
+    // The numbering disagreed and the WORLD did not, which is the whole distinction: the baseline
+    // is moved onto the file's table before a single chunk hash is compared.
+    CHECK(in.baseline_agreed);
+    CHECK(in.baseline_chunks_differing == 0);
+    must_be_identical(read.world, wrote.world);
+
+    // Said as a person would see it. The wall is stone-coloured and the block somebody placed is
+    // marble-coloured, whatever number either of them wears.
+    CHECK(read.types.visual_of(read.world.get(-13, -13, -13)).red == 120);
+    CHECK(read.types.visual_of(read.world.get(-27, -27, -27)).red == 240);
+    CHECK(read.world.get(0, 0, 0) == kAir);   // and the doorway is still cut
+}
+
+TEST_CASE("a session of chisel, undo and redo comes back exactly as it was left") {
+    // The whole edit path rather than `apply_op` on its own: `EditHistory` is what a player's
+    // hands actually reach, an undo is an ordinary op through the same log, and the boxes the file
+    // is handed come out of that log and nowhere else.
+    Scratch file("ws_test_edits_session.world");
+    const u64 key = world_cache_key("a clip", 32, 61);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+
+    EditHistory history;
+    OpLog log;
+    const u32 player = 1;
+    history.apply(wrote.world, wrote.ledger, log,
+                  Op::fill_box(1, player, -12, -12, -12, 11, 11, 11, kAir,
+                               MatterReason::PlayerBreak));
+    history.apply(wrote.world, wrote.ledger, log,
+                  Op::fill_box(2, player, 60, 60, 60, 70, 70, 70, wrote.marble,
+                               MatterReason::PlayerPlace));
+    history.apply(wrote.world, wrote.ledger, log,
+                  Op::fill_box(3, player, 16, 16, 16, 23, 23, 23, kAir,
+                               MatterReason::PlayerBreak));
+    std::vector<Op> stepped;
+    REQUIRE(history.undo(wrote.world, wrote.ledger, log, 4, player, stepped));
+    stepped.clear();
+    REQUIRE(history.redo(wrote.world, wrote.ledger, log, 5, player, stepped));
+    stepped.clear();
+    REQUIRE(history.undo(wrote.world, wrote.ledger, log, 6, player, stepped));
+    const u64 as_left = wrote.world.content_hash();
+
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.clip_world;
+    out.edits_named = true;
+    out.edited = edit_boxes_from_ops(log.ops());
+    CHECK(out.edited.size() >= 3);
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    Side read;
+    read.make_types();
+    build_clip_world(read.world, read.ledger, read.stone, read.wood);
+    WorldCache in = read.handle();
+    in.baseline = &read.world;
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+
+    CHECK(read.world.content_hash() == as_left);
+    must_be_identical(read.world, wrote.world);
+    CHECK(read.world.get(0, 0, 0) == kAir);            // the doorway
+    CHECK(read.world.get(65, 65, 65) == read.marble);  // the block that was placed
+    CHECK(read.world.get(20, 20, 20) == read.stone);   // the stroke that was undone, put back
+    const WorldStats after = read.world.stats();
+    CHECK(after.empty_bricks == 0);
+    CHECK(after.empty_chunks == 0);
+}
+
+// ============================================================================================
+// The gate's second and fourth clauses, said as numbers
+// ============================================================================================
+
+TEST_CASE("a world nobody has touched puts no derived node in the file") {
+    // GATE CLAUSE 2. Not "the file is small" -- a world that failed to build is small too -- but
+    // that a world identical to what its clip builds writes NOUGHT bricks and NOUGHT clearings,
+    // and every brick it holds is one the clip does not.
+    Scratch bare("ws_test_edits_gate_bare.world");
+    Scratch carved("ws_test_edits_gate_carved.world");
+    const u64 key = world_cache_key("a clip", 32, 53);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+
+    WorldCacheWritten nothing_written;
+    WorldCache nothing = wrote.handle();
+    nothing.baseline = &wrote.clip_world;
+    REQUIRE(write_world_cache(bare.path, key, nothing, &nothing_written));
+    CHECK(nothing_written.bricks_written == 0);
+    CHECK(nothing_written.bricks_cleared == 0);
+    CHECK(nothing_written.bricks_left_to_the_clip > 0);
+    CHECK(nothing_written.chunks_fingerprinted > 0);
+
+    // And one carve, so the count is a count and not a constant.
+    apply_op(wrote.world,
+             Op::fill_box(10, 1, -12, -12, -12, 11, 11, 11, kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+    WorldCacheWritten carved_written;
+    WorldCache some = wrote.handle();
+    some.baseline = &wrote.clip_world;
+    REQUIRE(write_world_cache(carved.path, key, some, &carved_written));
+    CHECK(carved_written.bricks_cleared > 0);
+    CHECK(carved_written.bricks_left_to_the_clip <
+          nothing_written.bricks_left_to_the_clip + carved_written.bricks_cleared + 1);
+    CHECK(carved.bytes() > bare.bytes());
+}
+
+TEST_CASE("a whole world still loads with the difference reader in the run") {
+    // GATE CLAUSE 4. A file written the way every file was written before R11f loads exactly as
+    // it did, and a baseline left lying in the struct is ignored rather than laid under it -- the
+    // mode is a byte in the header and is never inferred.
+    Scratch file("ws_test_edits_old_file.world");
+    const u64 key = world_cache_key("a clip", 32, 59);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    apply_op(wrote.world,
+             Op::fill_box(10, 1, -12, -12, -12, 11, 11, 11, kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+    WorldCache out = wrote.handle();   // no baseline: the whole world, as always
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    Side read;
+    read.make_types();
+    World stray;   // something in the baseline slot that has nothing to do with this file
+    MatterLedger stray_ledger;
+    build_clip_world(stray, stray_ledger, read.stone, read.wood, /*flavour=*/true);
+    WorldCache in = read.handle();
+    in.baseline = &stray;
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+
+    CHECK(in.mode == WorldCacheMode::Whole);
+    must_be_identical(read.world, wrote.world);
+    CHECK(read.world.get(0, 0, 0) == kAir);
+    CHECK(read.world.get(20, 20, 20) == read.stone);   // the stray world's wood did not get in
+}
+
+// ============================================================================================
 // The facility, both ways. Skipped by default -- it samples a real clip and writes real files.
 // Run it with:  ws_tests.exe --no-skip --test-case="the facility, both ways"
 // ============================================================================================
 
 TEST_CASE("the facility, both ways" * doctest::skip()) {
-    // Where the clip is, from wherever the test binary happens to be run.
-    const char* candidates[] = {"clips/facility.clip", "../clips/facility.clip",
-                                "../../clips/facility.clip", "../../../clips/facility.clip"};
+    // Where the clip is, from wherever the test binary happens to be run. `WS_GATE_CLIP` names
+    // another one -- `clips/sampler.clip`, or a single estate building -- so the four gate clauses
+    // can be taken on more than one real world without a second test.
+    std::string named = "clips/facility.clip";
+    if (const char* asked = std::getenv("WS_GATE_CLIP")) named = asked;
+    const std::string prefixes[] = {"", "../", "../../", "../../../"};
     std::string clip_path;
-    for (const char* candidate : candidates) {
-        if (std::filesystem::exists(candidate)) {
-            clip_path = candidate;
+    for (const std::string& prefix : prefixes) {
+        if (std::filesystem::exists(prefix + named)) {
+            clip_path = prefix + named;
             break;
         }
     }
-    REQUIRE_MESSAGE(!clip_path.empty(), "clips/facility.clip is not beside the test binary");
+    REQUIRE_MESSAGE(!clip_path.empty(), "the clip named is not beside the test binary");
 
     i32 per_metre = 8;
     if (const char* asked = std::getenv("WS_FACILITY_PER_METRE")) per_metre = std::atoi(asked);
@@ -718,15 +1037,17 @@ TEST_CASE("the facility, both ways" * doctest::skip()) {
     out.world = &edited;
     out.ledger = &edited_ledger;
 
+    WorldCacheWritten whole_written;
     const u64 whole_began = now_ns();
-    REQUIRE(write_world_cache(whole.path, key, out));
+    REQUIRE(write_world_cache(whole.path, key, out, &whole_written));
     const f64 whole_write_ms = ns_to_ms(now_ns() - whole_began);
 
     out.baseline = &clip_world;
     out.edits_named = true;
     out.edited = {box_of(-reach, -reach, -reach, reach, reach, reach)};
+    WorldCacheWritten diff_written;
     const u64 diff_began = now_ns();
-    REQUIRE(write_world_cache(diff.path, key, out));
+    REQUIRE(write_world_cache(diff.path, key, out, &diff_written));
     const f64 diff_write_ms = ns_to_ms(now_ns() - diff_began);
 
     // A third file: the same world, untouched, written as a difference. That is the FIXED cost of
@@ -735,6 +1056,7 @@ TEST_CASE("the facility, both ways" * doctest::skip()) {
     // from "the header is most of the file at this size".
     Scratch bare("ws_facility_bare.world");
     World untouched = clip_world;
+    WorldCacheWritten bare_written;
     {
         WorldCache nothing;
         nothing.tags = &tags;
@@ -743,8 +1065,21 @@ TEST_CASE("the facility, both ways" * doctest::skip()) {
         nothing.world = &untouched;
         nothing.ledger = &clip_ledger;
         nothing.baseline = &clip_world;
-        REQUIRE(write_world_cache(bare.path, key, nothing));
+        REQUIRE(write_world_cache(bare.path, key, nothing, &bare_written));
     }
+    // GATE CLAUSE 2, as a number rather than as a size: a world nobody has touched puts NO derived
+    // node in the file. Nought bricks, nought clearings, and every brick of the building left to
+    // the clip.
+    CHECK(bare_written.bricks_written == 0);
+    CHECK(bare_written.bricks_cleared == 0);
+    std::printf("gate 2        %u bricks written, %u cleared, %u left to the clip (untouched)\n",
+                bare_written.bricks_written, bare_written.bricks_cleared,
+                bare_written.bricks_left_to_the_clip);
+    std::printf("              carved: %u written, %u cleared, %u left to the clip\n",
+                diff_written.bricks_written, diff_written.bricks_cleared,
+                diff_written.bricks_left_to_the_clip);
+    std::printf("              whole:  %u bricks, every one of them derived\n",
+                whole_written.bricks_written);
 
     std::printf("whole world   %llu bytes (%.2f MB), written in %.0f ms\n",
                 static_cast<unsigned long long>(whole.bytes()),

@@ -73,6 +73,7 @@
 
 #include "core/types.hpp"
 #include "world/light_list.hpp"
+#include "world/op.hpp"
 #include "world/voxel_type.hpp"
 
 namespace ws {
@@ -181,6 +182,45 @@ struct CachedEditBox {
     i64 high[3]{};
 };
 
+// How many boxes a file will carry before the writer stops taking them one at a time.
+//
+// A box is 48 bytes, so this is three megabytes at the ceiling and it is never reached by a
+// person: a chisel stroke is one op, and a very long evening is thousands. It exists because the
+// op log is also where a script's `fill` ops land, and a clip driven from the console can append
+// as many as it likes -- and a list that grows without a bound turns "what was edited" from a
+// safeguard into the largest thing in the file.
+inline constexpr usize kMaxEditBoxes = 65536;
+
+// What an op log says somebody's hands were on, as boxes the world cache can be handed.
+//
+// **This is the piece R11f was missing and the reason its first two data-loss cases were open.**
+// The format has always been able to carry named boxes; nothing produced any. Without them the
+// file holds only the DIFFERENCE from the clip, and a difference cannot see two things a person
+// did:
+//
+//   - a brick they carved and refilled with the material the clip would have used, which agrees
+//     with the clip today and comes back as the clip's the moment the clip moves;
+//   - a swing through open air the clip agrees about, which leaves no difference at all and is
+//     filled in the day the clip grows a buttress there.
+//
+// Both are recoverable from the op log, which knows exactly which boxes were written to, and from
+// nothing else. So this turns the log into that list.
+//
+// EVERY op counts, including one that changed nothing. `apply_op` reports `voxels_changed`, and a
+// swing that met only air reports nought -- which is precisely the case above. "Somebody's hands
+// were here" is a fact about the op, not about its result.
+//
+// Undo counts too, and it has to: an undo is an ordinary op through the same log (see
+// EditHistory), so a carve and its undo are two boxes over the same voxels. That writes a brick
+// the person put back exactly as the clip has it, which is the intended cost -- the alternative is
+// deciding from outside which of a person's actions were "real", and there is no such thing.
+//
+// Boxes are normalised, exact duplicates are dropped, and a box wholly inside a box already in the
+// list is dropped. Nothing else is merged: a bounding box over two carves at opposite ends of a
+// building would name every brick between them and put the whole building in the file, which is
+// the failure this is trying to avoid, upside down.
+std::vector<CachedEditBox> edit_boxes_from_ops(const std::vector<Op>& ops);
+
 // Everything a cached world needs to come back complete. The materials a clip declared are part
 // of it, because they are what the chisel is loaded with and there is nowhere else to get them
 // once the script is no longer being read.
@@ -264,12 +304,27 @@ struct WorldCache {
 // executable's own modification time, which changes exactly when the code does.
 u64 world_cache_key(const std::string& source_text, i32 voxels_per_metre, u64 build_stamp);
 
+// What a write actually put in the file, brick by brick.
+//
+// It is the answer to R11f's second gate clause — "no derived node is in the file" — and a gate
+// wants a NUMBER rather than a size. A file can be small for the wrong reason (a world that failed
+// to build is small too), so the claim is not "the file shrank": it is that a world nobody has
+// touched writes nought bricks and nought clearings, and every brick it holds is one the clip does
+// not build.
+struct WorldCacheWritten {
+    u32 bricks_written = 0;             // bricks the file carries in full
+    u32 bricks_cleared = 0;             // bricks said to be air against a clip that fills them
+    u32 bricks_left_to_the_clip = 0;    // derived, and therefore not in the file at all
+    u32 chunks_fingerprinted = 0;
+};
+
 // Writes to a temporary beside the target and renames, so a run interrupted mid-write leaves the
 // old cache intact rather than a truncated one that looks valid.
 //
 // Writes every voxel when `cache.baseline` is null, and the difference from that baseline when it
 // is not. See WorldCache::baseline.
-bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache);
+bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache,
+                       WorldCacheWritten* written = nullptr);
 
 // Returns false — quietly, and without touching anything — when the file is missing, is from
 // another version, or was built from different source. A cache miss is not an error.

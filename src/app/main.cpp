@@ -442,6 +442,21 @@ struct Options {
     // so the arms are alternated inside one run and every round is printed.
     u32 clean_world_rounds = 2;
 
+    // R11f: write the world a second time as its CLIP PLUS ITS EDITS, and say what the two cost.
+    //
+    // Off, and it does not replace anything. At the ladder's fixed point the run writes its cache
+    // exactly as it always has, and then -- with this on -- writes `<cache>.edits` beside it: the
+    // same world as the DIFFERENCE from the world already on disk, with the op log's edited boxes
+    // named. Nothing loads that file. What it buys is the size claim taken from the build rather
+    // than from a test, on whatever clip is open, and the round trip exercised on a real building
+    // with a real op log behind it.
+    //
+    // Deliberately additive, because R11f is the one sub-step that can lose data and the cheapest
+    // way for it to lose none is to take nothing away. The file the game reads is untouched, so an
+    // old `.world` loads exactly as it did and a run with this on can be compared against a run
+    // without it byte for byte.
+    bool clip_plus_edits = false;
+
     // R12b's last unknown, asked of a real building: is `f32` enough for the field?
     //
     // `Field::mirror_eval_single` is the shader-shaped stack walk with every point and every
@@ -973,6 +988,9 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         options.clean_world = true;
     } else if (arg == "--clean-world-rounds") {
         options.clean_world_rounds = static_cast<u32>(std::max<i64>(1, next_number(2)));
+    } else if (arg == "--clip-plus-edits") {
+        // R11f. See Options::clip_plus_edits: additive, and the file the game reads is untouched.
+        options.clip_plus_edits = true;
     } else if (arg == "--no-coarse-paste") {
         // The default since D673. Kept for the same reason as `--stipple-from-world` above: it is
         // in scripts and in the five gates D630-D635 were measured with, and an unrecognised
@@ -1480,6 +1498,10 @@ void print_help() {
         "                        rebuilding between them. Headless. D630's price, D662's cure;\n"
         "                        exits non-zero if either arm fails to reproduce itself\n"
         "  --clean-world-rounds N  how many times each arm is run and printed (2)\n"
+        "  --clip-plus-edits     R11f: also write '<cache>.edits' -- the same world as the\n"
+        "                        difference from the one already on disk, with the op log's\n"
+        "                        edited boxes named -- and print what each of the two costs.\n"
+        "                        Additive: the file the game loads is untouched\n"
         "  --world-clean-serial  in game: clean the world the way D630 measured it, two walks\n"
         "                        on one thread. The control arm for the same change\n"
         "  --coarse-paste        build the whole building coarse before the first frame and\n"
@@ -4299,7 +4321,13 @@ void Application::save_refined_world() {
     // optimisation and a world coming back with somebody else's edits in it is a wrong answer --
     // and it costs nothing in the ordinary case, because the ladder settles long before anyone
     // has walked to the far side of the building.
-    if (!op_log_.ops().empty()) {
+    //
+    // `--clip-plus-edits` does not lift that refusal and must not: the objection is about what the
+    // clip's cache IS, and no format changes it. What it does is carry on past this point to write
+    // a file BESIDE the cache, which nothing loads -- so an edited world still never becomes the
+    // clip's own, and the difference it would have been is measurable from the build.
+    const bool edited = !op_log_.ops().empty();
+    if (edited && !options_.clip_plus_edits) {
         WS_LOG_INFO("clip",
                     "{} of {} nodes sharpened, but the world has been edited; not caching it "
                     "as the clip's own -- the cache is keyed on the clip, so every world built "
@@ -4401,7 +4429,7 @@ void Application::save_refined_world() {
     // ask for. Written from here rather than from a mode of its own because this is the one moment
     // it is safe: the ladder has stood down, nothing is half-pasted, and the edit check above has
     // already refused to bake a world somebody has carved into.
-    if (!refine_bake_path_.empty()) {
+    if (!edited && !refine_bake_path_.empty()) {
         if (write_world_cache(refine_bake_path_, refine_bake_key_, cache)) {
             std::error_code size_error;
             const auto bytes = std::filesystem::file_size(refine_bake_path_, size_error);
@@ -4413,10 +4441,80 @@ void Application::save_refined_world() {
         }
     }
     if (refine_cache_path_.empty()) return;
-    if (!write_world_cache(refine_cache_path_, refine_cache_key_, cache)) return;
-    refine_saved_regions_ = done;
-    WS_LOG_INFO("clip", "kept the world with {} of {} nodes sharpened", done,
-                refine_regions_.size());
+    if (!edited) {
+        if (!write_world_cache(refine_cache_path_, refine_cache_key_, cache)) return;
+        refine_saved_regions_ = done;
+        WS_LOG_INFO("clip", "kept the world with {} of {} nodes sharpened", done,
+                    refine_regions_.size());
+    }
+
+    // ---- R11f: the same world written as its clip plus its edits ---------------------------
+    //
+    // See Options::clip_plus_edits. Off by default, and additive: `<cache>.edits` is written and
+    // nothing reads it, so whatever the game loads today it goes on loading.
+    //
+    // The baseline is the world already on disk. On an unedited run that is the file written four
+    // lines above -- the same world -- so the difference holds NO VOXELS AT ALL and the two sizes
+    // are the whole of R11f's claim, taken from a real building rather than from a test: what is
+    // left is the type table, the ladder's leaves, the lamps and the fingerprint, and every
+    // derived node is gone. On an edited run the cache on disk is the world from before the edits
+    // (an edited world is never written into it), so the difference is exactly the carve, with the
+    // op log's boxes named beside it.
+    if (!options_.clip_plus_edits) return;
+    WorldCacheMode on_disk = WorldCacheMode::Whole;
+    if (!world_cache_mode_of(refine_cache_path_, on_disk) || on_disk != WorldCacheMode::Whole) {
+        WS_LOG_WARN("clip",
+                    "--clip-plus-edits: there is no whole world at '{}' to take a difference "
+                    "from yet",
+                    refine_cache_path_);
+        return;
+    }
+    TagRegistry base_tags;
+    PropertyRegistry base_properties;
+    VoxelTypeTable base_types;
+    World baseline;
+    MatterLedger baseline_ledger;
+    WorldCache base;
+    base.tags = &base_tags;
+    base.properties = &base_properties;
+    base.types = &base_types;
+    base.world = &baseline;
+    base.ledger = &baseline_ledger;
+    const u64 base_began = now_ns();
+    if (!read_world_cache(refine_cache_path_, refine_cache_key_, base, refine_jobs_.get())) {
+        WS_LOG_WARN("clip", "--clip-plus-edits: could not read '{}' back as the baseline",
+                    refine_cache_path_);
+        return;
+    }
+    const f64 base_ms = ns_to_ms(now_ns() - base_began);
+
+    WorldCache thin = cache;
+    thin.baseline = &baseline;
+    // What the op log says somebody's hands were on. THIS IS THE LINE THE HANDOVER ASKED FOR: a
+    // difference cannot see a brick carved and refilled with the clip's own stone, nor a swing
+    // through air the clip agrees about, and the op log is the only thing that can.
+    thin.edits_named = true;
+    thin.edited = edit_boxes_from_ops(op_log_.ops());
+    const std::string edits_path = refine_cache_path_ + ".edits";
+    if (!write_world_cache(edits_path, refine_cache_key_, thin)) {
+        WS_LOG_WARN("clip", "--clip-plus-edits: could not write '{}'", edits_path);
+        return;
+    }
+    std::error_code size_error;
+    const auto whole_bytes =
+        static_cast<u64>(std::filesystem::file_size(refine_cache_path_, size_error));
+    const auto edit_bytes = static_cast<u64>(std::filesystem::file_size(edits_path, size_error));
+    WS_LOG_INFO("clip",
+                "R11f: whole {} bytes, clip plus {} named edits {} bytes ({:.1f}x); baseline read "
+                "back in {:.0f} ms",
+                static_cast<unsigned long long>(size_error ? 0 : whole_bytes),
+                thin.edited.size(),
+                static_cast<unsigned long long>(size_error ? 0 : edit_bytes),
+                (edit_bytes > 0 && !size_error) ? static_cast<f64>(whole_bytes) /
+                                                      static_cast<f64>(edit_bytes)
+                                                : 0.0,
+                base_ms);
+    if (edited) refine_saved_regions_ = done;
 }
 
 // The nodes the clip ladder starts from, and the two operations that reshape them.
