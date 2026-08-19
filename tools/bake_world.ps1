@@ -137,11 +137,6 @@ param(
     # run: passes times -Seconds is the worst case, and finishing early is the normal case.
     [int]$Passes = 40,
 
-    # FAIL IF THE WORLD IS NOT ALL THERE. Off by default so that baking by hand is still a thing
-    # somebody can do in two minutes and look at, and ON in the release workflow, where a partial
-    # world is the exact defect this feature exists to remove and shipping one quietly is how it
-    # got shipped the first three times. It has nothing to say about a `-RefineAll:$false` bake,
-    # which is partial on purpose, so it refuses that combination rather than failing it.
     # THE WALL CLOCK THE WHOLE RUN GETS, in minutes, 0 for none. `-Passes` times `-Seconds` is a
     # worst case that leaves out how long a run takes to START, and on a machine with a software
     # Vulkan that is a minute a pass rather than five seconds -- so the arithmetic that fits inside
@@ -151,6 +146,11 @@ param(
     # timeout instead says nothing and leaves no report behind.
     [int]$TotalMinutes = 0,
 
+    # FAIL IF THE WORLD IS NOT ALL THERE. Off by default so that baking by hand is still a thing
+    # somebody can do in two minutes and look at, and ON in the release workflow, where a partial
+    # world is the exact defect this feature exists to remove and shipping one quietly is how it
+    # got shipped the first three times. It has nothing to say about a `-RefineAll:$false` bake,
+    # which is partial on purpose, so it refuses that combination rather than failing it.
     [switch]$RequireWhole,
 
     # WHERE ELSE THE GATE STANDS. `x,y,z,yaw,pitch` each, and an empty string is the world's own
