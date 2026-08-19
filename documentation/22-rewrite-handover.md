@@ -552,6 +552,23 @@ failure, not a compile error.
     a clock rather than a sampler — **before comparing two frames, list what in them is driven by
     something other than your change**, and either pin it or frame it out. D663.
 
+32. **BOTH arms can be inside the change, and then "exact" is what being wrong looks like.**
+    CLAUDE.md's rule is that a counter taken from inside the change is not a control. D683 is that
+    rule one worse: it built `Field::pruned_to`, measured the gate with the pruning on and off, got
+    **`a7660d52378d3c27` at 1,430,152 voxels on both arms**, and recorded it as proof the pruning
+    was exact. Then the scaffolding was reverted. **The scaffolding was on both arms**, and whatever
+    in it moved the world by 48 voxels sat outside the flag being tested — so the two arms agreed
+    with each other perfectly and both disagreed with the repository, which is precisely what
+    "exact" looks like. The wrong number then sat in this file for a day and was quoted into two
+    agent briefs, one of which spent an afternoon discovering its own gate did not reproduce.
+
+    **What settles it costs one command**: `git diff <the commit> <today> -- src/forge` came back
+    **empty**, so the committed tree could never have produced that figure and the measuring tree
+    was never committed. The general form: **an A/B tells you what the FLAG does, and nothing at
+    all about what the diff around it does.** When a gate is a whole-world hash, one of the arms has
+    to be a build with the change *absent from the tree* — `git stash`, rebuild, same command —
+    rather than present-but-off.
+
 ---
 
 ## 4b. The bug that was open here — closed, and what it teaches
