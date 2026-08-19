@@ -635,20 +635,55 @@ let lib_zl_s = difference {
 #
 # So the turn moves to the SOUTH rank and each offset moves to the room side of its zone. The
 # occupied band is unchanged -- the deepest book still spans -4.035..-3.72 and -6.33..-6.015 --
-# and only which end is flush has swapped. A rotation is an isometry and carries a box; it is
-# caught in the zone box in any case.
-let lib_bkl_a = union { intersection { translate { lib_fl_a } -10.80 7.245 -4.035  lib_zl_n }
-                        intersection { translate { rotate { lib_fl_a } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
-let lib_bkl_b = union { intersection { translate { lib_fl_b } -10.80 7.245 -4.035  lib_zl_n }
-                        intersection { translate { rotate { lib_fl_b } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
-let lib_bkl_c = union { intersection { translate { lib_fl_c } -10.80 7.245 -4.035  lib_zl_n }
-                        intersection { translate { rotate { lib_fl_c } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
-let lib_bkl_d = union { intersection { translate { lib_fl_d } -10.80 7.245 -4.035  lib_zl_n }
-                        intersection { translate { rotate { lib_fl_d } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
-let lib_bkl_e = union { intersection { translate { lib_fl_e } -10.80 7.245 -4.035  lib_zl_n }
-                        intersection { translate { rotate { lib_fl_e } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
-let lib_bkl_f = union { intersection { translate { lib_fl_f } -10.80 7.245 -4.035  lib_zl_n }
-                        intersection { translate { rotate { lib_fl_f } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
+# and only which end is flush has swapped.
+#
+# AND THE FIRST VERSION OF THAT FIX MOVED EVERY RANK 4.4 m SIDEWAYS, because this comment used
+# to end *"a rotation is an isometry and carries a box; it is caught in the zone box in any
+# case"*, and both halves of that are true and neither one is the point.
+#
+# **A half turn about y mirrors x as well as z.** It maps a rank's own extent [lo,hi] to
+# [-hi,-lo], so taking the turn OFF the north rank and putting it ON the south slid each of them
+# by (lo+hi) -- 4.365 m for rank `a` -- along the very axis the shelf runs down. The zone box
+# does catch it, and that is what hid it: the zone is 7.02 m wide and a rank is 4.365, so a rank
+# that has moved half the room is still entirely inside its zone and still reads as a shelf full
+# of books. It is just a DIFFERENT shelf, and the one it left is bare.
+#
+# The control arm is what said so, and nothing else would have: probe census **3,025,423 voxels
+# before the turn and 3,016,584 after it -- 8,839 gone.** A rotation is an isometry, so a turn
+# that only turns changes a voxel count by tens, from grid quantisation and nothing else. Three
+# orders of magnitude more than that is not a turn, it is a move, and the number says so before
+# any picture does.
+#
+# AND PAYING IT BACK IN THE TRANSLATE IS THE WRONG FIX, which the same census said just as
+# plainly: six compensated offsets came out at **2,930,172 voxels and A FLOATING COMPONENT**, so
+# the second attempt was further from the control than the first and had torn books off a shelf
+# to get there.
+#
+# **The turn was never one transform, it was two, and only one of them was wrong.** `rotate y=0.5`
+# is a mirror in x AND a mirror in z. The x half is what PLACED the north rank -- it is why a rank
+# of 4.365 m lands in the west half of a 7.02 m press -- and the z half is what pointed its spines
+# at the wall. Removing the turn removed both, so every version that argued about the translate
+# was trying to buy back a placement with a number after having thrown away the thing that made it.
+#
+# So the language's own `mirror` takes the axis and the ranks take one each: **north is `mirror
+# axis=x`, south is `mirror axis=z`.** North keeps precisely the x the turn gave it and stands its
+# spines up the room side; south keeps the x it always had and turns only its spines. No offset
+# changes, none of the six needs its own number, and the census comes back to the control.
+#
+# The general shape of it, which is worth more than this room: **when a composite transform is
+# doing two jobs and one is wrong, split the transform -- do not correct the survivor downstream.**
+let lib_bkl_a = union { intersection { translate { mirror { lib_fl_a } axis=x } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { mirror { lib_fl_a } axis=z } -10.80 7.245 -6.015  lib_zl_s } }
+let lib_bkl_b = union { intersection { translate { mirror { lib_fl_b } axis=x } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { mirror { lib_fl_b } axis=z } -10.80 7.245 -6.015  lib_zl_s } }
+let lib_bkl_c = union { intersection { translate { mirror { lib_fl_c } axis=x } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { mirror { lib_fl_c } axis=z } -10.80 7.245 -6.015  lib_zl_s } }
+let lib_bkl_d = union { intersection { translate { mirror { lib_fl_d } axis=x } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { mirror { lib_fl_d } axis=z } -10.80 7.245 -6.015  lib_zl_s } }
+let lib_bkl_e = union { intersection { translate { mirror { lib_fl_e } axis=x } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { mirror { lib_fl_e } axis=z } -10.80 7.245 -6.015  lib_zl_s } }
+let lib_bkl_f = union { intersection { translate { mirror { lib_fl_f } axis=x } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { mirror { lib_fl_f } axis=z } -10.80 7.245 -6.015  lib_zl_s } }
 
 # The upper rank: period 0.315 (0.7 M), six spines, TWO gaps, and one width of 0.048 which is the
 # only number in this file that is not a module fraction. It is there on purpose -- a rank whose
@@ -671,18 +706,18 @@ let lib_fu_f = repeat { repeat { lib_bu_f } x=0.315 nx=15 } y=0.30 ny=1
 let lib_zu_n = difference { box -14.85 9.14 -4.00   -6.975 10.07 -3.70   lib_up_ups }
 let lib_zu_s = difference { box -14.85 9.14 -6.31   -6.975 10.07 -6.02   lib_up_ups }
 
-let lib_bku_a = union { intersection { translate { lib_fu_a } -10.80 9.525 -3.99  lib_zu_n }
-                        intersection { translate { rotate { lib_fu_a } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
-let lib_bku_b = union { intersection { translate { lib_fu_b } -10.80 9.525 -3.99  lib_zu_n }
-                        intersection { translate { rotate { lib_fu_b } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
-let lib_bku_c = union { intersection { translate { lib_fu_c } -10.80 9.525 -3.99  lib_zu_n }
-                        intersection { translate { rotate { lib_fu_c } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
-let lib_bku_d = union { intersection { translate { lib_fu_d } -10.80 9.525 -3.99  lib_zu_n }
-                        intersection { translate { rotate { lib_fu_d } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
-let lib_bku_e = union { intersection { translate { lib_fu_e } -10.80 9.525 -3.99  lib_zu_n }
-                        intersection { translate { rotate { lib_fu_e } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
-let lib_bku_f = union { intersection { translate { lib_fu_f } -10.80 9.525 -3.99  lib_zu_n }
-                        intersection { translate { rotate { lib_fu_f } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
+let lib_bku_a = union { intersection { translate { mirror { lib_fu_a } axis=x } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { mirror { lib_fu_a } axis=z } -10.755 9.525 -6.03  lib_zu_s } }
+let lib_bku_b = union { intersection { translate { mirror { lib_fu_b } axis=x } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { mirror { lib_fu_b } axis=z } -10.755 9.525 -6.03  lib_zu_s } }
+let lib_bku_c = union { intersection { translate { mirror { lib_fu_c } axis=x } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { mirror { lib_fu_c } axis=z } -10.755 9.525 -6.03  lib_zu_s } }
+let lib_bku_d = union { intersection { translate { mirror { lib_fu_d } axis=x } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { mirror { lib_fu_d } axis=z } -10.755 9.525 -6.03  lib_zu_s } }
+let lib_bku_e = union { intersection { translate { mirror { lib_fu_e } axis=x } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { mirror { lib_fu_e } axis=z } -10.755 9.525 -6.03  lib_zu_s } }
+let lib_bku_f = union { intersection { translate { mirror { lib_fu_f } axis=x } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { mirror { lib_fu_f } axis=z } -10.755 9.525 -6.03  lib_zu_s } }
 
 # THE TWO PILES, lying flat in the two gaps the rank leaves. Three volumes each, 0.24 by 0.30 by
 # 0.042, every one of them shifted a few millimetres off the one under it, and the bottom one buried
