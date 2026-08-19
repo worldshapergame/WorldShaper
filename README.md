@@ -78,10 +78,8 @@ vsync.
 and answered, the architecture, and a decision log with the reasoning behind every choice
 including the ones that turned out wrong.
 
-Two files are worth starting with:
+One file is worth starting with:
 
-- [`12-plain-english.md`](documentation/12-plain-english.md) — what has been built and why,
-  with no jargon.
 - [`07-roadmap.md`](documentation/07-roadmap.md) — twenty-four stages with nineteen playable
   checkpoints, and where things actually stand.
 

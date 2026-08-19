@@ -304,7 +304,9 @@ bad performance, low fps, low resolution for a playable experience, short range 
 absolute, you can make it as long as you need
 - **N7.** How do you want to work: do you want to read/understand all the code, or do you want it to work and stay out of your way? This changes how much I explain and how exotic the optimizations get.
 i wish to understand more or less how it works but in a very superficial way in a language that isnt technical and is just a non code jargon explanation and common language explanation.
-> Answered. `12-plain-english.md` exists for this and is updated every stage.
+> Answered, then answered again the other way. `12-plain-english.md` existed for this and was
+> updated every stage until 2026-08-19, when the person it was for said *"remove the plain english
+> document, its a waste of time i never even read it"*. The explanation belongs in the reply.
 
 ---
 

@@ -6,7 +6,7 @@ Every stage ends in something that runs and something that is measured. Stages m
 
 Sizes are relative effort (S/M/L/XL), not calendar time (answer A9: open-ended). Answer N6 authorises long, thorough foundations — Stages 0–2 are weighted accordingly, and that is the main reason everything after them goes fast and stays working.
 
-**How you receive each stage:** a `WorldShaper.exe` plus a one-click `run.bat`, a plain-language changelog in `12-plain-english.md`, and a list of specific things to try and judge. You never open a code file (answers A2, A3, N7).
+**How you receive each stage:** a `WorldShaper.exe` plus a one-click `run.bat`, a short list of what to look at in the build, and a list of specific things to try and judge. You never open a code file (answers A2, A3, N7).
 
 ---
 

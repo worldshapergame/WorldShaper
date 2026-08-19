@@ -20,7 +20,9 @@ thousands of real voxels you can chip out one at a time.
 **Who you are working for.** One person, who does not write code and does not read it. They make
 design calls, play the builds and say what feels wrong. Automated tests are the safety net because
 there is no second engineer — this is why the suite is large and why "measure, do not guess" runs
-through everything here. Plain-language explanation for them lives in `12-plain-english.md`.
+through everything here. **The explanation for them is the reply itself** -- a short list of what
+to look at in the build. `12-plain-english.md` was that document and was deleted on 2026-08-19 at
+their request: *"its a waste of time i never even read it"*. Do not recreate it.
 
 **The data model** (`03-voxel-data-model.md`), which the rewrite keeps below the chunk:
 

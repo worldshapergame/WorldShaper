@@ -18,7 +18,6 @@ This folder is the source of truth for design, architecture, and planning. Code 
 | [09-performance-budgets.md](09-performance-budgets.md) | Hard numbers per frame, per tier of hardware |
 | [10-glossary.md](10-glossary.md) | Precise definitions — read this before arguing about a term |
 | [11-reality-check.md](11-reality-check.md) | Where the stated requirements conflict with physics/hardware, and the resolution |
-| **[12-plain-english.md](12-plain-english.md)** | **How the whole game works, in plain language with no jargon. Start here.** |
 | [13-decision-log.md](13-decision-log.md) | Every decision made, when, and why |
 | [14-ui-style.md](14-ui-style.md) | The visual language: no colour, blurred glass, per-pixel opposing ink, tooltips |
 | [17-crash-reports.md](17-crash-reports.md) | What a crash writes down, where it puts it, and how to prove it works |

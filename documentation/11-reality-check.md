@@ -141,4 +141,5 @@ Not a technical conflict, but the biggest project risk, so it is stated plainly 
 - **Automated tests are the safety net**, because there is no second engineer to catch mistakes. This is why answer N6 (long, thorough foundations) is the right call and why Stages 0–2 are heavily weighted toward test infrastructure.
 - **Your job** is design decisions, playing the checkpoint builds, and telling me what feels wrong. That is genuinely the valuable half.
 - **Scale:** this is a multi-year project at hobby pace. It is shippable and enjoyable long before it is finished — that is what the 19 playable checkpoints are for.
-- **Explanations** are written in plain language in `12-plain-english.md`, updated every stage (answer N7).
+- **Explanations** are written in the reply to the user as a short list of what to look at in the
+  build. A standing plain-language document was tried for a year and never read (2026-08-19).

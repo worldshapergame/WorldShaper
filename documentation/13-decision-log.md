@@ -12650,3 +12650,174 @@ recorded rather than chased.
 | D715 | **Split the transform, do not correct downstream** | design | Six compensating offsets were further from the control than the bug they fixed |
 | D715 | **"Caught in the zone box" is what HID it** | trap | A 4.365 m rank inside a 7.02 m zone can move half the room and still read as full |
 | D715 | **A voxel census is not a control for a turn here** | honesty | Asymmetric z exclusions move thousands of voxels legitimately; the floating component was the real signal |
+
+---
+
+## D716 — R4f: a reflection is the primary ray carrying on, and it reflects the clouds
+
+**2026-08-19.** D707 recorded the user's reversal — *"reflections should not be voxel face based, it
+should be more like ior bending light, and still be super performant"* — and this is the code for
+it. D652 put the TRANSMITTED half of an interface back on the ray; this is the REFLECTED half beside
+it, and the two are one event seen from either side of the Fresnel term.
+
+**The rough/sharp split is continuous and has no threshold in it.** The share a pixel's own ray earns
+is the lobe's angular width against *the angular resolution the answer it would replace can carry* —
+the face's own angular size, **floored at the pixel's**. Against the pixel alone the number is
+resolution-dependent in the wrong direction: at 4K a mirror would get less of its own ray than at
+800p. Chrome at `rough=8` earns **0.824**, the brushed sphere beside it **0.024**, and the largest
+step between neighbouring roughness bytes is under 0.06. **`face_alpha_of` is not the width** — its
+`kFaceAlphaMin` floor exists so GGX does not divide by nought, and read as a width it puts half a
+degree of blur under every mirror in the world.
+
+**Depth is a contribution budget, so it is not a setting.** `clips/mirror_hall.clip` — two chrome
+walls facing each other — reaches **sixteen** images of the hall, and **it is `kReflectBounces` that
+stops it there and not the budget**: picture and cost both stop moving between `--reflect-budget
+0.05` and 0.02 (2.28 of 255 against a same-arm floor of 2.27; 12.77 ms against 12.86). At 0.30 it
+stops at six and the budget is what stops it. Every dielectric is the other way round: 4% head-on is
+under a fiftieth after one bounce, which is why "infinite" is affordable.
+
+**The picture.** `clips/mirror_test.clip` at content `66727a9bdf6182de` in both arms: **8.24 of 255
+over 163,832 pixels of 1,024,000**, worst 203, against a floor of 1.66 and 2.50. The polished floor
+carries a recognisable mirror image, which is what D592, D594, D599, D694 and D703 each measured as
+absent.
+
+**The gate D703 shipped without.** Over the chrome sphere, consecutive frames of a `--fly` differ by
+**6.17 of 255 with this on against 13.77 with it off**; the brushed sphere in the same frame — the
+same stored bins in both arms — does not move (11.70 against 12.13). That is the user's *"stripes of
+non reflective zones"* measured rather than described.
+
+**And the user's second report — *"the reflections i see dont reflect the actual sky colors and
+neither clouds"* — is two faults and only one was a shim.** The COLOURS were the bins averaging a
+gradient over 13.5°; a ray has a direction, so they match now. The **DECK cannot come free in any
+design**, and this is the part worth carrying: the composite reads clouds out of a history the cloud
+pass marches **one ray per PIXEL**, so it is indexed by pixel and answers for the direction the
+*primary* ray went and for no other. A reflected direction is not in it, in any pass, and there is
+nothing to look it up in. It has to be marched again — at the primary's quality **2.60 → 18.06 ms**
+of visibility, at sixteen steps with the light sub-marches off **+0.84 ms**.
+
+**Cost.** On `clips/translucency_test.clip`, which holds no reflective material: **+1.0% at
+1280×800, +1.2% at 1440p, +1.6% at 4K** against R4's budget of fifteen. On `clips/mirror_test.clip`,
+where every surface reflects: 4.84 → 8.26, 9.43 → 18.10, 19.33 → 30.11 — that clip is a floor that
+reflects, filling the frame, and 4K on it is over budget.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D716 | **A reflection is a continuation, not a gather** | build | A bin is a cone and a picture needs more cones than there are rays |
+| D716 | **The share is measured against the FACE, floored at the pixel** | measurement | Against the pixel alone a mirror gets less of its own ray at 4K than at 800p |
+| D716 | **The budget bounds the CONTRIBUTION, so depth is not a setting** | design | Two chrome walls go sixteen deep and ordinary stone stops after one, out of one number |
+| D716 | **...and on chrome it is `kReflectBounces` that stops it, measured** | honesty | The sweep says where the picture stops moving, and it is the cap rather than the budget |
+| D716 | **The reflected ray CLAIMS the face it lands on** | correctness | Without it a sphere's middle band is black: the set behind the camera has no faces |
+| D716 | **The cloud deck cannot be looked up, only marched** | measurement | The history is one ray per pixel; this is why the fault was not a shim in the face pass |
+| D716 | **The sun's disc is subtracted from the escaped sky** | correctness | `face_lobe_sun` already puts it back clamped, and on a mirror it is the brightest thing in frame |
+
+---
+
+## D717 — R11i: nineteen seconds of the load was six shaders queueing, and the button is for the other kind of wait
+
+**Asked for directly:** *"make it so that it mainly loads way faster before launching the world ...
+but you can click a button to enter the world now which will keep what is already loaded but will
+put you on the world"*.
+
+**The first half could not be started because nothing could say where the load's time went.**
+`load stages:` names seven buckets and six are one thing each; the seventh, `settling`, is the pool,
+nine device buffers, two descriptor layouts, seven compute pipelines, the render target and the
+interface — and it printed **16,395 ms of a 16,545 ms load** with four timings beside it adding to
+under a second. `load steps:` now names every step, and found it in one run: **nineteen seconds of a
+twenty-second load in two shader compiles**, created one after another on the only thread that could
+draw the bar — so the screen also stood still for the thirteen seconds in the middle, which is the
+state a player reports as *"it has hung"*.
+
+Neither had a reason. `vkCreatePipelineLayout`, `vkCreateShaderModule` and
+`vkCreateComputePipelines` are all internally synchronised, and no pipeline cache is passed — the one
+object that would have needed a lock. So the six go on their own threads and the main thread draws.
+**Cold, interleaved, a fresh private shader cache per run: facility 15,905 → 10,989 ms**, one binary
+and two arms (`--serial-pipelines`), because two builds of a shader are two different states of the
+driver's own cache, which is the quantity being measured.
+
+**The floor is now one shader:** `visibility.comp` alone is 10,636 of 10,989 ms. The next lever is a
+`VkPipelineCache` on disk — the second run of an unchanged binary is 12 ms for all six, which is the
+driver's own cache doing exactly that job. It is in `src/gpu/shader.cpp` and is not done.
+
+**The button.** `play now`, offered the moment the ladder has its plan — **t+~140 ms on the facility,
+t+1 ms on a small clip** — because that is the earliest point at which leaving costs the player time
+and nothing else. What it skips is the up-front sample, the variation, the paste and the cache write.
+On `--coarse-paste`, which builds the whole world first, that is **403,803 ms waiting against 336 ms
+entering**.
+
+**It is never offered over the cache read, and that is the decision rather than an oversight.** A
+saved world carries somebody's carvings, and half of one is not a half-loaded world, it is a lost
+one. The offer is made only over work whose every result the ladder produces again. The gate is the
+user's own words: warm launch, waiting and with `--enter-now`, **23 chunks, 996,850 solid voxels,
+content `725db8f62f664fcd`, both**.
+
+**And a scripted run is offered no button.** A load with two end points makes every timed figure
+ambiguous. `Options::scripted()` is already the list of flags every measurement here is taken with
+and `tools/baseline.ps1` always passes `--settle`, so it needed no edit. This is not tidiness: a
+403-second `--coarse-paste` run in the session that built this logged `taken at t+373416 ms` with
+nobody at the keyboard on purpose.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D717 | **`settling` was a bucket, and it hid 16 s** | method | Four timings printed beside it added to under a second |
+| D717 | **Six pipelines compile at once, and the bar keeps moving** | performance | 15,905 → 10,989 ms cold; the screen no longer freezes for thirteen seconds |
+| D717 | **The load's floor is now one shader** | honesty | `visibility.comp` is 10,636 of 10,989 ms; a disk pipeline cache is the next lever and is not done |
+| D717 | **The button is offered where the ladder can rebuild, and nowhere else** | design | 403,803 → 336 ms on `--coarse-paste`; never over the cache read |
+| D717 | **It skips work, not setup** | correctness | The plan, the seed nodes and the palette are all after the up-front build in `build_world` |
+| D717 | **A scripted run is offered no button** | method | A 403-second run logged a press nobody made |
+
+---
+
+## D718 — A ray bent out of the first medium and slid through every one behind it
+
+**2026-08-19.** Reported from playing: *"translucent voxels behind translucent voxels dont render
+properly"*.
+
+`visibility.comp`'s three refraction segments ran **once, straight through**: bend into the pane the
+pixel landed on, cross it with `kThroughExit`, take *that* pane's Beer-Lambert absorption over its
+own path, bend out — and then march the rest of the way with `kThroughPass`, which slides through
+matter multiplying each voxel's **opacity** tint and nothing else.
+
+**So every medium behind the first contributed its greyness and none of its colour.**
+`node_medium_absorb` was called exactly once, at `hit.type_id`, and a stack of green glass came out
+as green as one sheet. Past the first pane the path was also straight, so a stack seen at an angle
+displaced what was behind it by one pane's worth however many panes there were — which is the one
+thing a stack visibly does that a sheet does not.
+
+The segments are a loop over interfaces now, `kRefractMedia` = 4. Each turn bends in, crosses, takes
+that medium's own absorption over its own path, bends out, and marches on with `kThroughStop` —
+which stops ON the next pane instead of sliding through it, so the next turn has an interface to
+bend at.
+
+**The control arm is exact rather than close.** The last turn marches `kThroughPass`, so at one
+medium the loop is the old code line for line. `--no-refract-stack` is bit-identical to every build
+before this by construction.
+
+**A COARSE stop is re-cast, and that is the difference between a fix and a trade.** Above level 0 a
+hit carries a folded colour and no `type_id`, so nothing can ask whether it is a medium — and
+`kThroughPass` would have slid through it if it were. Stopping there would draw a part-glass node as
+an opaque wall. So the ray is cast once more the way the old code cast it, which costs a second march
+only where an intermediate segment stopped on something coarse.
+
+### What is NOT gated, said plainly
+
+**The loop demonstrably runs** — a temporary marker written into the second turn came back on screen,
+and the pass went **9.27 → 18.24 ms** of GPU with it forced on. **The picture is not resolved against
+its own noise.** `clips/glass_test.clip` needs `--no-clip-cache --refine-all` before three runs agree
+on a content hash at all (`e39bf8f2b8737251`); once they do, the **same-arm floor is 137,306 px at
+mean 6.84 of 255 and the two arms differ by 126,754 px at mean 5.61** — the floor is LARGER than the
+effect. So the defect is proven by reading and the fix by a marker, and the picture is owed.
+
+**And the scene had no case to test.** `glass_test.clip`'s two panes stand side by side — no ray in
+it ever crossed two of them. Three stacked panes were added.
+
+**`shaders/shade_faces.comp:1442` has the same single-medium `absorb` read on the light path** and is
+not fixed. A sun ray crossing two panes is coloured by the first only.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D718 | **`kThroughPass` carries opacity and not absorption** | fault | One `node_medium_absorb` call per pixel, at the first medium, for the life of the feature |
+| D718 | **The segments are a loop over interfaces** | build | `kThroughStop` between panes so each turn has something to bend at |
+| D718 | **The last turn is `kThroughPass`, which makes the control exact** | method | At one medium the loop IS the old code; the arm is bit-identical by construction |
+| D718 | **A coarse stop is re-cast the old way** | correctness | Above level 0 there is no `type_id` to ask, and stopping would draw part-glass as a wall |
+| D718 | **The picture is not gated and the entry says so** | honesty | The same-arm floor on this scene is larger than the effect |
+| D718 | **A scene with no stacked case cannot test stacking** | trap | Two panes side by side; no ray crossed two of them |

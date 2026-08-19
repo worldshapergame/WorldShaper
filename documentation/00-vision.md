@@ -57,4 +57,6 @@ Answers A2, A3 and N7 set the working model, and it shapes everything:
 - **You do not write code.** I write all of it. Every stage ends with an executable you double-click.
 - **Automated tests are the safety net**, because there is no second engineer reviewing. This is why Stages 0–2 are heavily weighted toward test infrastructure — which you explicitly authorised (answer N6).
 - **Your job** is design calls, playing checkpoint builds, and telling me what feels wrong. That is the valuable half.
-- **Explanations** live in `12-plain-english.md`, written without jargon and updated every stage.
+- **Explanations** go in the reply to the user, as a short list of what to look at in the build.
+  There is no separate plain-language document: one was kept for a year and the person it was
+  written for said, in as many words, that they never read it. **Deleted 2026-08-19.**

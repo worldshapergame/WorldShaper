@@ -154,8 +154,6 @@ them.
 - `documentation/22-rewrite-handover.md` — start here. §5 is the current work.
 - `documentation/13-decision-log.md` — every decision with its reason, **including the ones that
   turned out wrong**. Those are the most useful entries in the repository.
-- `documentation/12-plain-english.md` — the same story written for the person the work is for. It is
-  the only document with that audience, so keep it current.
 - `documentation/21-renderer-rewrite.md` — the plan. §8.0 is the ledger of what is done.
 - `documentation/09-performance-budgets.md` — what the numbers are judged against. Exceeding a budget
   is a bug, not a trade-off.
