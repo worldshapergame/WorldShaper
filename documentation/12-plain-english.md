@@ -3801,3 +3801,45 @@ One honest note: the glow is currently applied *after* the picture has been sque
 brightness, which means a lamp a hundred times brighter than white and one four times brighter glow
 identically. The fix is small and written down; it needs one file that another piece of work is
 currently in.
+
+## Mirrors show a picture now
+
+I've told you three times that reflections were nearly there. They weren't, and each time the answer
+looked like "store more directions" — and each time it produced noise instead of a reflection,
+because more directions need more light rays to fill them and there were never enough.
+
+The way out wasn't more of anything. It was noticing that **the game only ever asks a surface what it
+looks like from one direction** — the direction your eye is in. A surface here is one voxel, three
+centimetres across, so every pixel looking at it is looking from within about a degree of every other
+pixel. But the surface was storing what it reflects in *every* direction across the whole dome above
+it. Nearly all of that detail was being computed for directions nothing would ever ask about.
+
+So a polished surface now spends all its detail on a narrow cone around where you actually are.
+Chrome went from storing directions **13.5° apart to 2.0° apart** — for the same number of stored
+directions, the same memory, and the same number of light rays. Nothing got more expensive.
+
+What you should see, on the mirror test scene:
+
+- **Before:** the chrome sphere is a uniform pale-grey ball with a faint ring pattern. Chalk.
+- **Now:** it carries an actual picture — the sky's gradient across the top, a hard dark band where
+  the far edge of the floor slab meets the ground, and the white floor reflected underneath.
+- The **brushed** sphere beside it is unchanged, which is correct — it isn't polished enough to
+  reflect anything sharply, and nothing about this forces it to.
+- Along the polished floor at a grazing angle, the red post now throws a soft red reflection down the
+  floor. Before there was only its shadow.
+
+It costs **0.4%** on a scene where every single surface is reflective, and provably nothing at all on
+a scene with no reflective material in it.
+
+**Glass.** The photograph I owed you from the refraction work is taken: with it off, the two panes in
+the glass test are a pair of faint vertical lines and you can't tell they're there. With it on, each
+pane is outlined and carries a *displaced* copy of what's behind it — the coloured wall's blue and
+red running out past its own edges as bars above and below.
+
+**And one thing I built that you will not see, with the reason.** Glass splitting light into colour
+is now implemented and correct. It's also invisible, and not because it's broken: a flat pane doesn't
+bend light, it shifts it sideways. Through the thickest, most colour-splitting glass anybody makes,
+twelve centimetres at a sharp angle separates red from blue by **1.1 millimetres** — a thirtieth of
+one voxel. Water is the best case at about 4 millimetres. The feature works; every scene we have is
+between three and thirty times too thin to show it. I've written the numbers into a test so nobody
+has to wonder again.

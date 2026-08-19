@@ -86,7 +86,7 @@ struct Cluster {
     i64 span_z() const { return max_z - min_z + 1; }
 };
 
-// Radiance a voxel gives off, from its visual record. Matches material_of() in pathtrace.comp
+// Radiance a voxel gives off, from its visual record. Matches material_of() in pt_material.glsl
 // exactly: the same squared scale and the same RGB565 tint. Two places computing this
 // differently would light the scene one way and aim the rays another.
 void emitted_radiance(const VisualRecord& visual, f32& red, f32& green, f32& blue) {
@@ -131,7 +131,7 @@ f64 contribution(const LightSource& light, i64 centre_x, i64 centre_y, i64 centr
     const f64 dz = static_cast<f64>(static_cast<i64>(light.z) - centre_z);
     const f64 distance_sq = std::max(dx * dx + dy * dy + dz * dz, 1.0);
     const f64 radius = 0.87 * std::cbrt(static_cast<f64>(std::max(light.voxels, 1u)));
-    // The same weights as face_luminance() in pathtrace.comp, so the ranking here agrees with
+    // The same weights shaders/shade_faces.comp uses to rank a lamp, so the ranking here agrees with
     // the importance the shader will put on the same lamp.
     const f64 luminance = 0.2126 * static_cast<f64>(light.red) +
                           0.7152 * static_cast<f64>(light.green) +

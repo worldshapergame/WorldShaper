@@ -27,10 +27,25 @@ struct QualityKnobs {
     // a voxel is a pixel"; above that, detail drops sooner with distance.
     f32 detail_bias = 1.0f;
 
-    // Path tracer: one pixel in this many may trace past its primary ray in a frame.
+    // THESE TWO HAVE HAD NO READER SINCE R3d, AND MOVING THEM DOES NOTHING. See D704.
+    //
+    // Both are written into `TracePush::quality` every frame by `make_trace_push`, and `uvec4
+    // quality` is declared in the GLSL mirrors of that block in shaders/clouds.comp and
+    // shaders/resolve.comp -- and nothing anywhere reads it. The pass that would want a shadow
+    // sample target is the FACE pass, which does not see this block at all: it takes its light
+    // count from `node_push.light_count`, a different push constant.
+    //
+    // This is D577 from the other side. There, `kPreviewExposure` was a constant with no WRITER
+    // after R3d deleted the tracer and R1e the buffer under it, and two clips written to test
+    // exposure could not be used for months. Here it is writers with no READER. Both are the same
+    // shape: a deletion leaves the two ends of a wire in different files, and neither end looks
+    // broken on its own.
+    //
+    // Left in place rather than removed, because the words are part of a std140 block laid out by
+    // POSITION and removing one without removing it from both mirrors is worse than leaving it.
+    // What is owed is deciding whether the face pass should read them -- a shadow-sample target is
+    // a real knob for it -- or whether they go with the tracer that wanted them.
     u32 refine_stride = 4;
-
-    // Path tracer: how many shadow samples a face gathers before pixels stop tracing for it.
     u32 shadow_target = 96;
 
     // There is no bounce-depth knob here, and there cannot be one. A path in this renderer

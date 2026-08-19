@@ -11787,3 +11787,55 @@ no two figures are comparable. The gate was taken on four clips whose hash *is* 
 | D703 | **The hero weights are normalised per channel** | correctness | One divisor for all three is clear glass tinting a room green, at 0.825 of red and blue |
 | D703 | **Dispersion is built and is a millimetre** | honesty | 1.1 mm through 12 cm of dense flint; `VisualRecord` needs an `abbe` byte |
 | D703 | **The facility could not be measured, for the third time this wave** | process | Its content hash changes on every run as the ladder fills the cache |
+
+---
+
+## D704 — two quality settings with no reader, and the stale comments that led to them
+
+**2026-08-19, found by the integrator while clearing D702's list of stale path-tracer references.**
+
+`TracePush::quality` is four words the host fills in every frame:
+
+```cpp
+trace.quality[0] = quality_.knobs().refine_stride;    // "Path tracer: one pixel in this many..."
+trace.quality[1] = quality_.knobs().shadow_target;    // "Path tracer: how many shadow samples..."
+trace.quality[2] = (shadow_refresh_frames_ > 0) ? 1u : 0u;
+trace.quality[3] = light_count_;
+```
+
+`uvec4 quality` is declared in the GLSL mirrors of that block in `shaders/clouds.comp` and
+`shaders/resolve.comp` — and **nothing anywhere reads it.** Every mention of the word in `shaders/`
+is those two declarations and three unrelated comments. The face pass, which is what would want a
+shadow-sample target, does not see this block at all: it takes its light count from
+`node_push.light_count`, a different push constant entirely.
+
+**So `refine_stride` and `shadow_target` are settings a player can move that do nothing**, and they
+have been since R3d deleted the tracer that read them. The fields stay in the block for layout —
+std140 lays out by position, so removing a word without removing it from both mirrors is worse than
+leaving it — but the two knobs are the interesting half.
+
+**This is D577's fault seen from the other side.** There, `kPreviewExposure` was a constant with no
+**writer**, because R3d deleted the tracer and R1e the buffer under it, and two clips written to test
+exposure could not be used for months. Here it is writers with no **reader**. Both are the same
+shape: *a deletion leaves the two ends of a wire in different files, and neither end looks broken on
+its own.*
+
+**How it was found is worth as much as the finding.** D702 listed the stale comments naming the
+deleted `pathtrace.comp`, and repointing them meant checking, for each, whether the counterpart had
+moved or vanished. Most had moved — `kMaxLights` to `shaders/node.glsl`, `material_of` to
+`shaders/pt_material.glsl`, the lamp-ranking weights to `shaders/shade_faces.comp`, and those three
+comments now name the file that actually holds the other end. `hash_u32` had not moved anywhere: it
+is copied into three shaders and the comment claimed a single home for it, so it now says there are
+three and that a change to the mix has to be made three times. **The two knobs are what was left when
+every other comment had a counterpart to point at.**
+
+Not removed here: the fields are in `src/game/quality.hpp` and `src/app/main.cpp`, and `main.cpp` was
+held by another agent of this wave. `quality.hpp` carries a note against both fields instead, so the
+next reader does not tune them.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D704 | **`refine_stride` and `shadow_target` have had no reader since R3d** | fault | The host writes them every frame; every mention in `shaders/` is a declaration or a comment |
+| D704 | **D577's fault from the other side** | honesty | There, a constant with no writer; here, writers with no reader. A deletion leaves the two ends of a wire in different files |
+| D704 | **Three stale comments had counterparts that had MOVED, and were repointed** | correctness | `kMaxLights` to `node.glsl`, `material_of` to `pt_material.glsl`, the lamp weights to `shade_faces.comp` |
+| D704 | **`hash_u32` has three copies and the comment claimed one home** | correctness | It now says three, and that the mix changes in three places or the sky stops matching itself |

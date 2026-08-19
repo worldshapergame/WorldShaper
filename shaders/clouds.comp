@@ -66,9 +66,11 @@ layout(push_constant) uniform Trace {
 const float kPi = 3.14159265358979;
 const int kChunkEdge = 256;
 
-// The sky's own noise wants this. It is defined in pathtrace.comp rather than in a shared file, and
-// copying four lines is better than including the whole sampling header for them — that header
-// brings a second definition of kPi and a dozen functions this pass never calls.
+// The sky's own noise wants this. R3d deleted pathtrace.comp, where this comment used to say it
+// was defined; there is no single home for it now and there are THREE copies -- here, in
+// resolve.comp and in shade_faces.comp. Copying four lines is still better than including the whole
+// sampling header for them, which brings a second definition of kPi and a dozen functions this pass
+// never calls. If the mix ever changes, it changes in three places or the sky stops matching itself.
 uint hash_u32(uint x) {
     x ^= x >> 16; x *= 0x7feb352du;
     x ^= x >> 15; x *= 0x846ca68bu;

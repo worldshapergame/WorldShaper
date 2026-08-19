@@ -69,7 +69,7 @@ inline constexpr i64 kLightFittingVoxels = 32;
 inline constexpr u32 kLightMergeSlack = 8;
 
 // More than this and the weakest are dropped. Matched by `const uint kMaxLights` in
-// shaders/pathtrace.comp, and the two have to agree: the shader has no separate flag for a
+// shaders/node.glsl, and the two have to agree: the shader has no separate flag for a
 // truncated list, it infers one from `count == kMaxLights` and turns direct light sampling off
 // entirely when it sees that. So a list of exactly this length means "do not trust me", and a
 // shorter one means "these are all of them".
