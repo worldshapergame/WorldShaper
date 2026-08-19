@@ -617,20 +617,38 @@ let lib_zl_s = difference {
     lib_zl_ex
 }
 
-# North faces south, so its rank is the same rank turned half a turn about y. A rotation is an
-# isometry and carries a box; it is caught in the zone box in any case.
-let lib_bkl_a = union { intersection { translate { rotate { lib_fl_a } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
-                        intersection { translate { lib_fl_a } -10.80 7.245 -6.33  lib_zl_s } }
-let lib_bkl_b = union { intersection { translate { rotate { lib_fl_b } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
-                        intersection { translate { lib_fl_b } -10.80 7.245 -6.33  lib_zl_s } }
-let lib_bkl_c = union { intersection { translate { rotate { lib_fl_c } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
-                        intersection { translate { lib_fl_c } -10.80 7.245 -6.33  lib_zl_s } }
-let lib_bkl_d = union { intersection { translate { rotate { lib_fl_d } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
-                        intersection { translate { lib_fl_d } -10.80 7.245 -6.33  lib_zl_s } }
-let lib_bkl_e = union { intersection { translate { rotate { lib_fl_e } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
-                        intersection { translate { lib_fl_e } -10.80 7.245 -6.33  lib_zl_s } }
-let lib_bkl_f = union { intersection { translate { rotate { lib_fl_f } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
-                        intersection { translate { lib_fl_f } -10.80 7.245 -6.33  lib_zl_s } }
+# WHICH END OF A BOOK IS ITS SPINE, AND IT WAS AGAINST THE WALL IN BOTH PRESSES.
+#
+# Reported from playing: the bookshelves look the wrong direction, and asked what that meant,
+# *"spines face into the wall"*. They did, in both ranks, and the reason is two lines apart.
+#
+# Every book above is drawn from **z = 0** and they have DIFFERENT depths -- 0.3150, 0.2925,
+# 0.3150, 0.3000, 0.3150, 0.2925. So the rank is flush at z = 0 and ragged at the far end,
+# which is how books stand on a shelf: flush at the spine, ragged at the fore-edge. **z = 0 is
+# the spine face**, and nothing in the file said so, which is why it survived.
+#
+# The north press was turned half a turn about y and translated to z = -3.72, putting local
+# z = 0 at -3.72 -- its WALL is at -3.70. The south press was not turned and translated to
+# -6.33, putting local z = 0 at -6.33 -- its WALL is at -6.35. **Both flush faces landed on
+# the wall**, so both ranks showed the room their fore-edges. The rotation was doing its job
+# and the pair was consistent; it was consistently backwards.
+#
+# So the turn moves to the SOUTH rank and each offset moves to the room side of its zone. The
+# occupied band is unchanged -- the deepest book still spans -4.035..-3.72 and -6.33..-6.015 --
+# and only which end is flush has swapped. A rotation is an isometry and carries a box; it is
+# caught in the zone box in any case.
+let lib_bkl_a = union { intersection { translate { lib_fl_a } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { rotate { lib_fl_a } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
+let lib_bkl_b = union { intersection { translate { lib_fl_b } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { rotate { lib_fl_b } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
+let lib_bkl_c = union { intersection { translate { lib_fl_c } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { rotate { lib_fl_c } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
+let lib_bkl_d = union { intersection { translate { lib_fl_d } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { rotate { lib_fl_d } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
+let lib_bkl_e = union { intersection { translate { lib_fl_e } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { rotate { lib_fl_e } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
+let lib_bkl_f = union { intersection { translate { lib_fl_f } -10.80 7.245 -4.035  lib_zl_n }
+                        intersection { translate { rotate { lib_fl_f } y=0.5 } -10.80 7.245 -6.015  lib_zl_s } }
 
 # The upper rank: period 0.315 (0.7 M), six spines, TWO gaps, and one width of 0.048 which is the
 # only number in this file that is not a module fraction. It is there on purpose -- a rank whose
@@ -653,18 +671,18 @@ let lib_fu_f = repeat { repeat { lib_bu_f } x=0.315 nx=15 } y=0.30 ny=1
 let lib_zu_n = difference { box -14.85 9.14 -4.00   -6.975 10.07 -3.70   lib_up_ups }
 let lib_zu_s = difference { box -14.85 9.14 -6.31   -6.975 10.07 -6.02   lib_up_ups }
 
-let lib_bku_a = union { intersection { translate { rotate { lib_fu_a } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
-                        intersection { translate { lib_fu_a } -10.755 9.525 -6.30  lib_zu_s } }
-let lib_bku_b = union { intersection { translate { rotate { lib_fu_b } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
-                        intersection { translate { lib_fu_b } -10.755 9.525 -6.30  lib_zu_s } }
-let lib_bku_c = union { intersection { translate { rotate { lib_fu_c } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
-                        intersection { translate { lib_fu_c } -10.755 9.525 -6.30  lib_zu_s } }
-let lib_bku_d = union { intersection { translate { rotate { lib_fu_d } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
-                        intersection { translate { lib_fu_d } -10.755 9.525 -6.30  lib_zu_s } }
-let lib_bku_e = union { intersection { translate { rotate { lib_fu_e } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
-                        intersection { translate { lib_fu_e } -10.755 9.525 -6.30  lib_zu_s } }
-let lib_bku_f = union { intersection { translate { rotate { lib_fu_f } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
-                        intersection { translate { lib_fu_f } -10.755 9.525 -6.30  lib_zu_s } }
+let lib_bku_a = union { intersection { translate { lib_fu_a } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { rotate { lib_fu_a } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
+let lib_bku_b = union { intersection { translate { lib_fu_b } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { rotate { lib_fu_b } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
+let lib_bku_c = union { intersection { translate { lib_fu_c } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { rotate { lib_fu_c } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
+let lib_bku_d = union { intersection { translate { lib_fu_d } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { rotate { lib_fu_d } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
+let lib_bku_e = union { intersection { translate { lib_fu_e } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { rotate { lib_fu_e } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
+let lib_bku_f = union { intersection { translate { lib_fu_f } -10.80 9.525 -3.99  lib_zu_n }
+                        intersection { translate { rotate { lib_fu_f } y=0.5 } -10.755 9.525 -6.03  lib_zu_s } }
 
 # THE TWO PILES, lying flat in the two gaps the rank leaves. Three volumes each, 0.24 by 0.30 by
 # 0.042, every one of them shifted a few millimetres off the one under it, and the bottom one buried

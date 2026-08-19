@@ -3950,3 +3950,41 @@ One thing I've corrected along the way: the note inside `facility.clip` still sa
 this was broken. It was true when written and false for three days, and it's the first thing anyone
 reads when they go looking for exactly this problem — so it sent me hunting for a fault that had
 already been fixed. It now says what happened and that it's done.
+
+## The colonnade's gravel was running under the building, and through the crypt
+
+You said the colonnade overlaps the front of the crypt. It did, and it was the **gravel**.
+
+The forecourt's stonework all stops where it should — the file even says where, "the arms open toward
+the great steps, which end at z = −15.70". But the gravel apron around the oval is drawn as a *ring*,
+and a ring has no ends. Its northern arc simply kept going: fourteen metres past the steps, under the
+main building, and straight through the front of the crypt — a 32-centimetre slab of gravel sitting
+inside a room.
+
+It's now cut to the shape of the ground it lies on, rather than to a number I'd have had to invent —
+gravel outside the ground is gravel with nothing under it, and tying it to the ground means the two
+can't drift apart later. That removed **1,294 voxels** that had been inside the building.
+
+One thing I have *not* changed and want to flag: the court paving itself is a 21.6 m circle, and the
+very tip of it still reaches about 7 m into the crypt's area — a narrow sliver near the centre line.
+That's the court, not an apron, and a forecourt running right up to a building's face is arguably
+correct, so I left it. If you still see something in the crypt, that tip is where to look.
+
+## The bookshelves were facing backwards — both of them
+
+You said the spines face into the wall. They did, in **both** presses, and here's how a thing like
+that hides.
+
+Every book is drawn from the same starting edge but they have *different depths* — 31.5 cm, 29.25,
+31.5, 30, 31.5, 29.25. So a row of them is flush along one face and ragged along the other, which is
+exactly how books sit on a real shelf: flush at the spines, ragged at the fore-edges. **The flush face
+is the spine** — and nothing anywhere in the file said so.
+
+The north shelving is turned a half-turn so it faces the other way, which is correct and necessary.
+But both ranks ended up with their *flush* edge against their own wall. So the rotation was doing its
+job, the two presses agreed with each other perfectly, and they agreed on being backwards. Nothing
+about them looks asymmetric or broken from the outside — only somebody standing in the room can see
+it, and you did.
+
+Both tiers, all twenty-four runs of shelving, now have their flush edge facing the room. The books
+occupy exactly the same space as before; only which end you're looking at has changed.

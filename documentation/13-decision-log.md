@@ -12389,3 +12389,78 @@ diff cut from the older base.
 | D710 | **R5c's second half does not resolve in the picture** | honesty | 1.300 against a 1.073 floor; held by arithmetic in a test instead |
 | D710 | **The 4x speckle gate is not this change's gate** | honesty | Anti-aliasing a one-pixel post against sky raises deviation-from-median by construction |
 | D710 | **Two agents were given one shader, and that was mine** | honesty | The rule exists for this; the second was redirected rather than the first reverted |
+
+---
+
+## D712 — the colonnade's gravel ran under the building, and the library's spines faced the wall
+
+**2026-08-19, both reported from playing, and both found by arithmetic rather than by a picture** —
+which matters, because the estate cannot be rendered to a settled frame and three attempts to
+photograph the first one came back as empty sky.
+
+### The colonnade: a cylinder has no end and nobody gave it one
+
+*"the colonnade also overlaps with the front of the main facilities crypt."*
+
+`part_colonnade` measured **z −46.0 .. −1.5**, and the file's own header says where it ends: *the arms
+open northward toward the great steps, **which end at z = −15.70***. Fourteen metres of something was
+past that, and it was the apron:
+
+```
+let colon_grav_out = cylinder 0 -0.14 0  r=27.90 h=0.32 axis=y
+let colon_gravel   = difference { colon_grav_out colon_grav_in }
+```
+
+An annulus about the oval's centre with an outer radius of **27.90**, translated to world z −29.00 —
+so its northern arc reached **world z −1.10**. The main block spans z −16.5 .. 8.0 and **the crypt
+spans z −9.5 .. 6.0 at y −1.5 .. 2.0**, and the gravel sits at y −0.30 .. 0.02. **A 0.32 m slab of
+gravel ran under the building and straight through the crypt's front.**
+
+**The stone obeyed the header and the ground obeyed it too** — `colon_ground` is a box stopping at
+local z +14.85, world −14.15. Only the gravel was unbounded, because it is a cylinder and a cylinder
+has no end.
+
+Clipped to **the ground's own footprint** rather than to a number invented for the purpose, so the two
+can never drift: gravel outside the ground is gravel with nothing under it. A generous y on the
+clipping box, because the apron stands 0.02 proud of the ground and intersecting the ground itself
+would shave that lip off.
+
+**Measured:** the estate at metre 2 goes **142,147 → 140,853 voxels**, a fall of **1,294** — the gravel
+that had been inside the building and the crypt. The colonnade's own extent goes z −1.5 → **−8.0**.
+
+**What remains, said rather than quietly left:** the court paving is `cylinder r=21.60`, whose northern
+tip reaches world **−7.40** — still inside the crypt's box, though only as a narrow sliver near x ≈ 0
+where the circle's tip is. It is the court itself rather than an apron, and a baroque forecourt
+running up to the building's face is arguably right, so it is **not** changed here. If the crypt still
+shows it, that tip is where to look.
+
+### The library: which end of a book is its spine
+
+*"in the library the bookshelves look the wrong direction"* — and, asked what that looked like,
+**"spines face into the wall."**
+
+They did, in both presses, and nothing in the file said which end the spine was. Every book is drawn
+from **z = 0** with a *different* depth — 0.3150, 0.2925, 0.3150, 0.3000, 0.3150, 0.2925 — so the rank
+is **flush at z = 0 and ragged at the far end**, which is how books stand on a shelf: flush at the
+spine, ragged at the fore-edge. **z = 0 is the spine face.**
+
+The north press was turned a half turn about y and translated to z −3.72, putting local z = 0 at
+−3.72 — its wall is at −3.70. The south press was not turned and was translated to −6.33, putting
+local z = 0 at −6.33 — its wall is at −6.35. **Both flush faces landed on the wall.**
+
+**The rotation was doing its job and the pair was consistent. It was consistently backwards** — which
+is why it survived: the two ranks agree with each other, and nothing about them looks asymmetric or
+broken. Only a person standing in the room can see it, and one did.
+
+So the turn moves to the SOUTH rank and each offset moves to the room side of its zone, in both the
+lower and the upper tier — twenty-four runs. **The occupied band is unchanged**: the deepest book
+still spans −4.035 .. −3.72 and −6.33 .. −6.015. Only which end is flush has swapped.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D712 | **The colonnade's gravel apron was an unbounded cylinder** | fault | Reached world z −1.10 against a header saying the arms end at −15.70; 1,294 voxels inside the building and crypt |
+| D712 | **It is clipped to the ground's own footprint, not to a new number** | design | Gravel outside the ground is gravel with nothing under it, and two numbers cannot drift if there is one |
+| D712 | **The court paving's tip still reaches −7.40 and is left alone** | honesty | It is the court, not an apron, and a forecourt meeting the building's face is arguably right |
+| D712 | **A book's spine is the end its rank is FLUSH at** | correction | Six depths, all drawn from z = 0; nothing in the file said so and that is why it survived |
+| D712 | **Both presses had their spines against the wall** | fault | The rotation was correct and the pair consistent — consistently backwards |
+| D712 | **Both faults were found by arithmetic, not by a picture** | method | The estate cannot be rendered to a settled frame; three attempts came back as empty sky |
