@@ -1,0 +1,176 @@
+#version 450
+// R6a and R6b: the post stage, as a pass of its own.
+//
+// Two things happen here and they are two dispatches of this one shader, chosen by `push.pass`:
+//
+//   pass 0, the SHUTTER (R6b). Reads the composite, smears each pixel back along the direction
+//           what it is looking at is travelling, and writes the result somewhere else. Somewhere
+//           else, and not in place, because a blur reads its neighbours and a dispatch that wrote
+//           into the image it is reading would have each invocation racing whichever of its
+//           neighbours happened to run first -- which does not fail, it just quietly reads a mix
+//           of blurred and unblurred pixels that changes from run to run.
+//
+//   pass 1, the COMBINE (R6a). Reads the composite -- or what the shutter left, if it ran --
+//           adds the glare chain, and writes the frame that is presented. This one IS in place
+//           when the shutter did not run, because every invocation touches only its own pixel.
+//
+// The glare chain itself is `bloom_down.comp` and `bloom_up.comp`; by the time this runs, level 0
+// of it holds every level summed, and all that is left to do is scale it and add it.
+//
+// # The one thing that is not right yet, said plainly
+//
+// `pt_post.glsl`'s own opening says glare belongs on the EXPOSED image, before the curve, because
+// bloom applied after the curve cannot blow anything out. This pass reads the composite, which
+// `resolve.comp` has already tone mapped and gamma encoded, so the glare here is added after the
+// curve: a lamp a hundred times over white and a lamp four times over it both read as white and
+// glare the same amount. The threshold and the knee are carried across the curve so they land on
+// the same pixels (see `bloom_display_threshold`), and what is lost is the MAGNITUDE above white.
+//
+// The fix is one change to a file this pass does not own -- `resolve.comp` writing linear radiance
+// and leaving the curve to post -- and it is written out in the decision log rather than done
+// here, because two passes editing one shader in one session is the trap that costs an afternoon.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// What to read and what to write. They are the same image when the shutter did not run.
+layout(binding = 0, rgba8) uniform readonly image2D in_colour;
+layout(binding = 1, rgba8) uniform writeonly image2D out_colour;
+// Level 0 of the glare chain, at half resolution, holding every level summed.
+layout(binding = 2, rgba16f) uniform readonly image2D in_bloom;
+// How far the primary ray got, which is the only thing the shutter needs that a colour image
+// cannot tell it. `.w` is the hit distance as float bits; see shaders/visibility.comp.
+layout(binding = 3, rgba32ui) uniform readonly uimage2D in_visibility;
+
+layout(std140, binding = 4) uniform Params {
+#include "params.glsl"
+} push;
+
+layout(push_constant) uniform Post {
+    uint pass;          // 0 the shutter, 1 the combine
+    float bloom_scale;  // kBloomIntensity divided by the number of levels; 0 means no glare
+    uint pad0;
+    uint pad1;
+} post;
+
+#include "pt_post.glsl"
+
+const uint kPassShutter = 0u;
+const uint kPassCombine = 1u;
+
+vec3 read_linear(ivec2 at) { return display_to_linear(imageLoad(in_colour, at).rgb); }
+
+// The glare at this pixel, read out of a chain that is half the width and half the height.
+//
+// Bilinear rather than nearest, and it matters more here than anywhere else in the chain: this is
+// the last step, so a nearest read would put the half-resolution grid straight onto the screen as
+// two-pixel blocks along every glare edge.
+vec3 sample_bloom(ivec2 pixel) {
+    ivec2 size = (ivec2(push.resolution.xy) + 1) / 2;
+    vec2 centre = (vec2(pixel) + 0.5) * 0.5 - 0.5;
+    ivec2 base = ivec2(floor(centre));
+    vec2 frac = centre - vec2(base);
+    ivec2 limit = size - 1;
+
+    vec3 sum = vec3(0.0);
+    for (int dy = 0; dy < 2; ++dy) {
+        for (int dx = 0; dx < 2; ++dx) {
+            float weight = (dx == 0 ? 1.0 - frac.x : frac.x) * (dy == 0 ? 1.0 - frac.y : frac.y);
+            sum += imageLoad(in_bloom, clamp(base + ivec2(dx, dy), ivec2(0), limit)).rgb * weight;
+        }
+    }
+    return sum;
+}
+
+// Smeared along the direction it is travelling.
+//
+// Taps are spread over the streak and averaged evenly, which is what a shutter open for a fixed
+// fraction of the frame actually does. The tap COUNT follows the length, so a short streak costs
+// almost nothing and a long one is still bounded: the cost of this is proportional to how fast the
+// player is turning, and a player standing still pays for one compare.
+//
+// Averaged in LINEAR light and not in display values. The curve is concave, so a mean of encoded
+// pixels is darker than the mean of the light behind them -- which shows as a streak past a bright
+// window coming out grey instead of bright.
+vec3 shutter(ivec2 pixel, vec3 here, vec2 velocity) {
+    float open = push.motion.x;
+    if (open <= 0.0) return here;
+
+    vec2 streak = velocity * open;
+    float length_px = length(streak);
+    if (length_px < 0.75) return here;   // less than a pixel is not a blur, it is a rounding error
+
+    float longest = max(push.motion.y, 1.0);
+    if (length_px > longest) {
+        streak *= longest / length_px;
+        length_px = longest;
+    }
+
+    // One tap every `spacing` pixels, and the spacing follows the frame rather than being one
+    // pixel everywhere.
+    //
+    // The tap count used to be the streak's length in PIXELS, which makes the shutter the one part
+    // of this renderer whose cost grows with resolution twice over: once because there are more
+    // pixels to blur and again because each of them takes more taps. Measured, turning at 60 deg/s:
+    // post at 4K was **1.897 ms** against a 1.0 ms budget, and 1.14 ms of that was this loop.
+    //
+    // A smear is a low-pass, and sampling a 24-pixel streak every pixel at 4K is asking for detail
+    // inside a blur. So the spacing is a fraction of the frame height, pinned at one pixel at 800
+    // lines -- which is the resolution documentation/09-performance-budgets.md is written at, so
+    // the picture there is exactly what it was.
+    float spacing = max(1.0, float(push.resolution.y) * (1.0 / 800.0));
+    int taps = int(min(length_px / spacing, 15.0)) + 1;
+    ivec2 limit = ivec2(push.resolution.xy) - 1;
+    vec3 sum = here;
+    float weight = 1.0;
+    for (int i = 1; i <= taps; ++i) {
+        // Backwards along the streak: the smear trails where the pixel came FROM, which is what a
+        // shutter records. Forwards as well would smear into places the surface has not been and
+        // reads as a glow ahead of everything.
+        float where = float(i) / float(taps);
+        ivec2 at = clamp(pixel - ivec2(streak * where + 0.5), ivec2(0), limit);
+        sum += read_linear(at);
+        weight += 1.0;
+    }
+    return sum / weight;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= int(push.resolution.x) || pixel.y >= int(push.resolution.y)) return;
+
+    vec3 linear = read_linear(pixel);
+
+    if (post.pass == kPassShutter) {
+        // The same ray the composite drew this pixel with, so the world point below is the one it
+        // shaded rather than an approximation of it.
+        vec2 uv = (vec2(pixel) + 0.5) / vec2(push.resolution.xy) * 2.0 - 1.0;
+        float aspect = float(push.resolution.x) / float(push.resolution.y);
+        vec3 dir = normalize(push.forward.xyz +
+                             push.right.xyz * uv.x * push.lens.x * aspect -
+                             push.up.xyz * uv.y * push.lens.x);
+
+        uvec4 visibility = imageLoad(in_visibility, pixel);
+        bool hit = visibility.x != 0xFFFFFFFFu;
+        float t = uintBitsToFloat(visibility.w);
+        // A ray that reached nothing is put at the far plane rather than dropped. The sky has no
+        // surface, but it still swings across the screen when the camera turns -- and a sky left
+        // sharp while everything in front of it streaks is the one artefact of this that reads as
+        // a bug rather than as a camera.
+        if (!hit || !(t > 0.0) || isinf(t) || t > push.lens.y) t = push.lens.y;
+
+        vec3 world_point = push.origin.xyz + dir * t;
+        vec2 velocity = post_screen_velocity(world_point, pixel, vec2(push.resolution.xy), aspect,
+                                             push.lens.x, push.prev_origin.xyz,
+                                             push.prev_forward.xyz, push.prev_right.xyz,
+                                             push.prev_up.xyz);
+        linear = shutter(pixel, linear, velocity);
+        imageStore(out_colour, pixel, vec4(linear_to_display(linear), 1.0));
+        return;
+    }
+
+    // The glare, at ten per cent of what got past the threshold. See pt_post.glsl for why one
+    // number serves both a flat bright sky and a single hot pixel.
+    if (post.bloom_scale > 0.0) linear += sample_bloom(pixel) * post.bloom_scale;
+
+    imageStore(out_colour, pixel, vec4(clamp(linear_to_display(linear), 0.0, 1.0), 1.0));
+}

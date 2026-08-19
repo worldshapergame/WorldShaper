@@ -110,7 +110,12 @@ foreach ($view in $viewList) {
         $png = Join-Path $shots ("{0}-{1}.png" -f $view, $size)
         if (Test-Path $png) { Remove-Item $png }
 
-        $runArgs = @("--pathtrace", "--debug-mode", "11",
+        # R3d deleted the reference path tracer -- shaders/pathtrace.comp, pt_normals.glsl, the
+        # --pathtrace flag, the F4 toggle and the branch itself (D517, D518). The binary WARNS about an
+        # unknown argument and then IGNORES it, so a run that still passes --pathtrace comes back
+        # looking like a perfectly good measurement of a mode that does not exist. That is trap 15, and
+        # tools/baseline.ps1 already refuses it by name for the same reason.
+        $runArgs = @("--debug-mode", "11",
                      "--screenshot", $png, "--screenshot-frame", "$Frames",
                      "--width", "$($wh[0])", "--height", "$($wh[1])",
                      "--cam", $WsViews[$view], "--quality", "$Quality",

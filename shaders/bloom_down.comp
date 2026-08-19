@@ -1,0 +1,89 @@
+#version 450
+// R6a, step one of two: the glare chain going down.
+//
+// One dispatch per level, each halving the one above it. The first is different from the rest and
+// that is the whole reason this shader has a mode rather than being two shaders:
+//
+//   mode 0  reads the COMPOSITE -- an 8-bit display image -- decodes its gamma, applies the
+//           threshold and the knee, and writes the half-resolution head of the chain.
+//   mode 1  reads the level above and writes the next one down. No threshold: what is in the
+//           chain has already been through it, and applying it twice would eat the tail.
+//
+// Why the first step is where the cost is: it is the only one that touches every pixel of the
+// frame. Everything below it is a quarter the size of the thing before it, so the whole rest of
+// the chain together is a third of one full-resolution pass. That is the arithmetic R6a exists
+// for -- the gather this replaces took up to 437 taps per pixel at 1440p, and every one of them
+// was a full-resolution read.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// The composite, as the frame ended up on screen. Read only in mode 0.
+layout(binding = 0, rgba8) uniform readonly image2D in_display;
+// The level above, in linear light. Read only in mode 1.
+layout(binding = 1, rgba16f) uniform readonly image2D in_level;
+// The level being written.
+layout(binding = 2, rgba16f) uniform writeonly image2D out_level;
+
+layout(push_constant) uniform Down {
+    ivec2 source_size;
+    ivec2 destination_size;
+    uint mode;          // 0 the first step, from the composite; 1 every step below it
+    uint pad0;
+    uint pad1;
+    uint pad2;
+} push;
+
+#include "pt_post.glsl"
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= push.destination_size.x || pixel.y >= push.destination_size.y) return;
+
+    ivec2 limit = push.source_size - 1;
+    ivec2 base = pixel * 2;
+    vec3 sum = vec3(0.0);
+
+    if (push.mode == 0u) {
+        // The two-by-two block this destination pixel stands for, weighted so that a single very
+        // bright pixel cannot dominate the block it is averaged into.
+        //
+        // That weighting -- one over one plus the luminance -- is what stops a specular glint or a
+        // stray firefly turning into a large soft blob three levels down. It costs nothing on a
+        // flat region, because there every weight is the same and the result is the plain mean,
+        // which is what the chain's normalisation depends on.
+        float weights = 0.0;
+        float threshold;
+        float knee;
+        bloom_display_limits(threshold, knee);
+        for (int dy = 0; dy < 2; ++dy) {
+            for (int dx = 0; dx < 2; ++dx) {
+                ivec2 at = clamp(base + ivec2(dx, dy), ivec2(0), limit);
+                vec3 linear = display_to_linear(imageLoad(in_display, at).rgb);
+                vec3 over = bloom_source(linear, threshold, knee);
+                float weight = 1.0 / (1.0 + post_luminance(over));
+                sum += over * weight;
+                weights += weight;
+            }
+        }
+        sum /= max(weights, 1e-6);
+    } else {
+        // A four-by-four tent, separable [1,3,3,1], centred on the same two-by-two block. Wider
+        // than a box on purpose: the levels below this are what the glare's REACH is made of, and
+        // a box halving leaves each of them a sampled copy of the one above rather than a smooth
+        // one -- which shows as the whole glare stepping in blocks when the camera moves.
+        //
+        // Clamped at the edge rather than dropped. The old gather dropped taps that ran off the
+        // frame, because clamping there read one edge pixel dozens of times over and printed a
+        // band of its colour along all four sides. Four taps cannot do that: the most any edge
+        // pixel is read is twice, and the weights still sum to one.
+        for (int dy = 0; dy < kBloomDownSpan; ++dy) {
+            for (int dx = 0; dx < kBloomDownSpan; ++dx) {
+                ivec2 at = clamp(base + ivec2(dx - 1, dy - 1), ivec2(0), limit);
+                sum += imageLoad(in_level, at).rgb *
+                       (kBloomDownWeight[dx] * kBloomDownWeight[dy]);
+            }
+        }
+    }
+
+    imageStore(out_level, pixel, vec4(sum, 1.0));
+}

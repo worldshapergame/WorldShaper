@@ -12,7 +12,10 @@ foreach($p in @(@{n="in-east";y=0},@{n="in-northeast";y=45},@{n="in-north";y=90}
 $views+=@{n="in-up";cam=("{0:0.###},{1:0.###},{2:0.###},90,62" -f 0,(3.50*$s),(-2.60*$s))}
 $common=@("--clip-file","clips\facility.clip","--clip-metre","$Metre","--no-vsync","--no-update-check",
           "--width","$W","--height","$H","--screenshot-frame","$Frames")
-if($PT){$common+="--pathtrace"}
+# R3d deleted the reference path tracer (D517, D518). Refused rather than ignored: an unknown
+# argument is warned about and dropped, so asking for the tracer would return a clean-looking
+# measurement of the real-time path. Trap 15, and baseline.ps1 refuses it the same way.
+if($PT){throw "the reference path tracer was deleted by R3d; there is no --pathtrace to measure"}
 $made=@();$labels=@()
 foreach($v in $views){
   $png=Join-Path $Out ($v.n+".png")

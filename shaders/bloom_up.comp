@@ -1,0 +1,59 @@
+#version 450
+// R6a, step two of two: the glare chain coming back up.
+//
+// One dispatch per level, coarsest first, each ADDING itself into the level above it. So by the
+// time the finest level has been written, it holds
+//
+//     D0 + up(D1 + up(D2 + ... ))
+//
+// which is every level of the chain, each spread to the size it was taken at, summed. Divided by
+// how many levels there were -- which `post.comp` does when it applies the intensity -- that has
+// exactly the property the one-pass gather was tuned for and stated in its own comment: a flat
+// expanse over the threshold comes back as itself, because every level of a flat region reads the
+// same value; a single bright pixel comes back peaked, because it is only worth its full value in
+// the finest level and is divided by four again in each level below.
+//
+// So the kernel is dense where it is strong and sparse where it is weak, which is what the 437-tap
+// version bought with a radius. This buys it with levels, and the taps per pixel do not move.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// The level below this one, already holding everything coarser than itself.
+layout(binding = 0, rgba16f) uniform readonly image2D in_coarse;
+// The level being added into. Read and written, one pixel per invocation, so no invocation ever
+// reads a texel another one is writing.
+layout(binding = 1, rgba16f) uniform image2D out_fine;
+
+layout(push_constant) uniform Up {
+    ivec2 coarse_size;
+    ivec2 fine_size;
+} push;
+
+#include "pt_post.glsl"
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= push.fine_size.x || pixel.y >= push.fine_size.y) return;
+
+    // Where this fine pixel's centre falls in the coarse level's texel grid. The half-pixel each
+    // way is the whole of it: without them the upsample is offset by half a coarse texel and the
+    // glare drifts up and to the left of what is glaring, by a pixel at the top of the chain and
+    // by thirty-two at the bottom of it.
+    vec2 centre = (vec2(pixel) + 0.5) * 0.5 - 0.5;
+    ivec2 base = ivec2(floor(centre));
+    vec2 frac = centre - vec2(base);
+
+    vec3 wx = bloom_up_weights(frac.x);
+    vec3 wy = bloom_up_weights(frac.y);
+    ivec2 limit = push.coarse_size - 1;
+
+    vec3 sum = vec3(0.0);
+    for (int dy = 0; dy < 3; ++dy) {
+        for (int dx = 0; dx < 3; ++dx) {
+            ivec2 at = clamp(base + ivec2(dx - 1, dy - 1), ivec2(0), limit);
+            sum += imageLoad(in_coarse, at).rgb * (wx[dx] * wy[dy]);
+        }
+    }
+
+    imageStore(out_fine, pixel, vec4(imageLoad(out_fine, pixel).rgb + sum, 1.0));
+}

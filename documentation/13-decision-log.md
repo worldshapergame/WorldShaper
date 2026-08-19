@@ -11546,3 +11546,129 @@ correct failure**, and the by-hand route is documented beside it.
 | D701 | **A run that DIED is not a world that was refused** | trap | The gate blamed D685 for another agent's `taskkill` |
 | D701 | **Three `package.ps1` faults, all found only by running it** | fault | A stderr WARN, a match inside a success line, and voxels demanded at frame 3 |
 | D701 | **Whether lavapipe can finish the estate in 200 minutes is open** | honesty | `require_whole` failing the job is the correct failure if it cannot |
+
+---
+
+## D702 — R6a and R6b: post is a pass, the glare is a chain, and five harnesses were measuring a mode that does not exist
+
+**2026-08-19.** `shaders/pt_post.glsl` has been included by **nothing** since R3d deleted the tracer,
+and §9 of the plan kept it for exactly this. Its bloom was a single-pass gather taking **up to 437
+taps a pixel at 1440p**, straight out of the accumulation image — and it was dense on purpose: with
+one pass and no chain, a sparse kernel does not blur a small bright thing, it **copies** it, so a
+specular glint comes out as a handful of discrete ghosts in a pattern that never moves and therefore
+never washes out. **That constraint is the one a chain simply does not have.**
+
+So: `bloom_down.comp`, `bloom_up.comp`, `post.comp` and `src/gpu/post_pass.*`, with `pt_post.glsl`
+rebuilt as a **header of arithmetic that declares no binding** — the shape the old one could not
+have, because it read `accum` directly and so every function in it belonged to one pass.
+
+**The three numbers are the same three numbers**, carried across the tone curve rather than restated:
+`kBloomThreshold` 1.0 in exposed units so it follows the light meter, `kBloomKnee` 0.6,
+`kBloomIntensity` 0.10. Sum the levels and divide by how many there were, and a flat expanse over the
+threshold comes back as exactly a tenth of itself — the property the old gather was tuned for.
+
+### Post ≤ 1.0 ms at 4K is MET on the fixed grid and MISSED when the camera turns
+
+Both are said, because only one of them is what `tools/_grid.ps1` measures. Minimum of three repeats,
+run from a privately-named copy of the exe with its own `%LOCALAPPDATA%` because five other agents
+were on the machine and contention only ever adds:
+
+| 3840x2160 | still | turning 60 deg/s |
+|---|---|---|
+| both on | **0.706** | **1.113** |
+| the glare chain only | 0.332 | 0.370 |
+| the shutter only | 0.493 | — |
+| both off | **0.000** | **0.000** |
+
+**0.109 to 0.327 to 0.706 ms at 1280x800, 1440p and 4K against pixel ratios 1 : 3.6 : 8.1** — linear
+in pixels, which is the whole point of a chain and is what the old gather could not be.
+
+**The tap count was the streak's length in PIXELS**, which made the shutter the one thing here whose
+cost grows with resolution *twice over* — more pixels to blur and more taps for each. Turning at 4K it
+read 1.897 / 2.140 / 2.529 ms. It is now one tap every `resolution.y / 800` pixels: **exactly 1.0 at
+the resolution `09-performance-budgets.md` is written at**, so that picture is unchanged to the bit,
+and a 24-pixel streak is sampled nine times at 4K rather than sixteen.
+
+**What is left of the 1.113 is a copy, and it is priced rather than guessed.** A blur reads its
+neighbours, so the shutter cannot write into the image it is reading and needs a second
+full-resolution pass: on a still camera `on minus glare-only` is 0.706 − 0.332 = **0.374 ms of pure
+copy**. It goes away if post's output is PRESENTED instead of written back — four call sites in
+`main.cpp` — which would put the turning case near 0.74.
+
+### The shutter's trip through eight bits is free, and that had to be measured
+
+Post decodes the composite's gamma, works in linear light and encodes again. Per pixel, against a
+repeat of the same arm:
+
+| | mean abs difference of 255 | max | channels moved | direction |
+|---|---|---|---|---|
+| the shutter only, still | 0.334 | 9 | 24.4% | balanced |
+| **two runs of ONE arm — the noise floor** | **0.334** | **9** | **24.4%** | **balanced** |
+| the glare against that floor | **3.54** | 95 | 96.0% | **99.5% brighter** |
+
+**Numerically identical to the floor.** The glare is one-directional and ten times it.
+
+### The glare is added AFTER the curve, and `pt_post.glsl`'s own opening says that is the one thing bloom is not for
+
+The composite hands post an 8-bit display image, so **a lamp a hundred times over white and one four
+times over it read as white and glare identically**. The threshold and knee are carried across the
+curve — `tonemap_aces(1.0)` is 0.619 in display-linear — so they land on the same pixels and only the
+magnitude above white is lost. The fix is one binding and one `imageStore` in `shaders/resolve.comp`
+plus post owning the curve; **it was not done because another agent was in that file**, and the exact
+patch is handed forward in the agent's report.
+
+### R6c was already done at R3d, and what survives is five HARNESSES — one of them live
+
+No `path_trace_`, no `--pathtrace`, no F4 branch; `pathtrace_layout_` is now `cloud_layout_` and
+`face_cache_` does not exist. `Key::F4` survives in `src/platform/window.*` bound to nothing.
+
+**But `main.cpp:1446` warns about an unknown argument and then IGNORES it**, and five scripts were
+still passing `--pathtrace`:
+
+- **`tools/facecount.ps1` passed it UNCONDITIONALLY** — so every face-count run since R3d has
+  silently measured the real-time path while reporting the tracer;
+- `tools/_rot_pt.ps1` likewise;
+- `tools/speckle.ps1`, `tools/views.ps1` and `tools/_rot_sheet.ps1` behind a `-PathTrace` switch that
+  quietly did nothing.
+
+`tools/baseline.ps1` already **throws** on it with the reason written down, and that is now what all
+five do: the two unconditional uses have the flag removed, and the three switches refuse by name
+rather than no-op. **Trap 15 exactly — a clean measurement and a measurement that never ran look
+identical** — and it had been true in the repository for weeks.
+
+Stale comments naming a deleted `pathtrace.comp` remain in `shaders/resolve.comp:143` (which asserts
+F4 still toggles it), `clouds.comp`, `node.glsl`, `pt_material.glsl`, `shade_faces.comp`,
+`src/world/light_list.*` and `src/game/quality.hpp`. None of those files was free this session.
+
+### And one fault found inside its own diff
+
+**The halving kernel was `[1,3,3,1]/16` and had to be `/8`.** The axes multiply, so every level came
+out a **quarter** of the one above and the chain read `D0 + D1/4 + D2/16 + ...`. That is not a dimmer
+glare, it is **a glare with no reach**, and it renders as a perfectly plausible picture — the only
+thing that catches it is adding the weights up.
+
+`--validation` is clean at 1440p with both halves live and the camera turning, and it earned its keep
+twice: a dynamic uniform buffer bound `VK_WHOLE_SIZE` may only take an offset of zero, and **a
+descriptor SET names all of its images whether or not the shader's branch reaches them** — the
+shutter's set names the chain head it never reads, and transitioning per half left that one
+`UNDEFINED` at submit, with a correct picture on screen.
+
+### What could not be measured, and why it is said rather than averaged
+
+**The outdoor camera never settled** — eight runs, **eight different content hashes** — so its four
+figures exist and none of them is a comparison. **`exposure_range.clip` and `glare_test.clip` do not
+converge inside a scripted run at all**: two repeats of one arm move further than the two arms differ
+(185.241 against 190.825 on `glare_test`). `many_lamps.clip` converges to 0.03 of 255, which is why
+every claim above rests on it — and it has **no recorded camera** for D577's 150.598, whose default
+for that clip is inside the central column.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D702 | **The reach comes from the levels, not from a radius** | design | 0.109 to 0.327 to 0.706 ms is linear in pixels rather than pixels times radius squared |
+| D702 | **The threshold is carried across the curve, not restated beside it** | correctness | Two constants would be one decision written twice, and they drift the first time the curve changes |
+| D702 | **Both flags record no command at all** | trap 15 | The two flags off is the composite's own frame to the bit by construction, not by a second path that happens to agree |
+| D702 | **`[1,3,3,1]/8` and not `/16`, and the wrong one renders a plausible picture** | fault | Per-axis weights summing to a half make every level a quarter of the one above: a glare with no reach |
+| D702 | **A descriptor SET names all of its images, not the ones the branch reaches** | trap | Per-half transitions left an image `UNDEFINED` at submit with a correct picture on screen |
+| D702 | **The tap count must not be the streak's length in pixels** | fault | It made the shutter grow with resolution twice over: 2.5 ms turning at 4K |
+| D702 | **Five harnesses were passing `--pathtrace` and one did it unconditionally** | fault | An unknown argument is warned about and ignored, so those runs measured the real-time path and said tracer |
+| D702 | **`many_lamps.clip` is the only one of the three exposure clips a scripted run can measure** | measurement | An arm-to-arm difference smaller than a one-arm repeat is not a difference, and two of the three are entirely inside that |

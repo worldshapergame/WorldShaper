@@ -10,7 +10,12 @@ $views=@(
  @{n="floor";  p=@(0.0,7.20,0.0);   yaw=90;  pit=-64}
 )
 $common=@("--clip-file","clips\facility.clip","--clip-metre","$Metre","--no-vsync","--no-update-check",
-          "--pathtrace","--width","$W","--height","$H","--screenshot-frame","$Frames")
+# R3d deleted the reference path tracer -- shaders/pathtrace.comp, pt_normals.glsl, the
+# --pathtrace flag, the F4 toggle and the branch itself (D517, D518). The binary WARNS about an
+# unknown argument and then IGNORES it, so a run that still passes --pathtrace comes back
+# looking like a perfectly good measurement of a mode that does not exist. That is trap 15, and
+# tools/baseline.ps1 already refuses it by name for the same reason.
+          "--width","$W","--height","$H","--screenshot-frame","$Frames")
 $made=@();$labels=@()
 foreach($v in $views){
   $cam=("{0:0.###},{1:0.###},{2:0.###},{3},{4}" -f ($v.p[0]*$s),($v.p[1]*$s),($v.p[2]*$s),$v.yaw,$v.pit)

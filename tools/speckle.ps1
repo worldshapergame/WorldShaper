@@ -80,7 +80,13 @@ foreach ($f in ($Frames -split "," | ForEach-Object { [int]$_.Trim() })) {
               "--width", "$Width", "--height", "$Height",
               "--screenshot-frame", "$f", "--screenshot", $png, "--cam", $Cam)
     if ($Metre -gt 0) { $shot += @("--clip-metre", "$Metre") }
-    if ($PathTrace) { $shot += "--pathtrace" }
+    # R3d deleted the reference path tracer (D517, D518). Refused by name rather than silently
+    # ignored, which is what tools/baseline.ps1 does and for the same reason: the binary warns
+    # about an unknown argument and then carries on, so a run that still asks for the tracer
+    # returns a clean-looking measurement of the real-time path instead. Trap 15.
+    if ($PathTrace) {
+        throw "the reference path tracer was deleted by R3d; there is no --pathtrace to measure"
+    }
     if ($Fly -ne "") { $shot += @("--fly", $Fly) }
 
     # Deliberately not `2>&1`. Windows PowerShell wraps each stderr line from a native program in

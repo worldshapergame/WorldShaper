@@ -239,7 +239,13 @@ if ($Only -ne "") {
 $common = @("--clip-file", $Clip, "--clip-metre", "$Metre", "--no-vsync", "--no-update-check",
             "--width", "$Width", "--height", "$Height", "--screenshot-frame", "$Frames")
 if ($Part -ne "") { $common += @("--clip-part", $Part) }
-if ($PathTrace) { $common += "--pathtrace" }
+# R3d deleted the reference path tracer (D517, D518). Refused by name rather than silently
+# ignored, which is what tools/baseline.ps1 does and for the same reason: the binary warns
+# about an unknown argument and then carries on, so a run that still asks for the tracer
+# returns a clean-looking measurement of the real-time path instead. Trap 15.
+if ($PathTrace) {
+    throw "the reference path tracer was deleted by R3d; there is no --pathtrace to measure"
+}
 
 $made = @()
 $labels = @()

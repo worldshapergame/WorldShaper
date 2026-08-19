@@ -54,6 +54,7 @@
 #include "gpu/face_light.hpp"
 #include "gpu/field_gpu.hpp"
 #include "gpu/node_buffers.hpp"
+#include "gpu/post_pass.hpp"
 #include "gpu/render_params.hpp"
 #include "gpu/profiler.hpp"
 #include "gpu/screenshot.hpp"
@@ -736,6 +737,14 @@ struct Options {
     // used before the meter existed -- so `--no-auto-exposure` is the picture every figure in the
     // decision log above R6 was measured against, exactly, and not an approximation of it.
     bool auto_exposure = true;
+    // R6a's glare. False records no chain and no combine, so the frame is exactly the one the
+    // composite wrote -- which is the picture every figure in the decision log above R6a was
+    // measured against, and not an approximation of it. `--no-bloom`.
+    bool bloom = true;
+    // R6b's shutter, and the same kind of arm: false records no shutter pass at all. Note that the
+    // quality level ALSO decides whether the shutter is open (`motion_blur_`, which sets
+    // `params.motion[0]`), so this is the outer of two switches and the one an A/B should use.
+    bool motion_blur = true;
     // The ceiling the meter may not expose past, as a multiplier. 0 keeps the shader's own figure.
     //
     // A light meter makes every scene average to the same grey, so without a ceiling there is no
@@ -1295,6 +1304,14 @@ bool parse_options_c(const std::string& arg, int& i, int argc, char** argv, Opti
     } else if (arg == "--no-auto-exposure") {
         // R6a's control arm: the fixed 3.2 this pass applied for the whole of the rewrite.
         options.auto_exposure = false;
+    } else if (arg == "--no-bloom") {
+        // R6a's control arm. Nothing has glared in this renderer since R3d deleted the pass that
+        // did, so this is the state every figure taken before R6a was measured in -- and it is
+        // that state by construction, because the post pass records no command at all with it.
+        options.bloom = false;
+    } else if (arg == "--no-motion-blur") {
+        // R6b's control arm, and the same construction: no shutter pass is recorded.
+        options.motion_blur = false;
     } else if (arg == "--no-face-denoise") {
         // R5a's control arm. Nothing in this renderer filtered across faces before it, so this
         // is the state every figure taken before R5 was measured in.
@@ -1498,6 +1515,9 @@ void print_help() {
         "                        control arm for the flicker while building\n"
         "  --no-auto-exposure    the fixed brightness multiplier of 3.2 this pass applied before\n"
         "                        the light meter existed. R6a's control arm\n"
+        "  --no-bloom            no glare at all: the frame the composite wrote, presented. R6a's\n"
+        "                        control arm, and the state every figure before it was measured in\n"
+        "  --no-motion-blur      no shutter: a moving frame is a still one. R6b's control arm\n"
         "  --exposure-max N      how far the light meter may lift a dark scene, as a multiplier\n"
         "                        (default 64). Smaller lets darkness stay dark; larger lifts a\n"
         "                        room with almost no light in it until it reads as lit\n"
@@ -2691,6 +2711,10 @@ private:
     bool loading_quit_ = false;   // the window was closed while it was still building
 
     ComputePipeline resolve_;
+    // R6a and R6b: the glare chain and the shutter, after the composite and before the blit.
+    // Owns its own images, its own descriptor sets and its own three shaders; see gpu/post_pass.hpp
+    // for why glare cannot live inside a per-pixel pass.
+    PostPass post_pass_;
     // R3: one invocation per face, working out light on the surface instead of on the screen.
     ComputePipeline shade_faces_;
 
@@ -9043,6 +9067,24 @@ void Application::record_frame(f32 time_seconds) {
 
     feedback_.end_frame(cmd, swapchain_.frame_index());
 
+    // ---- post: the glare chain and the shutter (R6a, R6b) ---------------------------
+    //
+    // After the composite, before anything reads the render target for presentation. It reads and
+    // writes that image in place, so nothing downstream has to know it ran -- and with both halves
+    // turned off it records no command at all, which is what makes the two flags control arms
+    // rather than second code paths.
+    //
+    // Skipped outright while a debug view is up. Views 12-15 write the four bytes of a visibility
+    // word out as four exact channels so the image IS the buffer; blurring one of those turns a
+    // readback into an average of readbacks, silently.
+    if (debug_mode_ == 0) {
+        PostSettings post_settings;
+        post_settings.bloom = options_.bloom;
+        post_settings.motion_blur = options_.motion_blur;
+        post_pass_.record(cmd, profiler_, render_target_, visibility_image_, params_buffer_.buffer,
+                          params_offset, post_settings);
+    }
+
     // ---- present ------------------------------------------------------------------
     image_barrier(cmd, render_target_.image, VK_IMAGE_LAYOUT_GENERAL,
                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -9899,6 +9941,12 @@ int Application::play(const Options& options) {
         return 1;
     }
 
+    // R6a and R6b. Not fatal: a build whose glare will not compile still has a game in it, and
+    // `PostPass::record` returns without recording anything when it is not valid.
+    if (!post_pass_.create(device_, std::filesystem::path(WS_SHADER_SOURCE_DIR), shaders)) {
+        WS_LOG_ERROR("app", "no post stage this run; the composite's frame is presented as it is");
+    }
+
     progress_.within(0.40);
     draw_loading();
 
@@ -10198,6 +10246,7 @@ int Application::play(const Options& options) {
         if (input.was_pressed(Key::F3)) debug_mode_ = (debug_mode_ + 1) % 7;
         if (input.was_pressed(Key::F5)) {
             resolve_.force_reload();
+            post_pass_.force_reload();
         }
         // Swap marchers where you are standing, without restarting.
         //
@@ -10265,6 +10314,7 @@ int Application::play(const Options& options) {
         }
 
         resolve_.reload_if_changed();
+        post_pass_.reload_if_changed();
 
         // Who gets the wheel this frame. It is the most contested input in the game, so the
         // rule is written once, here, rather than being discovered by each tool:
@@ -11198,6 +11248,9 @@ int Application::play(const Options& options) {
         node_layout_ = VK_NULL_HANDLE;
     }
     resolve_.destroy();
+    // R6a and R6b, for exactly the reason the note below gives: its three pipelines and its chain
+    // of images have to go while the device is still alive.
+    post_pass_.destroy();
     // And the cloud pass. Every pipeline has to be torn down HERE, while the device is still
     // alive: a ComputePipeline left to its own destructor runs after ~Application has taken the
     // device with it, and destroying a pipeline against a dead device is an access violation in
