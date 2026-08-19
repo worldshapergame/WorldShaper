@@ -739,7 +739,7 @@ the integration rather than after it:
 
 | dispatched | on | files it holds |
 |---|---|---|
-| wave 2 | **the  blocker** that keeps `--compile-field` OFF: named parts must survive the rewrite without becoming roots, because `gather` only flattens a child with one parent | `src/forge/compile.*`, `clip_script.*` |
+| wave 2 | **the `--part` blocker** that keeps `--compile-field` OFF: named parts must survive the rewrite without becoming roots, because `gather` only flattens a child with one parent, so adding the names as roots would fix `--part` and gut the rewrite. **0 of 5,091 names kept on the estate today** | `src/forge/compile.*`, `clip_script.*` |
 | wave 2 | **R12c's missing half** — the FIRST cold frame, which the marcher cannot reach: no chunks means no roots means nothing WANTED, so the pool must know the clip's extent before anything is pasted | `src/world/node_pool.*`, `src/gpu/node_buffers.*` |
 | wave 3 | **R5c and R5d's second halves** — the deterministic two-level blend (which closes §1's *no random numbers* clause, whose last holdout is `hash_u32` in the composite) and analytic edge AA over up to three partial hits | `shaders/resolve.comp` |
 | wave 3 | **R5b's temporal half and the sun seed**, plus **the one third of R9h that D589 says is actually missing** | `shaders/shade_faces.comp`, `face_terms.glsl`, `src/world/face_store.*`, `src/gpu/face_buffers.*`, `face_light.*` |
