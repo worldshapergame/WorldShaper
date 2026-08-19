@@ -131,6 +131,18 @@
 // of thirty parts costs thirty evaluations at every point, and at all but a handful of points
 // twenty-nine of them are answering about something metres away. A node whose box cannot be worked
 // out carries the infinite one, which never culls and is always correct.
+//
+// **`children` is NOT just the count any more.** The low byte is the count, exactly as it was, and
+// the bits above it are the R12 accelerator's word — what the host worked out about this node's box
+// and its children's boxes ONCE PER CLIP, so that the walk does not rediscover it at every one of
+// the hundred million points it is asked about. See WS_NODE_* below and `pack_cull_word` in
+// `src/gpu/field_gpu.cpp`, which is the only thing that writes it.
+//
+// Packed into the spare bits of a word that only ever held 0..4, rather than added as a field of its
+// own: the record is 80 bytes and every one of them is read from global memory by every turn of the
+// walk, so a ninth word would be a 10% tax on the traffic to buy a summary that fits in eight bits.
+// A caller that writes a bare count still works — every bit above the count reads as nought, which
+// means "nothing is known", and the walk falls back to exactly what it did before R12c.
 struct FieldNode {
     uint op;
     uint children;
@@ -209,6 +221,10 @@ layout(push_constant) uniform FieldPush {
 
 #define WS_FIELD_FLAG_NO_RESCUE 1u      // --no-gpu-rescue: the thin-feature rescue off, as a control
 #define WS_FIELD_FLAG_COUNT_VISITS 2u   // --gpu-visits: count nodes walked instead of building a world
+// --no-field-accel: the walk as it was before R12c — a union's children asked in the order the
+// author wrote them, and a difference's carves all asked. The control arm, and the arm every figure
+// taken before R12c was measured in. See the fold-op case in field_walk.glsl.
+#define WS_FIELD_FLAG_NO_ACCEL 4u
 
 // How many nodes the walk has stepped through for this cell, when WS_FIELD_FLAG_COUNT_VISITS is on.
 //
@@ -393,6 +409,57 @@ float ws_box_away_sq(uint at, vec3 p) {
                          field_nodes.items[at].hi[2]);
     const vec3 d = max(max(lo - p, p - hi), vec3(0.0));
     return dot(d, d);
+}
+
+// ---------------------------------------------------------------------------------------------
+// R12 — the accelerator's word, in the high bits of `children`.
+//
+// # What it is, and what it deliberately is NOT
+//
+// It is the host's answer, taken once when a clip is uploaded, to two questions the walk otherwise
+// asks at every point of every cell: **does this node carry a box at all**, and **can sorting this
+// node's children by that box change anything**. Neither answer depends on the point, so neither
+// belongs inside a walk that is run a hundred million times.
+//
+// **It is not a NEW bound and it must never become one.** The boxes are `Field::bounds_of`,
+// narrowed, exactly as they already were — the same boxes `Field::eval`'s cull reads, with the same
+// four primitives under-stating their own distance and the same intersections unable to vouch for
+// their overlap. D644 measured that hole and D646 built the sound repair and REFUSED it at 45x: *a
+// cull box an answer can vouch for is, on this building, a box that rejects nothing.* The card must
+// make the CPU's decisions, not better ones, or the two halves of the engine build two worlds —
+// which is what `--gpu-sample-check` exists to catch. So every bit here is a statement about a box
+// that was already being uploaded, and never a statement about a shape.
+//
+// # The layout
+//
+//   bits 0..7    the child count, 0..4. What this whole word used to be.
+//   bit  8       this node's own box is finite — `Field::Aabb::infinite()` said no.
+//   bits 9..12   one per child, in slot order: that CHILD's box is finite.
+//   bit  13      this node has more than one child and at least one of them is bounded, so
+//                ordering them by box distance can put a different one first.
+//
+// Bit 13 is not a shortcut round the CPU. `Field::eval` sorts a union of more than one child
+// unconditionally; when NO child carries a box every key is nought and a stable sort is the
+// identity, so skipping the sort there is provably the same order and the same decisions. That is
+// the only case it skips.
+#define WS_NODE_COUNT_MASK 0xFFu
+#define WS_NODE_BOUNDED    0x100u    // this node's own box is finite
+#define WS_NODE_CHILD_0    0x200u    // << slot: that child's box is finite
+#define WS_NODE_CULLABLE   0x2000u   // more than one child, and at least one of them bounded
+
+uint ws_child_count(uint word) { return min(word & WS_NODE_COUNT_MASK, 4u); }
+bool ws_child_bounded(uint word, uint slot) { return (word & (WS_NODE_CHILD_0 << slot)) != 0u; }
+
+// `ws_box_away_sq` for a child the parent's word already knows about.
+//
+// An UNBOUNDED child then costs nothing instead of two loads out of a record eighty bytes away and
+// a page away in the buffer, and that is not a rounding: D675 counted **923 of the estate's 18,250
+// nodes carrying no box**, and an ancestor of an unbounded node cannot be bounded either, so about
+// a quarter of the tree answers nought here. Nought is what `ws_box_away_sq` answers for the
+// infinite box too, so this is the same number by a cheaper route and not a different rule.
+float ws_child_away_sq(uint word, uint slot, uint at, vec3 p) {
+    if (!ws_child_bounded(word, slot)) return 0.0;
+    return ws_box_away_sq(at, p);
 }
 
 #endif   // WS_FIELD_TYPES_GLSL

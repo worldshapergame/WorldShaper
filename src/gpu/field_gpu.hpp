@@ -42,12 +42,29 @@
 
 namespace ws {
 
+// R12 — the accelerator's word, packed into the high bits of `GpuFieldNode::children`.
+//
+// **THESE FOUR NUMBERS ARE A SECOND COPY of the WS_NODE_* defines in shaders/field_types.glsl**,
+// which is the shape of fault `test_field_gpu.cpp` exists for: a GLSL `#define` cannot be a C++
+// constant, nothing about getting one of them wrong looks like getting it wrong, and the symptom
+// would be a card that culls a different set of subtrees from the CPU — a quietly different
+// building rather than an error. The test reads both files and holds them together. Move one and
+// the suite says so.
+//
+// What they mean is written where the walk reads them, in field_types.glsl. In short: the low byte
+// is the child count and everything above it is what the host worked out about the BOXES ALREADY
+// BEING UPLOADED — never a new or a sounder bound, which D646 measured and refused at 45x.
+inline constexpr u32 kNodeCountMask = 0xFFu;
+inline constexpr u32 kNodeBounded = 0x100u;
+inline constexpr u32 kNodeChild0 = 0x200u;
+inline constexpr u32 kNodeCullable = 0x2000u;
+
 // One node of the field as the card reads it. Scalars only, so std430 lays it out with a stride of
 // four and this matches `struct FieldNode` in shaders/field_types.glsl member for member. A `vec3`
 // would align to sixteen and put a hole in the middle of every record.
 struct GpuFieldNode {
     u32 op;
-    u32 children;
+    u32 children;   // the count in the low byte, the accelerator's word above it. See kNode*.
     u32 child[4];
     f32 a[8];
     f32 lo[3];
@@ -156,6 +173,26 @@ public:
     // a rule off is one of these; see documentation/22-rewrite-handover.md §7.
     void set_rescue(bool on) { rescue_ = on; }
 
+    // R12's first speed step off, as a control arm: `--no-field-accel`.
+    //
+    // ON is the shipped state whenever `--gpu-sample` is on, and off restores the walk exactly as
+    // it stood before — a union's children asked in the order the author wrote them, and every one
+    // of a difference's carves asked. One build, two arms, D407.
+    //
+    // It is a push-constant bit rather than a second upload, so both arms read the same buffers and
+    // the same boxes and cannot differ by anything but the branch.
+    void set_accelerate(bool on) { accelerate_ = on; }
+    bool accelerating() const { return accelerate_; }
+
+    // How many of the field's nodes carry a finite box, out of how many there are.
+    //
+    // The accelerator's whole reach, in one number, and it is not decoration: D675 counted 923 of
+    // the estate's 18,250 nodes with NO box, an ancestor of an unbounded node cannot be bounded
+    // either, and a cull can never touch any of them. A clip where this number falls is a clip
+    // where the walk got longer for a reason nothing else reports.
+    u32 bounded_nodes() const { return bounded_nodes_; }
+    u32 sortable_unions() const { return sortable_unions_; }
+
     // Count the nodes each cell walks instead of building a world. An instrument: what a dispatch
     // costs is (nodes walked) x (what a step costs), and no clock can tell those two apart. See
     // `ws_field_visits` in shaders/field_types.glsl.
@@ -168,6 +205,12 @@ public:
     u32 refused_op() const { return refused_op_; }
     u64 visits() const { return visits_; }
     u64 visited_cells() const { return visited_cells_; }
+    // Every cell the card was ever asked for, refusals included. The denominator `refused()` needs:
+    // "nought refusals" is only a statement about anything if something says how many were asked,
+    // and a run that asked for none reports nought either way. D676 is exactly that fault — the
+    // mirror refused every point of the estate and reported nought sign changes over nought points,
+    // which reads precisely like perfect agreement.
+    u64 answered_cells() const { return answered_cells_; }
 
     void reload_if_changed() { pipeline_.reload_if_changed(); }
 
@@ -208,9 +251,13 @@ private:
     u32 in_flight_ = 0;      // boxes in the batch the card is working on
     u32 delivered_ = 0;
     bool rescue_ = true;
+    bool accelerate_ = true;
     bool count_visits_ = false;
+    u32 bounded_nodes_ = 0;
+    u32 sortable_unions_ = 0;
     u64 visits_ = 0;
     u64 refused_ = 0;
+    u64 answered_cells_ = 0;
     u32 refused_op_ = 0xFFFFFFFFu;
     u64 visited_cells_ = 0;
     f64 last_gpu_ms_ = 0.0;

@@ -23,6 +23,7 @@ static_assert(sizeof(FieldPush) == 32, "must match FieldPush in field_types.glsl
 
 constexpr u32 kFlagNoRescue = 1u;
 constexpr u32 kFlagCountVisits = 2u;
+constexpr u32 kFlagNoAccel = 4u;   // WS_FIELD_FLAG_NO_ACCEL, --no-field-accel
 
 // Half a cell's diagonal, in voxels: the furthest a surface can be from a cell's centre and still
 // pass through that cell, and therefore the reach of the thin-feature rescue.
@@ -43,6 +44,43 @@ void write_box(f32* lo, f32* hi, const forge::Field::Aabb& box) {
     hi[0] = narrow(box.high.x);
     hi[1] = narrow(box.high.y);
     hi[2] = narrow(box.high.z);
+}
+
+// R12 — the accelerator's word for one node: the child count, and what is already known about the
+// boxes that were going to be uploaded anyway.
+//
+// **It states nothing that is not already in `bounds_`.** The temptation here is to work out a
+// bound for a node the CPU could not bound — a quarter of the estate's tree carries no box (D675) —
+// and it must be resisted: a card that can reject a subtree the CPU cannot is a card building a
+// different world, which is what `--gpu-sample-check` exists to catch, and D646 measured the sound
+// version of that idea at 45x for a byte-identical building. Every bit below is a `bounds_of` call
+// the walk would otherwise make a hundred million times.
+//
+// `infinite()` is the same test the shader's `ws_box_away_sq` makes on the narrowed box (`<= -1e29`
+// or `>= 1e29`), and narrowing f64 to f32 cannot move a value across either threshold — 1e30 stays
+// 1e30 and a real building's metres stay metres — so the two agree by construction rather than by
+// arithmetic luck.
+u32 pack_cull_word(const forge::Field& field, u32 at) {
+    const forge::Node& n = field.node(at);
+    const u32 children = n.children;
+    u32 word = children & kNodeCountMask;
+    if (!field.bounds_of(at).infinite()) word |= kNodeBounded;
+
+    u32 bounded_children = 0;
+    const u32 slots = (children < 4u) ? children : 4u;
+    for (u32 c = 0; c < slots; ++c) {
+        const u32 child = n.child[c];
+        if (child >= field.size()) continue;
+        if (field.bounds_of(child).infinite()) continue;
+        word |= kNodeChild0 << c;
+        ++bounded_children;
+    }
+    // More than one child and something to sort BY. With no bounded child every key is nought, a
+    // stable sort of equal keys is the identity, and the cull's `away > 0` can never fire — so
+    // skipping the sort there is the same order and the same decisions, provably, rather than a
+    // shortcut round `Field::eval` sorting unconditionally.
+    if (children > 1u && bounded_children > 0) word |= kNodeCullable;
+    return word;
 }
 
 }  // namespace
@@ -176,6 +214,20 @@ bool FieldSampler::create(Device& device, const std::filesystem::path& source_di
 
 void FieldSampler::destroy() {
     if (device_ == nullptr) return;
+    // The refusal count, SAID rather than left to be inferred from the absence of a warning.
+    //
+    // A refusal is not a wrong voxel, it is a voxel nobody computed, and the whole danger of it is
+    // that it reads as agreement: D676's mirror refused every point of the estate and reported
+    // nought sign changes over nought points, and only counting refusals separately caught it. The
+    // warning beside `refused()` fires the moment one happens and says nothing at all when none do,
+    // which is the same silence a run that never asked would make — so this line carries the
+    // denominator and prints whatever the answer is, including the good one.
+    if (answered_cells_ > 0) {
+        WS_LOG_INFO("clip",
+                    "the card answered {} cells over this run and REFUSED {} of them; the field "
+                    "accelerator was {}",
+                    answered_cells_, refused_, accelerate_ ? "ON" : "OFF (--no-field-accel)");
+    }
     const VkDevice device = device_->handle();
     if (in_flight_ > 0) vkWaitForFences(device, 1, &fence_, VK_TRUE, ~0ull);
     pipeline_.destroy();
@@ -251,12 +303,16 @@ bool FieldSampler::upload(const forge::SamplePlan& plan, u32 bounds_node, bool h
         return false;
     }
 
+    bounded_nodes_ = 0;
+    sortable_unions_ = 0;
     std::vector<GpuFieldNode> nodes(count);
     for (usize i = 0; i < count; ++i) {
         const forge::Node& from = field.node(static_cast<u32>(i));
         GpuFieldNode& to = nodes[i];
         to.op = static_cast<u32>(from.op);
-        to.children = from.children;
+        to.children = pack_cull_word(field, static_cast<u32>(i));
+        if ((to.children & kNodeBounded) != 0) ++bounded_nodes_;
+        if ((to.children & kNodeCullable) != 0 && from.op == forge::Op::Union) ++sortable_unions_;
         for (u32 c = 0; c < 4; ++c) to.child[c] = from.child[c];
         for (u32 a = 0; a < 8; ++a) to.a[a] = narrow(from.a[a]);
         write_box(to.lo, to.hi, field.bounds_of(static_cast<u32>(i)));
@@ -331,6 +387,18 @@ bool FieldSampler::upload(const forge::SamplePlan& plan, u32 bounds_node, bool h
                 "zone pieces",
                 node_count_, (node_count_ * sizeof(GpuFieldNode)) / 1024, params.size(),
                 rule_count_, pieces.size());
+    // R12's accelerator, and what it can actually reach on THIS clip. Said out loud because it is
+    // the one thing about the cull that varies from clip to clip and nothing else reports it: a
+    // node with no box can never be rejected, an ancestor of one cannot be bounded either, and
+    // D675 counted 923 of the estate's 18,250 in that state. A clip where this share falls is a
+    // clip whose walk got longer, and the log is the only place that would show.
+    WS_LOG_INFO("clip",
+                "field accelerator: {} of {} nodes carry a box ({:.1f}%), {} unions worth sorting",
+                bounded_nodes_, node_count_,
+                (node_count_ > 0)
+                    ? 100.0 * static_cast<f64>(bounded_nodes_) / static_cast<f64>(node_count_)
+                    : 0.0,
+                sortable_unions_);
     return true;
 }
 
@@ -365,7 +433,8 @@ bool FieldSampler::submit(const std::vector<GpuSampleBoxRecord>& boxes) {
     push.box_count = count;
     push.first_type = first_type_;
     push.half_cell = kHalfCellDiagonal;
-    push.flags = (rescue_ ? 0u : kFlagNoRescue) | (count_visits_ ? kFlagCountVisits : 0u);
+    push.flags = (rescue_ ? 0u : kFlagNoRescue) | (count_visits_ ? kFlagCountVisits : 0u) |
+                 (accelerate_ ? 0u : kFlagNoAccel);
     vkCmdPushConstants(cmd_, pipeline_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
                        &push);
     vkCmdDispatch(cmd_, (cells + 63) / 64, 1, 1);
@@ -443,6 +512,7 @@ bool FieldSampler::ready() {
         }
     }
     last_host_ms_ = ns_to_ms(now_ns() - submit_began_ns_);
+    answered_cells_ += cells;
     if (count_visits_) visited_cells_ += cells;
     delivered_ = count;
     in_flight_ = 0;

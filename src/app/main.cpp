@@ -199,6 +199,10 @@ struct Options {
     // Count the nodes each cell walks instead of building a world. What a dispatch costs is
     // (nodes walked) x (what a step costs); no clock separates those two and this measures one.
     bool gpu_visits = false;
+    // R12's cull on the card: a union's children asked NEAREST BOX FIRST and rejected on the box,
+    // and a difference's far carves skipped. `Field::eval`'s own cull, and on by default whenever
+    // the card sampler is. `--no-field-accel` is the control arm.
+    bool field_accel = true;
     // How wide a union has to be before a hierarchy is built over its leaves. 0 is off, which is the
     // default and what D637 measured on the facility. See `forge::accelerate_unions_from`.
     u32 accelerate_from = 0;
@@ -1033,6 +1037,12 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.accelerate_from = static_cast<u32>(next_number(8));
     } else if (arg == "--gpu-visits") {
         options.gpu_visits = true;
+    } else if (arg == "--no-field-accel") {
+        // R12's first speed step off: the card's walk as it stood before it — a union's children
+        // asked in the order the author wrote them, and every one of a difference's carves asked.
+        // ON whenever --gpu-sample is on; this is the control arm, and every visits-per-cell and
+        // wall-clock figure in the entry for it was taken both ways.
+        options.field_accel = false;
     } else if (arg == "--gpu-sample-check") {
         options.gpu_sample_check = static_cast<u32>(next_number(64));
     } else if (arg == "--refine-all") {
@@ -3469,9 +3479,11 @@ void Application::ensure_field_on_card() {
     }
     field_sampler_.set_rescue(options_.gpu_rescue);
     field_sampler_.set_count_visits(options_.gpu_visits);
+    field_sampler_.set_accelerate(options_.field_accel);
     gpu_check_left_ = options_.gpu_sample_check;
-    WS_LOG_INFO("clip", "the ladder samples on the CARD{}{}",
+    WS_LOG_INFO("clip", "the ladder samples on the CARD{}{}{}",
                 options_.gpu_rescue ? "" : ", with the thin-feature rescue OFF",
+                options_.field_accel ? "" : ", with the field accelerator OFF (--no-field-accel)",
                 gpu_check_left_ > 0 ? ", and the first nodes are checked against the CPU" : "");
 }
 

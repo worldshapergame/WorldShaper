@@ -22,10 +22,33 @@
 // The leaf ops. A node `ws_walk_is_leaf` accepts is handed to `field_leaf`, which is the other
 // half of the evaluator and fails in a completely different way — see field_types.glsl.
 //
-// The accelerator. `Field::eval` answers a wide union out of a BVH it built over the children's
-// boxes; that is an optimisation of the same min, and this walks the children instead. What it does
-// keep is the box cull, which is not optional decoration: without it every point walks every node
-// of a several-thousand-node tree.
+// The BVH. `Field::eval` can answer a wide union out of a hierarchy it built over the children's
+// boxes; that is an optimisation of the same min, and this walks the children instead. It has been
+// measured twice and refused twice (D637 on the facility, D682 on the estate) — the parts of a
+// building are layers rather than regions — so there is nothing here to copy.
+//
+// # The cull, which IS here, and is the whole of R12's first speed step
+//
+// Three things, and all three are `Field::eval`'s and not inventions:
+//
+//   **the box cull** — a union child the running answer already beats cannot change the answer;
+//   **nearest box FIRST** — the children sorted by how far the point is from each one, which is
+//   the difference between a cull that works and one that is merely correct (D638). In the order
+//   the author wrote them the running answer starts at whatever the first part happens to say, so
+//   a point standing in the seventh building of the estate evaluates the other six in full before
+//   it holds a number small enough to reject anything with, and then rejects everything;
+//   **and the carve cull** — a difference whose cutter the point is nowhere near does not need the
+//   cutter evaluated, which `Field::eval` has had all along and the card never got.
+//
+// Sorted, the rejection is a `break` rather than a skip: the children are in ascending box distance
+// and the answer only ever shrinks, so the first child rejected is a proof that every child after
+// it is rejected too.
+//
+// **What must NOT change is which boxes those are.** They are the same under-stating, unsound-on-
+// purpose boxes the CPU reads — D644 found the hole and D646 built the sound repair and measured it
+// at 45x for a byte-identical building. Sounder boxes here would be two evaluators computing two
+// worlds, which is D204 in its worst form. `--no-field-accel` is the control arm and restores the
+// walk exactly as it stood before this.
 
 #ifndef WS_FIELD_WALK_GLSL
 #define WS_FIELD_WALK_GLSL
@@ -286,6 +309,47 @@ float ws_walk_fold(uint at, uint op, float acc, float v) {
 #define WS_A(i) field_nodes.items[ni].a[i]
 #define WS_CHILD(i) field_nodes.items[ni].child[i]
 
+// Whether this frame's `axes` holds a sorted child order rather than a repeat's packed axes.
+//
+// It has to be a marked flag and not an assumption, because `WS_PUSH` zeroes `axes` and a zero
+// order reads as "child 0, four times" — a union that asked its first child over and over and
+// answered as if it had asked them all. The bit is written only by the sort below, so a frame the
+// sort skipped, a walk under `--no-field-accel`, and a clip uploaded by something that packs no
+// accelerator word all take the identity order, which is the order the author wrote.
+#define WS_WALK_ORDERED 0x100u
+
+uint ws_walk_order(uint axes, uint k) {
+    return ((axes & WS_WALK_ORDERED) != 0u) ? ((axes >> (2u * k)) & 3u) : k;
+}
+
+// The four box distances a sorted union frame banks on the way in, read back by slot.
+//
+// They are KEPT rather than recomputed, and that is `Field::eval`'s own decision measured under
+// callgrind: `squared_distance_to` was called 1.93 times per node visited and was 31% of every
+// instruction, because the sort worked the distances out, dropped them, and the rejection then
+// asked for the very same number again (D638). A union frame uses neither `fold` nor `lean`, so
+// they sit in a frame that already exists and cost no scratch at all.
+#define WS_WALK_AWAY(fi, k) (((k) < 3u) ? stack[fi].fold[(k)] : stack[fi].lean.x)
+
+// One comparator of the four-element sorting network, over (box distance, slot) pairs.
+//
+// A NETWORK rather than the insertion sort `Field::eval` writes, because five comparisons with
+// constant indices stay in registers where an insertion sort's data-dependent indices become
+// scratch memory on a card. It sorts to the same sequence, and "the same" is not a hope: the
+// comparison is lexicographic on (distance, slot) and the slots are distinct, so the order is
+// TOTAL and every correct sort of it produces the one arrangement. That is what makes this equal
+// to the CPU's stable insertion sort on ties, and ties are the common case — every child that
+// carries no box has a distance of exactly nought.
+#define WS_CX(a, b)                                                              \
+    if (ws_key.a > ws_key.b || (ws_key.a == ws_key.b && ws_slot.a > ws_slot.b)) { \
+        const float ws_kt = ws_key.a;                                            \
+        ws_key.a = ws_key.b;                                                     \
+        ws_key.b = ws_kt;                                                        \
+        const uint ws_st = ws_slot.a;                                            \
+        ws_slot.a = ws_slot.b;                                                   \
+        ws_slot.b = ws_st;                                                       \
+    }
+
 // The only way down. Refuses rather than answering when it would run off the stack or off the node
 // array: "I could not" and "the answer is nought" must never be the same reply (D676).
 #define WS_PUSH(child_index, where)                                     \
@@ -373,10 +437,13 @@ float field_eval(uint root, vec3 p) {
         const uint op = field_nodes.items[ni].op;
         const uint step = stack[fi].step;
         const vec3 fp = stack[fi].p;
+        // The accelerator's word: the child count in its low byte and what the host worked out
+        // about the boxes above it. See WS_NODE_* in field_types.glsl.
+        const uint word = field_nodes.items[ni].children;
         // A node holds four children at most — `Field::combine` folds a wider `union { a b c d e }`
         // into a chain rather than growing the record. Held to that here because an index past the
         // fourth is not a wrong number on a card, it is a read of whatever lies next in the buffer.
-        const uint nc = min(field_nodes.items[ni].children, 4u);
+        const uint nc = ws_child_count(word);
 
         if (ws_walk_is_leaf(op)) {
             // A leaf has no children, so the recursive evaluator does not recurse on one either:
@@ -686,6 +753,45 @@ float field_eval(uint root, vec3 p) {
             case WS_OP_MULTIPLY:
             case WS_OP_MIN:
             case WS_OP_MAX: {
+                // R12's first speed step, and it is `Field::eval`'s cull rather than a new one.
+                // `--no-field-accel` takes every part of it off in one place.
+                const bool accel = (field_push.flags & WS_FIELD_FLAG_NO_ACCEL) == 0u;
+
+                // ---- nearest box FIRST, worked out once on the way into the frame -----------
+                //
+                // Sorting the children by how far the point is from each one costs a handful of
+                // subtractions and no recursion, and it means the first child evaluated is the one
+                // most likely to give the smallest answer — after which everything else is
+                // rejected on its box. Unsorted, the running answer starts at whatever the author
+                // wrote first, which for a building is the ground, so a point up in a dome walks
+                // the whole site before it holds a number small enough to reject anything.
+                //
+                // Only `union`, and only where the sort can change the order: an intersection takes
+                // the LARGEST answer, so the child the point is furthest outside is exactly the one
+                // most likely to be it and there is nothing to reject; the smooth and chamfer folds
+                // depend on every child at once; `add` and `multiply` are arithmetic.
+                if (accel && op == WS_OP_UNION && step == 0u && (word & WS_NODE_CULLABLE) != 0u) {
+                    vec4 ws_key = vec4(3.0e38);
+                    uvec4 ws_slot = uvec4(0u, 1u, 2u, 3u);
+                    // A slot past the count keeps its huge key and sorts to the end, where the walk
+                    // stops before reading it. Guarded rather than read anyway, because `child[3]`
+                    // of a two-child node holds whatever it was built with.
+                    if (nc > 0u) ws_key.x = ws_child_away_sq(word, 0u, WS_CHILD(0), fp);
+                    if (nc > 1u) ws_key.y = ws_child_away_sq(word, 1u, WS_CHILD(1), fp);
+                    if (nc > 2u) ws_key.z = ws_child_away_sq(word, 2u, WS_CHILD(2), fp);
+                    if (nc > 3u) ws_key.w = ws_child_away_sq(word, 3u, WS_CHILD(3), fp);
+                    WS_CX(x, y)
+                    WS_CX(z, w)
+                    WS_CX(x, z)
+                    WS_CX(y, w)
+                    WS_CX(y, z)
+                    stack[fi].fold = ws_key.xyz;
+                    stack[fi].lean.x = ws_key.w;
+                    stack[fi].axes = WS_WALK_ORDERED | ws_slot.x | (ws_slot.y << 2u) |
+                                     (ws_slot.z << 4u) | (ws_slot.w << 6u);
+                }
+                const uint axes = stack[fi].axes;
+
                 uint next = step;
                 if (step > 0u) {
                     const float acc =
@@ -711,7 +817,18 @@ float field_eval(uint root, vec3 p) {
                     // Getting it wrong is not loud. The sign never changes, so nothing appears or
                     // vanishes; the magnitude does, which moves the normals, which moves the paint
                     // rule that follows them. Four hundred voxels of moss in the wrong place (D644).
-                    if (op == WS_OP_UNION) {
+                    if (op == WS_OP_UNION && (axes & WS_WALK_ORDERED) != 0u) {
+                        // Sorted: the boxes are in ascending distance and `acc` only ever shrinks,
+                        // so a child rejected here is a PROOF that every child after it is rejected
+                        // too. `Field::eval` says `break` for exactly that reason, and reaching for
+                        // the next one would be asking a question whose answer is already known.
+                        if (next >= nc) WS_FINISH(acc);
+                        const float away = WS_WALK_AWAY(fi, next);
+                        if (away > 0.0 && (acc < 0.0 || acc * acc <= away)) WS_FINISH(acc);
+                    } else if (op == WS_OP_UNION) {
+                        // Unsorted — the control arm, and a union nothing could be sorted by. The
+                        // scan may only SKIP, never stop: without the ordering a rejected child
+                        // says nothing whatever about the next one.
                         while (next < nc) {
                             const uint candidate = WS_CHILD(next);
                             if (candidate >= node_count) break;   // let the push refuse it
@@ -719,11 +836,31 @@ float field_eval(uint root, vec3 p) {
                             if (!(away > 0.0 && (acc < 0.0 || acc * acc <= away))) break;
                             ++next;
                         }
+                    } else if (accel && op == WS_OP_DIFFERENCE) {
+                        // Carving with something the point is nowhere near. Outside that child's
+                        // box its distance is at least `away`, so the term it contributes is at
+                        // most −away, and if the running answer already beats that then the cut
+                        // cannot reach here. `Field::eval` has had this since the cull was written
+                        // and the card never got it; the estate's solid is 142 differences.
+                        //
+                        // The sign is the opposite way round from the union's and that is the
+                        // whole of the difference between them: `max(acc, -child)` grows the answer
+                        // where `min` shrinks it, so what makes a carve irrelevant is the running
+                        // answer being ALREADY OUTSIDE (or nearer than the box), not already
+                        // inside. Skip and carry on, never stop — the children are in the author's
+                        // order here and one far cutter says nothing about the next.
+                        while (next < nc) {
+                            const uint candidate = WS_CHILD(next);
+                            if (candidate >= node_count) break;   // let the push refuse it
+                            const float away = ws_child_away_sq(word, next, candidate, fp);
+                            if (!(away > 0.0 && (acc >= 0.0 || acc * acc <= away))) break;
+                            ++next;
+                        }
                     }
                 }
                 if (next >= nc) WS_FINISH(stack[fi].acc);
                 stack[fi].step = next + 1u;
-                WS_PUSH(WS_CHILD(next), fp);
+                WS_PUSH(WS_CHILD(ws_walk_order(axes, next)), fp);
             }
 
             // ---- the point folded into a cell, then the leaning neighbours ------------------
@@ -868,5 +1005,7 @@ float field_eval(uint root, vec3 p) {
 #undef WS_CHILD
 #undef WS_PUSH
 #undef WS_FINISH
+#undef WS_CX
+#undef WS_WALK_AWAY
 
 #endif   // WS_FIELD_WALK_GLSL
