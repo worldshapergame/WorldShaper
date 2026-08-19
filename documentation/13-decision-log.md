@@ -10985,3 +10985,80 @@ across that measures the machine's mood.
 | D696 | **The constant is one-sided: too coarse above 1000 lines, never too fine** | measurement | 2.160x at 4K, first divergence at 250 m, 4,070 of 5,000 metres disagree |
 | D696 | **R2b still does not fire on either named camera** | honesty | 0 held, 0 refused, 0 given up on all three cameras with the REAL angle in |
 | D696 | **A settled+60 shot is not settled** | trap | The control disagreed with itself by 7.01 of 255, more than either flag moved it |
+
+---
+
+## D697 — a light path may not cause a sample, and the far chisel carves what the near one carves
+
+**2026-08-19.** R11e and R11h's remaining half, both met.
+
+### R11e, and the counter is only evidence because the offers are counted too
+
+The rule had nothing to enforce until R11d (D673) took the up-front sample away. After it, **the
+obvious next line anywhere near `stream()` is "the pool cannot build this because the world holds
+nothing here — go and sample it", and that line makes a dark room sample the whole building.**
+
+`SampleGate` is the one door a sample job is made through and `feedback_ray_class` says who is
+asking, **from the shader's own tag**: `kFeedbackExact` is R9i's stopped cell, `kFeedbackFace |
+kFeedbackSecondary` is R9a's landed face. Every one of those is **OFFERED and refused**, because a
+counter that is nought because nobody asked reads exactly like one that is nought because the answer
+was no.
+
+`clips/sealed_dark.clip`, cold, 640x400: **150,584 offers, 0 sample jobs caused, 2,064 caused by the
+camera.** At frame 3000 — ten times as long — **270,085 offers, still 0, camera still 2,064, and the
+same world to the digit.** It samples nothing after the room itself. R9a's face claim and R9i's
+residency request are untouched; only the sampling is refused.
+
+**The OFF arm is not "yesterday", and saying so is the only thing that makes the counter evidence.**
+Until this change there was **no route at all** from a request to the sampler, so a guard whose off
+arm is "today" is a counter reading nought because nobody asked. What `--no-light-sampling-guard`
+restores is *the rule absent with the route present* — the state R11e exists to make impossible.
+Measured there: **4,384, 4,038 and 4,212** light-caused sample jobs over three runs against ~1,550
+caused by the camera, **the class starving the camera's own share** (2,064 → 1,490), and **the world
+different every run** — `7d80b9a3dc069f43`, `ee499c3cb432e319`, `c981b77a8addd134` — where the
+guarded arm gives `5a1c07936a7111f1` three times. *A world whose detail depends on where a gathering
+ray happened to stop is not a scene anything can be measured against.*
+
+### R11h's far case, and it had never been run
+
+The near case (D635) looked solved because **the ladder self-corrects**: `deliver_refinement` replays
+the op log over every paste, so a carve made on coarse geometry is re-cut when the fine sample lands.
+The ladder never REACHES a surface sixty metres away that nothing is looking at, so **there is no
+later paste for the replay to ride on.**
+
+`presample_for_edit` takes the nodes the edit's box covers at the finest level, skips the ones empty
+in both world and field, samples them across the paste pool at the clip's own resolution, and
+Replace-pastes them **before** the op is applied.
+
+**Gate met, byte for byte.** Carving a 1 m box into `sampler.clip` from **60 m** and from **1 m**:
+both `ba1059f44662e644`, 11,055 voxels changed, 2,002 undo ops. `--no-edit-presample` from 60 m gives
+`6172c89982651022`, 10,560 and 612 — **495 voxels of detail that were never there to cut.** 109 of
+125 nodes, 14–91 ms; inside the radius it costs nothing.
+
+**The pre-sample is remembered as a VOLUME and never written into the ladder's list.** A delivery
+writes its answer back into `refine_regions_[job.at]` **by index**, so a pre-sample that split or
+marked list entries would rearrange the list under whatever batch is in the sampler's hands and land
+one node's voxels in another node's record. `refine_presampled_` is a box in metres instead, and
+`deliver_refinement` drops a coarser batch picked before the cut and still in flight when it lands —
+**without that second half the same fault arrives through timing instead of through distance**, metre
+8 pasted back over metre 32 one frame after the chisel.
+
+### The gate needed an instrument, and the edit BOX is the wrong volume for it
+
+R11h's gate is *the same world, byte for byte*, and the world's own content hash cannot answer it —
+after R11d two cameras settle on two different worlds whatever the chisel did. So the last edit's
+volume is hashed on its own. **The first version hashed the edit box and the treated and untreated
+far arms agreed to the digit while differing by 6,624 voxels in the world**: a carve fills its box
+with air in every arm, coarse or fine, so the box's contents are identical whatever was there before.
+Snapped out to whole **bricks** it separates them — and the brick is the right unit rather than a
+margin chosen to make the test pass, because **R11f writes a brick an edit partially emptied into the
+file as authoritative and never re-derives it**, so whatever detail that brick held at the moment of
+the cut is the building for ever.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D697 | **Light-path requests are OFFERED to the gate and refused, not filtered before it** | decision | Nought because nobody asked reads exactly like nought because the answer was no |
+| D697 | **The OFF arm is the rule absent with the route present, not "yesterday"** | honesty | There was no route at all before; 4,384 / 4,038 / 4,212 jobs and a different world every run |
+| D697 | **An edit samples what it is about to cut, synchronously, before it cuts** | change | The replay needs a later paste to ride on and a 60 m surface never gets one |
+| D697 | **The pre-sample is a box in metres, never an entry in the ladder's list** | trap | Deliveries write back by index; a reordered list lands one node's voxels in another's record |
+| D697 | **The gate hashes whole BRICKS, not the edit box** | instrument | A carve fills its box with air in every arm, so the box agreed to the digit across a 6,624-voxel difference |

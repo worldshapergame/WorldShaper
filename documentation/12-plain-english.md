@@ -3632,3 +3632,35 @@ with 24 samples, and 24 samples is 24 samples whether the surface is storing 36 
 The rule is right; the number of light rays behind it is not there yet. That is the next piece, and
 it is a known quantity now rather than a mystery — this is the fourth time that same limit has turned
 up, and the first time it has been the *only* thing left in the way.
+
+## Chiselling something far away now cuts it properly
+
+If you chiselled into a wall sixty metres off that you had never walked up to, the game carved a
+**blocky approximation** of it — because the fine detail of that wall had never been worked out, so
+there was nothing there to cut accurately. And it was permanent: what you carve is authoritative, so
+the game would never go back and fix it.
+
+Nearby, this was already fine, but for a reason that hid the problem. When the detail for a nearby
+surface arrives, the game re-applies your cuts on top of it, so a rough cut quietly becomes a clean
+one a moment later. **Sixty metres away that detail never arrives**, so there was nothing for the
+correction to ride on, and the rough cut was the final answer.
+
+An edit now works out the real detail of what it is about to cut, before it cuts. Carving the same
+box from **60 metres** and from **1 metre** now produces **exactly the same result, byte for byte**.
+Before, the far one was missing 495 voxels of detail that were never there to cut in the first place.
+
+## A dark room no longer secretly builds the whole building
+
+Light in this game bounces — a ray leaves a wall, travels, and lands on something else. If it lands
+on part of the building that has not been worked out yet, the tempting thing for the engine to do is
+go and work it out. That is a sealed windowless room quietly constructing the entire estate around
+itself, for light that by definition nobody can see.
+
+That is now forbidden, and — this is the part that makes it trustworthy — **the requests are counted
+rather than assumed away**. In a sealed dark room: **150,584 requests from light, none of them
+causing any work.** Left running ten times longer, still none, and the world came back identical to
+the digit.
+
+With the rule switched off, the same room causes thousands of pointless constructions, **steals a
+third of the effort away from the things you can actually see**, and produces a *different world every
+single time you run it*.
