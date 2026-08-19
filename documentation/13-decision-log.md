@@ -11407,6 +11407,29 @@ outcome of removing a stain, and it is the kind of change that is invisible unle
 arms, and is a **vacuous** gate for this change — it has no `on=` rules and no displaced zones, which
 is exactly why it is worth running.
 
+### Verified at integration, both arms, by the integrator rather than by the agent
+
+Because this is the most user-visible change of the wave and it was reported to the user, the
+campanile census was re-taken here on the merged tree, both arms, one command apart:
+
+| the campanile box, 35,435 voxels | shipping arm | `--no-rule-bounds` |
+|---|---|---|
+| `tuff where=site_grit_pale` | **idle** | 7.0%, all 35,435 voxels, **NO BOX** |
+| `sandstone where=site_grit_warm` | **idle** | 7.0%, all 35,435, **NO BOX** |
+| `tuff where=site_joints_f` | **idle** | 7.0%, all 35,435, **NO BOX** |
+| `boxwood where=site_weedy_f` | **does not appear at all** | 7.0%, all 35,435, **NO BOX** |
+
+`volume 35435 voxels / surface 31452 faces` on **both** arms, which is the other half of the claim:
+the matter does not move and only the materials do.
+
+**And it settles D693's hypothesis in passing.** That census is `run_clip_tool` on
+`clips/facility.clip` — the invocation D693 records as exiting 1 silently — and it **exits 0** here.
+The difference is `--clip-bounds`: a bounded box works and the whole clip does not. So D693 is about
+the SIZE of the sample rather than about the estate's content, which is what its own arithmetic
+guessed (17.0 billion voxels of box at the authored resolution) and could not confirm. **It is now
+confirmed enough to fix**, and the fix is the one D693 already names: say what the sample will cost
+and refuse with the number, rather than dying with none.
+
 ### Two honesties carried from the agent's own report
 
 **The world cache key still does not name this arm.** `--no-rule-bounds` and the default share a key
