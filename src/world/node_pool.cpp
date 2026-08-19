@@ -1859,12 +1859,19 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
             }
         }
         const NodePoolStats live = live_stats();
+        // The live pixel angle, not the one `create` printed. `create` can only print the budget's
+        // fallback -- there is no camera yet -- and the caller overrides it every frame from the
+        // render extent it is actually drawing at. A line that reported the fallback would say
+        // 1280x800's number on a 4K run, which is the exact confusion this whole rule turns on.
         WS_LOG_INFO("pool",
                     "R2b {} at frame {}: {} nodes, {} leaves held; sub-pixel STILL HELD {} ({} of "
                     "them leaves, {} bytes); lifetime {} refused, {} given up for being "
-                    "unaddressable",
+                    "unaddressable; pixel angle {:.6f} rad ({:.0f} lines){}",
                     subpixel_rule_ ? "ON" : "OFF", frame, live.nodes, live.leaves, held,
-                    held_leaves, held_bytes, subpixel_refused_, subpixel_evicted_);
+                    held_leaves, held_bytes, subpixel_refused_, subpixel_evicted_, pixel_angle_,
+                    (pixel_angle_ > 0.0) ? 2.0 / pixel_angle_ : 0.0,
+                    (pixel_angle_ == kSubPixelAngle) ? ", the FALLBACK -- nothing filled the view in"
+                                                     : "");
     }
 
     // ---- R8b's own line, and it is the gate rather than an instrument ---------------------------
