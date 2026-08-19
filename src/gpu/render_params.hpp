@@ -222,6 +222,24 @@ struct RenderParams {
     // `--lobe-floor`: D553 is the standing measurement of what changing a word's meaning costs, and
     // a spare field costs sixteen bytes once.
     f32 r4[4];
+    // R5c/R5d ---------------------------------------------------------------------------------
+    //
+    // The two SECOND halves, and they are here rather than in the probe for `r4`'s reason with one
+    // more on top of it: `shaders/resolve.comp` has no binding for the light probe buffer at all
+    // (D665 records the same wall from the other side), so a dial that the COMPOSITE has to read
+    // cannot be a probe bit however convenient that would be.
+    //
+    //   x  R5c's level-0 arm. 0 draws a level-0 hit's own colour outright instead of blending it
+    //      towards the brick average sitting in the same word, which is D664 exactly and is what
+    //      every figure before this was measured in. `--no-voxel-blend`.
+    //   y  R5d's third layer. 0 leaves the far node's own coverage byte and its "sky beyond" bit at
+    //      nought in `out_behind`, so the composite draws the far surface of an edge opaque
+    //      whatever its coverage says, which is D663 exactly. `--no-edge-layers`.
+    //   zw spare.
+    //
+    // Both are read as `!= 0.0` and neither is a magnitude, for the same reason `r4`'s two are: a
+    // control arm that can be half on is a control arm nobody can quote a figure against.
+    f32 r5[4];
 };
 // Written out rather than accumulated as a sum of historical deltas, which is what this was and
 // which nobody could check: 41 vectors of 16 bytes, in the order shaders/params.glsl declares
@@ -231,16 +249,17 @@ struct RenderParams {
 // The count: origin, forward, right, up, camera_chunk, bounds_min, bounds_max, resolution, lens,
 // tint_visible, tint_occluded, tool_colour (12), box_min and box_max at 16 each (32), marks_min,
 // marks_max (2), clip_slot and clip_coarse at 16 each (32), edit_min, edit_max (2), prev_origin,
-// prev_forward, prev_right, prev_up, motion, sky_cloud, sky_wind, tone (8) -- 88, and then THREE
-// appended in one afternoon: R7's `beam` makes 89, R12c's `derive` 90 and R4c/R4d's `r4` 91.
+// prev_forward, prev_right, prev_up, motion, sky_cloud, sky_wind, tone (8) -- 88, and then FOUR
+// appended in one afternoon: R7's `beam` makes 89, R12c's `derive` 90, R4c/R4d's `r4` 91 and
+// R5c/R5d's `r5` 92.
 //
-// Every one of the three was written against a block of 88, because each was built in its own
+// Every one of the first three was written against a block of 88, because each was built in its own
 // worktree from the same base, and not one of them could have known about the other two. That is
-// what this assert is for and it is the third time today it has been the thing that caught it: a
+// what this assert is for and it is the fourth time today it has been the thing that caught it: a
 // count left at 89 is the host writing one structure while every shader reads another, at every
 // offset past the gap, silently. The field ORDER has to be checked by eye as well -- the assert
-// counts and does not compare -- and it was: beam, derive, r4, in that order in both files.
-static_assert(sizeof(RenderParams) == 91 * 16, "RenderParams must match the GLSL block");
+// counts and does not compare -- and it was: beam, derive, r4, r5, in that order in both files.
+static_assert(sizeof(RenderParams) == 92 * 16, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.

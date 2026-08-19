@@ -123,14 +123,31 @@ layout(push_constant) uniform Trace {
 const float kPi = 3.14159265358979;
 const int kChunkEdge = 256;
 
-// pt_sky.glsl and pt_clouds.glsl want this. Defined here rather than pulled in with a header,
-// because that header brings a second kPi and a hundred functions this pass never calls.
-uint hash_u32(uint x) {
+// ---- R5c: the composite's last named random number, and what it actually was --------------------
+//
+// The gate's standing clause is *no per-pixel random numbers*, and the handover has recorded its
+// last holdout as `hash_u32` in this file's "ordered dither" since R3d deleted the tracer. **There
+// is no ordered dither in this pass and there never was one.** The dither the plan means lives in
+// `node_bayer` in shaders/node.glsl, it is a fixed 4x4 table rather than a hash, and D664 kept it
+// deliberately because it decides the SHAPE -- which cell a ray stops on, and so the coverage byte,
+// the face key and the depth. What this function is used for, and its only two callers are in
+// pt_sky.glsl, is value noise keyed on a WORLD CELL: `sky_hash` mixes a cloud lattice cell and
+// `star_field` mixes a cube-face cell. Neither is a function of the pixel, both are a function of
+// the direction the ray went, and two frames from one camera get identical answers out of them --
+// which is precisely what the clause asks for and what D194's bit-identity gate measures.
+//
+// So the function is named for what it does. The old name survives on one line because pt_sky.glsl
+// asks for it and that file is shared with clouds.comp, which keeps its own copy of the mix; the
+// alias is here rather than a rename there so this pass can say what the thing is without changing
+// what two other passes compile. Defined here rather than pulled in with a header, because that
+// header brings a second kPi and a hundred functions this pass never calls.
+uint sky_cell_mix(uint x) {
     x ^= x >> 16; x *= 0x7feb352du;
     x ^= x >> 15; x *= 0x846ca68bu;
     x ^= x >> 16;
     return x;
 }
+#define hash_u32 sky_cell_mix
 
 #include "pt_sky.glsl"
 #include "pt_clouds.glsl"
@@ -410,6 +427,57 @@ vec3 unpack_rgb(uint packed) {
                 float((packed >> 16u) & 0xFFu)) / 255.0;
 }
 
+// ---- R5c's SECOND half: the level-0 arm of the (0, 1) pair, blended here ------------------------
+//
+// D664 built the first half in the marcher and named the piece it could not build there. A hit
+// blends its folded colour towards the folded colour of the level the ordered dither did NOT pick
+// for that pixel, by how far between the two the footprint sits -- so both members of a pair aim at
+// the same number and the 4x4 two-tone pattern goes. That works at every level except the finest,
+// and the reason is a field rather than an oversight: **the composite reads a TYPE ID at level 0 and
+// a folded colour above it**, one payload word with two mutually exclusive readings, so the marcher
+// has no way to hand a level-0 pixel a blended colour without changing what visibility.comp packs.
+// The level-1 arm still blended towards the voxel, which left the pair `frac` of the step apart
+// instead of the whole of it -- better everywhere and exact nowhere.
+//
+// **The number the level-0 arm needs is already in the buffer and nothing read it.** At a level-0
+// hit `node_march` sets `result.colour` to the LEAF's average colour, for the gathering rays, and
+// visibility.comp packs `packed.z = hit.colour` at every level without asking. The pool holds a
+// voxel and it holds a brick and nothing between, so `colour(1)`, `colour(2)` and `colour(3)` are
+// all that same brick average (D664's third finding) -- which makes `packed.z` at level 0 exactly
+// `colour(1)`, the coarse end of the pair this pixel sits in. So the blend costs one word this
+// function has already loaded, no descent, and no change to the wire at all.
+//
+// # Why the weight can be recomputed here rather than carried
+//
+// `detail` is `log2(max(t * pixel_angle * lens.z, 1.0))` and every term of it is in the parameter
+// block or in `packed.w`. At level 0 `floor(detail)` is nought by construction -- the marcher takes
+// level 0 only when `floor(detail + dither) <= 0` and the dither is never negative, so `detail < 1`
+// -- which is why this is a clamp and not a `fract`: a `fract` would wrap a value that has crept
+// over one back to nought and put a hard seam across the middle of the blend.
+//
+// It creeps over one because the `t` in the buffer is not quite the `t` the marcher measured
+// `detail` at, and that is the one honest inexactness in this. The outer walk chooses the level at
+// the t where the ray enters a BRICK; the inner walk then steps single voxels and reports the t it
+// stopped at, up to a brick's diagonal further on. Thirteen point nine voxels of eight hundred is
+// 1.7%, so the weight this computes is within 0.025 of the weight the marcher used -- against a step
+// the level-0 arm is currently a whole 1.0 away from. Under the marcher's own deadband of a
+// sixteenth, and forty times smaller than what it removes.
+//
+// # And no deadband here
+//
+// `kNodeBlendDeadband` is a sixteenth in the marcher and it is a FETCH gate: below it the parent
+// lookup buys a correction smaller than the dither's own step. There is no fetch here -- the word is
+// in a register -- so the blend is applied at every weight, which leaves the pair strictly closer at
+// the low end than matching the deadband would.
+//
+// Zero when `push.r5.x` is nought, which is `--no-voxel-blend` and is D664 exactly.
+float voxel_blend_weight(float t) {
+    if (push.r5.x == 0.0) return 0.0;
+    const float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
+    const float footprint = max(t * pixel_angle * push.lens.z, 1.0);
+    return clamp(log2(footprint), 0.0, 1.0);
+}
+
 // ---- R4c: reading the bins a face reflects into -------------------------------------------------
 //
 // Which block of the pool this face is holding, by the same four-way probe the light pass claims
@@ -501,7 +569,12 @@ bool lobe_radiance(uint block, uint bins, uint side, vec2 at, out vec3 radiance)
 // The two reach values come back out through parameters rather than through file-scope variables
 // because the caller now has two of each to reconcile, and a shared variable would silently keep
 // whichever of the two surfaces happened to be shaded last.
-vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_past,
+// `level_pair` says that `packed.z` really is this surface's coarse partner, which is true of the
+// near surface -- visibility.comp packs `hit.colour` at every level -- and false of the far one,
+// whose word is rebuilt from a wire that carries one payload and puts nought in the field it is not
+// using. Reading it as a colour there would blend a voxel towards black by up to the whole step,
+// which is a distant railing's far half going dark for a reason nothing in the picture explains.
+vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_past, bool level_pair,
                    out float media_sun_reach, out float media_sky_reach) {
     media_sun_reach = 1.0;
     media_sky_reach = 1.0;
@@ -538,6 +611,25 @@ vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_pa
             emission = vec3(float((tint >> 11u) & 0x1Fu) / 31.0,
                             float((tint >> 5u) & 0x3Fu) / 63.0,
                             float(tint & 0x1Fu) / 31.0) * (emissive * emissive * 64.0);
+        }
+        // ---- R5c's second half, and it is the whole of it -----------------------------------
+        //
+        // Towards the brick average sitting in `packed.z`, by how far into the (0, 1) pair this
+        // pixel's footprint is. See voxel_blend_weight above for why the word is the right one and
+        // why the weight can be recomputed rather than carried.
+        //
+        // **The emission goes with it**, and that is not tidiness. The level-1 arm of this pair is a
+        // folded colour with no material behind it and therefore no emission at all, so a lamp voxel
+        // that did not scale its glow by the same weight would leave the two arms of the pair
+        // further apart in the one term the eye is most sensitive to -- a fitting at the level
+        // boundary glowing at full strength on the pixels that took level 0 and not at all on the
+        // ones that took level 1, in a fixed 4x4 pattern. That is the artefact this stage exists to
+        // remove, arriving through the term nobody thought to blend. R9f's fold is what will
+        // eventually give the coarse arm a glow of its own; until it does, both arms fade together.
+        const float towards_parent = level_pair ? voxel_blend_weight(t) : 0.0;
+        if (towards_parent > 0.0) {
+            colour = mix(colour, unpack_rgb(packed.z), towards_parent);
+            emission *= 1.0 - towards_parent;
         }
     } else {
         colour = unpack_rgb(packed.z);
@@ -1245,6 +1337,11 @@ void main() {
                       (1.0 / 255.0);
             const bool far_hit = ((behind.z >> 16u) & 1u) != 0u;
             const float far_t = uintBitsToFloat(behind.w);
+            // How far away the far LAYER is, which stops being one number the moment that layer is
+            // itself part sky (R5d's third layer, below). `push.lens.y` rather than nought for a ray
+            // that reached the sky, because a nought here means "run to the far plane" and mixing
+            // towards it would mean "half as far".
+            float far_layer_t = far_hit ? far_t : push.lens.y;
             if (far_hit) {
                 const uint far_level = (behind.x >> 27u) & 0x1Fu;
                 const uint payload = behind.y & 0xFFFFFFu;
@@ -1259,7 +1356,52 @@ void main() {
                                                far_level == 0u ? 0u : payload, behind.w);
                 far_colour = shade_surface(dir, far_packed,
                                            far_named == 0xFFFFFFu ? kNoFace : far_named, far_t,
-                                           vec3(0.0), far_sun, far_sky);
+                                           vec3(0.0), false, far_sun, far_sky);
+                // ---- R5d's SECOND half: the THIRD layer -------------------------------------
+                //
+                // D663 built the first: a coarse node only part of which is matter stops being a
+                // solid block, the ray carries on past it, and these twenty lines draw the two
+                // surfaces in proportion. What it could not build is the plan's own wording, *up to
+                // three partial hits*, and it wrote down exactly what stopped it -- **the wire**.
+                // `out_behind` carries one surface a pixel, so a partly covered node BEHIND a partly
+                // covered node was drawn opaque: a railing at thirty metres got its blend and the
+                // railing at fifty metres behind it did not, which on `clips/edge_aa_test.clip` is
+                // half the structure in the shot.
+                //
+                // The third layer costs nine bits rather than another sixteen bytes a pixel, and
+                // that is what makes it affordable. visibility.comp has the far node's own coverage
+                // byte in hand -- `far.coverage`, read off exactly the cell the second march stopped
+                // on -- and thirteen unused bits in `behind.z`. It packs the byte at 19..26 and, at
+                // 27, whether what lies beyond the far node is SKY, which it answers by marching a
+                // third time from past that node's exit.
+                //
+                // **Only the sky case is composited, and the honesty is in the asymmetry.** Where
+                // the third march reaches sky, the three shares are exact and independent -- the
+                // near node covers `c1` of the pixel, the far node covers `c2` of what is left, and
+                // the sky is the remainder -- and the sky's colour is a function of the direction
+                // this pixel already has, so no fourth surface has to be shaded, lit or looked up.
+                // Where the third march lands on something, that something's colour, face slot and
+                // distance are eighty-eight bits nothing has room for, and the far layer is drawn
+                // solid exactly as it was today. That errs towards the picture this replaces rather
+                // than past it, which is the same direction D663 chose, and it errs there only on
+                // the half of the shot where a silhouette stands against geometry instead of sky.
+                //
+                // The bits read nought under `--no-edge-layers` and under `--no-edge-aa`, and the
+                // byte reads 255 for R4d's glass, so all three of those arms take the branch below
+                // at `c2 == 1` and are bit-identical to the build before this one.
+                const uint far_coverage = (behind.z >> 19u) & 0xFFu;
+                if (edge && ((behind.z >> 27u) & 1u) != 0u && far_coverage < 255u) {
+                    const float c2 = float(far_coverage) * (1.0 / 255.0);
+                    far_colour = far_colour * c2 + sky_colour(dir) * (1.0 - c2);
+                    // The far LAYER's distance and its two reach values become the mixture as well,
+                    // for the reason the near/far mix below is written the way it is: the layer is
+                    // genuinely two distances at once and one lerp is right at both ends of it. Sky
+                    // is fully open to both sources by construction -- there is nothing between that
+                    // air and either of them -- so both reaches mix towards one.
+                    far_sun = mix(1.0, far_sun, c2);
+                    far_sky = mix(1.0, far_sky, c2);
+                    far_layer_t = mix(push.lens.y, far_t, c2);
+                }
             } else {
                 far_colour = sky_colour(dir);
             }
@@ -1277,8 +1419,8 @@ void main() {
             // plane" and mixing towards it would mean "half as far".
             const float share = (through.r + through.g + through.b) * (1.0 / 3.0);
             if (edge) {
-                air_t = mix(air_t, far_hit ? far_t : push.lens.y, share);
-                cloud_t = mix(cloud_t, far_hit ? far_t : push.lens.y, share);
+                air_t = mix(air_t, far_layer_t, share);
+                cloud_t = mix(cloud_t, far_layer_t, share);
             } else {
                 air_t = far_hit ? far_t : 0.0;
                 cloud_t = far_hit ? far_t : push.lens.y;
@@ -1294,7 +1436,7 @@ void main() {
         // surface's specular and emission have to go with its diffuse when it is a share of a pixel
         // rather than a pane.
         colour = (edge ? (vec3(1.0) - through) : vec3(1.0)) *
-                     shade_surface(dir, packed, face_slot, t, edge ? vec3(0.0) : through,
+                     shade_surface(dir, packed, face_slot, t, edge ? vec3(0.0) : through, true,
                                    media_sun_reach, media_sky_reach) +
                  through * far_colour;
         const float lets = (through.r + through.g + through.b) * (1.0 / 3.0);

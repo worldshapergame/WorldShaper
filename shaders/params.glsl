@@ -81,3 +81,10 @@
     // medium one index of refraction for all three channels, which is `--no-dispersion`. zw spare.
     // See RenderParams in src/gpu/render_params.hpp for why these are here and not in the probe.
     vec4 r4;
+    // R5c/R5d's two SECOND halves, and they are here for the reason `r4` is plus one more: the
+    // composite has no binding for the light probe buffer at all, so a control arm spelled as a
+    // probe bit is not available to it. x: 0 draws a level-0 hit's own colour outright, which is
+    // D664 exactly -- `--no-voxel-blend`. y: 0 makes visibility.comp leave the far node's coverage
+    // byte and its "sky beyond" bit at nought, so the composite draws the far surface of an edge
+    // opaque, which is D663 exactly -- `--no-edge-layers`. zw spare.
+    vec4 r5;

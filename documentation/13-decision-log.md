@@ -12260,3 +12260,132 @@ not, and it cost the time it was written to save.
 | D709 | **The viewer bakes every fragment through `--part`** | consequence | The one operation the fault broke is the one the site is built from |
 | D709 | **It also feeds D708's missing clips** | consequence | A part outside the shifted box reports `sampled to nothing` |
 | D709 | **A stale comment in `facility.clip` still claimed it was broken** | fault | True when written, false for three days, and the first thing a reader finds |
+
+---
+
+## D710 — R5c's and R5d's second halves: the number was already in the buffer, and the third layer costs nine bits
+
+**2026-08-19.** Both stages landed a first half and stopped in the same place, and it was the same
+place: **the composite reads a wire it did not write.** D664 could not give a level-0 pixel a blended
+colour because the payload field means a *type id* there. D663 could not composite the plan's *up to
+three partial hits* because `out_behind` carries one surface a pixel. **Neither needed what it looked
+like it needed.**
+
+### R5c's second half costs no wire at all, and that is the finding
+
+At a level-0 hit `node_march` sets `result.colour` to the **leaf's average** — put there for the
+gathering rays, which need an albedo and cannot reach the interned tables — and `visibility.comp`
+packs `packed.z = hit.colour` at every level without asking what the level is. **The pool holds a
+voxel and it holds a brick and nothing between**, so `colour(1)`, `colour(2)` and `colour(3)` are that
+same brick average (D664's own third finding). **`packed.z` at level 0 is therefore exactly
+`colour(1)`, the coarse end of the pair the pixel sits in, and it has been sitting unread in the
+buffer since the marcher existed.** The composite mixes towards it by
+`clamp(log2(max(t · pixel_angle · lens.z, 1)), 0, 1)` — the marcher's own `detail`, recomputed from
+numbers the parameter block and `packed.w` already hold. No descent, no fetch.
+
+**The emission goes with it, and that is not tidiness.** The level-1 arm of the pair is a folded colour
+with no material behind it and therefore no emission at all. A lamp voxel that blended its albedo and
+kept its glow would leave the two arms of the pair *further* apart in the term the eye is most
+sensitive to — a fitting glowing at full strength on the pixels that took level 0 and not at all on
+the ones that took level 1, **in a fixed 4x4 tile**, which is the artefact this stage exists to remove
+arriving through the term nobody thought to blend.
+
+**The one inexactness is a brick's diagonal and it is pinned rather than assumed.** The marcher chooses
+the level where the ray enters a BRICK; the inner walk then steps single voxels and the buffer records
+the `t` it stopped at, up to 13.86 voxels further on. Across the whole band that is a weight at most
+**0.0491** from the one the marcher used — under `kNodeBlendDeadband`'s sixteenth, and twenty times
+smaller than the step it removes. A `clamp` and **not** a `fract`, because a `fract` wraps a weight
+that has crept over one back to nought and puts a seam across the middle of the blend.
+
+### R5d's second half costs nine bits, because the third layer needs no surface
+
+`out_behind` is one surface a pixel, and a third is colour, level, direction, face slot and distance —
+about **88 bits against the 13** `behind.z` had spare. **But whenever the third layer is the SKY the
+composite already has the direction**, so the sky needs no slot, no face and no distance: only the
+share. So `visibility.comp` packs the far node's coverage byte at bits 19–26 and, at bit 27, whether a
+third march from past that node reached sky; the composite draws near, far and sky in proportion.
+Where the third march lands on something, the far layer stays opaque exactly as it was — **erring
+towards the picture this replaces**, which is D663's own direction.
+
+**The third march reports nothing**: no face claimed, no node named to residency. The store measures
+**1,287 live slots with both halves against 1,328 with the second half off**, where D663's *second*
+march costs 603 → ~1,300.
+
+### `hash_u32` is out of the composite, and the clause it held up rested on a stale reading
+
+The handover has named it the last holdout of §1's *no per-pixel random numbers* since R3d. **There is
+no ordered dither in that pass and there never was one** — the dither is `node_bayer` in `node.glsl`, a
+fixed sixteen-entry table kept deliberately by D664 because it decides the shape. What `hash_u32`
+served was `pt_sky.glsl`'s cloud lattice and star field, **both keyed on a world cell** — a function of
+the direction the ray went, not of the pixel, so two frames from one camera get identical answers,
+which is exactly what the clause asks for. Renamed `sky_cell_mix`, and **a test pins that no call to
+either name survives in the composite**, so the clause is testable instead of remembered.
+
+### Measured on a machine with a card, which D663 and D664 were both owed
+
+`clips/edge_aa_test.clip`, content `ca5c6803c7faebfd`, settled, quality and exposure pinned, frame 600.
+
+**Three independent runs of the default arm are identical to the byte** over the 31,360 pixels below
+the cloud deck — SHA-256 `a637143a…` all three — and **the `--no-edge-aa` arm's two runs are not
+identical to each other**. The whole frame cannot be, and that is D663's finding rather than this
+one's: `params.sky_cloud[1]` is real seconds, so two runs photograph different weather. **The arm this
+change replaces is the less reproducible one.**
+
+Over the structure rows the second half moves **403 and 447 pixels at mean 25.06 and 22.84 of 255,
+against a same-arm floor of 316–348 pixels at 4.64–6.25** — **3.7 to 5.4x the floor on two independent
+pairs**. And it costs nothing: `resolve` reads 0.623/0.627/0.628 against 0.627/0.634/0.629 at
+1280x800, inside a within-arm spread of 0.005.
+
+**In words:** with edge AA off, the far railing is a hard checkerboard of white and dark blocks with no
+tone between them. With D663's half only, the *near* railing softens and the far one is still a
+checkerboard. With both halves, **the far railing reads as a grey lattice with sky visible through it**,
+and the far structure seen through the near railing has picked up the sky's blue.
+
+### The first cost measurement was wrong, and how is the part worth keeping
+
+Run **blocked** — three of one arm, then three of the next — it read **0.630 against 1.404 ms**, a 2.2x
+regression on the control arm, **entirely because another worktree's build arrived partway through the
+batch**. Interleaving the arms round-robin collapsed the difference to 0.005. Trap 29 with a name on
+it: **on a shared box, block the arms and you measure the neighbours.**
+
+### Two things could not be measured, and both are honest
+
+**R5c's second half does not resolve in the shaded picture on any clip in the tree** — the same wall
+D664 hit for its own first half. It reaches most of the hit population (11,406 of 18,702 hit pixels are
+level 0) and reads 1.300 against a same-arm floor of 1.073, with the phase-locked 4x4 component not
+moving at all. **What holds it instead is arithmetic pinned in a test**, not a picture.
+
+**R5's 4x speckle gate is not this change's gate.** Whole-frame speckle sits inside its own
+run-to-run spread in every arm at every resolution, and at 1440p the *pre-R5* arm scores slightly
+lower — because speckle is deviation from the median of eight neighbours, and **anti-aliasing a
+one-pixel post against sky raises that by construction**. The 4x is written against the facility's
+enclosed room, where speckle is the *light's* and belongs to R5a and R5b.
+
+And `clips/facility.clip` could not be gated here either: **four consecutive runs, four content hashes,
+speckle 27.6 → 58.4.**
+
+### The file outside its list, flagged rather than hidden
+
+The agent edited `shaders/visibility.comp`, which was in neither list. Both owed halves are impossible
+without the nine bits it packs, and it said so plainly and gave the one-command revert. **That is the
+right way to cross a boundary**, and it is worth more than a diff that quietly stayed inside one.
+
+**And the collision underneath it is the integrator's fault, not an agent's:** `shaders/resolve.comp`
+was given to this agent *and* to the one rebuilding specular as bent light (D707). Two agents in one
+shader is exactly what the file-ownership rule exists to prevent, and I wrote both briefs. This one
+landed first; the other was told the file had moved and to merge from `main` rather than hand back a
+diff cut from the older base.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D710 | **The level-0 blend needs no wire change** | decision | `packed.z` at level 0 is the leaf's average, which IS `colour(1)` |
+| D710 | **The weight is recomputed, not carried** | decision | Every term is already in the parameter block or `packed.w` |
+| D710 | **A clamp and not a `fract`** | correctness | A `fract` wraps a weight over one back to nought and seams the blend |
+| D710 | **Emission scales by the same weight** | correctness | The coarse arm has no material and no glow; blending albedo alone leaves a lamp brightest where the eye catches it |
+| D710 | **The third layer is the SKY, not a third surface** | decision | 88 bits against 13 spare — but the sky needs only a share, the direction being known |
+| D710 | **The third march reports nothing** | build | 1,287 live slots against 1,328; D663's second march cost ~700 |
+| D710 | **`hash_u32` in the composite was never a dither** | correction | Two callers, both keyed on a world cell. A stale sentence held the clause up; a test holds it down now |
+| D710 | **Blocked arms measure the neighbours** | trap 29 | 0.630 against 1.404 blocked; 0.005 apart interleaved |
+| D710 | **R5c's second half does not resolve in the picture** | honesty | 1.300 against a 1.073 floor; held by arithmetic in a test instead |
+| D710 | **The 4x speckle gate is not this change's gate** | honesty | Anti-aliasing a one-pixel post against sky raises deviation-from-median by construction |
+| D710 | **Two agents were given one shader, and that was mine** | honesty | The rule exists for this; the second was redirected rather than the first reverted |

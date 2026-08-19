@@ -160,7 +160,16 @@ uint visibility_face_slot(ivec3 face_node, uint face_level, uint face_dir) {
 // which of the two questions produced it -- a pane's transmission, which acts on the near surface's
 // diffuse alone, or the share of the pixel the near surface does not occupy, which acts on all of
 // it. The composite cannot tell those apart from the number, so it is told.
-uvec4 visibility_pack_behind(NodeHit far, vec3 lets_past, bool edge) {
+//
+// `far_coverage` and `sky_beyond` are R5d's SECOND half and they are the whole of what the wire
+// gained for it. 255 and false say "one layer behind this pixel and it is solid", which is what
+// R4d's glass passes, what `--no-edge-layers` passes, and what every build before this packed --
+// the composite's branch on them is then a no-op to the bit. Anything less than 255 with the flag
+// set says the far surface is itself a part-covered coarse node with SKY beyond it, and the
+// composite draws three layers. Nine bits of the thirteen `behind.z` had spare, against the sixteen
+// bytes a third surface would have cost over the whole screen.
+uvec4 visibility_pack_behind(NodeHit far, vec3 lets_past, bool edge, uint far_coverage,
+                             bool sky_beyond) {
     uint far_slot = kNoFace;
     if (far.hit && far.face_level != kNoFaceLevel) {
         far_slot = visibility_face_slot(far.face_node, far.face_level, far.face_dir);
@@ -184,7 +193,8 @@ uvec4 visibility_pack_behind(NodeHit far, vec3 lets_past, bool edge) {
     // the same answer by luck rather than by construction. Bit 16 says the far ray landed on
     // something rather than on sky. Bit 18 says which of the two stages asked.
     behind.z = quantised.g | (quantised.b << 8u) | (far.hit ? (1u << 16u) : 0u) | (1u << 17u) |
-               (edge ? (1u << 18u) : 0u);
+               (edge ? (1u << 18u) : 0u) | (min(far_coverage, 255u) << 19u) |
+               (sky_beyond ? (1u << 27u) : 0u);
     behind.w = floatBitsToUint(far.hit ? far.t : push.lens.y);
     return behind;
 }
@@ -502,7 +512,9 @@ void main() {
             // whatever the reason, a far surface with nothing taken out of it is the near one.
             const vec3 lets_past = far.through * refract_through;
             if (max(max(lets_past.r, lets_past.g), lets_past.b) < 0.999) {
-                behind = visibility_pack_behind(far, lets_past, false);
+                // 255 and false: a pane's far surface is one layer and is drawn whole, which is what
+                // R4d measured and what this packed before R5d's second half existed.
+                behind = visibility_pack_behind(far, lets_past, false, 255u, false);
             }
         }
     } else if (hit.hit && hit.level > 0 && hit.coverage < kEdgeCoverageFull &&
@@ -539,13 +551,16 @@ void main() {
         // the branch cannot fire there, and the near march is bit for bit what it was for every
         // pixel inside about twenty metres.
         //
-        // And ONE further layer, not three. The plan asks for up to three partial hits composited,
-        // and what stops that here is the wire rather than the idea: `out_behind` is one surface a
-        // pixel and a third layer is another sixteen bytes of traffic over the whole screen for a
-        // term already weighted by two coverages multiplied together. The far surface is therefore
-        // drawn opaque whatever ITS coverage says, which errs towards the picture this stage
-        // replaces rather than away from it -- a partly covered node behind a partly covered node is
-        // slightly too solid, where before both were entirely too solid.
+        // And ONE further SURFACE, not three -- but three LAYERS, which is R5d's second half and is
+        // the block after the march below. The plan asks for up to three partial hits composited and
+        // what stopped it was the wire: `out_behind` is one surface a pixel and a third surface is
+        // another sixteen bytes of traffic over the whole screen. What is affordable is nine BITS,
+        // and nine bits are enough whenever the third layer is the SKY -- the composite already has
+        // the direction, so the sky needs no slot, no face and no distance, only the share. So the
+        // far node's own coverage byte and a bit saying "sky beyond" go into `behind.z`'s spare, and
+        // the composite draws near, far and sky in proportion. Where the third layer is not sky the
+        // far surface is still drawn opaque, which errs towards the picture this stage replaces
+        // rather than away from it, exactly as it did before.
         //
         // The nudge past the boundary scales with distance for D156's reason: a 32-bit float's own
         // step at t = 96,000 voxels is 0.0156, so a fixed 1e-3 rounds straight back to the boundary
@@ -565,7 +580,41 @@ void main() {
                                  report_used, report_face, true, false, kThroughStop,
                                  kNodeUnbounded, past);
         const float covered = float(hit.coverage) * (1.0 / 255.0);
-        behind = visibility_pack_behind(far, vec3(1.0 - covered), true);
+
+        // ---- R5d's SECOND half: is the far surface an edge too, and is the sky beyond it? --------
+        //
+        // The march above stops on the first thing it meets, and that thing can be another coarse
+        // node only part of which is matter -- which is not a corner case, it is the ordinary shape
+        // of open structure seen from a distance. `clips/edge_aa_test.clip` is two railings and a
+        // lattice at thirty, forty and fifty metres precisely so that a ray through the first one
+        // lands on the second, and until now the second was drawn solid.
+        //
+        // The guard is the same one the near hit passed, term for term, and it has to be: a coverage
+        // byte is only usable where it was read off the cell the ray actually stopped in, which is
+        // exactly what `coverage_exit_t > t` says (D663 -- the two other places `coverage` is set
+        // read the byte off a node coarser than the cell they draw, and blending a pixel by a
+        // fraction measured over eight times its footprint is trap 6 at a different scale).
+        //
+        // The third march is a pure visibility question: it reports nothing, claims no face and asks
+        // residency for nothing, because the only thing taken off it is whether it reached the sky.
+        // `stand_in` is false for the same reason -- that flag is "this ray's colour will be drawn",
+        // and this one's is not, so it must not pay R5c's blend either. It runs only on a pixel that
+        // is an edge behind an edge, which is a small share of a set that is already only the
+        // silhouettes.
+        uint far_coverage = 255u;
+        bool sky_beyond = false;
+        if (push.r5.y != 0.0 && far.hit && far.level > 0 && far.coverage < kEdgeCoverageFull &&
+            far.coverage_exit_t > far.t) {
+            const float past_far = far.coverage_exit_t + max(1e-3, far.coverage_exit_t * 1e-5);
+            const NodeHit third = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel),
+                                             false, false, false, false, false, kThroughStop,
+                                             kNodeUnbounded, past_far);
+            if (!third.hit) {
+                far_coverage = far.coverage;
+                sky_beyond = true;
+            }
+        }
+        behind = visibility_pack_behind(far, vec3(1.0 - covered), true, far_coverage, sky_beyond);
     }
     imageStore(out_behind, pixel, behind);
 

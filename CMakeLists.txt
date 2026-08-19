@@ -215,6 +215,7 @@ set(WS_TEST_SOURCES_HEADLESS
     tests/test_refraction.cpp
     tests/test_translucency.cpp
     tests/test_sun_confidence.cpp
+    tests/test_edge_layers.cpp
     tests/test_history.cpp
     tests/test_chisel.cpp
     tests/test_clip.cpp
