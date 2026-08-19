@@ -10487,3 +10487,46 @@ everything, and that is where it should be tried next.
 | D688 | **The ladder never samples the expensive cells at all** | decision | `box_may_hold_matter` refuses them before enlistment; they are settled in bulk |
 | D688 | **There are TWO loads with different costs and the ledger conflated them** | honesty | The ladder pays for surfaces; the up-front build pays for interiors |
 | D688 | **The visibility rays are 43 ms of a 45,000 ms load** | honesty | D622 fixed them; quoting its pre-fix 26 s as current was wrong |
+
+---
+
+## D689 — twelve agents in one wave, four of them on R12, and the base they all branched from
+
+**2026-08-19.** The user asked for the renderer rewrite finished — *"dispatch a ton of agents to
+finally finish the renderer rewrite, so that when they all finish it will be all done especially
+step 12, make sure all agents produce code and not fix or verify or measure."* Twelve went out in
+one wave, each in its own worktree, each given a feature to build, a control flag to take both arms
+of, and an explicit list of the files that are its own.
+
+**The base is `5be06c0`, and it is green here before anybody branched from it**: built clean, and
+`ws_tests.exe` reports **637 test cases, 637 passed, 0 failed, 1 skipped, 18,839,614 assertions**.
+That number is written down because it is what every agent's own suite result is judged against — an
+agent reporting 639 green has added two cases, and an agent reporting 158 with 493 skipped has
+crashed a case, which is what `5be06c0` itself was taken out for. **A crashed case looks QUIETER in
+the summary than a failed one**, and 637 is the only figure that makes the difference visible.
+
+**Four of the twelve are on R12**, which is what "especially step 12" bought: the compiler's
+multi-root signature (the blocker — one root remaps `script.solid` and leaves `settings.bounds` and
+every rule's `test` and `place` pointing at whatever now occupies their old index), the descent on
+the card (a cell walks 4,158 nodes of an 18,250-node field), R12c itself (the marcher derives rather
+than stops), and the eight unbounded paint rules — D675's count, D672's stains and the 372 ms cell
+under the podium, all one change.
+
+**The file allocation is the whole of the safety.** Two agents in one shader is a lost afternoon, so
+each shader and each subsystem has exactly one owner, and the four sub-steps whose files were already
+spoken for — R12d, R5b/c/d's second halves, R7c, R8a and R8e, R9h's remaining third — were held back
+for a second wave rather than double-booked. `src/app/main.cpp` and `src/gpu/render_params.hpp` are
+the two unavoidable crossroads: each agent was given a different anchor flag to insert its branch
+after, and told to append rather than reformat.
+
+**Nobody was allowed into `documentation/`.** Every agent hands its decision-log entry back as text
+and it is written here by the integrator. Twelve agents writing this file at once is twelve conflicts
+in the one document that has to stay readable, and it is also how the log would stop being one voice.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D689 | **Twelve agents, one worktree each, one owner per file** | decision | The arrangement that stopped a device-losing shader reaching `main`; the dispatcher builds and tests every diff before it lands |
+| D689 | **Four of twelve on R12** | decision | The user named step 12 specifically; the other eight cover the rest of the open ledger |
+| D689 | **The base is 637 cases green at `5be06c0`** | measurement | A crashed case reports FEWER cases, not a failure; without the base figure that reads like agreement |
+| D689 | **Six sub-steps held back rather than double-booked** | decision | R12d, R5b–d, R7c, R8a/R8e and R9h all wanted a file another agent already owned |
+| D689 | **No agent may edit `documentation/`** | decision | One voice in the log, and no conflicts in the one document that has to stay readable |

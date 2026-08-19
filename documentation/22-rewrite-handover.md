@@ -602,6 +602,47 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — twelve agents were dispatched at once on 2026-08-19, and this is who owns what
+
+**The user asked for the rewrite finished, "especially step 12", and for every agent to produce
+code rather than a verification, a fix or a measurement.** Twelve went out in one wave, each in its
+own worktree, each given a feature to build and a gate to run, and each told which files are its own
+and which belong to somebody else. **Four of the twelve are on R12**, which is what "especially step
+12" bought.
+
+The rule that makes the arrangement safe is the one that has always made it safe: **files nobody
+else is in**, and the dispatcher builds and tests every diff before it lands. It is what stopped a
+device-losing shader reaching `main` last time. None of these may be merged on the strength of it
+compiling.
+
+| the file it owns | the stage | what it was told to build |
+|---|---|---|
+| `src/forge/compile.*`, `clip_script.*` | **R12, the blocker** | `compile_field` takes a SET of roots and returns the remapped set, so `script.solid`, `settings.bounds` and every rule's `test` and `place` survive the remap. Plus the SIGSEGV at `test_compile.cpp:352` |
+| `shaders/field_walk.glsl`, `field_types.glsl`, `field_leaf.glsl`, `sample_field.comp`, `src/gpu/field_gpu.*` | **R12, speed step one** | the descent on the card — a bound per field node so a cell stops walking 4,158 nodes of an 18,250-node field. Its cull must make the CPU's decisions bit for bit, D646, not sounder ones |
+| `shaders/node.glsl`, `src/gpu/node_buffers.*` | **R12c** | the marcher derives rather than stops, behind `--derive-in-marcher`, with derivations capped per dispatch because one cell under the podium walks 1,073,935 nodes |
+| `src/forge/sample.*`, `field.*` | **R12's 200x lever** | bound the eight unbounded paint rules (D675), which is D672 item 2 as well — the stains and the load are one change. The `max` operator question to be settled by a purpose-built clip, not by another read |
+| `src/world/face_store.*`, `src/gpu/face_buffers.*`, `shaders/face_worklist.comp` | **R4b** | bins from measured pixel coverage and roughness, no threshold anywhere |
+| `shaders/shade_faces.comp`, `face_terms.glsl`, `resolve.comp`, `pt_material.glsl`, `pt_media.glsl` | **R4c + R4d** | the reflected IMAGE, owed since D591; and dispersion on a hero wavelength per face sample |
+| `shaders/pt_post.glsl`, new post pass, `src/gpu/post_pass.*` | **R6a, R6b, R6c** | bloom to a downsampled chain off the 437-tap gather, motion blur off the composited image, post as its own pass at ≤1.0 ms at 4K |
+| `shaders/visibility.comp`, new `beam.comp`, `src/gpu/beam_pass.*` | **R7a, R7b** | the beam pre-pass at 1/8, and a temporal start distance BOUNDED by it so a wrong reprojection can only cost time |
+| `src/world/node_pool.*` | **R8b + R2b** | hashed variation as the always-available child source; R2b recovered from its branch; and `NodeView::pixel_angle` filled in, which is the one line R2b may not ship without |
+| `src/world/world_cache.*`, `serialize.*` | **R11f** | a world is a clip plus its edits, from the branch that wrote it and never built it, with both data-loss cases closed and the sequential despeckler preserved rather than fixed |
+| `src/gpu/feedback.*`, `main.cpp`'s pump, `src/game/chisel.*` | **R11e + R11h far** | a light path may not cause sampling, counted rather than reasoned about; and the proximity radius holds SAMPLING so a chisel at 60 m carves what a chisel at 1 m carves |
+| `tools/bake_world.ps1`, `.github/workflows/` | **the bake** | `--refine-all` into the shipped bake command, the CI world bake with the SDK pinned to 1.4.341.0, verified from cameras the bake never came from |
+
+**`src/app/main.cpp` and `src/gpu/render_params.hpp` are the two shared files**, and each agent was
+given a different anchor flag to insert after and told to append rather than reformat. Conflicts
+there are expected and are the integrator's.
+
+**Nobody was allowed into `documentation/`** — every agent hands its decision-log entry back as text
+and it is written here. That is why this file is one voice and not twelve.
+
+**Left for a second wave, because their files were taken:** R12d (the CPU sampler writes what is
+EDITED — it needs R12c on under it), R5b's temporal half and R5c/R5d's second halves (`resolve.comp`
+and `shade_faces.comp` were both spoken for), R7c (step count, in `node.glsl`), R8a signed levels and
+R8e `--infinite-detail` (`node.glsl` and `node_pool` both spoken for), and R9h's remaining third.
+
+
 #### START HERE — the whole world bakes, and `--refine-all` is the word that was missing
 
 **The user's complaint all along was that entering a world does not show all of it, and every bake
