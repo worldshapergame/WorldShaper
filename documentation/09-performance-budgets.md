@@ -62,21 +62,26 @@ Simulation runs at 20 Hz (answer E1) — 2 ticks per 3 frames — so its cost is
 
 ## 3. GPU frame budget — T3 dev machine, 1440p, 60 FPS (16.6 ms)
 
-| Pass | Budget |
-|---|---|
-| Streaming + edits | 0.6 ms |
-| Simulation (amortised) | 1.8 ms |
-| Hierarchy update | 0.3 ms |
-| Beam + primary visibility | 4.2 ms |
-| Face selection | 0.3 ms |
-| Face shading (300k faces × 4 paths, 2 bounces + sky) | 4.4 ms |
-| Face denoise | 0.6 ms |
-| Specular / refraction / dispersion (25% of pixels) | 1.8 ms |
-| Caustic photons (300k) | 0.5 ms |
-| Volumetric fog | 0.7 ms |
-| Composite + post (bloom, DOF, motion blur, exposure, TAA) | 1.0 ms |
-| UI | 0.3 ms |
-| **Total** | **≈16.5 ms** |
+| Pass | Budget | Measured, 2026-08-19 |
+|---|---|---|
+| Streaming + edits | 0.6 ms | |
+| Simulation (amortised) | 1.8 ms | |
+| Hierarchy update | 0.3 ms | |
+| Beam + primary visibility | 4.2 ms | **D698.** The beam is BUILT. At 4K, arm to arm: 1.18 ms outdoors against 16.81 without it, 1.96 against 15.07 close, 2.32 against 12.49 sky. The beam pass itself is 0.019–0.348 ms. At the `distant` camera it is a net COST, 0.76 against 0.56, where the ray was already trivial |
+| Face selection | 0.3 ms | |
+| Face shading (300k faces × 4 paths, 2 bounces + sky) | 4.4 ms | |
+| Face denoise | 0.6 ms | |
+| Specular / refraction / dispersion (25% of pixels) | 1.8 ms | **D703.** The reflected image costs +0.4% of total GPU on a clip where EVERY surface is reflective, and provably nothing where none is: 0 blocks and 0 lobe rays in both arms |
+| Caustic photons (300k) | 0.5 ms | |
+| Volumetric fog | 0.7 ms | |
+| Composite + post (bloom, DOF, motion blur, exposure, TAA) | 1.0 ms | **D702.** Post is its own pass now. At 4K: **0.706 ms still, MET**; **1.113 ms with the camera turning, MISSED**, of which 0.374 is a pure copy that goes if post is presented rather than written back. 0.109 / 0.327 / 0.706 across the three resolutions against pixel ratios 1 : 3.6 : 8.1 |
+| UI | 0.3 ms | |
+| **Total** | **≈16.5 ms** | |
+
+*Blank means nothing was re-measured against that row on 2026-08-19, not that it is met. The three
+rows that carry a figure are the three passes that changed. **Two of the three are stated as met AND
+missed**, because a budget written for a still 1440p frame and a figure taken at 4K with the camera
+turning are different questions and averaging them would hide the one that matters.*
 
 ## 4. CPU budget (main thread, per frame)
 
