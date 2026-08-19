@@ -37,10 +37,70 @@ layout(binding = 27, r32f) uniform writeonly image2D out_beam;
 #include "node.glsl"
 #include "beam.glsl"
 
+// The nearest thing the previous frame drew in each of this workgroup's sixty-four tiles, as float
+// bits. Non-negative floats compare the same as their bit patterns, which is what lets a min over
+// them be one shared atomic.
+shared uint s_tile[64];
+
+// "Nothing was read here", which is every slot whose tile is off the screen. Larger than any depth
+// the marcher writes, so it loses every minimum -- and CLAMPED before it is used, because
+// FLT_MAX times a direction is an infinity and an infinity minus a share of itself is a NaN, which
+// a `min` is entitled to propagate rather than reject.
+const uint kBeamNoDepth = 0x7F7FFFFFu;
+
 void main() {
     const ivec2 corner = ivec2(gl_GlobalInvocationID.xy);
     const ivec2 corners = beam_corners();
-    if (corner.x >= corners.x || corner.y >= corners.y) return;
+    const bool live = corner.x < corners.x && corner.y < corners.y;
+    const uint lane = gl_LocalInvocationID.y * 8u + gl_LocalInvocationID.x;
+
+    // ---- R7b's input, gathered before anything else and gathered COALESCED --------------------
+    //
+    // The previous frame's nearest depth per tile. It is one read per screen pixel however it is
+    // arranged, and the arrangement is the whole cost: read a tile at a time, each lane walking its
+    // own 8x8 block, and the thirty-two lanes of a warp touch thirty-two different cache lines per
+    // instruction on a dispatch far too small to hide the latency. Measured that way it cost
+    // **1.605 and 1.811 ms** at 1280x800 against **0.072 ms** for the coarse march it is attached
+    // to -- twenty times the pass it was meant to help.
+    //
+    // So the workgroup reads its own 64x64 pixels a ROW at a time, one column per lane, which is
+    // thirty-two consecutive floats per instruction and four cache lines instead of thirty-two.
+    // Each lane keeps eight private minima -- one per tile row of its column -- and spends eight
+    // shared atomics at the end rather than sixty-four.
+    //
+    // What changes about the ANSWER is only which pixels a corner's number covers: its own tile
+    // rather than the 8x8 centred on it. A tile still takes the smallest of its four corners in
+    // visibility.comp, so its own tile is always among them and the other three are neighbours --
+    // a superset, which can only make the proposal smaller, and smaller is the safe direction.
+    //
+    // Every invocation reaches both barriers, including the ones outside the corner grid: that is
+    // why `live` is a flag here and not the early return it was.
+    s_tile[lane] = kBeamNoDepth;
+    barrier();
+    if (beam_temporal_enabled()) {
+        const ivec2 base = ivec2(gl_WorkGroupID.xy) * (8 * kBeamTile);
+        const ivec2 last = ivec2(push.resolution.xy) - ivec2(1);
+        const int col = base.x + int(lane);
+        float mine[8];
+        for (int t = 0; t < 8; ++t) mine[t] = push.lens.y;
+        if (col <= last.x) {
+            for (int t = 0; t < 8; ++t) {
+                for (int s = 0; s < kBeamTile; ++s) {
+                    const int row = base.y + t * kBeamTile + s;
+                    if (row > last.y) break;
+                    mine[t] = min(mine[t], imageLoad(prev_depth, ivec2(col, row)).x);
+                }
+            }
+        }
+        const uint tile_x = uint(int(lane) / kBeamTile);
+        for (int t = 0; t < 8; ++t) {
+            atomicMin(s_tile[uint(t) * 8u + tile_x], floatBitsToUint(max(mine[t], 0.0)));
+        }
+    }
+    barrier();
+    const float seen = min(uintBitsToFloat(s_tile[lane]), push.lens.y);
+
+    if (!live) return;
 
     const vec2 at = vec2(corner * kBeamTile);
     const vec3 dir = beam_direction(at, push.forward.xyz, push.right.xyz, push.up.xyz);
@@ -81,23 +141,10 @@ void main() {
 
     // ---- R7b: and what the last frame saw, which is allowed to LOWER it and nothing else -----
     //
-    // The previous frame's depth over this corner's own block of pixels, at full resolution --
-    // which is the thing the coarse march cannot see. A railing one pixel wide between two corner
-    // rays is invisible to R7a and was drawn by sixty-four pixels last frame.
-    //
-    // The block is the 8x8 CENTRED on the corner, so the four corners of a tile cover that tile
-    // exactly once between them and the whole pass reads each depth texel once.
+    // `seen` above is the previous frame's nearest depth in this corner's tile, at FULL resolution
+    // -- which is the thing the coarse march cannot see. A railing one pixel wide between two
+    // corner rays is invisible to R7a and was drawn by dozens of pixels last frame.
     if (beam_temporal_enabled()) {
-        float seen = push.lens.y;
-        const ivec2 base = corner * kBeamTile - ivec2(kBeamTile / 2);
-        const ivec2 last = ivec2(push.resolution.xy) - ivec2(1);
-        for (int y = 0; y < kBeamTile; ++y) {
-            for (int x = 0; x < kBeamTile; ++x) {
-                const ivec2 p = clamp(base + ivec2(x, y), ivec2(0), last);
-                seen = min(seen, imageLoad(prev_depth, p).x);
-            }
-        }
-
         // Where that surface was, and how far it is from the eye NOW. The camera's previous basis
         // is already in the parameter block for the motion blur, in the same camera-relative
         // voxels as `origin` and corrected for a chunk crossing, so this is a subtraction rather
