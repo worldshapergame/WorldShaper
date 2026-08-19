@@ -35,23 +35,58 @@ cheaper (D683). So the world is sampled **once, on a build server**, and travels
 `.github/workflows/bake-world.yml` is that build server, and `tools/bake_world.ps1` is the whole of
 what it does — the workflow only gets a Windows runner into the state where the script can run.
 
+### `--refine-all`, which is the word that was missing
+
+**The user's complaint all along was that entering a world does not show all of it, and every bake
+before this one deserved it.** `--bake-world` on its own saves what the refinement ladder REACHED,
+and the ladder is driven by what a camera can see and how many pixels each node covers — so a bake
+from the spawn view writes a world that is complete where that camera stood and coarse everywhere
+else. That is the floor with no walls, photographed and reported, and it was in the download.
+
+`--refine-all` takes the two visibility terms out of the ladder: the behind-the-camera demotion in
+the sweep, and the `next_keen > kRefineSplitAt` gate on the split. Every node is then refined to the
+clip's own detail whether or not the camera is looking at it, **and the file is the world.**
+
+The bake command carries it, and so does every release. `-RefineAll:$false` is the control arm and
+bakes the old, camera-shaped way; `-RequireWhole` — which the release passes — **fails the job**
+unless the game reports every node baked, because a partial world reads, gates and photographs
+exactly like a complete one and the only thing that tells them apart is that number.
+
+### One run cannot finish the estate, and the limit is FRAMES
+
+`kSettleGiveUp` in `main.cpp` is 30,000 frames. Past it a run stops waiting to settle, takes its
+screenshot and leaves, **whatever `--max-seconds` says** — measured here, a facility bake given a
+1,800 s deadline ended after 30,001 frames and 119 s with 26,496 of 36,427 nodes, and two 60 s
+passes reached the same place. So the deadline was never the ceiling.
+
+Two things get past it, and the script does both:
+
+- **The cap lives on `--settle`.** The give-up branch is inside `if (options_.settle &&
+  !settled_seen_)`, so a run with no `--settle` never enters it and is bounded by `--max-seconds`
+  alone. The first pass settles, so a small clip — a sky, a pane of glass — stops the moment it is
+  finished; every pass after it does not, and is worth its whole deadline instead of the ~119 s
+  that 30,000 frames comes to on a fast card.
+- **Passes resume.** The game reads the world the last pass wrote, says `cached world has N of M
+  leaves … carrying on from here`, and sharpens more of it. Measured: 18,816 of 27,315 after one
+  pass, 26,496 of 36,427 after two, each from the one before. The loop stops the moment a pass
+  reports every node done, or a pass adds nothing, or `-Passes` runs out.
+
+That is why the passes share one data root and why `--no-clip-cache` comes off when there is more
+than one of them — a pass that empties the cache path cannot resume from the pass before it. What
+D684 asks that flag for, that the baking machine's own accumulated world must not leak into the
+shipped one, is still had and had directly: the root is created empty for this bake and thrown away
+after it, and the shipped `.world` is deleted before the first pass. There is nothing left to leak.
+
 ### What actually happens
 
 | | |
 |---|---|
-| what is baked | `clips/facility.clip` → `clips/facility.world`, from the spawn camera |
-| how | the game itself: `--world <the clip> --bake-world --settle`, which runs the refinement ladder and writes what it reached |
+| what is baked | `clips/facility.clip` → `clips/facility.world` — the estate, every node of it |
+| how | the game itself: `--world <the clip> --bake-world --refine-all`, over as many resuming passes as it takes |
 | where it ends up | `build\bin\clips`, which is the folder `Copy-Item build\bin\clips` puts in the zip |
 | how the game finds it | a shelf world looks beside itself **and** in the shipped `clips/`, paired by stem, and the key is hashed from the clip's source text so a wrong file is refused rather than believed (D685) |
-| what the download costs | **3.63 MB**, measured. The workflow refuses to go over 64 MB without somebody raising the budget on purpose |
-| what a cold bake costs | **157.6 s** for the facility on a desktop card, 29,184 of 39,864 nodes. On a runner with no graphics card it is longer, which is why the workflow's deadline is 900 s and not 150 |
-| what a warm bake costs | **7.7 s**, all of it the gate. The cache is keyed on `clips/**` and `src/**`, so a run with nothing changed re-proves the world and bakes nothing |
-| what a player gets for it | the world **read in 133 ms** and **everything ready at t+404 ms**, against minutes of sampling |
-
-It buys the **first sight** of the world and not the whole of it, which is the design and not a
-shortfall (D684, R11d). The same run reports `cached world has 29056 of 39864 leaves at the clip's
-own detail, 10808 still to sharpen, carrying on from here` — a player who walks somewhere the baking
-camera never looked still pays for somewhere new.
+| what the download costs | see the measured table below. The workflow refuses to go over **128 MB** without somebody raising the budget on purpose |
+| what a warm bake costs | the gate alone. The cache is keyed on `clips/**` and `src/**`, so a run with nothing changed re-proves the world and bakes nothing |
 
 ### Why it is a `needs:` job and not a step somebody remembers
 
@@ -108,7 +143,14 @@ tools\bake_world.ps1                      # bake what ships, from build\bin, and
 tools\bake_world.ps1 -Clips *             # every world the shelf seeds, not just the facility
 tools\bake_world.ps1 -GateOnly            # prove the worlds already there are read; bake nothing
 tools\bake_world.ps1 -Game C:\unpacked    # against an unpacked download rather than a build
+tools\bake_world.ps1 -RefineAll:$false    # the control arm: what ONE CAMERA reached, the old way
+tools\bake_world.ps1 -RequireWhole        # what the release does: fail unless every node is baked
+tools\bake_world.ps1 -GateShots renders\gate   # keep the gate's four frames to look at
 ```
+
+`-Seconds` is the deadline for one PASS and `-Passes` the most passes a world gets. The loop stops
+the moment the world is whole, so a small clip never sees the second one; the estate is what the
+numbers above are about.
 
 Only the facility is baked by default, and that is a decision about the size of the download rather
 than an oversight: the shelf seeds every top-level clip, but the other nineteen are test scenes — a
@@ -124,10 +166,35 @@ sky, a pane of glass, a row of lamps — that build in seconds from cold.
 - **`--settle` does not end a run.** Only `--screenshot` does. A `--settle --max-seconds 60` bake
   was still drawing at frame 94,200 when it was killed — having already written a correct world, so
   on a build server it is a job that hits its timeout over a bake that succeeded.
+- **And `--settle` is also what caps a bake at 30,000 frames**, which is the third one and is new.
+  A run that carries it stops there whatever its deadline says; a run without it is bounded by
+  `--max-seconds` alone and will keep sharpening for as long as it is given. Neither is wrong —
+  the first pass wants the cap so a finished world stops, and the passes after it want the clock.
 
 And `--no-clip-cache` belongs on the bake and **must never be on the gate**: the shipped-world
 lookup lives inside `if (!source.empty() && !options_.no_clip_cache)`, so a gate carrying it would
-skip the very read it exists to prove.
+skip the very read it exists to prove. On a multi-pass bake it must not be there either, and for
+the neighbouring reason: it empties the cache path the next pass resumes from.
+
+### And the gate stands where the bake never did
+
+D685 is the fault that a gate has to be built against, and it has a second half nobody had closed.
+The gate proves the file was **read** — but the run that proves it stands exactly where the bake
+stood, and a world baked without `--refine-all` is complete precisely there. A one-camera check
+cannot see a missing wall, because the camera it uses is the one the wall was built for.
+
+So after the read, the gate opens the same shelf world three more times, each from its own fresh
+data root and its own fresh shelf, from viewpoints the bake never came from:
+
+| | |
+|---|---|
+| `0,45,0,90,-70` | above the roof, looking down — the dome tops out at 18.2 m |
+| `0,14,-76,90,-5` | sixty metres clear of the great steps, looking back at the south front |
+| `0,6,40,-90,-4` | the far side of the block at head height, where the spawn view never pointed |
+
+Each has to say `opened the world shipped at` in its turn, and each has to come back with solid
+voxels in the frame at **frame 60** — a frame counted from a standing start, which is what a
+player's first second is. `-GateCams` changes them and `-GateShots <dir>` keeps the pictures.
 
 ### The one part of this that is a bet
 
@@ -142,23 +209,37 @@ and points the loader at it. It is pinned to an exact Mesa release for the reaso
 pinned: a build tool that changes under the build between runs cost this repository three releases
 (D641).
 
-**Whether that works on a hosted runner has not been established.** Two things could be false and
-neither can be settled from a development machine: whether lavapipe satisfies everything
-`Device::create` asks for, and whether SDL can open a window on a runner at all. There is also a
-cost even when it does work — refinement advances per frame, so at software frame rates a bake
-covers less world per second of wall clock, which makes the world smaller rather than broken.
+**Whether that works on a hosted runner has not been established.** Three things could be false and
+none can be settled from a development machine: whether lavapipe satisfies everything
+`Device::create` asks for, whether SDL can open a window on a runner at all, and — since
+`--refine-all` — **whether a software renderer can finish the estate inside the job's four hours.**
 
-If it turns out not to work, the job fails and no release is published, which is the right way
-round. The fallback is to bake by hand on a machine with a graphics card and package with
-`tools/package.ps1`:
+That third one used to be a cost and is now a gate. Refinement advances per frame, so at software
+frame rates a bake covers less world per second of wall clock; before `--refine-all` that made the
+world smaller rather than broken, and now `-RequireWhole` turns a smaller world into a failed job.
+That is the right way round — a world that stops where the ladder stopped is the exact defect this
+was built to remove — but it means the release is only as reachable as lavapipe is fast. The dials
+are `seconds` (the deadline for one pass), `passes` (how many it gets) and the job's
+`timeout-minutes`; the shipped settings are 240 × 45 inside a 240-minute job.
+
+If it turns out not to work, the job fails and no release is published. The fallback is to bake by
+hand on a machine with a graphics card and package with `tools/package.ps1`:
 
 ```powershell
-tools\bake_world.ps1            # writes build\bin\clips\facility.world and proves it reads
-tools\package.ps1               # stages build\bin\clips, so the world goes with it
+tools\bake_world.ps1 -RequireWhole   # writes build\bin\clips\facility.world; fails if it is partial
+tools\package.ps1 -SkipBuild         # stages build\bin\clips, so the world goes with it
 ```
 
+`-SkipBuild` is there because `tools/package.ps1` **cannot currently invoke `build.bat`** — `vswhere`
+does not resolve through it — so the build and the tests are run by hand first and the script does
+the rest: stage, zip, **unpack to a clean directory and run it there**, gate the shipped world off
+that unpacked shelf, hash. That unpack-and-run gate is the one that caught v0.6.0 shipping with a
+shader path hard-coded to the build machine; the shelf gate beside it is D685's, and both now run
+from the same file the workflow calls.
+
 That download carries **no provenance attestation** — say so in the release notes, as this document
-already requires for any zip built that way.
+already requires for any zip built that way, and as the script now prints when it finishes. A CI
+release carries one.
 
 ## The update check
 

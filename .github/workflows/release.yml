@@ -35,12 +35,21 @@ jobs:
   # and a bake that fails is a release that does not happen.
   #
   # It runs at this commit, because `uses: ./` in the same repository always does.
+  # And it bakes the WHOLE world, which is the second half and is newer than the first.
+  # `--bake-world` on its own saves what the refinement ladder REACHED, and the ladder is driven
+  # by what a camera can see — so a release baked that way ships a world complete where the baking
+  # camera stood and coarse everywhere else, which is the floor with no walls the user
+  # photographed. `--refine-all` refines every node regardless, and then the file is the world.
+  # `require_whole` is what makes a shortfall stop the release instead of shrinking the download
+  # quietly: a partial world reads, gates and photographs exactly like a complete one.
   bake:
     uses: ./.github/workflows/bake-world.yml
     with:
       clips: facility
-      seconds: 900
-      budget_mb: 64
+      seconds: 240
+      passes: 45
+      require_whole: 'true'
+      budget_mb: 128
 
   windows:
     needs: bake

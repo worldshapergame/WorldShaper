@@ -11,9 +11,10 @@
 #   tools\bake_world.ps1 -Clips *              every world the shelf seeds, not just the facility
 #   tools\bake_world.ps1 -GateOnly             only prove the worlds already there are read
 #   tools\bake_world.ps1 -Game C:\unpacked     against an unpacked download rather than a build
+#   tools\bake_world.ps1 -RefineAll:$false     the control arm: what ONE CAMERA reached, the old way
 #
 # ---------------------------------------------------------------------------------------------
-# FIVE THINGS THAT ARE NOT OPTIONAL. THE FIRST TWO WERE MEASURED HERE AND BOTH FAIL SILENTLY.
+# SEVEN THINGS THAT ARE NOT OPTIONAL. THE FIRST TWO WERE MEASURED HERE AND BOTH FAIL SILENTLY.
 #
 # 1. `--world`, NOT `--clip-file`. `main()` sends any run carrying `--clip-file` and no
 #    `--screenshot` to `run_clip_tool`, which parses, samples, prints a measurement and exits -- it
@@ -52,6 +53,45 @@
 #    reported about it was real. So the gate seeds a shelf into an empty data root and opens the
 #    world off that shelf, by the path the shell would pass down, and it fails unless the log says
 #    `opened the world shipped at`.
+#
+# 6. `--refine-all`, OR THE FILE IS ONE CAMERA'S WALK AND NOT THE WORLD. `--bake-world` on its own
+#    saves what the refinement ladder REACHED, and the ladder is driven by what a camera can see
+#    and how many pixels each node covers -- so a bake from the spawn view writes a world that is
+#    complete where that camera stood and coarse everywhere else. That is the floor with no walls
+#    the user photographed, and every bake before this one deserved it. `--refine-all` takes the
+#    two visibility terms out of the ladder -- the behind-the-camera demotion in the sweep and the
+#    `next_keen > kRefineSplitAt` gate on the split -- so every node is refined to the clip's own
+#    detail regardless of where the camera is pointing, and then the file IS the world.
+#
+#    It costs what it sounds like it costs. On the estate it is hundreds of thousands of nodes
+#    instead of the ~29,000 a two-minute spawn-view bake reaches: many minutes rather than
+#    seconds, and tens of megabytes rather than three. `-RefineAll:$false` is the control arm and
+#    bakes the old way.
+#
+# 7. ONE RUN CANNOT FINISH THE ESTATE, AND THE LIMIT IS FRAMES RATHER THAN SECONDS. `kSettleGiveUp`
+#    in main.cpp is 30,000 frames: past that the run stops waiting to settle, takes its screenshot
+#    and leaves, whatever `--max-seconds` says. Measured here -- a facility bake given a 1,800 s
+#    deadline ended after 30,001 frames and 119 s with 26,496 of 36,427 nodes, and the same work
+#    came out of two 60 s passes, so the ceiling is the cap and not the clock.
+#
+#    So a whole-world bake is a LOOP. Each pass resumes from the last -- the game reads the world
+#    the previous pass wrote, says `cached world has N of M leaves ... carrying on from here`, and
+#    sharpens more of it -- and the loop stops the moment a pass reports every node done, or when
+#    a pass adds nothing, or when -Passes runs out. Measured resuming: 18,816 of 27,315 after one
+#    pass, 26,496 of 36,427 after two, each from the one before it.
+#
+#    AND THE CAP IS ON `--settle`, NOT ON THE GAME. The give-up branch is inside
+#    `if (options_.settle && !settled_seen_)`, so a run with no `--settle` never enters it and is
+#    bounded by `--max-seconds` alone. That is why the first pass settles -- so a small clip stops
+#    the moment it is finished -- and every pass after it does not, and is worth its whole
+#    deadline instead of the ~119 s that 30,000 frames comes to on a fast card.
+#
+#    That is why the passes SHARE a data root and why `--no-clip-cache` comes off when there is
+#    more than one of them: a pass that empties the cache path cannot resume from the pass before
+#    it. What D684 asks of `--no-clip-cache` -- that the baking machine's own accumulated world
+#    must not leak into the shipped one -- is still had, and had by the two things that give it
+#    directly: the root is created empty for this bake and thrown away after it, and the shipped
+#    `.world` is deleted before the first pass. There is nothing left to leak from.
 # ---------------------------------------------------------------------------------------------
 
 [CmdletBinding()]
@@ -77,10 +117,46 @@ param(
     # a fixed point at all (D684), so without this the run is bounded only by `kSettleGiveUp`.
     [double]$Seconds = 150,
 
-    # Where the baking camera stands, `x,y,z,yaw,pitch`. What gets baked is what a camera reached,
-    # by design (D684, R11d) -- so this is the spawn view, and the ladder still runs for anywhere
-    # a player walks that this camera never looked at.
+    # Where the baking camera stands, `x,y,z,yaw,pitch`. With -RefineAll on -- which is the default
+    # -- this decides almost nothing about what is IN the world, because every node is refined
+    # whether the camera can see it or not. It still decides what the settle frame looks at and
+    # therefore what the run's screenshot shows, so it stays the spawn view.
     [string]$Cam = '0,0,0,-90,0',
+
+    # REFINE EVERY NODE, NOT THE ONES A CAMERA COULD SEE. This is the difference between shipping
+    # the world and shipping one walk through it, and it is on by default because a release that
+    # ships the second is the complaint this whole feature exists to answer. See 6 at the head of
+    # this file. `-RefineAll:$false` is the control arm: same script, same gate, the old bake.
+    [bool]$RefineAll = $true,
+
+    # THE MOST PASSES ONE WORLD GETS, and it is a ceiling rather than a count: the loop stops the
+    # moment a pass says every node is done, or the moment a pass adds nothing to the one before
+    # it. A small clip finishes in one and never sees the rest. The estate cannot finish in one --
+    # see 7 at the head of this file, the cap is 30,000 FRAMES and no deadline raises it -- so a
+    # whole-world bake is this loop, and the number here is how long anybody is prepared to let it
+    # run: passes times -Seconds is the worst case, and finishing early is the normal case.
+    [int]$Passes = 40,
+
+    # FAIL IF THE WORLD IS NOT ALL THERE. Off by default so that baking by hand is still a thing
+    # somebody can do in two minutes and look at, and ON in the release workflow, where a partial
+    # world is the exact defect this feature exists to remove and shipping one quietly is how it
+    # got shipped the first three times. It has nothing to say about a `-RefineAll:$false` bake,
+    # which is partial on purpose, so it refuses that combination rather than failing it.
+    [switch]$RequireWhole,
+
+    # WHERE ELSE THE GATE STANDS. `x,y,z,yaw,pitch` each, and an empty string is the world's own
+    # spawn view -- which is where the BAKE stood, and is therefore the one viewpoint that cannot
+    # tell you whether the world is all there. The other three are chosen to be nowhere the bake
+    # ever pointed: above the roof looking down, sixty metres south of the great steps, and on the
+    # far side of the block at head height. The estate is `bounds -53 -2 -46 .. 72.5 35.5 64.5`
+    # and the dome tops out at 18.2 m, so 45 m up is above all of it and z = -76 is sixty metres
+    # clear of the steps at z = -15.7. Yaw 90 looks north, -90 south; +z is north.
+    [string[]]$GateCams = @('', '0,45,0,90,-70', '0,14,-76,90,-5', '0,6,40,-90,-4'),
+
+    # Keep the gate's pictures here instead of throwing them away with the data root. Nothing
+    # depends on them -- a picture proves nothing about a world having been READ, which is D685's
+    # own finding -- but a person looking at four frames can see a missing wall in a second.
+    [string]$GateShots,
 
     # The window the bake runs at, which is NOT cosmetic: refinement is driven by how many pixels a
     # node covers, so a bake at 640x360 sharpens less of the world than one at 1280x720 and writes
@@ -121,6 +197,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+if ($RequireWhole -and -not $RefineAll) {
+    throw ("-RequireWhole with -RefineAll:`$false asks for a whole world from the arm that bakes " +
+           "one camera's walk on purpose. Pick one.")
+}
 
 $repo = Resolve-Path (Join-Path $PSScriptRoot '..')
 if (-not $Game) { $Game = Join-Path $repo 'build\bin' }
@@ -214,6 +295,12 @@ function Write-Stamps {
 function Get-BakeKey {
     $acc = [System.Text.StringBuilder]::new()
     [void]$acc.Append((Get-FileHash $exe -Algorithm SHA256).Hash)
+    # AND HOW IT WAS BAKED, because the source is only half of what decides the bytes. The ladder
+    # is driven by the camera, the window and whether visibility gates it at all, so a world baked
+    # with -RefineAll:$false is a different world from the same exe and the same clips -- and the
+    # warm path would otherwise hand the old, camera-shaped file straight back to a run that asked
+    # for the whole thing. D673's own lesson, one layer up: the key must name the arm that built it.
+    [void]$acc.Append("|refine_all=$([int][bool]$RefineAll)|cam=$Cam|view=${Width}x$Height")
     foreach ($f in Get-ChildItem $clipdir -Recurse -File | Sort-Object FullName) {
         if ($f.Extension -eq '.world') { continue }
         [void]$acc.Append($f.FullName.Substring($clipdir.Length))
@@ -256,6 +343,11 @@ Write-Host ""
 Write-Host "bake  game    $Game"
 Write-Host "bake  shard   $Shard of $($stems.Count) world(s): $($mine -join ', ')"
 Write-Host "bake  camera  $Cam at ${Width}x$Height, deadline $Seconds s each, budget $BudgetMB MB"
+if ($RefineAll) {
+    Write-Host "bake  detail  --refine-all: EVERY node, not the ones this camera can see"
+} else {
+    Write-Host "bake  detail  -RefineAll:`$false -- what the ladder REACHED from this camera only"
+}
 Write-Host ""
 
 # ------------------------------------------------------------------------------------------------
@@ -328,15 +420,75 @@ function Test-BakedWorldIsRead {
     $readyMs = 0.0
     if ($ready.Success) { $readyMs = [double]$ready.Groups[1].Value }
 
-    Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host ("gate  $Stem read '{0}': {1} chunks, {2} solid voxels, everything ready in {3:N0} ms" `
                 -f $from, $built.Groups[1].Value, $built.Groups[2].Value, $readyMs)
+
+    # ------------------------------------------------------------------------------------------
+    # AND FROM CAMERAS THE BAKE NEVER CAME FROM, which is the half a one-camera check cannot have.
+    #
+    # Everything above proves the file was READ. It says nothing about whether the file has the
+    # far side of the building in it, because the run that proved it stood exactly where the bake
+    # stood -- and a world baked without `--refine-all` is complete precisely there and coarse
+    # everywhere else. That is the shape of the whole complaint: the floor is present because the
+    # camera was on it, and the walls are not because the camera never looked at them.
+    #
+    # So the gate opens the same shelf world again from somewhere else: above the roof, sixty
+    # metres outside, and on the far side at head height. Each is its own fresh data root and its
+    # own fresh shelf, each has to say `opened the world shipped at` in its turn, and each has to
+    # come back with SOLID VOXELS IN THE FRAME -- `--screenshot-frame 60`, because a frame counted
+    # from a standing start is what a player's first second is.
+    #
+    # The number that matters is `nothing to sample`. If the world were partial, a camera out here
+    # would find nodes it had to build and the run would say so; a run that reads and samples
+    # nothing has everything this viewpoint needs already in the file.
+    # ------------------------------------------------------------------------------------------
+    $views = @()
+    foreach ($cam in $GateCams) {
+        $vroot = New-DataRoot
+        $vshelf = Join-Path $vroot "WorldShaper\worlds\$Stem.wsworld"
+        $vshot = Join-Path $vroot 'view.png'
+        $vargs = @('--world', $vshelf, '--no-title', '--screenshot', $vshot,
+                   '--screenshot-frame', '60', '--no-update-check', '--no-vsync',
+                   '--width', '960', '--height', '540', '--max-seconds', '180')
+        if ($cam) { $vargs += @('--cam', $cam) }
+        $vrun = Invoke-Game -What "view-$Stem" -Root $vroot -GameArgs $vargs
+
+        if ($vrun.log -notmatch "opened the world shipped at") {
+            Remove-Item $vroot -Recurse -Force -ErrorAction SilentlyContinue
+            throw ("$Stem : the shipped world was read from the spawn view and NOT from '$cam'. " +
+                   "One camera's answer is not the world's answer -- that is D685 exactly.")
+        }
+        $vscene = [regex]::Match($vrun.log,
+            "scene: (\d+) chunks, (\d+) solid voxels, (\d+) of (\d+) nodes sharpened, content ([0-9a-f]+)")
+        $vox = 0; $sharp = ''; $content = ''
+        if ($vscene.Success) {
+            $vox = [int64]$vscene.Groups[2].Value
+            $sharp = "$($vscene.Groups[3].Value) of $($vscene.Groups[4].Value)"
+            $content = $vscene.Groups[5].Value
+        }
+        if ($vox -le 0) {
+            Remove-Item $vroot -Recurse -Force -ErrorAction SilentlyContinue
+            throw "$Stem : from '$cam' the frame held no solid voxels at all"
+        }
+        if ($GateShots) {
+            New-Item -ItemType Directory -Path $GateShots -Force | Out-Null
+            $tag = if ($cam) { ($cam -replace '[^0-9A-Za-z-]', '_') } else { 'spawn' }
+            Copy-Item $vshot (Join-Path $GateShots "$Stem-$tag.png") -Force -ErrorAction SilentlyContinue
+        }
+        Write-Host ("gate  $Stem from '{0}': {1:N0} solid voxels at frame 60, {2} nodes, content {3}" `
+                    -f $(if ($cam) { $cam } else { 'the spawn view' }), $vox, $sharp, $content)
+        $views += [pscustomobject]@{ cam = $cam; voxels = $vox; nodes = $sharp; content = $content }
+        Remove-Item $vroot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
     return [pscustomobject]@{
         stem     = $Stem
         from     = $from
         chunks   = [int64]$built.Groups[1].Value
         voxels   = [int64]$built.Groups[2].Value
         ready_ms = $readyMs
+        views    = $views
     }
 }
 
@@ -349,60 +501,150 @@ $rows = @()
 foreach ($stem in $mine) {
     $world = Join-Path $clipdir "$stem.world"
     $warm = $false
+    $spent = 0.0
+    $nodes = ''
+    $whole = $false
+    $passesRun = 0
 
     if ($GateOnly) {
         if (-not (Test-Path $world)) { throw "$stem : -GateOnly, and there is no clips\$stem.world" }
     } else {
+        # The stamp is `key|nodes|whole`, and only the key decides whether the file can be reused.
+        # The other two fields are carried so that a WARM row can still say whether the world it
+        # is reusing is the whole world -- a re-used partial world is still a partial world, and
+        # -RequireWhole has to be able to see that without re-baking to find out.
         $known = ''
         if ($stamps.ContainsKey($stem)) { $known = $stamps[$stem] }
-        if (-not $Force -and (Test-Path $world) -and $known -eq $key) {
+        $knownParts = $known -split '\|'
+        if (-not $Force -and (Test-Path $world) -and $knownParts[0] -eq $key) {
             $warm = $true
+            if ($knownParts.Count -ge 3) {
+                $nodes = $knownParts[1]
+                $whole = ($knownParts[2] -eq 'whole')
+            }
             Write-Host ("bake  $stem is already baked from this exact game and clip " +
                         "({0:N2} MB); reusing it" -f ((Get-Item $world).Length / 1MB))
         }
     }
 
-    $spent = 0.0
-    $nodes = ''
     if (-not $GateOnly -and -not $warm) {
         # Deleted first, always. A bake that fails must not leave the last one standing and be
-        # mistaken for a success by the size check below.
+        # mistaken for a success by the size check below. It is also half of what replaces
+        # `--no-clip-cache` on a multi-pass bake: with no `.world` beside the clip, the first pass
+        # has no shipped world to find and starts from nothing exactly as it did before.
         Remove-Item $world -Force -ErrorAction SilentlyContinue
         if ($stamps.ContainsKey($stem)) { $stamps.Remove($stem) }
         Write-Stamps -Stamps $stamps
 
-        Write-Host "bake  $stem ..."
-        $shot = Join-Path ([IO.Path]::GetTempPath()) "ws-bake-$stem.png"
-        # `--world` and not `--clip-file`, and `--screenshot` so the run ENDS: see 1 and 2 at the
-        # head of this file. `--settle` waits for the ladder to have nothing left it can do from
-        # this camera and the shot is taken three frames after that; `--max-seconds` forces both
-        # for a camera that never reaches a fixed point. The world is written at the fixed point
-        # and again on the way out, so either route leaves the file behind.
+        # ONE ROOT FOR THE WHOLE OF THIS WORLD'S BAKE, created empty here and thrown away below.
+        # That is the other half: nothing this machine accumulated for itself is in reach of any
+        # pass, which is what D684 asks `--no-clip-cache` for, and the passes can still see each
+        # other -- which is what makes the second one resume rather than start again.
         $bakeRoot = New-DataRoot
-        $run = Invoke-Game -What "bake-$stem" -Root $bakeRoot -GameArgs @(
-            '--world', "clips\$stem.clip", '--no-title', '--no-clip-cache', '--bake-world',
-            '--cam', $Cam, '--settle', '--screenshot', $shot, '--screenshot-frame', '3',
-            '--max-seconds', "$Seconds", '--no-update-check', '--no-vsync',
-            '--width', "$Width", '--height', "$Height")
-        $spent = $run.seconds
-        Write-Host $run.log
-        Remove-Item $shot -Force -ErrorAction SilentlyContinue
-        Remove-Item $bakeRoot -Recurse -Force -ErrorAction SilentlyContinue
-        if ($run.code -ne 0) { throw "$stem : the bake run failed (exit $($run.code))" }
+        $shot = Join-Path ([IO.Path]::GetTempPath()) "ws-bake-$stem.png"
+        $before = -1
 
-        # THE LOG LINE, not the exit code, because the failure this is guarding against exited
-        # zero after four minutes of work and wrote nothing at all (D684).
-        $wrote = [regex]::Match($run.log,
-            "baked the world for shipping: '([^']+)' \((\d+) MB\), (\d+) of (\d+) nodes")
-        if (-not $wrote.Success) {
-            throw ("$stem : the run finished and never baked anything. The game says " +
-                   "'baked the world for shipping' when it does, and there is no such line above.")
+        for ($pass = 1; $pass -le [math]::Max(1, $Passes); $pass++) {
+            $passesRun = $pass
+            if ($Passes -gt 1) {
+                Write-Host "bake  $stem pass $pass of $Passes ..."
+            } else {
+                Write-Host "bake  $stem ..."
+            }
+            # `--world` and not `--clip-file`, and `--screenshot` so the run ENDS: see 1 and 2 at
+            # the head of this file. The world is written at the fixed point and again on the way
+            # out, so either route leaves the file behind.
+            #
+            # THE FIRST PASS SETTLES AND THE REST DO NOT, and that is the whole shape of a bake.
+            #
+            # `--settle --screenshot-frame 3` ends the run three frames after the ladder has
+            # nothing left it can do, so a small clip -- a sky, a pane of glass -- finishes in
+            # seconds and the loop stops after one pass. It is also what brings `kSettleGiveUp`
+            # into play: with `--settle` set, frame 30,001 makes the run stop waiting and leave,
+            # whatever `--max-seconds` says, which is why one run cannot finish the estate.
+            #
+            # So every pass after the first drops `--settle` and asks for a frame no run will
+            # reach. Then `measuring` is true from frame one, the give-up branch is never entered,
+            # and the only thing that ends the run is `--max-seconds` -- which makes a pass worth
+            # its whole deadline of ladder work instead of the ~119 s that 30,000 frames comes to
+            # on a fast card. Measured: a settle-less `sky_test` bake wrote all 60,136 of 60,136
+            # nodes and left when its deadline came up.
+            #
+            # It logs `the picture is of frame N of the M it was asked for` on the way out. That
+            # is expected and is not a fault: the screenshot is a by-product here, the thing being
+            # produced is the `.world`, and the frame it was asked for is a number chosen so that
+            # nothing but the clock can end the run.
+            $bakeArgs = @(
+                '--world', "clips\$stem.clip", '--no-title', '--bake-world',
+                '--cam', $Cam, '--screenshot', $shot,
+                '--max-seconds', "$Seconds", '--no-update-check', '--no-vsync',
+                '--width', "$Width", '--height', "$Height")
+            if ($pass -eq 1) {
+                $bakeArgs += @('--settle', '--screenshot-frame', '3')
+            } else {
+                $bakeArgs += @('--screenshot-frame', '1000000000')
+            }
+            # THE WORD THAT WAS MISSING. Without it the ladder only sharpens what this one camera
+            # can see, and the shipped file is complete where the baking camera stood and coarse
+            # everywhere else -- which is the floor with no walls the user photographed.
+            if ($RefineAll) { $bakeArgs += '--refine-all' }
+            # Only on a single-pass bake, and see 7 at the head of this file for why it cannot be
+            # there on a multi-pass one: it empties the very cache path the next pass resumes from.
+            if ($Passes -le 1) { $bakeArgs += '--no-clip-cache' }
+
+            $run = Invoke-Game -What "bake-$stem" -Root $bakeRoot -GameArgs $bakeArgs
+            $spent += $run.seconds
+            Write-Host $run.log
+            Remove-Item $shot -Force -ErrorAction SilentlyContinue
+            if ($run.code -ne 0) {
+                Remove-Item $bakeRoot -Recurse -Force -ErrorAction SilentlyContinue
+                throw "$stem : the bake run failed on pass $pass (exit $($run.code))"
+            }
+
+            # THE LOG LINE, not the exit code, because the failure this is guarding against exited
+            # zero after four minutes of work and wrote nothing at all (D684).
+            $wrote = [regex]::Match($run.log,
+                "baked the world for shipping: '([^']+)' \((\d+) MB\), (\d+) of (\d+) nodes")
+            if (-not $wrote.Success) {
+                Remove-Item $bakeRoot -Recurse -Force -ErrorAction SilentlyContinue
+                throw ("$stem : pass $pass finished and never baked anything. The game says " +
+                       "'baked the world for shipping' when it does, and there is no such line " +
+                       "above.")
+            }
+            if (-not (Test-Path $world)) {
+                Remove-Item $bakeRoot -Recurse -Force -ErrorAction SilentlyContinue
+                throw "$stem : said it baked, and there is no $world"
+            }
+            $done = [int64]$wrote.Groups[3].Value
+            $all  = [int64]$wrote.Groups[4].Value
+            $nodes = "$done of $all"
+            $whole = ($done -ge $all)
+
+            # EVERY NODE, which is the only outcome that means the file is the world. The game
+            # prints the two numbers and they are equal when there is nothing left to sharpen.
+            if ($whole) {
+                Write-Host ("bake  $stem is WHOLE: $nodes nodes, after $pass pass(es)")
+                break
+            }
+            # A pass that added nothing is a plateau, and running it thirty more times adds
+            # nothing thirty more times. Say where it stopped rather than spending the budget.
+            if ($done -le $before) {
+                Write-Host ("bake  $stem stopped growing at $nodes nodes on pass $pass -- " +
+                            "further passes are adding nothing, so this is where it ends.")
+                break
+            }
+            $before = $done
+            if ($run.log -match 'gave up waiting for the world to settle') {
+                Write-Host ("bake  $stem pass $pass ran out its frame budget at $nodes nodes; " +
+                            "the next pass resumes from here.")
+            }
         }
-        if (-not (Test-Path $world)) { throw "$stem : said it baked, and there is no $world" }
-        $nodes = "$($wrote.Groups[3].Value) of $($wrote.Groups[4].Value)"
-        if ($run.log -match 'gave up waiting for the world to settle') {
-            Write-Host ("bake  $stem ran out of its $Seconds s and baked what it had reached -- a " +
-                        "smaller world, not a broken one. Raise -Seconds to bake more of it.")
+
+        Remove-Item $bakeRoot -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not $whole) {
+            Write-Host ("bake  $stem is NOT whole: $nodes nodes after $passesRun pass(es). The file " +
+                        "is complete as far as it got and coarse past that -- raise -Passes or " +
+                        "-Seconds to bake the rest.")
         }
     }
 
@@ -413,13 +655,15 @@ foreach ($stem in $mine) {
         mb      = [math]::Round($bytes / 1MB, 2)
         seconds = [math]::Round($spent, 1)
         nodes   = $nodes
+        whole   = [bool]$whole
+        passes  = $passesRun
         warm    = [bool]$warm
         sha256  = (Get-FileHash $world -Algorithm SHA256).Hash
         read    = $null
     }
 
     if (-not $GateOnly -and -not $warm) {
-        $stamps[$stem] = $key
+        $stamps[$stem] = "$key|$nodes|" + $(if ($whole) { 'whole' } else { 'partial' })
         Write-Stamps -Stamps $stamps
     }
 }
@@ -435,6 +679,22 @@ if ($totalMB -gt $BudgetMB) {
            "from a tighter camera -- but decide it rather than shipping it.")
 }
 
+# AND THAT THE WORLD IS ALL OF IT, when somebody has asked for that -- before the gate, for the
+# budget's reason exactly: a partial world reads perfectly well and proving that it does answers a
+# question nobody asked. `-GateOnly` is exempt because it baked nothing and has nothing to say
+# about how what it is proving was made; that judgement belongs to the run that made it.
+if ($RequireWhole -and -not $GateOnly) {
+    $short = @($rows | Where-Object { -not $_.whole })
+    if ($short.Count -gt 0) {
+        throw ("-RequireWhole, and " +
+               (($short | ForEach-Object { "$($_.stem) got to $($_.nodes) nodes" }) -join '; ') +
+               ". A world that stops where the ladder stopped is complete where the baking " +
+               "camera reached and coarse past it, which is the floor with no walls this whole " +
+               "feature exists to remove. Raise -Passes or -Seconds, or bake it somewhere with " +
+               "a graphics card and package by hand.")
+    }
+}
+
 if (-not $NoGate) {
     foreach ($row in $rows) { $row.read = Test-BakedWorldIsRead -Stem $row.stem }
 }
@@ -447,6 +707,8 @@ foreach ($row in $rows) {
     if ($null -ne $row.read) { $readyMs = $row.read.ready_ms; $voxels = $row.read.voxels }
     $note = ''
     if ($row.warm) { $note = ' (warm)' }
+    elseif ($row.whole) { $note = " (WHOLE, $($row.passes) pass(es))" }
+    elseif ($row.passes -gt 0) { $note = " (PARTIAL, $($row.passes) pass(es))" }
     Write-Host ("{0,-20} {1,8:N2}  {2,8:N1}  {3,9:N0}  {4,10:N0}  {5}{6}" -f `
                 $row.stem, $row.mb, $row.seconds, $readyMs, $voxels, $row.nodes, $note)
 }
@@ -457,17 +719,29 @@ if ($NoGate) {
 } else {
     Write-Host "every world above was opened OFF THE SHELF, from an empty data root, and READ."
 }
+# SAID OUT LOUD, because "it baked" and "it baked the world" are different claims and the second
+# one is the whole point of --refine-all. A partial file still opens, still reads, still passes
+# every gate above -- and is complete only as far as the ladder got, which is the thing the user
+# photographed. Nobody should have to count nodes in a table to find that out.
+$partial = @($rows | Where-Object { -not $_.whole -and -not $_.warm -and $_.passes -gt 0 })
+if ($partial.Count -gt 0) {
+    Write-Host ""
+    Write-Host ("PARTIAL: " + (($partial | ForEach-Object { "$($_.stem) at $($_.nodes) nodes" }) -join ', '))
+    Write-Host "These worlds are complete as far as the ladder reached and coarse past that."
+    Write-Host "Raise -Passes or -Seconds. -RefineAll:`$false is the arm that is meant to be partial."
+}
 
 if ($Report) {
     $summary = [pscustomobject]@{
-        game     = $Game
-        key      = $key
-        shard    = $Shard
-        camera   = $Cam
-        seconds  = $Seconds
-        total_mb = $totalMB
-        gated    = (-not $NoGate)
-        worlds   = $rows
+        game       = $Game
+        key        = $key
+        shard      = $Shard
+        camera     = $Cam
+        refine_all = [bool]$RefineAll
+        seconds    = $Seconds
+        total_mb   = $totalMB
+        gated      = (-not $NoGate)
+        worlds     = $rows
     }
     ($summary | ConvertTo-Json -Depth 6) | Out-File $Report -Encoding ascii
     Write-Host "wrote $Report"

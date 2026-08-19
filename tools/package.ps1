@@ -5,7 +5,13 @@
 # so anyone who wants to know where the file came from has only the checksum and the source.
 # Say so in the release notes when you use it.
 
-param([switch]$SkipTests)
+# -SkipBuild runs every step below against a tree that has ALREADY been built and tested, which is
+# the only way this script currently works from an agent session or a shell that is not a developer
+# command prompt: `build.bat` resolves the compiler through `vswhere`, and `vswhere` does not
+# resolve through the invocation this script makes. So build and test by hand first, then
+# -SkipBuild here, and the stage / zip / unpack-and-run / hash gates all still run. Do NOT use it
+# to skip building; use it because the building already happened.
+param([switch]$SkipTests, [switch]$SkipBuild)
 
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -17,8 +23,13 @@ if ($cmake -notmatch 'project\(WorldShaper VERSION ([0-9]+\.[0-9]+\.[0-9]+)') {
 $version = $Matches[1]
 $name = "WorldShaper-v$version-windows-x64"
 
-& (Join-Path $root "build.bat")
-if ($LASTEXITCODE -ne 0) { throw "build failed" }
+if ($SkipBuild) {
+    Write-Host "-SkipBuild: packaging whatever is already in build\bin. It must have been built"
+    Write-Host "            and tested by hand, or this zip is a draft with a checksum on it."
+} else {
+    & (Join-Path $root "build.bat")
+    if ($LASTEXITCODE -ne 0) { throw "build failed" }
+}
 
 # The same gate the workflow applies. A build that fails it should never become a download.
 if (-not $SkipTests) {
@@ -118,9 +129,24 @@ if (-not $built.Success) {
 if ([int64]$built.Groups[2].Value -le 0) {
     throw "the unpacked build built a world with no voxels in it"
 }
-Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ("smoke test: the unpacked build ran from $smoke, built {0} solid voxels and drew a " +
             "frame" -f $built.Groups[2].Value)
+
+# AND THAT THE SHIPPED WORLD IS READ OFF THE SHELF, WHICH IS A DIFFERENT QUESTION AGAIN.
+#
+# The gate above proves the zip has a game in it. It does not prove the zip has a WORLD in it that
+# the game will use: a `.world` whose key does not match is refused in SILENCE and the sampler runs
+# for minutes exactly as if the file were not there, producing a perfectly good screenshot and a
+# perfectly good voxel count. That is D685 word for word, and it was reported as working within the
+# hour. So the release workflow ends with `bake_world.ps1 -GateOnly` against its own unpacked zip
+# and this script does the same, from the same file -- a gate the two paths do not share is a gate
+# only one of them has.
+#
+# If it fails saying there is no clips\facility.world, the bake has not been run:
+#     tools\bake_world.ps1        (writes build\bin\clips\facility.world, then re-package)
+& (Join-Path $PSScriptRoot "bake_world.ps1") -Game $smoke -Clips facility -GateOnly
+
+Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
 
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
 $hash | Out-File "$zip.sha256" -Encoding ascii
@@ -128,6 +154,14 @@ $hash | Out-File "$zip.sha256" -Encoding ascii
 Write-Host ""
 Write-Host "$name.zip  ($([math]::Round((Get-Item $zip).Length / 1MB, 2)) MB)"
 Write-Host "SHA-256: $hash"
+Write-Host ""
+# Said here as well as at the head of the file, because the head of the file is read once and this
+# line is read every time somebody publishes one of these. A CI release carries a statement signed
+# by GitHub tying the file to the commit and the workflow that built it; this zip carries nothing
+# of the kind, and the release notes have to say so or they are claiming something that is not true.
+Write-Host "NO PROVENANCE ATTESTATION. This zip was built here, not by .github/workflows/release.yml,"
+Write-Host "so there is nothing tying it to a commit but the checksum above and the source. SAY SO IN"
+Write-Host "THE RELEASE NOTES. A CI release carries an attestation; this one does not."
 Write-Host ""
 Write-Host "Publish with:  gh release create v$version `"$zip`" `"$zip.sha256`" --title `"WorldShaper v$version`""
 Write-Host "Push to itch:  tools\push-itch.ps1"

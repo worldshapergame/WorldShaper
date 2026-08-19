@@ -34,18 +34,51 @@ on:
         type: string
         default: 'facility'
       seconds:
-        description: 'Deadline for one bake, in seconds'
+        description: 'Deadline for one bake PASS, in seconds'
         required: false
         type: number
-        default: 900
+        default: 240
+      # A WHOLE WORLD IS A LOOP, and this is how many turns of it a world gets. One run cannot
+      # finish the estate and the reason is not the deadline: `kSettleGiveUp` in main.cpp stops a
+      # run waiting to settle after 30,000 FRAMES, and no value of `--max-seconds` raises that.
+      # Each pass resumes from the world the last one wrote, and the script stops the moment a
+      # pass reports every node done or a pass adds nothing. So `seconds x passes` is the worst
+      # case and finishing early is the normal one -- 240 x 45 is three hours, inside the job
+      # timeout below with the build and the gate around it.
+      passes:
+        description: 'The most passes one world gets before the bake gives up on finishing it'
+        required: false
+        type: number
+        default: 45
+      # A PARTIAL WORLD IS THE DEFECT, NOT A DEGRADED SUCCESS. `--refine-all` exists because
+      # `--bake-world` on its own ships what one camera reached, and a release that ships that is
+      # the floor with no walls the user photographed. So the release asks for the whole thing and
+      # fails without it, rather than publishing a smaller world and saying nothing.
+      #
+      # A STRING and not a boolean, deliberately. This file is triggered three ways -- called,
+      # dispatched and pushed -- and a `type: boolean` input arrives as a real boolean on one of
+      # them and as the STRING "false" on another, which GitHub's `==` does not consider equal to
+      # `false`. One spelling that means the same thing under all three triggers is worth more
+      # than the type.
+      require_whole:
+        description: 'Fail unless every node of every world asked for was baked ("true"/"false")'
+        required: false
+        type: string
+        default: 'true'
       # Underscores and not hyphens, here and everywhere below. A GitHub expression parses
       # `inputs.budget-mb` as a subtraction, so a hyphenated name has to be written
       # `inputs['budget-mb']` at every use and reads as a typo the one time somebody forgets.
+      # 128 and not 64, and it is a decision rather than a slackening. `--refine-all` bakes EVERY
+      # node instead of the ones the spawn camera could see, so the estate goes from ~29,000 of
+      # 40,000 nodes at 3.7 MB to all 647,797 at tens of megabytes -- and a download that is tens
+      # of megabytes bigger is what buys a world that is complete everywhere instead of complete
+      # where the baking camera happened to stand. The budget still exists and still stops the
+      # job, because the next person to grow it should have to say so out loud.
       budget_mb:
         description: 'The most the baked worlds may add to the download'
         required: false
         type: number
-        default: 64
+        default: 128
     outputs:
       artifact:
         description: 'The artifact holding clips/*.world'
@@ -61,13 +94,21 @@ on:
         required: false
         default: 'facility'
       seconds:
-        description: 'Deadline for one bake, in seconds'
+        description: 'Deadline for one bake PASS, in seconds'
         required: false
-        default: '900'
+        default: '240'
+      passes:
+        description: 'The most passes one world gets before the bake gives up on finishing it'
+        required: false
+        default: '45'
+      require_whole:
+        description: 'Fail unless every node of every world asked for was baked'
+        required: false
+        default: 'true'
       budget_mb:
         description: 'The most the baked worlds may add to the download'
         required: false
-        default: '64'
+        default: '128'
 
   # KEEPING THE CACHE WARM IS THE POINT OF THIS TRIGGER, not publishing anything.
   #
@@ -97,6 +138,8 @@ jobs:
       matrix: ${{ steps.pick.outputs.matrix }}
       clips: ${{ steps.pick.outputs.clips }}
       seconds: ${{ steps.pick.outputs.seconds }}
+      passes: ${{ steps.pick.outputs.passes }}
+      whole: ${{ steps.pick.outputs.whole }}
       budget: ${{ steps.pick.outputs.budget }}
     steps:
       - uses: actions/checkout@v4
@@ -115,8 +158,15 @@ jobs:
           fi
           echo "clips=$(printf '%s' "$stems" | paste -sd, -)" >> "$GITHUB_OUTPUT"
           echo "matrix=$(printf '%s\n' "$stems" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
-          echo "seconds=${{ inputs.seconds || github.event.inputs.seconds || 900 }}" >> "$GITHUB_OUTPUT"
-          echo "budget=${{ inputs.budget_mb || github.event.inputs.budget_mb || 64 }}" >> "$GITHUB_OUTPUT"
+          echo "seconds=${{ inputs.seconds || github.event.inputs.seconds || 240 }}" >> "$GITHUB_OUTPUT"
+          echo "passes=${{ inputs.passes || github.event.inputs.passes || 45 }}" >> "$GITHUB_OUTPUT"
+          echo "budget=${{ inputs.budget_mb || github.event.inputs.budget_mb || 128 }}" >> "$GITHUB_OUTPUT"
+          # Anything but the literal `false` asks for the whole world, and the push trigger --
+          # which passes nothing at all -- gets the whole world too, because a warm cache holding
+          # half an estate is not a cache worth having when a release comes to use it.
+          whole='${{ inputs.require_whole || github.event.inputs.require_whole || 'true' }}'
+          if [ "$whole" != "false" ]; then whole=true; fi
+          echo "whole=$whole" >> "$GITHUB_OUTPUT"
           echo "baking: $stems"
 
   # ONE BUILD, HANDED ROUND. Every baking runner needs the same executable, and a Windows build of
@@ -180,7 +230,11 @@ jobs:
   bake:
     needs: [plan, build]
     runs-on: windows-latest
-    timeout-minutes: 180
+    # 45 passes at 240 s is three hours in the worst case, and the worst case is what a hosted
+    # runner with a software Vulkan will actually take. 240 leaves an hour around it for the
+    # download, the Mesa install and the gate, and stays under the six hours GitHub allows a job.
+    # If this ever times out, the bake is not finishing the world and the release SHOULD stop.
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
@@ -271,9 +325,15 @@ jobs:
             Game     = 'bin'
             Clips    = '${{ matrix.clip }}'
             Seconds  = ${{ needs.plan.outputs.seconds }}
+            Passes   = ${{ needs.plan.outputs.passes }}
             BudgetMB = ${{ needs.plan.outputs.budget }}
             Report   = 'report-${{ matrix.clip }}.json'
           }
+          # `--refine-all` is the script's default and stays it -- see 6 at the head of that file.
+          # This is the half that makes a shortfall LOUD: a world that stopped where the ladder
+          # stopped reads perfectly, gates perfectly and is exactly the defect being removed, so
+          # the job fails on it rather than publishing a smaller world quietly.
+          if ('${{ needs.plan.outputs.whole }}' -eq 'true') { $ps.RequireWhole = $true }
           if ('${{ steps.warm.outputs.cache-hit }}' -eq 'true') { $ps.GateOnly = $true }
           Write-Host ($ps | Out-String)
           & .\tools\bake_world.ps1 @ps
@@ -291,8 +351,10 @@ jobs:
           "| | |"                                                    >> $env:GITHUB_STEP_SUMMARY
           "|---|---|"                                                >> $env:GITHUB_STEP_SUMMARY
           "| adds to the download | $($w.mb) MB |"                   >> $env:GITHUB_STEP_SUMMARY
-          "| bake |  $($w.seconds) s |"                              >> $env:GITHUB_STEP_SUMMARY
+          "| bake |  $($w.seconds) s over $($w.passes) pass(es) |"   >> $env:GITHUB_STEP_SUMMARY
           "| nodes | $($w.nodes) |"                                  >> $env:GITHUB_STEP_SUMMARY
+          $all = if ($w.whole) { 'the WHOLE world' } else { 'PARTIAL - as far as the ladder got' }
+          "| how much of it | $all |"                                >> $env:GITHUB_STEP_SUMMARY
           "| read off the shelf in | $($w.read.ready_ms) ms |"       >> $env:GITHUB_STEP_SUMMARY
           "| solid voxels | $($w.read.voxels) |"                     >> $env:GITHUB_STEP_SUMMARY
           "| sha256 | ``$($w.sha256)`` |"                            >> $env:GITHUB_STEP_SUMMARY
