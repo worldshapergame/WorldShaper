@@ -107,7 +107,7 @@ Hierarchical DDA marching, visibility buffer, direction-shaded faces (no lightin
 | Overview of the scene | 1280×800 | **1.171 ms** | — |
 | Grazing, at ground level | 1280×800 | **0.570 ms** | — |
 
-T3 passes with headroom. **The T0 gate cannot be validated** — there is no Steam Deck (decision D62). Extrapolating from the desktop numbers puts the Deck somewhere around 5–14 ms against a 9.5 ms budget, which is exactly the uncertainty band the beam pre-pass exists to close. It is deliberately not built yet: there is no point optimising against an extrapolation.
+T3 passes with headroom. **The T0 gate cannot be validated** — there is no Steam Deck (decision D62). Extrapolating from the desktop numbers puts the Deck somewhere around 5–14 ms against a 9.5 ms budget, which is exactly the uncertainty band the beam pre-pass exists to close. **It is built now — 2026-08-19, D698** — and the argument for waiting held right up until it did not: the point of building it was never the Deck extrapolation but 4K, where primary visibility went from 16.81 ms to **1.18** outdoors. The Deck gate is still unvalidated for D62's reason, and now has more headroom under it than anybody has been able to measure.
 
 **Also added:** `--screenshot`, `--cam` and `--debug-mode`, so a rendering change can be rendered, captured and compared without a person looking at the screen. That is not a convenience — with no second engineer, "does it draw the right thing" needs to be answerable by the build.
 
