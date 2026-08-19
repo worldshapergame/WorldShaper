@@ -6819,10 +6819,18 @@ void Application::stream(f64 seconds) {
                     // above builds nothing and streams nothing, and the gate below is what says so
                     // in a number rather than in this comment: the offer is made on every one of
                     // these, and refused.
-                    ++light_offers_landed_face_;
-                    if (sample_gate_.may_sample(SampleCause::kLight)) {
-                        demand_sample_of(NodeKey{entry.x, entry.y, entry.z, level},
-                                         SampleCause::kLight);
+                    //
+                    // Classified by `feedback_ray_class` rather than by the `secondary` flag
+                    // beside it, even though the two must agree here. One classifier, in the file
+                    // that owns the tags: a second reading of the same bits is a second thing to
+                    // get wrong the next time a tag is added, and this one is a rule rather than a
+                    // branch of a switch.
+                    if (feedback_ray_class(entry.level) == RayClass::kLight) {
+                        ++light_offers_landed_face_;
+                        if (sample_gate_.may_sample(SampleCause::kLight)) {
+                            demand_sample_of(NodeKey{entry.x, entry.y, entry.z, level},
+                                             SampleCause::kLight);
+                        }
                     }
                     // No stand-in for a secondary face, and that is not an omission. A stand-in
                     // exists so the COMPOSITE has something to read while a fine face is being
@@ -6934,10 +6942,12 @@ void Application::stream(f64 seconds) {
                 //
                 // The residency request above is untouched and must be: refusing it would put back
                 // the shadow of a thing that is not there. What is refused is the SAMPLE.
-                ++light_offers_stopped_cell_;
-                if (sample_gate_.may_sample(SampleCause::kLight)) {
-                    demand_sample_of(NodeKey{entry.x, entry.y, entry.z, level},
-                                     SampleCause::kLight);
+                if (feedback_ray_class(entry.level) == RayClass::kLight) {
+                    ++light_offers_stopped_cell_;
+                    if (sample_gate_.may_sample(SampleCause::kLight)) {
+                        demand_sample_of(NodeKey{entry.x, entry.y, entry.z, level},
+                                         SampleCause::kLight);
+                    }
                 }
                 continue;
             }
