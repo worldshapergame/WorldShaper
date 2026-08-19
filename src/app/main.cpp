@@ -469,6 +469,38 @@ struct Options {
     // compared at all. With this the ladder ranks by distance alone and stops only when there is
     // nothing left anywhere, so both arms end at the same world or the difference is real.
     bool refine_all = false;
+    // THE PICKER'S OCCLUSION RAY, which is OFF, and this flag is the arm that puts it back.
+    //
+    // The ladder used to refuse a node it could not SEE: it cast a ray from the camera at the
+    // node's centre through `World` and, if anything solid stood in the way, the node was not
+    // sampled. Asked for directly -- *"ditch the occlusion detection for loading nodes because
+    // without it they load much faster"* -- and the log had already written the reason down three
+    // times before anybody played it:
+    //
+    // - **D622**: **7,103,492 rays to choose sixteen nodes.** A node the ray refuses never becomes
+    //   the front runner, so the best-so-far never rises and every permanently-occluded node fires
+    //   again on nearly every wake, for the whole run. One ray-free sweep took 25,996 ms of main
+    //   thread to 1,736 and the rays to 149,512 -- and what is left of those 149,512 is this test.
+    // - **D619**: the ladder was **starved** by it. 3,102 of 3,628 leftovers were refused as
+    //   occluded, they are big and near so the rank puts them at the head of the shortlist, and the
+    //   721 nodes refusable by nothing at all never got into a batch at all. `kRefuseFor` exists
+    //   only to make that affordable; it is a memo about a test that no longer runs.
+    // - **D631**: on a COLD load the ray is asked of a world still being built. There is nothing
+    //   under it, so early nodes are refused by nothing, whatever geometry happens to arrive first
+    //   occludes everything behind it, and a refusal outlives the thing that caused it. Occluded
+    //   went 6,022 -> 8,446 with the coarse paste removed.
+    //
+    // So the pick is now screen coverage and facing and nothing else. Facing stays -- it is three
+    // multiplies and it DEMOTES rather than refuses, so turning round finds the world improved.
+    //
+    // What it costs is on the record beside what it saves: a node behind a wall is now enlisted,
+    // so more of the world is sampled from any one camera and the ladder runs longer before it
+    // stands down. R2's rule -- what is not seen is not processed -- is relaxed for the LOADING
+    // decision and for nothing else; residency and eviction are untouched.
+    //
+    // With this flag the old behaviour is restored exactly: the ray in `refine_candidate`, the
+    // memo it writes, and the census column that reads them back.
+    bool occlusion_cull = false;
     // Work out the clip's paint rules again for every node, which is what `sample` did before
     // D614 split `plan_sample` off. The control arm for that split, and the only honest way to
     // measure it: two flags of one build rather than two builds (D407).
@@ -1209,6 +1241,9 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.derive_visits_m = static_cast<u32>(next_number(16));
     } else if (arg == "--refine-all") {
         options.refine_all = true;
+    } else if (arg == "--occlusion-cull") {
+        // The control arm for the picker's occlusion ray. See Options::occlusion_cull.
+        options.occlusion_cull = true;
     } else if (arg == "--clip-at") {
         if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
     } else if (arg == "--material") {
@@ -1659,6 +1694,10 @@ void print_help() {
         "                        else can. Off by default; prints a determinism hash at load\n"
         "  --refine-batch N      nodes the ladder picks and samples per wake (default 128). 16\n"
         "                        is what it was when a batch was sampled one node at a time\n"
+        "  --occlusion-cull      put the picker's occlusion ray back: refuse a node the camera\n"
+        "                        cannot see, and remember the refusal for 32 wakes. Off by\n"
+        "                        default -- the ladder picks on screen size and facing alone --\n"
+        "                        and this is the control arm for that\n"
         "  --refine-workers N    workers the background sampler gets (default half the machine).\n"
         "                        More loads faster and steals from the paste; both are measured\n"
         "  --no-batch-parallel   sample the batch one node at a time on one core, which is what\n"
@@ -2316,8 +2355,19 @@ private:
     // The shortlist the batch is drawn from. Deep enough that it still fills when most of it is
     // refused: about a thirty-second of the occluded nodes are re-offered on any given wake
     // (kRefuseFor), which is a couple of hundred on the facility, so several times the batch.
+    //
+    // That sizing is `--occlusion-cull`'s. With the ray off nothing is refused, so the shortlist
+    // fills with nodes that are all going to be sampled and the depth is simply headroom -- it is
+    // left where it is so the two arms draw their batches from the same-sized list.
     static constexpr usize kShortlistMax = 4096;
     // How many wakes a node refused by the occlusion ray is left out of the batch for.
+    //
+    // **DEAD UNLESS `--occlusion-cull` IS ON, and kept for exactly that reason.** The memo is a
+    // note about a test, and by default there is no test: `refuse_until` is never written, so every
+    // node is offered on every wake and the clog this constant exists to clear cannot form. It
+    // stays because deleting it would delete the control arm with it -- the arm is the whole of how
+    // the two behaviours can still be compared -- and because it costs nothing to carry: one `u64`
+    // a node and one comparison a sweep, both of which the sweep is already doing.
     //
     // A batch of sixteen was still delivering one node a batch, and the reason was not the picker's
     // arithmetic but its forgetfulness. The three tests have different tenures: a node with nothing
@@ -2369,8 +2419,9 @@ private:
     u64 refine_rearm_world_ = 0;
     f64 refine_stand_at_[3]{0.0, 0.0, 0.0};    // where the camera was when it stood down
     f64 refine_stand_dir_[3]{0.0, 0.0, 1.0};
-    // A brick, and about two degrees. Below these the same occlusion rays give the same answers, so
-    // re-sweeping is work with a known result.
+    // A brick, and about two degrees. Below these the same rank puts the same nodes at the head of
+    // the same shortlist -- and, under `--occlusion-cull`, the same rays give the same answers --
+    // so re-sweeping is work with a known result.
     static constexpr f64 kStandDownMove = 0.25;
     static constexpr f64 kStandDownTurn = 0.99939;   // cos 2 degrees
     // The furthest-out occlusion refusal the ladder is still holding, in wakes.
@@ -2397,6 +2448,13 @@ private:
     // it can never be satisfied: every sweep rewrites the memos it refuses, so the horizon moves
     // with the clock. The window has to be measured from the last sweep that DELIVERED, not from
     // the memos.
+    //
+    // **With the occlusion ray off there are no memos, so an empty sweep is ALREADY the fixed
+    // point and the window buys nothing -- and it is kept anyway.** It costs 32 sweeps with no ray
+    // in them, which is about a millisecond over a whole load. What it buys instead is that both
+    // arms stand down by one rule: a stand-down that fired on the first empty sweep in one arm and
+    // on the thirty-second in the other would be a different SCHEDULE as well as a different
+    // picker, and every figure taken across the flag would then be measuring two changes at once.
     u64 refine_empty_since_ = 0;
     // One save per fixed point, rather than one per frame that the count happens to have moved on.
     //
@@ -2599,6 +2657,10 @@ private:
         // refused it. See `kRefuseFor`: a refusal is remembered rather than rediscovered, because
         // a node the picker refuses is never marked done and would otherwise come back to the head
         // of the shortlist every frame for the rest of the run.
+        //
+        // **Never written unless `--occlusion-cull` is on**, because the ray that writes it is the
+        // only thing that ever did. Under the default picker this stays nought for the life of the
+        // node and the sweep's test against it is always false.
         u64 refuse_until = 0;
         // R11e/R11h: somebody other than the camera has asked for this node, so the two visibility
         // tests do not apply to it and it is split all the way down rather than to the level its
@@ -2691,6 +2753,10 @@ private:
     u64 refine_total_wakes_ = 0;
     u64 refine_total_nodes_ = 0;          // nodes delivered, so a wake's yield is visible
     u64 refine_total_rays_ = 0;
+    // ...and how many of them REFUSED a node, which is the number the flag is about. Nought rays
+    // and nought refusals is the default arm; the two apart say whether the ray was cheap and
+    // useless or expensive and decisive. Always nought without `--occlusion-cull`.
+    u64 refine_total_refused_ = 0;
     u64 refine_total_swept_ = 0;          // list entries walked, which is what a sweep costs
     // What despeckling actually did over the whole ladder, which until now nothing counted: the
     // per-node call at the sampler throws its report away, so "the ladder despeckles every node it
@@ -4071,8 +4137,9 @@ bool Application::start_refinement() {
         std::lock_guard<std::mutex> lock(refine_mutex_);
         if (refine_outstanding_ >= kRefineInFlight) return false;
     }
-    // Stood down, and nothing has moved. The sweep below would walk the whole node list and cast an
-    // occlusion ray for every shortlisted node to arrive at the answer it arrived at last frame.
+    // Stood down, and nothing has moved. The sweep below would walk the whole node list -- and,
+    // under `--occlusion-cull`, cast a ray for every shortlisted node -- to arrive at the answer it
+    // arrived at last frame.
     if (refine_stood_down_) {
         if (!refine_should_rearm()) return false;
         rearm_refinement(/*forget_refusals=*/true);   // the camera moved; every memo is stale
@@ -4133,6 +4200,11 @@ bool Application::start_refinement() {
     // a refusal expires after 32 wakes, so the node it protects is retried about twice a second.
     // The guarantee becomes "the best node not refused within the last half second", which is the
     // guarantee every other member of the batch already had.
+    //
+    // **And the ray is now off entirely** — D622 made the seven million into a hundred and fifty
+    // thousand and the user played both of what is left, so the shortlisted nodes are no longer
+    // rayed either. `--occlusion-cull` is the arm that puts every word above back; see
+    // Options::occlusion_cull for what enlisting the hidden nodes costs in exchange.
     //
     // So: rank everything cheaply — no ray, no field, no world — keep the best few, and pay for
     // the expensive tests only on those. The winner is simply the first entry that survives them,
@@ -4282,14 +4354,21 @@ bool Application::start_refinement() {
     }
 
     if (refine_batch_.empty()) {
-        // Nothing this camera can improve. Not the same as "every node is sharp": a node behind a
-        // wall is refused by the occlusion ray and stays coarse for as long as the camera stands
-        // here, and one refused within the last `kRefuseFor` wakes is not even offered.
+        // Nothing this camera can improve.
         //
-        // It is a fixed point all the same, and that is what a measurement needs -- and it is an
-        // honest one under the merged sweep, because a refusal expires on a timer: if any of them
-        // becomes viable the very next wake picks it up, which breaks the settle streak long before
+        // Under `--occlusion-cull` that is not the same as "every node is sharp": a node behind a
+        // wall is refused by the occlusion ray and stays coarse for as long as the camera stands
+        // here, and one refused within the last `kRefuseFor` wakes is not even offered. It is a
+        // fixed point all the same, and that is what a measurement needs -- and it is an honest one
+        // under the merged sweep, because a refusal expires on a timer: if any of them becomes
+        // viable the very next wake picks it up, which breaks the settle streak long before
         // `kSettleFrames` is reached. See --settle.
+        //
+        // **By default it IS "every node this camera justifies is sharp"**, and that is the whole
+        // consequence of the ray being gone: nothing is left out for being hidden, so the ladder
+        // keeps going until every node of the clip has been sampled at the detail its own distance
+        // asks for. Later, and more of it -- which is what enlisting the hidden nodes buys and
+        // costs. The censuses beside the settle line are where the two are read off.
         refine_settled_ = true;
         // Nothing this camera can do, so stop asking until something moves. Remembering WHERE it
         // was asked from is the whole of the re-arm test.
@@ -4637,9 +4716,9 @@ void Application::deliver_refinement(RefineDelivery delivered) {
 
 // What the world on disk is worth, and when it is worth writing.
 //
-// It used to be written only when the LAST box landed, and the last box never lands: a box behind
-// a wall is skipped by the occlusion test in start_refinement and stays coarse for as long as the
-// camera stands where it does. The facility settles at fourteen boxes of eighteen from its own
+// It used to be written only when the LAST box landed, and the last box never lands: under
+// `--occlusion-cull` a box behind a wall is skipped by the picker's ray and stays coarse for as
+// long as the camera stands where it does. The facility settles at fourteen boxes of eighteen from its own
 // default camera, so the cache was never written once, and every launch ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and every one of the
 // forty-two runs of the measurement grid ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â rebuilt a hundred and twenty-five million voxels from
 // the field. Two minutes, every time, for a file that was already sitting there in every sense
@@ -5329,10 +5408,10 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
 
 // Is this node worth a sample from where the camera is, and how keenly?
 //
-// The same three questions the picker asks of every node -- how big it is on screen, whether it is
-// in front, whether anything is in the way -- plus the two that say a sample would change nothing.
-// Pulled out because R11c has to ask them of the eight children of a node it has just split, and a
-// second copy of this reasoning is a second copy to get wrong.
+// The questions the picker asks of every node -- how big it is on screen, whether it is in front,
+// and (only under `--occlusion-cull`) whether anything is in the way -- plus the two that say a
+// sample would change nothing. Pulled out because R11c has to ask them of the eight children of a
+// node it has just split, and a second copy of this reasoning is a second copy to get wrong.
 //
 // Marks a node done when sampling it could not change anything, which is why it is not const: the
 // answer is worth keeping, and the picker would otherwise ask the field about the same empty node
@@ -5373,7 +5452,11 @@ bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64
         return false;
     }
 
-    if (reach > 1e-6 && !options_.refine_all && !demanded) {
+    // IS ANYTHING IN THE WAY -- and by default nobody asks any more. See Options::occlusion_cull
+    // for the three log entries that measured this test costing more than it saved and one that
+    // measured it being actively WRONG on a cold load, and for what enlisting the hidden nodes
+    // costs in return.
+    if (options_.occlusion_cull && reach > 1e-6 && !options_.refine_all && !demanded) {
         const f64 v = static_cast<f64>(kVoxelsPerMetre);
         const u64 ray_began = now_ns();
         const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z, reach * v);
@@ -5382,6 +5465,7 @@ bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64
         if (blocked.hit && blocked.distance < (reach - across) * v) {
             // Remembered, not just refused. See kRefuseFor.
             refine_regions_[at].refuse_until = refine_wake_ + kRefuseFor;
+            ++refine_total_refused_;
             return false;
         }
     }
@@ -5628,9 +5712,20 @@ std::string Application::refine_census() const {
         const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
         if (reach <= 1e-6) { ++idle; continue; }
         if ((to_x * fx + to_y * fy + to_z * fz) / reach < 0.0) { ++behind; continue; }
-        const f64 v = static_cast<f64>(kVoxelsPerMetre);
-        const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z, reach * v);
-        if (blocked.hit && blocked.distance < (reach - across) * v) { ++occluded; continue; }
+        // **The occluded column is only a column when the picker actually casts the ray.**
+        //
+        // This function repeats `refine_candidate`'s arithmetic rather than calling it (see the
+        // header above), so it would happily go on reporting "occluded" for nodes nothing refuses
+        // -- a settled run left short would read as "behind a wall, as designed" when in fact the
+        // ladder never got to them, which is exactly the starvation D619 spent a day finding.
+        // Without the cull those leftovers belong in `neither`, and `neither` is the column the
+        // census is judged by.
+        if (options_.occlusion_cull) {
+            const f64 v = static_cast<f64>(kVoxelsPerMetre);
+            const RayHit blocked =
+                raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z, reach * v);
+            if (blocked.hit && blocked.distance < (reach - across) * v) { ++occluded; continue; }
+        }
         ++idle;
     }
 
@@ -5642,8 +5737,13 @@ std::string Application::refine_census() const {
                   std::to_string(per_level[level]);
     }
     if (levels.empty()) levels = "no nodes";
+    // The arm is named in the line, because the occluded column reads as nought in BOTH a run that
+    // found nothing behind a wall and a run that never looked -- and those are opposite facts.
     return levels + "; left coarse: " + std::to_string(behind) + " behind the camera, " +
-           std::to_string(occluded) + " occluded, " + std::to_string(idle) + " neither";
+           std::to_string(occluded) + " occluded, " + std::to_string(idle) + " neither" +
+           (options_.occlusion_cull ? " (--occlusion-cull: the ray is ON)"
+                                    : " (no occlusion cull: the ray is OFF, so nothing is refused "
+                                      "for being hidden and `occluded` cannot be anything but 0)");
 }
 
 // A cached world is not necessarily a finished one, and this is what tells them apart.
@@ -6039,8 +6139,16 @@ void Application::build_world() {
         //
         // The cost of being wrong here is a rebuild, and the cost of being right is a rebuild the
         // first time each arm is asked for. `--no-clip-cache` is still the way to have neither.
+        // `--occlusion-cull` goes in for exactly the reason the paragraph above gives, and it is
+        // the sharpest case of it yet: the two arms do not merely schedule the ladder differently,
+        // they converge on different WORLDS. Measured on `clips/sampler.clip` from one camera, both
+        // arms bit-identical run to run: `e5bcf9f1afb6f57e` at 1,393,620 solid voxels with the ray
+        // off, `fe2ec6aa403b426c` at 87,307 with it on -- because a node refused for being hidden
+        // is never built and never splits. Without this token the second run of the pair would read
+        // the first one's file, report its hash, and the two arms would agree perfectly.
         const std::string arm = std::string("|coarse-paste=") + (options_.no_coarse_paste ? "0" : "1") +
                                 "|stipple-at-coarse=" + (options_.stipple_at_coarse ? "1" : "0") +
+                                "|occlusion-cull=" + (options_.occlusion_cull ? "1" : "0") +
                                 "|clip-coarse=" + std::to_string(options_.clip_coarse);
         const std::string keyed_on =
             ui::without_author(source) + "|part=" + options_.clip_part + arm;
@@ -10698,8 +10806,9 @@ int Application::play(const Options& options) {
         //
         // "Nothing selectable" is transient. pump_refinement marks a box done and calls
         // start_refinement BEFORE pasting it, so the pick that decides whether anything is left is
-        // made against the world as it was before the box landed - and a box that lands can uncover
-        // regions the occlusion test was rejecting. Latching on the first quiet frame therefore
+        // made against the world as it was before the box landed - and a box that lands can split
+        // into children the previous pick never saw (and, under `--occlusion-cull`, uncover regions
+        // the ray was rejecting). Latching on the first quiet frame therefore
         // started the window in the middle of the build: two runs measured 82,718 and 95,638 nodes
         // and disagreed on 65,316 pixels, and a longer window made it worse rather than better,
         // which is the signature of a world still changing rather than a picture still converging.
@@ -10722,8 +10831,9 @@ int Application::play(const Options& options) {
             // And it cannot wait for ever.
             //
             // Settling means "refinement has nothing left it can do from here", and an EDIT can
-            // give it something to do again -- carving a wall exposes regions the occlusion test
-            // was rejecting. So a run that edits can reset the streak repeatedly and never reach
+            // give it something to do again -- a cut makes the volume it touched worth resampling,
+            // and under `--occlusion-cull` carving a wall also exposes regions the ray was
+            // rejecting. So a run that edits can reset the streak repeatedly and never reach
             // its screenshot frame at all, which is not a slow measurement, it is a measurement
             // that never returns. Two of them ran until they were killed and wrote nothing.
             if (!settled_seen_ && (frame_counter_ > kSettleGiveUp || out_of_time)) {
@@ -10933,12 +11043,16 @@ int Application::play(const Options& options) {
                             "NOT comparable with another run; take it with --settle",
                             unrefined);
             } else if (unrefined > 0) {
-                // Settled, and still short. The expected reason is that a region behind a wall is
-                // skipped by the occlusion test in start_refinement and stays coarse while the
+                // Settled, and still short. Under `--occlusion-cull` the expected reason is that a
+                // region behind a wall is skipped by the picker's ray and stays coarse while the
                 // camera stands here -- but that was only ever an assumption, and a settled run
                 // that leaves a lump on something in plain view looks exactly the same from here.
                 // So the census says which test refused each leftover and at what size, and the
                 // sentence claims no cause of its own.
+                //
+                // By default there IS no such test, so a leftover here is a node the picker refused
+                // for nothing it can name, the census's `neither` column counts it, and a non-zero
+                // one is a fault rather than the design.
                 WS_LOG_INFO("frame", "settled with {} regions left coarse", unrefined);
             }
             if (!refine_regions_.empty() && refine_stipple_counts_.any()) {
@@ -11033,7 +11147,8 @@ int Application::play(const Options& options) {
                 WS_LOG_INFO(
                     "frame",
                     "ladder cost: {:.0f} ms elapsed, {} wakes delivering {} nodes ({:.2f} each); "
-                    "pick {:.0f} ms MAIN THREAD (sweeps {:.0f} over {} entries, {} rays {:.0f}), "
+                    "pick {:.0f} ms MAIN THREAD (sweeps {:.0f} over {} entries, {} occlusion rays "
+                    "{:.0f} ms refusing {} nodes, {}), "
                     "sample {:.0f} ms background, paste {:.0f} ms; stood down {} times "
                     "(woken {} by the camera, {} by the world)",
                     elapsed, refine_total_wakes_, refine_total_nodes_,
@@ -11042,7 +11157,9 @@ int Application::play(const Options& options) {
                               static_cast<f64>(refine_total_wakes_)
                         : 0.0,
                     refine_total_pick_ms_, refine_total_sweep_ms_, refine_total_swept_,
-                    refine_total_rays_, refine_total_ray_ms_, refine_total_sample_ms_,
+                    refine_total_rays_, refine_total_ray_ms_, refine_total_refused_,
+                    options_.occlusion_cull ? "--occlusion-cull" : "the ray is OFF",
+                    refine_total_sample_ms_,
                     refine_total_paste_ms_, refine_stand_downs_, refine_rearm_camera_,
                     refine_rearm_world_);
                 // R12: which sampler did the work, and what the CARD spent as measured on the card.
