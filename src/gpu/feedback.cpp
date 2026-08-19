@@ -4,6 +4,34 @@
 
 namespace ws {
 
+// R11e. The tag, and nothing else: no coordinate, no level, no camera, no guess about what a
+// request "looks like". A pass that casts a light ray sets one of these two bits and a pass that
+// casts a primary ray never does, so this cannot drift from which shader ran.
+//
+// `kFeedbackExact` alone is enough for the first: it is written in exactly one place, the
+// `occlude_unknown` arm of `node_march`, and `occlude_unknown` is true only in the calls made by
+// `shaders/shade_faces.comp`. Every march in `shaders/visibility.comp` passes it false.
+//
+// `kFeedbackSecondary` rides on `kFeedbackFace` and says a LIGHT ray landed on that face rather
+// than a pixel (R9a). Both bits are tested rather than the second alone, because the second is
+// defined as a rider and a lone rider would be a shader fault rather than a class.
+RayClass feedback_ray_class(i32 level_field) {
+    if ((level_field & kFeedbackExact) != 0) return RayClass::kLight;
+    if ((level_field & kFeedbackFace) != 0 && (level_field & kFeedbackSecondary) != 0) {
+        return RayClass::kLight;
+    }
+    return RayClass::kPixel;
+}
+
+const char* sample_cause_name(SampleCause cause) {
+    switch (cause) {
+        case SampleCause::kCamera: return "the camera";
+        case SampleCause::kEdit: return "an edit";
+        case SampleCause::kLight: return "a light path";
+        default: return "nobody";
+    }
+}
+
 bool FeedbackBuffer::create(Device& device) {
     device_ = &device;
     device_buffer_ = create_device_buffer(device, kSlotBytes,

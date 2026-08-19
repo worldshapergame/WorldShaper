@@ -47,6 +47,40 @@ void hollow_box(const Op& box, i64 thickness, u64& next_id, std::vector<Op>& out
     slab(b.x0, my0, mz0, b.x0 + t - 1, my1, mz1);                            // left
     slab(b.x1 - t + 1, my0, mz0, b.x1, my1, mz1);                            // right
 }
+
+bool edit_bounds(const std::vector<Op>& ops, i64 low[3], i64 high[3]) {
+    bool any = false;
+    for (const Op& raw : ops) {
+        Op op = raw;
+        op.normalise();
+        const i64 op_low[3] = {op.x0, op.y0, op.z0};
+        const i64 op_high[3] = {op.x1, op.y1, op.z1};
+        for (u32 axis = 0; axis < 3; ++axis) {
+            low[axis] = any ? std::min(low[axis], op_low[axis]) : op_low[axis];
+            high[axis] = any ? std::max(high[axis], op_high[axis]) : op_high[axis];
+        }
+        any = true;
+    }
+    return any;
+}
+
+bool edit_beyond_proximity(const i64 low[3], const i64 high[3], const f64 camera_voxel[3],
+                           f64 radius_voxels) {
+    // A radius of nought or less is the radius switched off, and off has to mean the guarantee
+    // covers nothing at all -- exactly as `NodePoolBudget::proximity_voxels` at nought means the
+    // sweep does not run. A version of this that answered "inside" for an empty radius would let
+    // every edit skip the pre-sample.
+    if (!(radius_voxels > 0.0)) return true;
+    f64 away = 0.0;
+    for (u32 axis = 0; axis < 3; ++axis) {
+        const f64 lo = static_cast<f64>(low[axis]);
+        const f64 hi = static_cast<f64>(high[axis]) + 1.0;   // the far side of the last voxel
+        const f64 d = std::max({lo - camera_voxel[axis], 0.0, camera_voxel[axis] - hi});
+        away += d * d;
+    }
+    return away > radius_voxels * radius_voxels;
+}
+
 namespace {
 
 i64 floor_i64(f64 v) { return static_cast<i64>(std::floor(v)); }

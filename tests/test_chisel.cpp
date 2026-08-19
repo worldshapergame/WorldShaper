@@ -343,3 +343,71 @@ TEST_CASE("holding both buttons does not start two drags") {
     REQUIRE(step(chisel, world, input, op));
     CHECK(op.type == kAir);
 }
+
+// ---- R11e and R11h ---------------------------------------------------------------------------
+
+TEST_CASE("an edit's bounds are the union of every op in the group") {
+    // What has to be sampled before a cut is the volume the WHOLE group touches. `hollow_box`
+    // turns one carve into six slabs and the clipboard produces a run of them, so asking each op
+    // on its own would sample the middle of a hollow shell that nothing is going to write to.
+    std::vector<Op> ops;
+    i64 low[3]{};
+    i64 high[3]{};
+    CHECK_FALSE(edit_bounds(ops, low, high));   // empty is not a box of nought volume
+
+    ops.push_back(Op::fill_box(1, 1, 10, 10, 10, 12, 12, 12, kRock, MatterReason::PlayerPlace));
+    REQUIRE(edit_bounds(ops, low, high));
+    CHECK(low[0] == 10);
+    CHECK(high[2] == 12);
+
+    // Corners the other way round: `edit_bounds` normalises, because an op is allowed to carry
+    // them in either order and two peers describing one box differently must agree here.
+    ops.push_back(Op::fill_box(2, 1, 40, -5, 3, 20, -9, 1, kAir, MatterReason::PlayerBreak));
+    REQUIRE(edit_bounds(ops, low, high));
+    CHECK(low[0] == 10);
+    CHECK(low[1] == -9);
+    CHECK(low[2] == 1);
+    CHECK(high[0] == 40);
+    CHECK(high[1] == 12);
+    CHECK(high[2] == 12);
+}
+
+TEST_CASE("the proximity radius decides whether anything guaranteed the edit's detail") {
+    // Twenty metres is 640 voxels (D199, R2c). Inside it the ladder has already been obliged to
+    // hold the volume; outside it nothing has, which is the whole of R11h's far case.
+    const f64 radius = kProximityMetres * 32.0;
+
+    const i64 low[3] = {1000, 0, 0};
+    const i64 high[3] = {1007, 7, 7};
+
+    // Standing on it.
+    const f64 close[3] = {1004.0, 4.0, 4.0};
+    CHECK_FALSE(edit_beyond_proximity(low, high, close, radius));
+
+    // Six hundred voxels away on one axis: inside, just.
+    const f64 near_edge[3] = {400.0, 4.0, 4.0};
+    CHECK_FALSE(edit_beyond_proximity(low, high, near_edge, radius));
+
+    // Sixty metres out, which is the arm that has never been run.
+    const f64 far_off[3] = {1000.0 - 60.0 * 32.0, 4.0, 4.0};
+    CHECK(edit_beyond_proximity(low, high, far_off, radius));
+
+    // Diagonal: the distance is to the BOX and not along any one axis, so three components each
+    // inside the radius can still be outside it together.
+    const f64 corner[3] = {1000.0 - 500.0, -500.0, -500.0};
+    CHECK(edit_beyond_proximity(low, high, corner, radius));
+
+    // A radius of nought is the guarantee switched off, and off has to cover nothing -- otherwise
+    // every edit would read as "inside" and skip the pre-sample.
+    CHECK(edit_beyond_proximity(low, high, close, 0.0));
+}
+
+// R11e's own two -- `SampleGate` and `feedback_ray_class` -- are NOT tested here, and it is worth
+// saying why rather than leaving the omission to be noticed. They live in `src/gpu/feedback.hpp`,
+// which reaches Vulkan through `gpu/buffer.hpp`, and this suite links no Vulkan (see the note at
+// the top of `tests/test_field_gpu.cpp`, which makes the same choice for the same reason). A copy
+// of the classification written here to have something to assert against would be the trap the
+// handover names: three checks agreeing because all three read the same wrong source. What stands
+// in for it is the counted run, which is what R11e's gate asks for in the first place -- the
+// `light paths:` line beside the settle line, on `clips/sealed_dark.clip`, in both arms of
+// `--no-light-sampling-guard`.

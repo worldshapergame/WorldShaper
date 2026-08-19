@@ -44,6 +44,40 @@ enum class ChiselMode : u8 { None, Carve, Place };
 // shell is a one-voxel wall.
 void hollow_box(const Op& box, i64 thickness, u64& next_id, std::vector<Op>& out);
 
+// ---- R11h: what an edit is about to touch, and whether anything has ever sampled it -----------
+//
+// The one box every op in a group falls inside, in world voxels. `false` when the group is empty,
+// which is not the same as a box of nought volume and must not read as one.
+//
+// A group, not an op, because that is what the tool produces: `hollow_box` turns one carve into six
+// slabs and the clipboard produces a run of them. The volume that has to be sampled before the cut
+// is the union of all of them, and asking six times would sample the middle of a hollow shell that
+// nothing is going to write to.
+bool edit_bounds(const std::vector<Op>& ops, i64 low[3], i64 high[3]);
+
+// The proximity radius, in metres, and it is the SAME twenty as `NodePoolBudget::proximity_voxels`.
+//
+// R2c and D199: twenty metres is held at full detail regardless of visibility, because collision,
+// physics and editing all touch what is behind you and under your feet, and none of them can be
+// served by what a pixel happened to ask for. The radius has held RESIDENCY since D270 — what the
+// node pool keeps built out of what the world already holds — and R11h is the other half of the
+// same sentence: after R11d the world does not hold real voxels everywhere, so a radius that
+// guarantees residency guarantees residency of a coarse approximation.
+inline constexpr f64 kProximityMetres = 20.0;
+
+// Is this edit outside the radius, so that nothing guarantees the world holds it at full detail?
+//
+// Measured from the camera to the box, nought inside it, in VOXELS — `Camera::position_*` is in
+// voxel doubles (see game/camera.hpp) and scaling it again is the mistake that put a scripted
+// chisel a kilometre away from the facade it was aimed at.
+//
+// This is a question about the CAMERA and not about the world, deliberately. "Has this volume been
+// sampled finely?" is answerable and is asked separately by the ladder's own bookkeeping; this one
+// says whether the twenty-metre guarantee is even claiming to cover the edit, which is what decides
+// whether the edit has to go and get its own voxels first.
+bool edit_beyond_proximity(const i64 low[3], const i64 high[3], const f64 camera_voxel[3],
+                           f64 radius_voxels);
+
 struct ChiselInput {
     bool left = false;
     bool right = false;

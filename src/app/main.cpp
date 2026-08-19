@@ -22,6 +22,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 
 #include "core/arena.hpp"
 #include "core/hash.hpp"
@@ -297,6 +298,25 @@ struct Options {
     // `--light-read-period N` sweeps the trade: how many frames a node may go unstamped, against
     // the feedback entries the stamping costs. A power of two; 0 is off.
     u32 light_read_period = 16;
+
+    // R11e: a node request that came from a light path may not cause a sample job.
+    //
+    // On, and `--no-light-sampling-guard` is the arm that shows what the rule is holding back
+    // rather than a restatement of what was already true. Read the flag honestly: before R11h there
+    // was no route at all from a request to the sampler, so "off" is not "yesterday's build" -- it
+    // is the rule ABSENT with the route present, which is the state R11e exists to make impossible.
+    // With it off, `clips/sealed_dark.clip` samples the building it is sealed inside; with it on,
+    // the offers are counted and the sample jobs are nought.
+    bool light_sampling_guard = true;
+
+    // R11h: an edit outside the proximity radius samples what it is about to cut, before it cuts.
+    //
+    // On, and `--no-edit-presample` restores today's behaviour exactly -- which is a chisel sixty
+    // metres out carving a four-voxel-wide approximation of the surface into the world, PERMANENTLY
+    // once R11f makes carved matter authoritative. The near case needs none of this and pays none
+    // of it: within twenty metres the ladder has already brought the surface to full detail, which
+    // is what D635 measured.
+    bool edit_presample = true;
 
     // How much confidence a face keeps when an edit announces that the world under it changed.
     //
@@ -1122,6 +1142,10 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.node_crossings = false;
     } else if (arg == "--no-light-keeps-geometry") {
         options.light_read_period = 0;
+    } else if (arg == "--no-light-sampling-guard") {
+        options.light_sampling_guard = false;
+    } else if (arg == "--no-edit-presample") {
+        options.edit_presample = false;
     } else if (arg == "--light-read-period" && i + 1 < argc) {
         // Rounded UP to a power of two, because the shader tests a mask. Saying so beats a
         // silent floor: `-Extra "--light-read-period 24"` would otherwise measure 16 and be
@@ -2389,6 +2413,19 @@ private:
         // a node the picker refuses is never marked done and would otherwise come back to the head
         // of the shortlist every frame for the rest of the run.
         u64 refuse_until = 0;
+        // R11e/R11h: somebody other than the camera has asked for this node, so the two visibility
+        // tests do not apply to it and it is split all the way down rather than to the level its
+        // screen size justifies.
+        //
+        // The two tests are the camera's own — is it in front of me, is anything in the way — and
+        // they are exactly right for a node whose only reason to exist is that a pixel can see it.
+        // They are exactly wrong for a node an EDIT is about to cut, which is very often behind
+        // something and is being cut anyway. What sets this is `demand_sample_of`, and what is
+        // allowed to reach that is `SampleGate`.
+        bool forced = false;
+        // ...and WHO, because the gate is asked again at the point the job is actually made and a
+        // node that has forgotten where its demand came from cannot be refused there.
+        SampleCause forced_by = SampleCause::kCamera;
     };
     std::vector<RefineNode> refine_regions_;
     usize refine_region_ = 0;   // the one being sampled right now
@@ -2480,6 +2517,49 @@ private:
     // 13 ms and a frame is 19, so a single pick per frame leaves it idle again.
     bool start_refinement();
     void pump_refinement();
+
+    // ---- R11e and R11h: who is allowed to cause a sample, and what an edit does about it -------
+    //
+    // The gate is the one door. Every sample job this application makes asks it first, so the rule
+    // is a refusal in one place rather than an absence in several. See `gpu/feedback.hpp`.
+    SampleGate sample_gate_;
+    // How many light-path requests were offered to it, by the two tagged classes, so a nought in
+    // the causes column can be told from a nought in the offers column. The gate counts the same
+    // totals; these say WHICH exception the offer came from, because R9a and R9i are separate
+    // mechanisms and only one of them being wired would look identical from the totals.
+    u64 light_offers_stopped_cell_ = 0;   // R9i, kFeedbackExact
+    u64 light_offers_landed_face_ = 0;    // R9a, kFeedbackFace | kFeedbackSecondary
+    // Sample jobs the ladder made, by who caused them. `kCamera` is the ordinary pick.
+    u64 sample_jobs_by_cause_[static_cast<u8>(SampleCause::kCount)]{};
+
+    // A node somebody other than the camera wants sampled. Returns false when the gate refused.
+    //
+    // It does not sample anything itself: it puts the node's box on the ladder's list, marked
+    // `forced`, and the ladder picks it on its next wake. That is deliberate — one sampler, one
+    // paste path, one set of bookkeeping — and it is why a demand cannot arrive at a different
+    // world than a camera's pick would have.
+    bool demand_sample_of(const NodeKey& key, SampleCause cause);
+
+    // R11h: sample what an edit is about to cut, before it cuts it. Synchronous.
+    //
+    // The ladder cannot serve this, and that is the whole sub-step: the ladder is a background
+    // thread that delivers a batch a frame, and an op is applied on the frame the button comes up.
+    // A carve that waits for the ladder cuts the coarse world and is then replayed over the fine
+    // one — which is what `deliver_refinement`'s replay does and is why the NEAR case looks right —
+    // but the ladder never REACHES a surface sixty metres away that nothing is looking at, so the
+    // replay never happens and the coarse cut is what the world keeps.
+    //
+    // Returns how many nodes it sampled. Nought is the ordinary answer: an edit inside the
+    // proximity radius, or one whose nodes the ladder has already brought to full detail, has
+    // nothing to do here and pays nothing for asking.
+    u32 presample_for_edit(const std::vector<Op>& ops);
+    // ...and the boxes it has sampled, in metres, so a coarser ladder node can never Replace-paste
+    // over one. See `refine_would_improve`.
+    std::vector<std::pair<forge::Vec3, forge::Vec3>> refine_presampled_;
+    u64 presample_nodes_ = 0;
+    u64 presample_voxels_ = 0;
+    f64 presample_ms_ = 0.0;
+
     // The ladder's boxes, from the clip's own bounds. One function so the run that builds the
     // world and the run that loads a half-built one plan the same grid ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â if they did not, the
     // flags in the cache would be read against boxes they were never about.
@@ -3726,6 +3806,15 @@ bool Application::refine_should_rearm() const {
 // passes -- but every figure in this repository is compared against that hash, and a stand-down for
 // the CACHED case must not reschedule the COLD one. Memos expire on their own within 32 wakes once
 // the ladder is running again, which is what an edit needs and all it needs.
+// Do two boxes in metres share any volume? Half-open on the high side, which is how a node's box
+// is defined (`forge::node_box`): two neighbouring nodes touch and do not overlap, and a test that
+// said otherwise would spread every pre-sampled box one node further in each direction.
+static bool boxes_meet(const forge::Vec3& a_low, const forge::Vec3& a_high,
+                       const forge::Vec3& b_low, const forge::Vec3& b_high) {
+    return a_low.x < b_high.x && b_low.x < a_high.x && a_low.y < b_high.y &&
+           b_low.y < a_high.y && a_low.z < b_high.z && b_low.z < a_high.z;
+}
+
 void Application::rearm_refinement(bool forget_refusals) {
     if (!refine_stood_down_) return;
     refine_stood_down_ = false;
@@ -3837,7 +3926,9 @@ bool Application::start_refinement() {
     for (usize i = 0; i < refine_regions_.size(); ++i) {
         const RefineNode& box = refine_regions_[i];
         if (box.done) continue;
-        if (box.refuse_until > refine_wake_) continue;
+        // A demanded node is never memoed out: the memo records that the CAMERA could not see it,
+        // and a demand is the statement that the camera is not who is asking.
+        if (box.refuse_until > refine_wake_ && !box.forced) continue;
 
         // Distance to the box, nought inside it, so the one you are standing in always wins.
         const f64 dx = std::max({box.low.x - cx, 0.0, cx - box.high.x});
@@ -3862,10 +3953,14 @@ bool Application::start_refinement() {
         const f64 to_y = (box.low.y + box.high.y) * 0.5 - cy;
         const f64 to_z = (box.low.z + box.high.z) * 0.5 - cz;
         const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
-        if (reach > 1e-6 && !options_.refine_all &&
+        if (reach > 1e-6 && !options_.refine_all && !box.forced &&
             (to_x * fx + to_y * fy + to_z * fz) / reach < 0.0) {
             rank *= 0.05;
         }
+        // ...and a demanded node goes to the head of the shortlist. Not a separate queue, because
+        // a second list is a second set of rules about which one is drained first; one list with
+        // one comparison keeps the ORDER a property of the rank and nothing else.
+        if (box.forced) rank *= 1e6;
 
         if (short_count == kShortlist && rank <= short_rank[kShortlist - 1]) continue;
         usize at = (short_count < kShortlist) ? short_count++ : kShortlist - 1;
@@ -3880,7 +3975,24 @@ bool Application::start_refinement() {
     refine_total_sweep_ms_ += ns_to_ms(now_ns() - sweep_began);
 
     refine_batch_.clear();
+    // R11e LIVES HERE. This is the point a sample job is made, and it is the only one -- every
+    // node this application ever samples in the background is enlisted through this lambda.
+    //
+    // The gate is asked with the cause the node is carrying rather than with a fact about the node,
+    // because the two are different questions and only the first can be wrong: a node behind a wall
+    // is behind a wall whoever wants it, and what R11e forbids is not a PLACE but an ORIGIN.
     const auto enlist = [&](usize at) {
+        const SampleCause cause = refine_regions_[at].forced ? refine_regions_[at].forced_by
+                                                             : SampleCause::kCamera;
+        if (!sample_gate_.may_sample(cause)) {
+            // Refused, and taken off the list rather than left on it: a node the gate will refuse
+            // for ever must not come back to the head of the shortlist on every wake for the rest
+            // of the run, which is the starvation `kRefuseFor` exists to stop.
+            refine_regions_[at].forced = false;
+            refine_regions_[at].forced_by = SampleCause::kCamera;
+            return;
+        }
+        ++sample_jobs_by_cause_[static_cast<u8>(cause)];
         RefineJob job;
         job.at = at;
         job.settings = refine_script_->settings;
@@ -3902,7 +4014,8 @@ bool Application::start_refinement() {
         // Split it down the same way the winner was, so every member of the batch is at the level
         // its own distance justifies rather than at whatever level it happened to be listed at.
         while (refine_regions_[next].key.level > finest &&
-               (options_.refine_all || next_keen > kRefineSplitAt ||
+               (options_.refine_all || refine_regions_[next].forced ||
+                next_keen > kRefineSplitAt ||
                 !refine_would_improve(refine_regions_[next]))) {
             const usize first_child = refine_regions_.size();
             const u32 kept = split_refine_node(next);
@@ -4116,6 +4229,24 @@ void Application::deliver_refinement(RefineDelivery delivered) {
     u64 chunks_emptied = 0;
     for (const RefineJob& job : finished) {
         if (job.result == nullptr || job.result->clip.empty()) continue;
+        // R11h: a batch picked BEFORE an edit pre-sampled its volume is still in the sampler's
+        // hands when the cut lands, and it is carrying a coarser answer for the same box. Pasting
+        // it would blow metre 8 back over metre 32 one frame after the chisel, and the op replay
+        // below would re-cut the blocky version -- which is the fault this sub-step is about,
+        // arriving through timing instead of through distance. Dropped rather than pasted;
+        // `refine_would_improve` keeps every later pick out of the same volume.
+        if (!refine_presampled_.empty() &&
+            job.settings.voxels_per_metre <
+                ((refine_authored_ > 0) ? refine_authored_ : kVoxelsPerMetre)) {
+            bool over_presampled = false;
+            for (const auto& [low, high] : refine_presampled_) {
+                if (boxes_meet(job.settings.low, job.settings.high, low, high)) {
+                    over_presampled = true;
+                    break;
+                }
+            }
+            if (over_presampled) continue;
+        }
         const i64 scale = static_cast<i64>(job.scale);
         const i64 lo[3] = {job.result->origin_voxel[0] * scale + refine_at_[0],
                            job.result->origin_voxel[1] * scale + refine_at_[1],
@@ -4731,6 +4862,12 @@ u32 Application::split_refine_node(usize at) {
                             parent.level - 1};
         if (refine_node_of(child, children[kept])) {
             children[kept].applied_per_metre = refine_regions_[at].applied_per_metre;
+            // A demand is inherited, because it is a statement about a VOLUME and the children are
+            // that volume. Dropping it here would let the picker descend out of the exemption
+            // halfway down and refuse the last two levels for occlusion -- which is the same node
+            // left coarse, arrived at more slowly.
+            children[kept].forced = refine_regions_[at].forced;
+            children[kept].forced_by = refine_regions_[at].forced_by;
             ++kept;
         }
     }
@@ -4743,6 +4880,210 @@ u32 Application::split_refine_node(usize at) {
     refine_regions_[at] = children[0];
     for (u32 i = 1; i < kept; ++i) refine_regions_.push_back(children[i]);
     return kept;
+}
+
+// R11e's accepted branch, and it exists so that a refusal is a decision rather than an absence.
+//
+// Nothing calls this with `kLight` unless `--no-light-sampling-guard` is passed, because the gate
+// is asked first and refuses. That is the point: with the guard off, the very same request that a
+// sealed dark room produces thousands of a frame walks straight into the ladder and the room
+// samples the building around it. The route is real, the refusal is what stops it, and both are
+// counted.
+//
+// It samples nothing itself. It marks the ladder node covering the key as demanded and lets the
+// ordinary pick, the ordinary split and the ordinary paste do the work — one sampler, one paste
+// path, one set of bookkeeping. A second route to the world is a second world.
+bool Application::demand_sample_of(const NodeKey& key, SampleCause cause) {
+    if (refine_script_ == nullptr) return false;
+    const forge::NodeBox want = forge::node_box(key);
+    for (RefineNode& box : refine_regions_) {
+        // `done` is either "in flight in a batch" or "nothing left to do here", and neither may be
+        // disturbed: the delivery writes back by INDEX, so a node changed under a batch is a
+        // node's answer written into another node's record.
+        if (box.done) continue;
+        if (box.forced) continue;   // already demanded; one mark is the whole of it
+        if (!boxes_meet(box.low, box.high, want.low, want.high)) continue;
+        box.forced = true;
+        box.forced_by = cause;
+        box.refuse_until = 0;
+        // A demand is an event the ladder has to wake for, exactly as an edit is. The memos are
+        // NOT expired — see rearm_refinement for why a world event and a camera event must not
+        // reschedule alike.
+        rearm_refinement(/*forget_refusals=*/false);
+        refine_settled_ = false;
+        return true;
+    }
+    return false;
+}
+
+// R11h — an edit needs voxels that may never have been sampled, and this is where it gets them.
+//
+// **The near case never needed this and that is why it looked solved.** A surface a metre away is
+// large on screen, so the ladder has already sharpened it; a carve cuts full-detail geometry and
+// D635 photographed the result. Sixty metres out the same surface is four pixels across, the ladder
+// has correctly left it at metre 8 or coarser, and the same carve cuts a four-voxel-wide
+// approximation — which R11f then makes AUTHORITATIVE, so it is not a picture that improves as you
+// walk up to it. It is the building, changed, for ever.
+//
+// SYNCHRONOUS, on the frame of the edit, and it has to be. The ladder is a background thread that
+// delivers one batch a frame and `deliver_refinement` replays the op log over every paste — which
+// is exactly why the near case self-corrects and why the far case cannot. The ladder never reaches
+// a surface nothing is looking at, so there is no later paste for the replay to ride on.
+//
+// What it costs when it is not needed is one walk of the node coordinates the edit box covers and
+// a `no-op` test each, which is what an edit inside the proximity radius pays: nought samples.
+u32 Application::presample_for_edit(const std::vector<Op>& ops) {
+    if (!options_.edit_presample) return 0;
+    // No ladder at all: the clip was built at its authored detail in one pass, or the world came
+    // back from the cache finished. There is nothing coarse to cut into.
+    if (refine_script_ == nullptr) return 0;
+
+    i64 low[3];
+    i64 high[3];
+    if (!edit_bounds(ops, low, high)) return 0;
+
+    const u32 finest = refine_finest_level();
+    const i32 want_per_metre = refine_resolution(finest);
+
+    // The clip's own frame. `refine_at_` is where the clip's origin sits in world voxels, and a
+    // node key is a coordinate at its own level in that frame — so this is exact integer
+    // arithmetic and not a rounding of metres, which at 32 voxels to the metre is the difference
+    // between the right node and its neighbour.
+    const i64 first[3] = {(low[0] - refine_at_[0]) >> finest, (low[1] - refine_at_[1]) >> finest,
+                          (low[2] - refine_at_[2]) >> finest};
+    const i64 last[3] = {(high[0] - refine_at_[0]) >> finest, (high[1] - refine_at_[1]) >> finest,
+                         (high[2] - refine_at_[2]) >> finest};
+
+    // A ceiling, and it is a safety rail rather than a policy. A twenty-metre carve at a quarter of
+    // a metre a node is half a million nodes and eleven minutes on the main thread, which is the
+    // game gone rather than a slow frame. Past this the edit is pre-sampled as far as the rail and
+    // the rest is said out loud, because a silently partial answer here is a blocky cut nobody was
+    // told about.
+    static constexpr u64 kPresampleNodeCap = 32768;
+
+    const u64 began = now_ns();
+    std::vector<RefineJob> jobs;
+    u64 wanted = 0;
+    for (i64 z = first[2]; z <= last[2] && jobs.size() < kPresampleNodeCap; ++z) {
+        for (i64 y = first[1]; y <= last[1] && jobs.size() < kPresampleNodeCap; ++y) {
+            for (i64 x = first[0]; x <= last[0] && jobs.size() < kPresampleNodeCap; ++x) {
+                RefineNode node;
+                if (!refine_node_of(NodeKey{x, y, z, finest}, node)) continue;   // outside the clip
+                ++wanted;
+                // Empty in the world and in the field: there is nothing here to cut into and
+                // sampling it would paste nothing. The same test the picker uses, so the two
+                // cannot disagree about what an empty node is.
+                if (refine_node_is_a_no_op(node)) continue;
+                RefineJob job;
+                // `at` is deliberately left at nought and never read. These jobs are NOT list
+                // entries: a delivery writes its answer back into `refine_regions_[job.at]` by
+                // index, and a pre-sample that put itself on that list would rearrange it under
+                // whatever batch is in the sampler's hands right now. The bookkeeping this needs
+                // instead is `refine_presampled_`, which is a volume rather than an index.
+                job.settings = refine_script_->settings;
+                job.settings.voxels_per_metre = want_per_metre;
+                job.settings.low = node.low;
+                job.settings.high = node.high;
+                job.scale = refine_scale_for(finest);
+                jobs.push_back(std::move(job));
+            }
+        }
+    }
+    if (jobs.empty()) return 0;
+
+    // The gate, once for the whole edit rather than once a node: R11e's question is about the
+    // ORIGIN of a demand and an edit is one origin however many nodes it needs.
+    if (!sample_gate_.may_sample(SampleCause::kEdit)) return 0;
+    sample_jobs_by_cause_[static_cast<u8>(SampleCause::kEdit)] += jobs.size();
+
+    // Across the paste pool, which has one submitter — this thread — and is not the sampler's own
+    // (trap 17, D511): handing `refine_jobs_` work from here is the main thread waiting inside a
+    // pool the background sampler is already submitting to.
+    JobSystem* const pool = world_clean_pool();
+    const auto take = [&](usize begin, usize end) {
+        for (usize i = begin; i < end; ++i) {
+            RefineJob& job = jobs[i];
+            job.result = std::make_unique<forge::SampleResult>(
+                forge::sample(refine_plan_, job.settings, nullptr, {}));
+            job.stipple = forge::stipple_counts(job.result->clip);
+            // The same despeckle the ladder gives every node it sharpens, against the same
+            // whole-clip verdict. A node pre-sampled by a different rule from the one beside it is
+            // a seam in the building at the edge of the edit.
+            if (despeckle_) forge::despeckle(job.result->clip, 0.05, &refine_stipple_);
+        }
+    };
+    if (pool != nullptr && jobs.size() > 1 && !options_.no_batch_parallel) {
+        pool->parallel_for(jobs.size(), 1, take);
+    } else {
+        take(0, jobs.size());
+    }
+
+    // ...and into the world, the same way a delivered batch goes in. REPLACE, so the fine sample
+    // supersedes the coarse voxels standing in for it.
+    u64 written = 0;
+    forge::Vec3 covered_low{0, 0, 0};
+    forge::Vec3 covered_high{0, 0, 0};
+    bool covered_any = false;
+    for (const RefineJob& job : jobs) {
+        if (job.result == nullptr || job.result->clip.empty()) continue;
+        const i64 scale = static_cast<i64>(job.scale);
+        const i64 lo[3] = {job.result->origin_voxel[0] * scale + refine_at_[0],
+                           job.result->origin_voxel[1] * scale + refine_at_[1],
+                           job.result->origin_voxel[2] * scale + refine_at_[2]};
+        const PasteStats stamped =
+            paste_clip(world_, ledger_, job.result->clip, lo[0], lo[1], lo[2], PasteMode::Replace,
+                       MatterReason::PlayerPlace, 1, pool, types_.type_count(), job.scale,
+                       !options_.no_paste_drop);
+        written += stamped.bricks_written;
+        if (stamped.chunks_left_empty) refine_wants_compact_ = true;
+        const i64 hi[3] = {lo[0] + std::max(job.result->clip.size[0] * scale - 1, i64{0}),
+                           lo[1] + std::max(job.result->clip.size[1] * scale - 1, i64{0}),
+                           lo[2] + std::max(job.result->clip.size[2] * scale - 1, i64{0})};
+        announce_world_change(lo, hi);
+        if (!covered_any) {
+            covered_low = job.settings.low;
+            covered_high = job.settings.high;
+            covered_any = true;
+        } else {
+            covered_low.x = std::min(covered_low.x, job.settings.low.x);
+            covered_low.y = std::min(covered_low.y, job.settings.low.y);
+            covered_low.z = std::min(covered_low.z, job.settings.low.z);
+            covered_high.x = std::max(covered_high.x, job.settings.high.x);
+            covered_high.y = std::max(covered_high.y, job.settings.high.y);
+            covered_high.z = std::max(covered_high.z, job.settings.high.z);
+        }
+    }
+
+    // Remembered, so the LADDER can never undo it. A node of the same volume at metre 8 is a worse
+    // answer than what is now standing there, and `PasteMode::Replace` does not know that — it
+    // would blow the coarse sample straight back over the fine one the next time the camera made
+    // that node look worth a rung. See `refine_would_improve` and `deliver_refinement`.
+    if (covered_any) refine_presampled_.emplace_back(covered_low, covered_high);
+
+    presample_nodes_ += jobs.size();
+    presample_voxels_ += written;
+    presample_ms_ += ns_to_ms(now_ns() - began);
+
+    const f64 camera_voxel[3] = {camera_.position_x(), camera_.position_y(),
+                                 camera_.position_z()};
+    // Not `far`, for the same reason the neighbour loop in `stream` is not `near`: windows.h still
+    // defines both as empty macros, so a variable by either name is a syntax error with no mention
+    // of macros anywhere in it.
+    const bool outside_radius =
+        edit_beyond_proximity(low, high, camera_voxel,
+                              static_cast<f64>(NodePoolBudget{}.proximity_voxels));
+    WS_LOG_INFO("edit",
+                "pre-sampled {} of {} nodes at metre {} before the cut ({} bricks, {:.0f} ms) -- "
+                "the edit is {} the {:.0f} m proximity radius",
+                jobs.size(), wanted, want_per_metre, written, ns_to_ms(now_ns() - began),
+                outside_radius ? "OUTSIDE" : "inside", kProximityMetres);
+    if (jobs.size() >= kPresampleNodeCap) {
+        WS_LOG_WARN("edit",
+                    "the edit is larger than {} nodes, so only the first {} were pre-sampled; the "
+                    "rest of the cut goes into whatever detail the world already held there",
+                    kPresampleNodeCap, kPresampleNodeCap);
+    }
+    return static_cast<u32>(jobs.size());
 }
 
 // Is this node worth a sample from where the camera is, and how keenly?
@@ -4772,7 +5113,12 @@ bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64
     const f64 to_y = (box.low.y + box.high.y) * 0.5 - cy;
     const f64 to_z = (box.low.z + box.high.z) * 0.5 - cz;
     const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
-    if (reach > 1e-6 && !options_.refine_all) {
+    // R11h: a node somebody DEMANDED is exempt from both visibility tests, and `--refine-all` is
+    // the arm that already had to be exempt from them for the same reason. What an edit is about to
+    // cut is very often behind something -- that is what carving is -- and a node demoted for
+    // facing away or refused for being occluded is a node the edit will cut blind.
+    const bool demanded = refine_regions_[at].forced;
+    if (reach > 1e-6 && !options_.refine_all && !demanded) {
         const f64 facing = (to_x * fx + to_y * fy + to_z * fz) / reach;
         if (facing < 0.0) keen *= 0.05;
     }
@@ -4786,7 +5132,7 @@ bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64
         return false;
     }
 
-    if (reach > 1e-6 && !options_.refine_all) {
+    if (reach > 1e-6 && !options_.refine_all && !demanded) {
         const f64 v = static_cast<f64>(kVoxelsPerMetre);
         const u64 ray_began = now_ns();
         const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z, reach * v);
@@ -4874,7 +5220,27 @@ u32 Application::refine_finest_level() const {
 // enough to improve on what is there. Marking it done instead is a ladder that refines nothing at
 // all, which is exactly what the first version of this did.
 bool Application::refine_would_improve(const RefineNode& node) const {
-    return refine_resolution(node.key.level) > node.applied_per_metre;
+    const i32 mine = refine_resolution(node.key.level);
+    if (mine <= node.applied_per_metre) return false;
+    // R11h: and it may not improve on what an EDIT has already sampled here.
+    //
+    // A pre-sample lays the clip's own resolution into the world at the moment of a cut, and
+    // `applied_per_metre` cannot record it — that word belongs to the ladder's own node list and
+    // the pre-sample deliberately does not touch it (a delivery writes back by index, so a list
+    // rearranged under a batch in flight is one node's answer landing in another node's record).
+    // So the volume is remembered instead, and a node too coarse to match it is not finished: it
+    // wants SPLITTING until its children are fine enough, which is what returning false asks the
+    // picker for. Saying "done" here instead is a lump of metre-8 building left standing at the
+    // edge of the cut.
+    if (!refine_presampled_.empty()) {
+        const i32 authored = (refine_authored_ > 0) ? refine_authored_ : kVoxelsPerMetre;
+        if (mine < authored) {
+            for (const auto& [low, high] : refine_presampled_) {
+                if (boxes_meet(node.low, node.high, low, high)) return false;
+            }
+        }
+    }
+    return true;
 }
 
 // Would sampling this node change anything? See `any_matter_in` for why the world half is answered
@@ -5889,6 +6255,10 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
         } else {
             scripted.push_back(op);
         }
+        // R11h: BEFORE the cut, and before is the whole of it. An op is a shape and replaying it
+        // over finer geometry re-cuts the same volume -- but only if finer geometry ever arrives,
+        // and sixty metres from a surface nothing is looking at, it never does.
+        presample_for_edit(scripted);
         const OpResult result = history_.apply_group(world_, ledger_, op_log_, scripted);
         WS_LOG_INFO("chisel",
                     "scripted edit: {} voxels changed of {} visited in {:.3f} ms "
@@ -6129,6 +6499,12 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
             ops.push_back(op);
         }
     }
+
+    // R11h: what this is about to cut, sampled first if nothing has ever sampled it. Outside the
+    // interactive path this is the same call from the scripted `--edit` above; `--chisel-every` is
+    // deliberately NOT given one, because it is an instrument for measuring what an edit costs
+    // downstream and a sampler in front of it measures the sampler.
+    presample_for_edit(ops);
 
     const u64 started = now_ns();
     const OpResult result = history_.apply_group(world_, ledger_, op_log_, ops);
@@ -6400,6 +6776,15 @@ void Application::stream(f64 seconds) {
                 if (secondary) {
                     ++faces_secondary_offered_;
                     if (slot != kNoFace && first_time) ++faces_secondary_claimed_;
+                    // R11e. R9a's exception is about CLAIMING A FACE and stops there. The claim
+                    // above builds nothing and streams nothing, and the gate below is what says so
+                    // in a number rather than in this comment: the offer is made on every one of
+                    // these, and refused.
+                    ++light_offers_landed_face_;
+                    if (sample_gate_.may_sample(SampleCause::kLight)) {
+                        demand_sample_of(NodeKey{entry.x, entry.y, entry.z, level},
+                                         SampleCause::kLight);
+                    }
                     // No stand-in for a secondary face, and that is not an omission. A stand-in
                     // exists so the COMPOSITE has something to read while a fine face is being
                     // found (R9d), and no pixel is reading this one; claiming one would be a second
@@ -6500,7 +6885,23 @@ void Application::stream(f64 seconds) {
             }
             node_pool_.request(NodeKey{entry.x, entry.y, entry.z, level},
                                exact ? kRequestOcclusion : kRequestRay);
-            if (exact) continue;
+            if (exact) {
+                // R11e, and this is the request the rule is really about. R9i's exception is a
+                // shadow, ambient or lamp ray NAMING THE ONE CELL THAT STOPPED IT, so the pool can
+                // build it out of what the world already holds and stop casting a shadow from
+                // ignorance (D341-D343, D430). It has never meant "and if the world holds nothing
+                // there, go and make some" -- and after R11d the world holds nothing almost
+                // everywhere, so that is now one line away in every direction from here.
+                //
+                // The residency request above is untouched and must be: refusing it would put back
+                // the shadow of a thing that is not there. What is refused is the SAMPLE.
+                ++light_offers_stopped_cell_;
+                if (sample_gate_.may_sample(SampleCause::kLight)) {
+                    demand_sample_of(NodeKey{entry.x, entry.y, entry.z, level},
+                                     SampleCause::kLight);
+                }
+                continue;
+            }
 
             // And the six face neighbours, for the same reason the chunk path dilates: a ray
             // reports one node, so only the nodes some ray happened to land on would ever be
@@ -8489,6 +8890,9 @@ void Application::record_frame(f32 time_seconds) {
 int Application::play(const Options& options) {
     options_ = options;
     despeckle_ = options.despeckle;
+    // R11e. Set once, here, so there is no frame on which the rule is not in force -- the gate is
+    // asked from `stream()`, which runs before anything the ladder does.
+    sample_gate_.allow_light(!options.light_sampling_guard);
 
     // ---- the loading screen ------------------------------------------------------------
     //
@@ -9856,6 +10260,30 @@ int Application::play(const Options& options) {
             WS_LOG_INFO("frame", "scene: {} chunks, {} solid voxels, {}, content {:016x}",
                         measured_world.chunks, measured_world.solid_voxels, sharpness,
                         world_.content_hash());
+
+            // R11e's gate, COUNTED. The middle number is the one the rule is judged on and it must
+            // be nought; the first two are what makes a nought mean something, because a counter
+            // that is nought because nobody ever asked reads exactly like one that is nought
+            // because the answer was no. R9a and R9i are printed apart because they are separate
+            // mechanisms and one of them going quiet would be invisible in a total.
+            WS_LOG_INFO("frame",
+                        "light paths: {} requests offered to the sampler ({} a stopped cell, R9i; "
+                        "{} a landed face, R9a), {} sample jobs caused, {} refused -- the guard is "
+                        "{}",
+                        sample_gate_.offered(SampleCause::kLight), light_offers_stopped_cell_,
+                        light_offers_landed_face_,
+                        sample_jobs_by_cause_[static_cast<u8>(SampleCause::kLight)],
+                        sample_gate_.refused(),
+                        options_.light_sampling_guard ? "ON" : "OFF (--no-light-sampling-guard)");
+            // ...and R11h's, beside it, because the two guards are the same question asked of two
+            // askers: what is allowed to cause a sample, and what is obliged to.
+            WS_LOG_INFO("frame",
+                        "sample jobs: {} the camera, {} an edit pre-sampling what it was about to "
+                        "cut ({} bricks, {:.0f} ms over {} edits' worth of nodes){}",
+                        sample_jobs_by_cause_[static_cast<u8>(SampleCause::kCamera)],
+                        sample_jobs_by_cause_[static_cast<u8>(SampleCause::kEdit)],
+                        presample_voxels_, presample_ms_, presample_nodes_,
+                        options_.edit_presample ? "" : " -- OFF, --no-edit-presample");
             // The two ways the world can lie to the render tree, counted where they are standing
             // rather than where they were made. `world_has` asks whether a brick is ALLOCATED and
             // answers level 8 and above out of the set of chunks that EXIST, so either of these
