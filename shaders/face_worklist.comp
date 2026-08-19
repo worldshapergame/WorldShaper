@@ -135,20 +135,52 @@ void face_coverage_bins(uint slot, Face face) {
     // Already holding something? A run is idempotent -- stamp it and stop. A single block is the
     // cheap class and is what this is here to upgrade, so it falls through, and the way it is in is
     // remembered so the take-over below can treat it as free to itself.
+    //
+    // ...and a run may have been BROKEN under this face since the last frame, which is the one
+    // state the sharp class can reach that the cheap class cannot. `node_face_lobe`'s ordinary
+    // take-over may take any way of a set that is cold or held by something worth less, and a run's
+    // HEAD is an ordinary way to that walk: it clears the head's class word and hands the block to
+    // the new face, and the three followers are left naming a slot that no longer holds the head.
+    // A reader landing on one of those steps back to the head and reads somebody else's bins as its
+    // own -- and would read thirty-six of them as a hundred and forty-four if the class word had
+    // survived, which is the fault the class word is cleared to prevent and is only half of it.
+    //
+    // So the run is checked, not assumed, on every frame by the pass that made it. A broken run is
+    // released outright: this face then has nothing, and the shading pass gives it a clean cheap
+    // block on the same frame, which is a coarser lobe for one visit rather than a wrong one.
     uint mine_at = kLobeWays;
+    bool broken = false;
     for (uint way = 0u; way < kLobeWays; ++way) {
         const uint header = face_lobe_header(base + way);
         if (header + 1u >= face_lobe.words.length()) return;
         const uint held = face_lobe.words[header];
         if (!face_lobe_is_held(held) || face_lobe_holder_slot(held) != slot) continue;
         const uint state = face_lobe.words[face_lobe_state_at(base + way)];
-        if ((state & (kLobeBig | kLobeFollower)) != 0u) {
-            const uint head = base + (way & ~(kLobeBigWays - 1u));
+        if ((state & (kLobeBig | kLobeFollower)) == 0u) {
+            mine_at = way;   // the cheap class, which is what this is here to upgrade
+            break;
+        }
+        const uint head = base + (way & ~(kLobeBigWays - 1u));
+        const uint head_held = face_lobe.words[face_lobe_header(head)];
+        const uint head_state = face_lobe.words[face_lobe_state_at(head)];
+        if (face_lobe_is_held(head_held) && face_lobe_holder_slot(head_held) == slot &&
+            (head_state & kLobeBig) != 0u) {
             face_lobe.words[face_lobe_header(head) + 1u] = frame;
             return;
         }
-        mine_at = way;
+        broken = true;
         break;
+    }
+    if (broken) {
+        for (uint way = 0u; way < kLobeWays; ++way) {
+            const uint header = face_lobe_header(base + way);
+            const uint held = face_lobe.words[header];
+            if (!face_lobe_is_held(held) || face_lobe_holder_slot(held) != slot) continue;
+            const uint state = face_lobe.words[face_lobe_state_at(base + way)];
+            if ((state & (kLobeBig | kLobeFollower)) == 0u) continue;
+            face_lobe.words[header] = 0u;
+            face_lobe.words[face_lobe_state_at(base + way)] = 0u;
+        }
     }
 
     // ---- four consecutive blocks of one set, taken whole -------------------------------------
