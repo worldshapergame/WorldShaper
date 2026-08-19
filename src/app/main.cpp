@@ -177,6 +177,16 @@ struct Options {
     // run is the load `--settle` and `baseline.ps1` have always measured.
     bool enter_now = false;
     bool no_early_entry = false;
+    // The control arm for the edit pre-sample's own emptiness test: sample every node the
+    // ladder would not refuse, which is what R11h shipped and what a player reported as a
+    // lag spike proportional to the size of the edit.
+    // The control arm for batching the edit pre-sample into one call: ask the sampler once a
+    // node, which is what R11h shipped and what a player reported as a lag spike
+    // proportional to the size of the edit.
+    // The control arm for taking the edit pre-sample off the frame: sample every node the cut
+    // will touch before applying it, on the main thread, which is what R11h shipped and what
+    // a player reported as a lag spike proportional to the size of the edit.
+    bool sync_edit_presample = false;
     // The control arm for compiling the six pipelines at once: create each one and wait for it
     // before starting the next, which is what every load did until R11i. One binary, two arms —
     // the alternative is two builds, and two builds of a shader compile are two different states
@@ -1207,6 +1217,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         if (i + 1 < argc) options.loading_shot = argv[++i];
     } else if (arg == "--loading-shot-frame") {
         options.loading_shot_frame = static_cast<u64>(std::max<i64>(1, next_number(2)));
+    } else if (arg == "--sync-edit-presample") {
+        options.sync_edit_presample = true;
     } else if (arg == "--no-early-entry") {
         options.no_early_entry = true;
     } else if (arg == "--no-clip-cache") {
@@ -5556,6 +5568,7 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
 
     const u64 began = now_ns();
     std::vector<RefineJob> jobs;
+    std::vector<NodeKey> wanted_keys;
     u64 wanted = 0;
     for (i64 z = first[2]; z <= last[2] && jobs.size() < kPresampleNodeCap; ++z) {
         for (i64 y = first[1]; y <= last[1] && jobs.size() < kPresampleNodeCap; ++y) {
@@ -5567,6 +5580,7 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
                 // sampling it would paste nothing. The same test the picker uses, so the two
                 // cannot disagree about what an empty node is.
                 if (refine_node_is_a_no_op(node)) continue;
+                wanted_keys.push_back(NodeKey{x, y, z, finest});
                 RefineJob job;
                 // `at` is deliberately left at nought and never read. These jobs are NOT list
                 // entries: a delivery writes its answer back into `refine_regions_[job.at]` by
@@ -5583,10 +5597,56 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
         }
     }
     if (jobs.empty()) return 0;
+    const usize nodes_wanted = jobs.size();
 
     // The gate, once for the whole edit rather than once a node: R11e's question is about the
     // ORIGIN of a demand and an edit is one origin however many nodes it needs.
     if (!sample_gate_.may_sample(SampleCause::kEdit)) return 0;
+
+    // ---- ASKING THE LADDER, RATHER THAN SAMPLING ON THE FRAME THE BUTTON COMES UP -------------
+    //
+    // Reported from playing: *"placing voxels now takes a lot more lag spike"*, and *"the lag spike
+    // from placing voxels is bigger the bigger the amount of the voxels placed is"*. Both are this
+    // function, and the `chisel` line pointed straight past it -- a 912,673-voxel box read **1,734
+    // ms of which the op was 0.6 and the undo capture 0.4**. Splitting this function's own timer
+    // found the rest: `sample 1,723 + paste 9`. A four-metre carve into the building was **8,854 ms
+    // = sample 8,836 + paste 17**, over 3,757 nodes. That is the game stopped for nine seconds.
+    //
+    // **Two cheaper answers were tried and the control arm refused both, which is why this one is
+    // written the way it is.** Refusing nodes the WORLD says are empty took the carve from 8,849 ms
+    // to 149 -- and from **610,623 voxels changed to 248**, because the nodes it refused were
+    // precisely the un-streamed building the cut was meant to bite into. That is D697's *"the far
+    // chisel carves what the near one carves, byte for byte"* destroyed by the fix for its own cost.
+    // Collapsing the 3,757 samples into one over the union was correct to the brick and **seven
+    // times SLOWER** (64,507 ms against 8,825): the per-node path runs across the whole pool, and
+    // one box is one thread. The cost is not overhead. It is the sampling, and it is irreducible.
+    //
+    // So it is not made cheaper, it is taken off the frame. **`demand_sample_of` marks the ladder's
+    // node and lets the ordinary pick, the ordinary split and the ordinary paste do the work** --
+    // and that paste path is `deliver_refinement`, which replays the op log over everything it
+    // lands. This function's own comment above says the ladder *"never REACHES a surface sixty
+    // metres away that nothing is looking at, so the replay never happens"*; a demand is exactly
+    // the thing that makes it reach. The replay was always there. What R11h had to supply was the
+    // arrival, and it supplied it by doing the sampler's work on the main thread.
+    //
+    // **What this costs is honesty about WHEN, not about WHAT.** The cut lands on the coarse world
+    // on the frame the button comes up and sharpens over the next few as the nodes arrive, instead
+    // of being right on the first frame and stopping the game for nine seconds to be. R11h's gate
+    // is met at the fixed point rather than instantly. `--sync-edit-presample` is the control arm
+    // and is the old path unchanged, including its timings.
+    if (!options_.sync_edit_presample) {
+        u64 asked = 0;
+        for (const NodeKey& key : wanted_keys) {
+            if (demand_sample_of(key, SampleCause::kEdit)) ++asked;
+        }
+        sample_jobs_by_cause_[static_cast<u8>(SampleCause::kEdit)] += asked;
+        WS_LOG_INFO("edit",
+                    "asked the ladder for {} of {} nodes at metre {} across the edit ({:.2f} ms on "
+                    "this frame); the cut goes in now and the op log is replayed over each node as "
+                    "it lands",
+                    asked, wanted, want_per_metre, ns_to_ms(now_ns() - began));
+        return static_cast<u32>(asked);
+    }
     sample_jobs_by_cause_[static_cast<u8>(SampleCause::kEdit)] += jobs.size();
 
     // Across the paste pool, which has one submitter — this thread — and is not the sampler's own
@@ -5605,15 +5665,24 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
             if (despeckle_) forge::despeckle(job.result->clip, 0.05, &refine_stipple_);
         }
     };
+    const u64 sample_began = now_ns();
     if (pool != nullptr && jobs.size() > 1 && !options_.no_batch_parallel) {
         pool->parallel_for(jobs.size(), 1, take);
     } else {
         take(0, jobs.size());
     }
+    // Split, because the line below reported one number for two very different pieces of work and
+    // a player reported the sum. Sampling the field is parallel across the pool; pasting is a
+    // single-threaded walk of every brick. Which of the two it is decides what can be done to it.
+    const f64 presample_sample_ms = ns_to_ms(now_ns() - sample_began);
+    const u64 paste_began = now_ns();
 
     // ...and into the world, the same way a delivered batch goes in. REPLACE, so the fine sample
     // supersedes the coarse voxels standing in for it.
     u64 written = 0;
+    i64 all_lo[3]{};
+    i64 all_hi[3]{};
+    bool announced_any = false;
     forge::Vec3 covered_low{0, 0, 0};
     forge::Vec3 covered_high{0, 0, 0};
     bool covered_any = false;
@@ -5632,8 +5701,29 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
         const i64 hi[3] = {lo[0] + std::max(job.result->clip.size[0] * scale - 1, i64{0}),
                            lo[1] + std::max(job.result->clip.size[1] * scale - 1, i64{0}),
                            lo[2] + std::max(job.result->clip.size[2] * scale - 1, i64{0})};
-        // The ladder delivering a node. NOT an edit: see announce_world_change.
-        announce_world_change(lo, hi, WorldChange::kRefinement);
+        // ONE announcement for the whole pre-sample, and not one per node.
+        //
+        // Reported from playing: *"placing voxels now takes a lot more lag spike"*, and *"the lag
+        // spike from placing voxels is bigger the bigger the amount of the voxels placed is"*.
+        // Measured: a 912,673-voxel box took **1,639.876 ms**, of which the op itself was 0.607 and
+        // the undo capture 0.405. Everything else was here, and the `large edit:` line said nothing
+        // because it times apply, bounds and announce AFTER this function has already run.
+        //
+        // This loop called `announce_world_change` once for every node it pasted -- 1,728 of them
+        // on that edit -- and each call rearms refinement, sets the shadow refresh, marks the
+        // lights dirty and walks the chunk range of its box erasing emitter-cache entries. That is
+        // D522's fault in a new place: **work proportional to the world for a change that has one
+        // box**, done once per node instead of once.
+        //
+        // The union is exactly equivalent for every consumer. `rearm_refinement` and the shadow and
+        // light flags are not per-box at all; the emitter erase is over a chunk range, and the
+        // nodes TILE the edit box, so the union names the same chunks. What it cannot do is name
+        // fewer, which is the direction that would have been a bug.
+        for (u32 axis = 0; axis < 3; ++axis) {
+            all_lo[axis] = announced_any ? std::min(all_lo[axis], lo[axis]) : lo[axis];
+            all_hi[axis] = announced_any ? std::max(all_hi[axis], hi[axis]) : hi[axis];
+        }
+        announced_any = true;
         if (!covered_any) {
             covered_low = job.settings.low;
             covered_high = job.settings.high;
@@ -5647,6 +5737,9 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
             covered_high.z = std::max(covered_high.z, job.settings.high.z);
         }
     }
+    const f64 presample_paste_ms = ns_to_ms(now_ns() - paste_began);
+    // The ladder delivering nodes. NOT an edit: see announce_world_change.
+    if (announced_any) announce_world_change(all_lo, all_hi, WorldChange::kRefinement);
 
     // Remembered, so the LADDER can never undo it. A node of the same volume at metre 8 is a worse
     // answer than what is now standing there, and `PasteMode::Replace` does not know that — it
@@ -5667,17 +5760,20 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
         edit_beyond_proximity(low, high, camera_voxel,
                               static_cast<f64>(NodePoolBudget{}.proximity_voxels));
     WS_LOG_INFO("edit",
-                "pre-sampled {} of {} nodes at metre {} before the cut ({} bricks, {:.0f} ms) -- "
-                "the edit is {} the {:.0f} m proximity radius",
-                jobs.size(), wanted, want_per_metre, written, ns_to_ms(now_ns() - began),
-                outside_radius ? "OUTSIDE" : "inside", kProximityMetres);
-    if (jobs.size() >= kPresampleNodeCap) {
+                "pre-sampled {} of {} nodes at metre {} before the cut in {} sample(s) ({} "
+                "bricks, {:.0f} ms = sample {:.0f} + paste {:.0f}) -- the edit is {} the {:.0f} m "
+                "proximity radius",
+                nodes_wanted, wanted, want_per_metre, jobs.size(), written,
+                ns_to_ms(now_ns() - began),
+                presample_sample_ms, presample_paste_ms, outside_radius ? "OUTSIDE" : "inside",
+                kProximityMetres);
+    if (nodes_wanted >= kPresampleNodeCap) {
         WS_LOG_WARN("edit",
                     "the edit is larger than {} nodes, so only the first {} were pre-sampled; the "
                     "rest of the cut goes into whatever detail the world already held there",
                     kPresampleNodeCap, kPresampleNodeCap);
     }
-    return static_cast<u32>(jobs.size());
+    return static_cast<u32>(nodes_wanted);
 }
 
 // Is this node worth a sample from where the camera is, and how keenly?
