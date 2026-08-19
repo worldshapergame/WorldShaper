@@ -12023,3 +12023,91 @@ wants rebuilding.
 | D706 | **`--clip-part` does not compose with `--clip-bounds`** | fault | The part query samples its own box; the bounds are dropped |
 | D706 | **The east bound had to move with the building** | correctness | Matter outside bounds is never sampled, so the overlap would have been "fixed" by truncation |
 | D706 | **Three probes said no overlap and the player was right** | honesty | Two instrument faults and one unsettleable scene, each plausible on its own |
+
+---
+
+## D707 — reflections stop being face-based and become bent light, and it is the user reversing themselves after playing
+
+**2026-08-19, asked for directly:** *"reflections should not be voxel face based, it should be more
+like ior bending light, and still be super performant."*
+
+**This reverses one of the three clarifications the whole rewrite was written around.** §1 of
+`22-rewrite-handover.md` records the original in their own words — *"Everything is per voxel face
+based — even reflections and those things"* — and R4 is the stage built to satisfy it: a face stores
+a distribution over direction, and the composite reads one direction out of it. **The reversal is
+theirs to make and it was made after playing the build**, which is the only place this project's
+decisions are supposed to come from.
+
+### What it means, and why it is smaller than it sounds
+
+A specular reflection becomes **a continuation of the primary ray** rather than a lookup into a
+stored distribution. Almost all of the mechanism is already in the tree, built for the transmitted
+half:
+
+- **`kThroughExit`** in `shaders/node.glsl` already stops a ray where it LEAVES a medium *"for the
+  caller to bend"* — D652, and it is exactly the continuation hook;
+- the **index of refraction is already a byte on every material** — `1.0 + ior/128`, off the record;
+- **Schlick's Fresnel is already written**, `face_fresnel` in `shaders/face_terms.glsl`.
+
+So Fresnel over the material's own IOR splits the ray at a surface: part goes through and bends,
+which is D652 and works, and part reflects and marches on, which is the new half. **No lobe, no cap,
+no bins, no re-centring.**
+
+### Two of the user's other complaints dissolve into it, which is the strongest argument for it
+
+- *"make reflections support infinite reflections between them"* — **free.** Each reflection is
+  another continuation of the same march, so two facing mirrors recurse until a **contribution
+  budget** stops them. Depth becomes a budget rather than a stored structure, and a mirror corridor
+  is no longer a special case.
+- *"when im moving reflective surfaces like mirrors get stripes of non reflective zones"* — **gone
+  with the mechanism.** That stripe is D703's cap re-centring, reported within an hour of D703
+  landing: a face the eye walks out of re-centres and reads the hemispherical mean while it does, and
+  because the cap boundary is smooth across a flat mirror every face crossing it does so together, so
+  the "fade" D703 predicted is a **band** on a moving camera. With no cap there is nothing to walk
+  out of. **A still-camera gate cannot see that fault, which is exactly why D703 shipped with it.**
+
+### "Still be super performant", which is the hard half
+
+Putting a ray back on the pixel is what this rewrite exists to avoid, so it is paid for explicitly:
+
+1. **A continuation, not a gather.** One ray carries on; it does not sample a hemisphere. Refraction
+   already does this and D652 measured what it costs.
+2. **R7's beam pre-pass landed today** — 4K outdoors 16.81 → 1.18 ms — so marching is far cheaper
+   than it was when R4 was designed.
+3. **Fresnel is the budget.** Most dielectrics reflect about 4% head-on, so terminating on
+   CONTRIBUTION rather than on a depth count makes a dim third bounce free and lets a mirror corridor
+   keep going.
+4. **And the rough/sharp split stays CONTINUOUS**, which is R4's standing rule and the thing most
+   likely to be quietly broken:
+
+   > The reflected ray is cast per pixel always. How much of the answer comes from **this ray**
+   > against the face's **already-accumulated average** is a continuous function of the lobe's
+   > angular width versus the pixel's own solid angle.
+
+   A mirror's lobe is narrower than a pixel, so the pixel's own ray dominates — sharp, correct,
+   recursive. A rough surface's lobe is far wider, so the face's converged average dominates — cheap,
+   already measured, no noise. **Nothing branches on roughness.** It is the same comparison between
+   detail and pixels the engine already makes everywhere, applied to direction instead of to size —
+   which is §1's own rule, and is why the face store keeps its job rather than being deleted.
+
+### What this costs of today's work, said plainly
+
+**D694 and D703 both landed today and both are partly superseded by this.** D703 is what finally made
+a mirror carry a picture — the cap, and the finding that the composite reads exactly ONE direction
+out of a face so a hemisphere of bins is wasted. That finding survives; the cap does not. D694's
+coverage rule keeps its job for rough surfaces under the continuous rule above.
+
+**That is not waste and it should not be recorded as waste.** D703 is the change that established the
+image was reachable at all, and the stripe it produced is what told the user the face-based approach
+had a shape they did not want. A design that had never been built could not have been rejected on
+what it looked like.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D707 | **Specular becomes a continuation of the primary ray, not a stored lobe** | decision | The user, after playing: reflections should be IOR bending light rather than face-based |
+| D707 | **Almost all of it exists**: `kThroughExit`, the IOR byte, Schlick's Fresnel | build | The transmitted half already does this; the reflected half is the addition |
+| D707 | **Infinite mirror-to-mirror recursion falls out** | consequence | Each reflection is another continuation; depth is a contribution budget, not a structure |
+| D707 | **D703's stripe dissolves with the cap** | consequence | Nothing to walk out of, so nothing to re-centre |
+| D707 | **Terminate on CONTRIBUTION, not on a depth count** | design | 4% head-on for a dielectric makes a dim bounce free and a mirror corridor affordable |
+| D707 | **The rough/sharp split is lobe width against pixel solid angle, continuously** | design | R4's no-threshold rule, and it is why the face store keeps its job |
+| D707 | **D703 is superseded and was not wasted** | honesty | It made the image reachable and made the shape rejectable by looking at it |
