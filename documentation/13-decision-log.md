@@ -10530,3 +10530,369 @@ in the one document that has to stay readable, and it is also how the log would 
 | D689 | **The base is 637 cases green at `5be06c0`** | measurement | A crashed case reports FEWER cases, not a failure; without the base figure that reads like agreement |
 | D689 | **Six sub-steps held back rather than double-booked** | decision | R12d, R5b–d, R7c, R8a/R8e and R9h all wanted a file another agent already owned |
 | D689 | **No agent may edit `documentation/`** | decision | One voice in the log, and no conflicts in the one document that has to stay readable |
+
+---
+
+## D690 — the field compiler takes a SET of roots, and its crash was a counter that ran before its bounds check
+
+**2026-08-19.** `forge::compile_field` was merged, crashed the suite, and was taken back out at
+`5be06c0` with two things owed: find the crash, and give it a signature that can be wired. Both are
+done and it is in behind `--compile-field`, **OFF**.
+
+### The crash, and the shape of it is worth more than the fix
+
+`tests/test_compile.cpp:352` asks about node `b + 99` of a **one-node** field, to check that an
+out-of-range root is refused rather than guessed. `compile_field` filled its report **before** it
+checked the root was in range, and `count_op` — one of three counters — had no bounds check of its
+own: `seen[99]` on a one-entry vector, `f.node(99)` ninety-nine 96-byte records past the end,
+garbage `children`, garbage indices onto its own stack, SIGSEGV two frames later. `reachable_nodes`
+and `depth_from` both guarded. **The third did not, and the third ran.**
+
+`5be06c0` already wrote the finding down and it holds: **a crashed doctest case is QUIETER in the
+summary than a failed one.** 158 cases with 493 SKIPPED and one failure carrying zero failed
+assertions reads like a small fault and is the suite not running at all. The case is kept and
+strengthened rather than disabled — it now also asserts what a refusal hands back, so "I could not"
+needs no special case at a call site to be safe.
+
+### Why one root could never have been wired
+
+A `Script` names nodes in four places that BUILD — `solid`, `settings.bounds`, and every paint
+rule's `test` and `place` — and on the estate that is **686 roots**. Compiling from the solid alone
+leaves the other 685 aimed at whatever now occupies their old index: **a building painted from the
+wrong shapes, no error anywhere, and nothing on screen naming the cause.** So the signature takes a
+set and returns the set out of one output field, and **a root counts as a reference to itself** —
+one line, and it is what stops a subtree shared between two roots being specialised for one and
+copied for the other, which would grow the field instead of shrinking it.
+
+### What it does not carry, and it is loud rather than silent
+
+`script.parts` survives only where a name's node survived as itself. **On the estate that is 0 of
+5,091**, because `apply_origin` wraps every named part in its own fresh translate that nothing else
+references. The names are dropped rather than re-pointed at a guess, `--part` answers "does not name
+anything", and the parse prints the tally. Adding the names as roots would fix it and gut the
+rewrite — `gather` only flattens a child with one parent. **This is why the flag is off, and it is
+the thing to solve before it goes on.**
+
+### The numbers, re-taken
+
+Estate 18,250 nodes, 8,877 reachable → **8,536**; depth 146 → 134. Best of seven interleaved over
+216 points: **1.191x**, 1.214x without the fold, and **the transform fold alone 0.887x** — D637 and
+D682's mistake for the third time, a change that cuts node COUNT and raises node VISITS. It stays
+out. Agreement over 28,224 points: worst 0.000e+00 m, **0 sign flips**.
+
+### The gate, and the figure it could not reach
+
+`clips/sampler.clip --refine-all --no-despeckle`, both arms: **1,430,104 voxels,
+`a1f8bc6c656343b7`**, identical, with the headless clip report line-for-line identical bar the field
+description and the eval counts. Suite **652 cases, 652 passed**.
+
+**There is no facility gate, because there is no affordable deterministic one** — see D693.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D690 | **`compile_field` takes a set of roots and returns the remapped set** | decision | A `Script` names 686 on the estate; one root silently repaints the building |
+| D690 | **A root counts as a reference to itself** | build | Otherwise a shared subtree is specialised for one root and copied for the other |
+| D690 | **The crash was `count_op` indexing before the range check** | fault | Two of three counters guarded; the third ran first |
+| D690 | **The transform fold measures 0.887x and stays out** | fault | Third instance of D637/D682: fewer nodes, more visits |
+| D690 | **`--part` refuses under the flag on any clip with an `origin`** | honesty | 0 of 5,091 names kept; dropped rather than aimed at a guess |
+
+---
+
+## D691 — the card asked its unions in the author's order, and R12's first speed step is the two culls it never got
+
+**2026-08-19.** D681 left R12 measured and off: **the card is 2.7x slower than five threads on the
+camera the game opens on**, and the reason was named — a cell of the estate walks **8,231 nodes of
+an 18,250-node field**. The accelerator that stops it walking them turns out not to be a new idea at
+all. **It is the rest of `Field::eval`'s cull.**
+
+### `Field::eval` culls a union three ways and the card had one
+
+- **the box cull** — a child the running answer already beats cannot change it. The card had this.
+- **nearest box FIRST** — D638's finding, made on the CPU, where it is written down as *the
+  difference between a cull that works and one that is merely correct*. The card did not have it. In
+  declaration order the running answer starts at whatever part the author wrote first, which for a
+  building is the ground; **a point in the seventh building of the estate evaluated the other six in
+  full** before it held a number small enough to reject anything with, and then rejected everything.
+- **the carve cull** — a difference whose cutter the point is nowhere near cannot reach it.
+  `Field::eval` has had it since the cull was written; the card never got it. The estate's solid is
+  **142 differences**.
+
+Sorted, the rejection is a `break` and not a skip: ascending box distance against an answer that only
+shrinks means the first child rejected is a proof about every child after it.
+
+### The boxes are the same boxes, and that was the whole design constraint
+
+D644 measured the hole — cone 0.53, ellipsoid 0.59, platonic 0.58, prism 0.87 of their own box
+distance — and D646 built the sound repair and **refused it at 45x** for a byte-identical building:
+*a cull box an answer can vouch for is, on this building, a box that rejects nothing.* So the card
+reads the same under-stating boxes the CPU reads, and the temptation to bound a node `build_bounds`
+could not was refused deliberately. **A card that can reject a subtree the CPU cannot is two
+evaluators computing two worlds**, which is what `--gpu-sample-check` exists to catch.
+
+What the host computes once per clip is not a bound but a **summary of bounds already being
+uploaded**, packed into the spare bits of `children` — a word that only ever held 0..4. A ninth word
+in an 80-byte record read by every turn of the walk would have been a 10% traffic tax to carry eight
+bits. **15,439 of the estate's 18,250 nodes carry a box (84.6%), 1,897 unions are worth sorting**,
+and both are logged, because a clip where that share falls is a clip whose walk got longer and
+nothing else would say so.
+
+### The gate first, because agreement is the gate and speed is only the point
+
+`--gpu-sample-check`, both arms, both clips: **48 nodes, 24,576 cells, 0 differ in matter, 0 in
+material, 0 in the clip mask.**
+
+**And refusals are now SAID rather than inferred from a silence.** The warning beside `refused()`
+fires when one happens and says nothing when none do — the same silence a run that never asked
+makes. `FieldSampler::destroy` now prints the count with its denominator whatever the answer is:
+**0 refused of 16.1 M cells over nine runs.** D676 is this exact fault from the CPU side.
+
+### And it is 2.8x on the number that was named
+
+| arm | nodes walked a cell, estate, enclosed, cold |
+|---|---|
+| the accelerator | **2,876** and **2,935** |
+| `--no-field-accel` | **8,273** and **8,150** |
+
+The control arm reproduces D681's 8,231 to within noise, which is what says it really is the old
+walk. On `clips/sampler.clip`, where both arms did **identical work** — 75 dispatches over 1,203,712
+cells — **33 a cell against 67, and 191 ms of GPU against 204**.
+
+Matched 45 s on the estate: **3,680 and 10,528 nodes built against 1,920 and 2,400**, at **6.19 and
+3.90 ms of card a node against 17.85 and 12.78**. The same machine's `--cpu-sample` arm built 8,320
+nodes at 5.05 ms of five threads — so **on the quieter of the two the card is now AHEAD of the arm
+that ships**, on the camera D681 measured it 2.7x behind on.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D691 | **The card was missing two of `Field::eval`'s three union culls** | fault | Declaration order and no carve cull; 8,273 nodes a cell against 2,876 |
+| D691 | **Nearest-box-first is worth 2.8x on the card, as it was on the CPU** | decision | D638's finding, transliterated |
+| D691 | **The card's bounds stay exactly the CPU's unsound ones** | decision | D646 measured the sound version at 45x; the gate is 0/0/0 both clips, both arms |
+| D691 | **The cull word rides in the spare bits of `children`** | build | A ninth word is a 10% traffic tax to carry eight bits |
+| D691 | **Refusals are printed with their denominator, always** | honesty | A silent warning and a run that never asked make the same silence (D676) |
+
+---
+
+## D692 — R11f's format was complete, and all three ways it could still lose a building were outside it
+
+**2026-08-19.** The world cache could carry named edit boxes from the day the mode landed, and
+**nothing in the repository ever produced one.** That is the whole of the first open case: without
+them the file holds only the difference from the clip, and a difference cannot see a brick somebody
+carved and refilled with the clip's own stone, nor a swing that met only air the clip agrees about.
+`edit_boxes_from_ops` is the bridge, and it takes **every** op including the ones that changed
+nothing — a swing through air reports `voxels_changed == 0` and is exactly the case being kept.
+Undo counts too: an undo is an ordinary op through the same log, so a carve and its undo are two
+boxes over the same voxels, and the alternative is deciding from outside which of a person's actions
+were real.
+
+**Two more were found under it, and all three have one shape: nothing fails.** Each fix was patched
+back out and the test re-run, so each control arm below is a number rather than an argument.
+
+1. **Nobody handed the format the op log.** Control: `named.size()` 0 against 2; the brick carved
+   and refilled with the clip's own stone comes back as the clip's wood (**2 against 1**); the swing
+   through air comes back solid (**1 against 0**).
+2. **A named box in a chunk neither world has anything in was dropped.** The writer walked the
+   chunks the saved world and the clip's world have *between* them, so a chisel in an empty field —
+   or the last carve out of a demolished outbuilding — reached no chunk in that list and was written
+   nowhere. **The guarantee failed precisely where it was written for.** Control: the swing comes
+   back solid, 1 against 0.
+3. **`adopt` replaces the type table, and the baseline is a world the READING run built out of ITS
+   table.** A type id is only the order things were interned in, and interning follows the order the
+   sampler meets materials, which follows what the camera asked for — so two runs of one clip hand
+   back the same building with the ids permuted. Control: **478,720 of a 512,000-voxel wall come
+   back in somebody else's materials**, plus 18,081 outside it, and the reader **blames the clip** —
+   *"8 of 15 chunks disagree"*. The test file's own note called this "an assumption, not a
+   guarantee" and named a test case nobody had written.
+
+**The gate's second clause is a COUNT and not a size**, because a file is small for many reasons and
+only one of them is the right one. A world nobody has touched writes **0 bricks and 0 clearings**.
+
+| | whole | clip + edits | fixed cost, no voxels | the voxels |
+|---|---|---|---|---|
+| estate, metre 4, 995,234 solid voxels | 1,178,305 B | 111,088 B | 109,640 B | 1,068,665 → **1,448 B, 738x** |
+| sampler, metre 32, 1,352,838 solid voxels | 857,435 B | 24,750 B | 1,344 B | 856,091 → **23,406 B, 37x** |
+
+Reading it back is **155 ms against 776,979 ms to sample it instead.**
+
+**`--clip-plus-edits` is additive and does not lift the refusal to cache an edited world as the
+clip's own.** That refusal is about what the clip's cache IS — keyed on the clip, so a square
+somebody carved into a floor came up in every new world built from it — and no format changes it.
+Until there is a per-world save, the file the game loads stays whole and the difference is written
+beside it. **Making the loaded file a difference is a decision for the user, not an optimisation.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D692 | **The op log is what names an edit, not the voxels that differ** | decision | A brick carved and refilled with the same material differs from nothing |
+| D692 | **Every op counts, including one that changed nothing** | decision | A swing through air is an edit; `voxels_changed == 0` is the case, not the exception |
+| D692 | **A named box adds its chunks rather than intersecting them** | fault | A chisel in an empty field reached no chunk and was written nowhere |
+| D692 | **The baseline is moved onto the file's type table before any hash is compared** | fault | Ids are interning order; 478,720 voxels came back in the wrong materials and it blamed the clip |
+| D692 | **`--clip-plus-edits` is additive and the loaded file stays whole** | decision | The refusal is about what a clip's cache is; a per-world save is a decision for the user |
+
+---
+
+## D693 — `run_clip_tool` dies silently on the estate, and it is why nothing here has a deterministic gate
+
+**2026-08-19.** Found while checking another agent's report, reproduced independently, and it is
+**pre-existing on `main` and nothing to do with this wave.**
+
+```
+WorldShaper.exe --clip-file clips/sampler.clip    exit 0, full report
+WorldShaper.exe --clip-file clips/facility.clip   exit 1, after "started 8 worker threads"
+```
+
+No error line, no crash dump, no message of any kind — the two warnings before it are the ordinary
+"displace amount too small, dropped" ones. **The headless clip report is the only deterministic
+whole-clip instrument this repository has**, and it does not work on the scene everything is judged
+against.
+
+**That is what leaves every sampler change gated on `clips/sampler.clip` alone.** Three agents this
+wave wanted a facility or estate gate and none could take one: `--refine-all` on the estate does not
+finish in a ten-minute window at metre 32 or metre 4, and without `--refine-all` the render path's
+`--settle` gives up at its deadline and says in its own log that the figure *"is not comparable with
+a settled one"* — so the two arms stop at different frames over different node totals, which is two
+points on a ladder and not two arms of a gate.
+
+**The likely cause, stated as a hypothesis and not as a finding**, because it has not been confirmed:
+`run_clip_tool` takes one whole-clip `forge::sample` at the authored resolution, and since D672
+`clips/facility.clip` **is the estate** — bounds `-53 -2 -46 .. 72.5 35.5 64.5`, which is
+125.5 x 37.5 x 110.5 m, and at 32 voxels to the metre that is **4016 x 1200 x 3536 = 17.0 billion
+voxels** of box. D686 measured the same clip at three gigabytes and more than ten minutes, abandoned
+twice. An allocation that big failing immediately fits the five seconds and the silence.
+
+**It is not fixed here, deliberately.** The fix is in `src/app/main.cpp`, which six agents of this
+wave are holding, and an integrator resolving conflicts against its own uncommitted work in the one
+file everybody needs is the lost afternoon the file-ownership rule exists to prevent. It is the
+first thing to do when the wave is in.
+
+**What the fix has to be is already decided by the project's own rule**: a refusal and a crash must
+not look alike. The tool should say what the sample is going to cost before it tries — box, voxels,
+bytes — and refuse with that number, rather than dying with none.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D693 | **`run_clip_tool` exits 1 silently on `clips/facility.clip`** | fault | Reproduced twice; works on `sampler.clip`; no message, no dump |
+| D693 | **It is why every sampler gate this wave ran on `sampler.clip` alone** | honesty | Three agents wanted a facility gate; none could take one |
+| D693 | **17.0 billion voxels of box at the authored resolution** | hypothesis | Not confirmed — the arithmetic fits the symptom and nothing has proved it |
+| D693 | **Held until the wave is in, because the fix is in `main.cpp`** | method | Six agents hold that file; conflicts against uncommitted work is the rule's own reason |
+
+---
+
+## D694 — R4b's coverage rule: the bins a face allocates are a function of the pixels on it
+
+**2026-08-19. D186's other half, and the half R4c's pool was built for.** A face's block of outgoing
+bins came out of the pool at one fixed size for every face that asked. **How many pixels were
+looking at it did not enter**, so a voxel four pixels across on the far side of the room was given
+the same thirty-six directions as one filling a quarter of the screen.
+
+**Two quantities, and neither is compared against a cutoff.** Roughness says how many directions the
+material can tell apart — `2/alpha²`, which was already there. Coverage says how many eyes are
+reading them — the face's extent over its distance over one pixel's angle, three lines from the
+record. A face is never given more bins than the smaller of the two. **What quantises the answer is
+the POOL and only the pool**: it hands out blocks of thirty-six and runs of four, so the earned
+figure picks the largest class that does not exceed it. There is no roughness threshold anywhere,
+which is the rule R4 is written under, **and there is no coverage threshold either.**
+
+**It lives in `face_worklist.comp`, and that is what let it be built without touching a reader.**
+That pass already walks the whole store once a frame and is not the shading pass. A run of four
+blocks placed there is found by `node_face_lobe`'s "this face already holds one" path, so
+`node.glsl`, `shade_faces.comp`, `face_terms.glsl` and `resolve.comp` did not change.
+
+**The distance is taken to the face's COARSE PATCH and not to the face, which is what D599 got
+wrong.** Coverage varies smoothly across one flat surface, so a decision taken per face flips face
+to face along the middle of it — and R5's cross-face blend pairs a lobe only with lobes cut into the
+same number of directions, so exactly the faces at that boundary get no blending and stand out as
+noise. Shifting the coordinate down by `kFaceAncestorStep` makes **512 fine faces compute one
+distance and one class by construction**. The picture shows it: one coherent mottled region against
+one coherent smooth region, with the boundary where the coverage falls, rather than a speckle
+through the middle of a surface.
+
+**Measured**, `clips/mirror_test.clip`, chrome ball at 0.9 m, 2560x1440, settled, **same content hash
+both arms**: 2,695 faces of 30,565 hold the sharp class (8.8%), payload **11,749,600 bytes against
+9,709,456** — +21% of the store for 8.8% of the faces, with declines unmoved at 0.9%. The census line
+now prints **bytes beside the face count**, because a sharp-class face is four blocks: **the face
+count goes DOWN as the store's bill goes up**, and one number cannot show that. On a scene with no
+reflective material in it (`sealed_dark`, one material at `rough=210`) the pool holds **nought blocks
+in both arms** and the frame is 3.616 and 3.700 ms against a control that read 4.139 and 6.984 on a
+machine with two other renderers on it.
+
+**And the gate is still not met, which is the third measurement of the same constraint.** The sharp
+class puts the sky's own colour into individual bins — **there are blue pixels in the chrome for the
+first time** — and at `kLobeBigSamples` = 24 it arrives as noise rather than as an image. Twenty-four
+samples of a radiance is what it is however many bins there are. D592 measured that at 256 bins, D594
+at 36 with a proper ray, D599 at 144 with a roughness gate, and this is it at 144 with a coverage
+gate: **the rule is right and the ray budget is not there.** The lever is `kLobeBigSamples` and
+`face_lobe_denoise`'s convergence gate, in `shade_faces.comp` — which is a different agent's file and
+was told so mid-flight.
+
+**A run of four blocks is four ordinary ways to `node_face_lobe`'s take-over**, so it may take the
+HEAD from under a run and leave three followers naming a face that no longer holds it — a reader
+steps back to the head and reads somebody else's bins. Unreachable before, because only
+`--lobe-coverage` ever made a run and it is off. The pass that makes a run now checks it every frame
+instead of assuming it and releases a broken one outright.
+
+**What it cannot do, said plainly: it can only upgrade.** `node_face_lobe` decides whether a face
+gets a block at all from `worth`, `push.tone.z` and the slot number, and consults nothing the host or
+the store owns — so a four-pixel face still gets the cheap block, and *matte stone allocates none* is
+still `kLobeWorthFloor`'s doing and not this rule's. **That is also what makes `--no-coverage-bins`
+restore the old allocation to the byte rather than approximately.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D694 | **`min(bins the roughness wants, pixels on the face)`, quantised by the pool** | D186 | Both read as quantities; the pool's block is the only honest place to quantise |
+| D694 | **The rule lives in `face_worklist.comp`, not in `node_face_lobe`** | design | The one whole-store walk that is not the shading pass, so no reader changed |
+| D694 | **The distance is the coarse PATCH's, not the face's** | D599 | 512 faces agree by construction; the boundary is a step the blend can pair across |
+| D694 | **Bytes on the census line, beside the face count** | trap 17 | A sharp face is four blocks, so the count falls as the bill rises |
+| D694 | **Still no recognisable reflection, and said so** | measurement | Third measurement of D592's constraint; the lever is the ray budget, not this rule |
+
+---
+
+## D695 — the shipped world is one camera's walk, and the cap that stops a bake is on `--settle`
+
+**2026-08-19.** `--bake-world` saves what the refinement ladder **reached**, and the ladder is driven
+by what a camera can see and how many pixels each node covers. So a bake from the spawn view writes
+a world complete where that camera stood and coarse everywhere else — **the floor with no walls the
+user photographed, and every bake before this one deserved it.** `--refine-all` takes the two
+visibility terms out of the ladder and then the file IS the world. It is in
+`tools/bake_world.ps1` and in the release workflow, with `-RefineAll:$false` as the control arm.
+
+### One run cannot finish the estate, and the limit is FRAMES rather than seconds
+
+`kSettleGiveUp` in `main.cpp` is **30,000 frames**: past that the run stops waiting to settle, takes
+its screenshot and leaves, whatever `--max-seconds` says. Measured — a facility bake given an
+**1,800 s** deadline ended after **30,001 frames and 119 s** with 26,496 of 36,427 nodes, and the
+same work came out of two 60 s passes. **The ceiling is the cap and not the clock.**
+
+**And the cap is on `--settle`, not on the game.** The give-up branch sits inside
+`if (options_.settle && !settled_seen_)`, so a run with no `--settle` never enters it and is bounded
+by `--max-seconds` alone. That is why the bake's first pass settles — so a small clip stops the
+moment it is finished — and every pass after it does not, and is worth its whole deadline instead of
+the ~119 s that 30,000 frames comes to on a fast card.
+
+So **a whole-world bake is a LOOP.** Each pass resumes from the last — the game reads the world the
+previous pass wrote and carries on sharpening — and the loop stops the moment a pass reports every
+node done, or adds nothing, or `-Passes` runs out. Measured resuming: **18,816 of 27,315 after one
+pass, 26,496 of 36,427 after two**, each from the one before it. `-RequireWhole` fails the run unless
+every node is baked, and the release passes it, because **a partial world reads, gates and
+photographs exactly like a complete one.**
+
+### And the gate opens it from cameras the bake never came from
+
+D685's finding, built into the script: everything the old gate proved was that the file was **read**.
+It said nothing about whether the file has the far side of the building in it, because the run that
+proved it stood exactly where the bake stood. The gate now opens the same shelf world from three more
+viewpoints — above the roof, sixty metres outside, and the far side at head height — each with its
+own fresh data root and shelf, each having to say `opened the world shipped at`, and each having to
+come back with solid voxels in the frame at **frame 60**.
+
+`package.ps1` gains `-SkipBuild` (because `vswhere` does not resolve through it), runs that same
+shelf gate against its own unpacked zip, and **prints the no-provenance-attestation warning every
+time** rather than only at the head of the file — a CI release carries an attestation tying it to a
+commit and workflow; a hand-built zip carries nothing but its checksum.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D695 | **The shipped bake carries `--refine-all`** | decision | Without it the file is one camera's walk, which is the complaint the feature exists to answer |
+| D695 | **`kSettleGiveUp` is 30,000 FRAMES and no deadline raises it** | fault | An 1,800 s bake ended at 119 s; the same work came out of two 60 s passes |
+| D695 | **The cap is inside the `--settle` branch, so later passes have none** | build | First pass settles so small clips stop; the rest are worth their whole deadline |
+| D695 | **A whole-world bake is a resuming loop, not a run** | decision | 18,816 of 27,315, then 26,496 of 36,427, each from the one before |
+| D695 | **`-RequireWhole`, and the release passes it** | decision | A partial world reads, gates and photographs exactly like a complete one |
+| D695 | **The gate opens the world from three cameras the bake never used** | D685 | A one-camera check proves the file was read and nothing about what is in it |
