@@ -91,7 +91,20 @@
 # The box is cut to the complex plus about a metre. It is mostly air — the buildings occupy
 # perhaps a fifth of it — and that is the price of an estate in one array, paid deliberately.
 metre 32
-bounds -53 -2 -46   72.5 35.5 64.5
+# The east bound was 72.5 and had to move with the orangery, which was overlapping the main block.
+#
+# The orangery is 57.60 m of bays and its terrace slab is 59.40, and it used to be placed so that
+# slab began at x 12.60 -- while the main block reaches x 16.50. So very nearly four metres of it,
+# and about one whole bay of the building itself, stood INSIDE the main building's south-east
+# corner rooms. Reported from playing: *"it overlaps on the opposite side from the chapel, on the
+# front of the building corner on the rooms there it clips into the main building"*, and the chapel
+# is at x -15.5..-6.5, so the opposite side is east and the corner is exactly this one.
+#
+# It is moved five metres east, which clears the main block by 1.10 m, and its east end therefore
+# reaches x 77.00 against the 72.00 it used to. Matter outside the bounds is never sampled rather
+# than clipped -- so an east bound left at 72.5 would have answered the overlap by slicing four
+# metres off the far end of the building instead, with a flat face and no error anywhere.
+bounds -53 -2 -46   78.0 35.5 64.5
 
 # --- the site plan: where every building in the complex stands ----------------------------------
 #

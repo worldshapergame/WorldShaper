@@ -3843,3 +3843,52 @@ twelve centimetres at a sharp angle separates red from blue by **1.1 millimetres
 one voxel. Water is the best case at about 4 millimetres. The feature works; every scene we have is
 between three and thirty times too thin to show it. I've written the numbers into a test so nobody
 has to wonder again.
+
+## The lighting no longer resets every time part of the world loads
+
+You reported that after a node loads, the path tracer resets — flickering, and losing information,
+worst in reflections. That was exactly right, and it was one line.
+
+There is a signal inside the engine meaning "the world changed here". It has four senders, and only
+**one** of them is you changing something — the chisel. The other three are the world *arriving*: the
+building streaming in around you as you look at it. All four told every surface nearby to throw away
+the light it had measured. So during a load, every single piece of world that arrived reset the
+lighting around it — thousands of times over. Reflections need about a hundred measurements to settle,
+which is precisely why they were the worst of it.
+
+A load doesn't need that reset, and the reason is tidy. When a coarse block is replaced by finer
+geometry, the surfaces on it are genuinely *new* — they start from nothing anyway, and always did. A
+surface that *survives* a load is one whose shape didn't change: the same wall, still there, with
+sharper detail around it. Its light was already the right answer. We were throwing away right answers
+in order to work out the same ones again.
+
+Chiselling still resets, because there it should: you have changed what is behind that surface.
+
+## The orangery was standing four metres inside the main building
+
+You said it overlapped, I measured and said I couldn't find it, and you told me exactly where to
+look: opposite the chapel, the front corner rooms. You were right and my first three attempts to
+check were each wrong in their own way.
+
+The arithmetic, once written down, is not ambiguous. The orangery's terrace slab ran from **x 12.60**
+and its twenty-one bays from **13.50**. The main building reaches **x 16.50**. So nearly four metres
+of terrace, and about one whole bay of the orangery itself, stood inside the main building's
+south-east corner rooms. The chapel is on the west side, so "opposite the chapel" is east — that
+corner exactly.
+
+Its own file had this written in it and didn't notice: it says the site plan reserves a 36-metre
+strip for a 57.6-metre building, and calls the difference "a shade wider". A shade was 21 metres, and
+the west end of it landed in another building.
+
+**It is moved five metres east** — all twenty-one pieces that carry its position moved together — so
+it now clears the main building by a metre. The estate's eastern boundary had to move with it, from
+72.5 to 78, and that part matters: anything outside the boundary is simply *never built* rather than
+trimmed, so leaving the boundary alone would have "fixed" the overlap by slicing four metres off the
+far end of the orangery instead, with a clean flat face and no error anywhere.
+
+**How I finally proved it, which is the interesting bit.** When two buildings occupy the same space,
+the engine counts that space once — so an overlap is invisible in a voxel count. Pulling them apart
+makes it visible: the estate went from **140,924 voxels to 142,147**. That rise of **1,223** is
+precisely the volume that had been inside both buildings at once.
+
+One consequence: the estate's fingerprint changes, so any world baked before today wants rebuilding.

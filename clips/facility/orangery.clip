@@ -5,16 +5,25 @@
 # and `solid part_orangery`. This file declared no `variation` and no `origin`, so unlike its
 # neighbours it loses nothing else.
 #
-# WHERE IT STANDS — (42.30, 0.90, -5.25), which is this file's own header asking for it in as many
+# WHERE IT STANDS — (47.30, 0.90, -5.25), which is this file's own header asking for it in as many
 # words: *"translate this clip by x + 42.30, y + 0.90, z - 5.25"*. THE y IS THE ONE TO NOTICE. Every
 # other estate building is carried in the ground plane and this one is lifted 0.90 m, because it
 # sits on the east terrace rather than on the lawn. A reader checking the vectors against the site
 # plan will find this the only row with a height in it, and it is not a typo.
 #
-# IT IS THE TIGHTEST FIT IN x. Translated it reaches x = 72.00 against the manifest's `bounds` high
-# of 72.5 -- half a metre, sixteen voxels at metre 32. Its own weathering is 0.05 and 0.04 so it
-# holds, but matter outside the bounds is never sampled rather than clipped, so anything added to
-# its east end comes back with a flat face and no error.
+# IT WAS OVERLAPPING THE MAIN BUILDING, AND IT IS MOVED FIVE METRES EAST. Reported from playing:
+# *"it overlaps on the opposite side from the chapel, on the front of the building corner on the
+# rooms there it clips into the main building"*. The chapel is at x -15.5..-6.5, so the opposite
+# side is east, and the arithmetic is unambiguous once it is written down: `or_terrace` is
+# `box -29.70 .. 29.70` in x, so at the old placement of 42.30 the slab began at **x 12.60** and
+# the bays at **13.50** -- while the main block reaches **x 16.50**. Nearly four metres of terrace
+# and about one whole bay stood inside its south-east corner rooms.
+#
+# At 47.30 the slab begins at 17.60 and clears the main block by 1.10 m. It is no longer the
+# tightest fit in x -- it reaches 77.00, and `_contract.clip`'s east bound moved from 72.5 to 78.0
+# with it, because matter outside the bounds is never sampled rather than clipped: leaving the
+# bound alone would have answered the overlap by slicing four metres off the far end of the
+# building instead, with a flat face and no error anywhere.
 #
 # EVERY SHAPE A RULE NAMES HAS A TRANSLATED TWIN, `<name>_at`, standing directly after the shape it
 # carries, height included. `below=` goes 0.02 to 0.035, per clips/estate/BRIEF.md rule 5.
@@ -156,16 +165,16 @@ include "../_trees.clip"
 # ================================================================================================
 
 let or_terrace = box -29.70 -1.35 -6.75   29.70 -0.90 5.10
-let or_terrace_at = translate { or_terrace } 42.30 0.90 -5.25   # the twin the rules name
+let or_terrace_at = translate { or_terrace } 47.30 0.90 -5.25   # the twin the rules name
 let or_gravel  = box -12.15 -1.30 -6.75   12.15 -0.85 -5.30
-let or_gravel_at = translate { or_gravel } 42.30 0.90 -5.25   # the twin the rules name
+let or_gravel_at = translate { or_gravel } 47.30 0.90 -5.25   # the twin the rules name
 let or_podium  = box -29.25 -0.95 -5.40   29.25  0.00 4.95 round=0.01
-let or_podium_at = translate { or_podium } 42.30 0.90 -5.25   # the twin the rules name
+let or_podium_at = translate { or_podium } 47.30 0.90 -5.25   # the twin the rules name
 
 # Five risers of 0.18 and five runs of 0.32, which is the contract's stair and nothing else. The
 # flight climbs in +z, which is the way `stairs` builds, and laps 0.05 into the breakfront.
 let or_steps = stairs -4.95 -0.95 -6.50   4.95 0.00 -4.90  run=0.32 rise=0.18
-let or_steps_at = translate { or_steps } 42.30 0.90 -5.25   # the twin the rules name
+let or_steps_at = translate { or_steps } 47.30 0.90 -5.25   # the twin the rules name
 
 # ================================================================================================
 # THE FOUR WALLS
@@ -256,7 +265,7 @@ let or_sb_fan  = intersection {
 }
 let or_sb_disc = cylinder 0 0 -4.995 r=0.27 h=0.14 axis=z
 let or_sunburst = translate { union { or_sb_fan or_sb_disc } } 0 8.60 0
-let or_sunburst_at = translate { or_sunburst } 42.30 0.90 -5.25   # the twin the rules name
+let or_sunburst_at = translate { or_sunburst } 47.30 0.90 -5.25   # the twin the rules name
 
 # ================================================================================================
 # THE HOLLOW: THE HALL AND THE VAULT
@@ -282,9 +291,9 @@ let or_roofshell = difference {
     }
     cylinder 0 5.40 0 r=4.50 h=58.00 axis=x
 }
-let or_roofshell_at = translate { or_roofshell } 42.30 0.90 -5.25   # the twin the rules name
+let or_roofshell_at = translate { or_roofshell } 47.30 0.90 -5.25   # the twin the rules name
 let or_roof_lead = difference { or_roofshell  cylinder 0 5.40 0 r=4.725 h=58.00 axis=x }
-let or_roof_lead_at = translate { or_roof_lead } 42.30 0.90 -5.25   # the twin the rules name
+let or_roof_lead_at = translate { or_roof_lead } 47.30 0.90 -5.25   # the twin the rules name
 
 # THE TWO GABLE ENDS, AND THEY WERE MISSING. The hall's void stops at x = +-27.90 and the shell is
 # 0.45 of curved plaster with nothing behind it, so above the end walls the last 0.90 m of vault
@@ -318,14 +327,14 @@ let or_lunettes = repeat { mirror { or_lun_unit } axis=z } x=2.70 nx=10
 # ================================================================================================
 
 let or_floor = box -27.95 -0.45 -3.65   27.95 0.00 3.65 round=0.01
-let or_floor_at = translate { or_floor } 42.30 0.90 -5.25   # the twin the rules name
+let or_floor_at = translate { or_floor } 47.30 0.90 -5.25   # the twin the rules name
 
 # The granite grid in the travertine: a paint key, not geometry, so its boxes may stand 0.02 above
 # the floor to be sure the rule reaches the surface voxels the final grain pushes outward.
 let or_grid_x = repeat { box -0.015 -0.20 -3.65   0.015 0.02 3.65 } x=1.35 nx=21
 let or_grid_z = repeat { box -27.95 -0.20 -0.015   27.95 0.02 0.015 } z=1.35 nz=2
 let or_floor_grid = intersection { union { or_grid_x or_grid_z }  or_floor }
-let or_floor_grid_at = translate { or_floor_grid } 42.30 0.90 -5.25   # the twin the rules name
+let or_floor_grid_at = translate { or_floor_grid } 47.30 0.90 -5.25   # the twin the rules name
 
 # The rill: 0.90 wide (2 M), 0.15 deep, on the centre line, with a round basin of radius 1.35 at
 # each end. Cut from the floor, and filled to 0.12.
@@ -334,7 +343,7 @@ let or_basin_cut = mirror { cylinder 25.65 -0.14 0 r=1.35 h=0.32 axis=y } axis=x
 let or_water_rill  = box -25.65 -0.15 -0.45   25.65 -0.03 0.45
 let or_water_basin = mirror { cylinder 25.65 -0.165 0 r=1.35 h=0.27 axis=y } axis=x
 let or_water = union { or_water_rill or_water_basin }
-let or_water_at = translate { or_water } 42.30 0.90 -5.25   # the twin the rules name
+let or_water_at = translate { or_water } 47.30 0.90 -5.25   # the twin the rules name
 
 # ================================================================================================
 # ONE OPENING, DRAWN AT THE ORIGIN OF ITS BAY
@@ -528,7 +537,7 @@ let or_dr_leaf   = difference {
     }
 }
 let or_dr_leaves  = mirror { or_dr_leaf } axis=x
-let or_dr_leaves_at = translate { or_dr_leaves } 42.30 0.90 -5.25   # the twin the rules name
+let or_dr_leaves_at = translate { or_dr_leaves } 47.30 0.90 -5.25   # the twin the rules name
 let or_dr_transom = box -0.90 2.655 -4.11   0.90 2.79 -3.93 round=0.008
 let or_dr_bead    = box -0.03 0.00 -4.065   0.03 2.70 -3.92
 let or_dr_handle  = mirror { torus 0.63 1.35 -4.04 ring=0.135 tube=0.027 axis=z } axis=x
@@ -539,12 +548,12 @@ let or_dr_hinge   = mirror {
     }
 } axis=x
 let or_dr_bronze  = union { or_dr_bead or_dr_handle or_dr_hinge }
-let or_dr_bronze_at = translate { or_dr_bronze } 42.30 0.90 -5.25   # the twin the rules name
+let or_dr_bronze_at = translate { or_dr_bronze } 47.30 0.90 -5.25   # the twin the rules name
 let or_door       = union { or_dr_leaves or_dr_transom or_dr_bronze }
 
 let or_glazing = difference { or_glaz_all or_door_zone }
 let or_glass   = difference { repeat { or_gz_glass } x=2.70 nx=10  or_door_zone }
-let or_glass_at = translate { or_glass } 42.30 0.90 -5.25   # the twin the rules name
+let or_glass_at = translate { or_glass } 47.30 0.90 -5.25   # the twin the rules name
 let or_bars    = difference { repeat { or_gz_metal } x=2.70 nx=10  or_door_zone }
 
 # ================================================================================================
@@ -633,28 +642,28 @@ let or_pots    = mirror {
 } axis=x
 
 let or_caisse_wood = translate { repeat { union { or_cs_wood } } x=5.40 nx=5 } 0 0 -1.80
-let or_caisse_wood_at = translate { or_caisse_wood } 42.30 0.90 -5.25   # the twin the rules name
+let or_caisse_wood_at = translate { or_caisse_wood } 47.30 0.90 -5.25   # the twin the rules name
 let or_caisse_iron = translate { repeat { union { or_cs_iron } } x=5.40 nx=5 } 0 0 -1.80
 let or_pot_clay    = mirror {
     translate { repeat { or_pt_body } x=5.40 nx=2 } 13.50 0 1.80
 } axis=x
-let or_pot_clay_at = translate { or_pot_clay } 42.30 0.90 -5.25   # the twin the rules name
+let or_pot_clay_at = translate { or_pot_clay } 47.30 0.90 -5.25   # the twin the rules name
 
 let or_trunks = union {
     translate { repeat { or_tree_a_wood } x=5.40 nx=5 } 0 0 -1.80
     mirror { translate { repeat { or_tree_b_wood } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
 }
-let or_trunks_at = translate { or_trunks } 42.30 0.90 -5.25   # the twin the rules name
+let or_trunks_at = translate { or_trunks } 47.30 0.90 -5.25   # the twin the rules name
 let or_leaves = union {
     translate { repeat { or_tree_a_leaf } x=5.40 nx=5 } 0 0 -1.80
     mirror { translate { repeat { or_tree_b_leaf } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
 }
-let or_leaves_at = translate { or_leaves } 42.30 0.90 -5.25   # the twin the rules name
+let or_leaves_at = translate { or_leaves } 47.30 0.90 -5.25   # the twin the rules name
 let or_fruit = union {
     translate { repeat { or_tree_a_fruit } x=5.40 nx=5 } 0 0 -1.80
     mirror { translate { repeat { or_tree_b_fruit } x=5.40 nx=2 } 13.50 0 1.80 } axis=x
 }
-let or_fruit_at = translate { or_fruit } 42.30 0.90 -5.25   # the twin the rules name
+let or_fruit_at = translate { or_fruit } 47.30 0.90 -5.25   # the twin the rules name
 let or_tubs = union { or_caisses or_pots }
 
 # ================================================================================================
@@ -667,7 +676,7 @@ let or_tubs = union { or_caisses or_pots }
 # float however the sampler rounds it.
 
 let or_metal = union { or_bars or_dr_transom or_flue_grilles or_caisse_iron }
-let or_metal_at = translate { or_metal } 42.30 0.90 -5.25   # the twin the rules name
+let or_metal_at = translate { or_metal } 47.30 0.90 -5.25   # the twin the rules name
 
 let or_fittings = union { or_glazing or_door }
 
@@ -698,7 +707,7 @@ let or_assembly = union {
     or_tubs
     or_sunburst
 }
-let part_orangery = translate { or_assembly } 42.30 0.90 -5.25
+let part_orangery = translate { or_assembly } 47.30 0.90 -5.25
 
 # ================================================================================================
 # PAINT
@@ -762,7 +771,7 @@ let or_weather_stone = union {
     or_end_w or_end_e or_parapet
     box -28.80 4.50 3.60   28.80 8.10 4.50
 }
-let or_weather_stone_at = translate { or_weather_stone } 42.30 0.90 -5.25   # the twin the rules name
+let or_weather_stone_at = translate { or_weather_stone } 47.30 0.90 -5.25   # the twin the rules name
 
 weather desert    0.05 scale=0.9 seed=13 on=or_weather_stone_at
 weather overgrown 0.04 scale=1.2 seed=29 on=or_terrace_at

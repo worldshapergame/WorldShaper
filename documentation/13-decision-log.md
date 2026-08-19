@@ -11943,3 +11943,83 @@ The headless clip report never touches the cache and needs nothing.
 | D705 | **`script.variation.by` was a fifth root and was missing** | fault | Control arm: 51 failed assertions, 3,603 distinct records against 15,722. The estate has no `by=`, which is why nothing caught it |
 | D705 | **`--compile-field` ships ON; `--no-compile-field` is the arm** | decision | 0 of 5,091 names was the stated blocker and it is 5,091 of 5,091 |
 | D705 | **The world cache key still does not know about the switch** | honesty | Third time this wave — D673 item 4. Take the arm with `--no-clip-cache` |
+
+---
+
+## D706 — the orangery stood four metres inside the main building, and a union hid it
+
+**2026-08-19, reported from playing** — *"the orangery building overlaps with the main facility
+building"*, and when the first measurement did not find it: *"it overlaps on the opposite side from
+the chapel, on the front of the building corner on the rooms there it clips into the main
+building."* Both are exactly right, and the second is what made it findable.
+
+### The arithmetic, once it is written down
+
+`clips/facility/orangery.clip`:
+
+```
+let or_terrace    = box -29.70 -1.35 -6.75   29.70 -0.90 5.10
+let or_terrace_at = translate { or_terrace } 42.30 0.90 -5.25
+```
+
+So the terrace slab ran **x 12.60 .. 72.00** and the twenty-one bays **13.50 .. 71.10**. The main
+block (`hollowed`) reaches **x 16.50**. **Nearly four metres of terrace and about one whole bay stood
+inside the main building's south-east corner rooms.** The chapel is at x −15.5..−6.5 — the west side
+— so "the opposite side from the chapel" is east, and "the front corner rooms" is that corner
+precisely.
+
+**Its own header had the collision written in it and did not notice.** It says the site plan reserves
+x 24..60 and that the building is *"a shade wider than the 24 .. 60 the table gives it, because
+twenty-one bays of 2.70 plus a closing pier is 57.60 and the module decides the length, not the
+table."* A shade is 21.6 m, and the west end of it lands in another building.
+
+### Why three probes missed it, which is the useful part
+
+The first three attempts to confirm it all failed, and each failed for its own reason:
+
+1. **A bounded sample of the shared box found only the main block's materials.** True and
+   misleading: `--clip-bounds` with **decimal** corners silently produced a `0 x 0 x 0` sampled box.
+   Integer corners work. A box of nothing reports no matter, and no matter reads as no overlap.
+2. **`--clip-part` does not compose with `--clip-bounds`** — the part query samples its own box and
+   the bounds are ignored — so "the orangery has nothing in that region" could not be asked directly.
+3. **Three renders came back as empty sky**, because the estate never reaches a fixed point: at
+   frame 1500 the ladder was still 15 m out from a camera 60 m south of the buildings, pasting
+   `0 bricks` into open ground. **That is not a rendering fault and it briefly looked like one** —
+   the same wall three agents of this wave hit, and it is why the estate cannot be gated.
+
+**What settled it is a union's own arithmetic.** A union MERGES: two buildings occupying one voxel
+contribute one voxel. So separating them makes the total go UP by exactly what they were sharing.
+
+| the estate at metre 2, `--no-despeckle` | volume |
+|---|---|
+| overlapping | 140,924 voxels |
+| moved apart | **142,147 voxels** |
+
+**1,223 voxels of 50 cm were inside both buildings at once**, and the count going up is the proof.
+Components go 235 → 240 and the largest 86,522 → 87,738: the orangery is its own building again
+rather than fused to the block.
+
+### The fix, and why the bound had to move with it
+
+Five metres east — every one of the **twenty-one** `<name>_at` twins carries the placement vector, so
+all twenty-one moved together. The terrace now begins at **17.5** against the main block's 16.5, a
+**1.0 m** clearance, and the east end reaches **76.5**.
+
+**`_contract.clip`'s east bound moved 72.5 → 78.0 with it, and that is not housekeeping.** Matter
+outside a clip's bounds is **never sampled rather than clipped** — so a bound left at 72.5 would have
+answered the overlap by slicing four metres off the far end of the orangery instead, with a flat face
+and no error anywhere. Verified after the move: the sampled box is 262 x 75 x 221 (131.0 m wide) and
+the orangery's extent is still 119 voxels, so nothing is cut.
+
+**The estate's content hash moves again**, for the second time today after D700. This one moves the
+geometry rather than only the paint, so it is the more visible of the two and every baked `.world`
+wants rebuilding.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D706 | **The orangery stood ~4 m inside the main block's south-east corner** | fault | Terrace from x 12.60 and bays from 13.50 against a block reaching 16.50 |
+| D706 | **A union hides an overlap, and separating it is what measures it** | method | 140,924 → 142,147 voxels; the rise IS the shared volume |
+| D706 | **`--clip-bounds` STALLS on a decimal corner and zeroes the rest** | fault | `parse_numbers` is `strtoll(...,10)` into `i64 corners[6]`: on `12.5` it reads 12, stops at the `.`, and because that is not a comma it never advances — so the loop re-reads the same character, every later corner stays 0, and the box comes back inverted and empty. The clip language's own `bounds` takes reals |
+| D706 | **`--clip-part` does not compose with `--clip-bounds`** | fault | The part query samples its own box; the bounds are dropped |
+| D706 | **The east bound had to move with the building** | correctness | Matter outside bounds is never sampled, so the overlap would have been "fixed" by truncation |
+| D706 | **Three probes said no overlap and the player was right** | honesty | Two instrument faults and one unsettleable scene, each plausible on its own |
