@@ -10430,3 +10430,60 @@ wants — instant arrival, full detail, no bake — hangs off that single number
 | D687 | **It needs the field ~30x cheaper to be playable, not more** | decision | 41 ms a frame at 28 ns an evaluation |
 | D687 | **The peak had to be tracked; the settled frame wants 7** | fault | A run that wants a million and one that wants seven both settle at seven |
 | D687 | **R12c is gated on the field compiler, which is the lever nobody has tried** | decision | Eight attacks on the sampler; none on the expression's shape |
+
+## D688 — the ladder never samples the expensive cells, so nothing aimed at them helps it
+
+Asked to make node loading as fast as possible by any means. The ninth lever, and it failed for the
+reason that finally makes the whole ledger make sense.
+
+### The lever, and it was aimed at the right target
+
+The clearest measurement of the session: **a cell under the podium walks 1,073,935 nodes and takes
+372 ms** where a typical cell walks 5,195 and takes 1.8 (D687's companion finding). Deep in solid
+matter almost nothing culls, so the eight rules the planner can bound for neither a box nor a region
+each walk most of the building. **And those cells are ones nobody can ever see** — weathering is rain
+stain, moss, soot and wear, and none of it means anything a metre inside a wall.
+
+So: a box wholly solid and more than four voxels from any surface takes the rules that SETTLED and
+skips the ones that could not. Sound, cheap to test (`dc < -(reach + 4 voxels)` is already computed),
+and the user had explicitly allowed the shape to be evaluated differently.
+
+### It is worth 1.9%
+
+**Matched 45-second arms, enclosed camera, cold:** 13,952 nodes against the control's 13,696. Noise.
+Reverted.
+
+### And the reason is the finding
+
+**The ladder never asks about a deep cell.** `box_may_hold_matter` refuses any node that cannot hold
+matter before it is ever enlisted, and the picker chooses by projected size from the camera — so what
+the ladder samples is the shell of the building, the surfaces, the places where a cell is near a
+face. **The 372 ms cells live in the bulk interior, which the descent settles from one reading at a
+box centre long before the ladder exists.**
+
+That reconciles the entire ledger at last:
+
+- D678: a settle on the ladder's own nodes is worth nothing — right, because the ladder's nodes are
+  all surface and 100% of their cells come down to singles.
+- D681: the card loses 2.7x indoors — right, because the card brute-forces cells the descent skips.
+- D683: pruning the field to the box is worth 2% — right, for the same reason.
+- D686: the whole world up front is 22 s at 50 cm and hours at 3 cm — that is where the deep cells
+  are paid for, and it is the only path that pays for them.
+- **And this entry: a change aimed squarely at the deep cells does nothing to the ladder**, because
+  the ladder is not where they are.
+
+**So there are two different loads with two different costs, and eight of the nine levers were aimed
+at whichever one the previous measurement had last mentioned.** The ladder's cost is the surface: many
+cheap cells, and it is already 97% sampler-bound with rays at 0.1%. The up-front build's cost is the
+interior: few cells, catastrophically expensive, and it is the one this change would have helped.
+
+**It is kept OUT rather than in.** It changes the colour of stone inside a wall, and a semantic change
+that buys 1.9% of the wrong load is not a trade — but it is the right change for a BAKE, which carves
+everything, and that is where it should be tried next.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D688 | **Skipping weathering deep inside stone is worth 1.9% to the ladder** | fault | 13,952 nodes against 13,696; reverted |
+| D688 | **The ladder never samples the expensive cells at all** | decision | `box_may_hold_matter` refuses them before enlistment; they are settled in bulk |
+| D688 | **There are TWO loads with different costs and the ledger conflated them** | honesty | The ladder pays for surfaces; the up-front build pays for interiors |
+| D688 | **The visibility rays are 43 ms of a 45,000 ms load** | honesty | D622 fixed them; quoting its pre-fix 26 s as current was wrong |
