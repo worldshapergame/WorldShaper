@@ -637,6 +637,30 @@ there are expected and are the integrator's.
 **Nobody was allowed into `documentation/`** — every agent hands its decision-log entry back as text
 and it is written here. That is why this file is one voice and not twelve.
 
+**FIVE ARE IN AS OF THIS WRITING, each built and tested on its own before the next was touched**,
+and the suite grew 637 → 667 cases with 0 failed at every step:
+
+| landed | what it turned out to be |
+|---|---|
+| the bake (D695) | `--refine-all`, and the finding that `kSettleGiveUp` is 30,000 FRAMES inside the `--settle` branch, so one run can never finish the estate whatever `--max-seconds` says |
+| the field compiler (D690) | a SET of roots; the crash was `count_op` indexing before its range check. OFF, because `--part` refuses on any clip with an `origin` |
+| the descent on the card (D691) | **the card was missing two of `Field::eval`'s three union culls.** 2,876 nodes a cell against 8,273, and the card is now AHEAD of the CPU arm on D681's own camera |
+| R11f (D692) | the format was already right; all three ways it could lose a building were outside it |
+| R4b (D694) | the coverage rule, in `face_worklist.comp` so no reader changed. The image is still missing and the lever is now named: `kLobeBigSamples` is 24 |
+
+**And one fault found by the integrator rather than by an agent, D693**: `run_clip_tool` exits 1
+silently on `clips/facility.clip` and works on `clips/sampler.clip`. **That is why every sampler gate
+this wave ran on `sampler.clip` alone** — three agents wanted a facility gate and none could take
+one. It is pre-existing, it is not fixed yet because the fix is in `main.cpp` and six agents are
+holding that file, and **it is the first thing to do when the wave is in.**
+
+**A trap this wave produced and it will recur every time agents run in parallel:** `build.bat` runs
+`taskkill /F /IM WorldShaper.exe`, which kills **every** agent's game and not only its own. A
+measured run dies with exit −1, truncated buffered stdout and no crash dump, which looks exactly like
+a fault in the change being measured and is not one. Two agents lost runs to it and so did the
+integrator. They also share one log file at `%LOCALAPPDATA%\WorldShaper\worldshaper.log`, so a tail
+of it during a wave is several runs interleaved and is worth nothing.
+
 **Left for a second wave, because their files were taken:** R12d (the CPU sampler writes what is
 EDITED — it needs R12c on under it), R5b's temporal half and R5c/R5d's second halves (`resolve.comp`
 and `shade_faces.comp` were both spoken for), R7c (step count, in `node.glsl`), R8a signed levels and
