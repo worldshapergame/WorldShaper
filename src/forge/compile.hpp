@@ -75,7 +75,9 @@
 // before it is allowed to fire, and the mechanism that guarantees it is `refs`: a shared
 // subexpression is NEVER specialised for one of its parents, so no subtree is ever duplicated and
 // no input node is emitted more than once. A compiler that "optimises" a clip into twice the
-// nodes is the one failure mode nobody would notice from a screenshot.
+// nodes is the one failure mode nobody would notice from a screenshot. The witness pass that
+// carries NAMES (below) is held to the same promise by the same arithmetic and refuses a name
+// rather than breaking it.
 //
 // It will not prune. `Field::pruned_to` was built, was exact, and was worth 2% (D683); the
 // children a union could drop are not there to drop.
@@ -127,7 +129,26 @@ struct CompileReport {
     // a weathering scope, anything that held an index for diagnostics rather than for building.
     // A node that was flattened into its parent or folded to a number has no output of its own and
     // reads `kUnmapped`, which a caller must treat as "that name is gone" and never as node 0.
+    //
+    // **A name handed to the `names` overload does not have to rely on this.** `remap` is what the
+    // roots' own emission happened to leave behind; `names` below is asked for on purpose.
     std::vector<u32> remap;
+
+    // What each NAME became, in the order the names were handed in, or `kUnmapped` where the name
+    // genuinely has no answer.
+    //
+    // Same length as the `names` argument. This is the witness pass's answer and it is the reason
+    // `--compile-field` can be switched on at all: on the estate `remap` alone kept 0 of 5,091
+    // names, because `apply_origin` wraps every named part in its own fresh translate that nothing
+    // else references, so not one of them is reachable from the building's roots (D690).
+    std::vector<u32> names;
+
+    usize names_kept = 0;
+    usize names_answered_as_themselves = 0;   // the node survived the rewrite and cost nothing
+    usize names_rebuilt = 0;                  // it had dissolved; re-emitted out of the same parts
+    usize names_dropped_unhandled = 0;        // an op this pass was never taught, under the name only
+    usize names_dropped_over_budget = 0;      // rebuilding it would have made the field bigger
+    usize names_dropped_out_of_range = 0;
 
     // False when the input holds an op this pass cannot rebuild. The returned field is then a
     // COPY of the input and `root` is the input's root, so an unchecked caller still gets a
@@ -137,10 +158,26 @@ struct CompileReport {
     Op unhandled = Op::Constant;
 
     usize nodes_before = 0;       // reachable from `root` in the input
-    usize nodes_after = 0;        // the whole output field, which is reachable by construction
+    usize nodes_after = 0;        // the whole output field, names included
     usize nodes_in_input = 0;     // `in.size()`, including whatever no longer answers anything
     usize depth_before = 0;       // longest root-to-leaf path, in nodes
     usize depth_after = 0;
+
+    // The output before the witness pass ran: what the ROOTS alone needed, which is the number
+    // `nodes_before` is the honest comparison for and the one every figure in D690 was taken as.
+    // With no names handed in it is `nodes_after`.
+    //
+    // Kept separate because a name is not part of the walk. Nothing reaches a name's node from
+    // `solid`, so a name costs a node in the array and nought in the sample — and reporting one
+    // number for both would say a compiler had stopped compressing when what it had done was
+    // start answering `--part`.
+    usize nodes_for_roots = 0;
+    usize name_nodes_added = 0;   // `nodes_after - nodes_for_roots`
+
+    // Everything from here to `parameter_nodes_kept` counts what the ROOTS' rewrite did, and not
+    // what carrying a name did. The witness pass goes through the same `place` and the same
+    // `gather`, so leaving them shared would move this whole table the moment somebody asked
+    // `--part` a question — a measurement changing under its own instrument.
 
     // Transform folding.
     usize translates_before = 0;              // Translate nodes reachable in the input
@@ -263,6 +300,65 @@ struct CompileOptions {
 // could not" and "the answer is nought" must never be the same reply.
 Field compile_field(const Field& in, const std::vector<u32>& roots,
                     CompileReport* report = nullptr,
+                    const CompileOptions& options = CompileOptions{});
+
+// The same compilation, plus a set of NAMES that must still mean something afterwards.
+//
+// # Why a name cannot simply be a root, and it is the thing that kept `--compile-field` off
+//
+// D690 wired the compiler and shipped it OFF for one reason: `script.parts` — the 5,091 pieces the
+// estate declares, which `--part` and the tooling look up — survived only where a name's node came
+// through the rewrite AS ITSELF, and that was **0 of 5,091**. `apply_origin` wraps every named part
+// in its own fresh translate that nothing else references, so no name is reachable from `solid`,
+// from the bounds or from any paint rule, and none of them was ever emitted.
+//
+// **Adding the names to `roots` fixes that and guts the rewrite.** `refs` is this file's whole
+// safety mechanism, `gather` only flattens a child with ONE parent, and a name is a parent: hand
+// the 5,091 in as roots and every named intermediate of the building — which on a clip written out
+// of a shared vocabulary is most of it — reads two parents and stops flattening. The 1.19x is the
+// flatten-and-re-balance pair (the fold measured 0.887x and is off), so blocking the flatten is
+// spending the entire win to answer a diagnostic.
+//
+// # So a name is carried WITHOUT being a reference: the witness pass
+//
+// The names take no part in `survey`, so `refs` is what it would have been and the roots' output is
+// node-for-node what it would have been with no names at all. They are emitted AFTERWARDS, through
+// the same one door every other node goes through, against an `emitted` table the roots have
+// already filled. Three things fall out of that order:
+//
+//   * A name whose node survived as itself is a table lookup. It costs nothing and it is exact.
+//   * A name whose node DISSOLVED — flattened into its parent, folded to a number — is re-emitted
+//     out of the parts it dissolved into. That is a node which is EQUIVALENT rather than identical,
+//     and it is built by the same rules the roots were, not chosen by resemblance.
+//   * A name over a subtree nothing else reaches is built now rather than never.
+//
+// # Where a name has no answer it is dropped, and that has not been softened
+//
+// D690 kept `--part` saying "does not name anything" rather than sampling the wrong shape, and that
+// property is the reason any of this is trustworthy. Three things still drop a name, each counted
+// separately in the report because they are different facts about a clip:
+//
+//   * it is out of range;
+//   * its own subtree holds an op this pass was never taught — the root scan cannot have seen it,
+//     because nothing reachable from a root leads there;
+//   * rebuilding it would push the output past the input plus ONE NODE A NAME. That is this file's
+//     promise — "it will not make the field bigger" — with the one allowance a name genuinely
+//     needs: a name that dissolved dissolved into its parent, and putting it back is the single
+//     combine node that says where it ended. Names are answered in the order they are handed in and
+//     the ones that no longer fit are refused rather than squeezed.
+//
+//     The flat version of that bound — never past `in.size()` — was tried and is wrong. It refused
+//     `slabs` on `clips/sampler.clip`, a 47-node clip whose roots compile to 43 and whose 28 names
+//     want 48: one node over, and `--part slabs` came back "does not name anything" while the walk
+//     had gone 40 nodes to 43. A name is NOT on the walk, so it costs an array slot and nothing per
+//     sample, and refusing one to hold a total under a line spends the thing somebody notices to
+//     protect a number nobody reads.
+//
+// `report->names` comes back in the same order and the same length as `names`, with `kUnmapped`
+// wherever one was dropped. A refusal of the whole compilation hands the names back unchanged,
+// like `roots` and `remap`, so a caller that ignores `ok` still holds a consistent clip.
+Field compile_field(const Field& in, const std::vector<u32>& roots,
+                    const std::vector<u32>& names, CompileReport* report = nullptr,
                     const CompileOptions& options = CompileOptions{});
 
 // The one-root case, which is every test in `tests/test_compile.cpp` and no caller in the engine.

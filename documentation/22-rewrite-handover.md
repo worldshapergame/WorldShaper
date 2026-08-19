@@ -726,12 +726,26 @@ estate figure across that commit.** The same applies to every estate row already
 `documentation/baselines/`: they are not comparable across D700 and the harness cannot tell, because
 the matter is identical to the voxel and only the materials moved.
 
-**A trap this wave produced and it will recur every time agents run in parallel:** `build.bat` runs
-`taskkill /F /IM WorldShaper.exe`, which kills **every** agent's game and not only its own. A
-measured run dies with exit −1, truncated buffered stdout and no crash dump, which looks exactly like
-a fault in the change being measured and is not one. Two agents lost runs to it and so did the
-integrator. They also share one log file at `%LOCALAPPDATA%\WorldShaper\worldshaper.log`, so a tail
-of it during a wave is several runs interleaved and is worth nothing.
+**A trap this wave produced, and the cause is NOT what four separate reports say it is.** Agents kept
+losing measured runs to `taskkill /F /IM WorldShaper.exe` — a run dies with exit −1, truncated
+buffered stdout and no crash dump, which looks exactly like a fault in the change being measured and
+is not one. Two agents lost several runs each, one worked around it by running from a copy of the exe
+under another name, and the integrator lost one too.
+
+**Every one of those reports blamed `build.bat`, and `build.bat` does not do it.** `grep -i taskkill
+build.bat` comes back empty. The instruction is in CLAUDE.md, addressed to a person building by hand
+— and it reached all thirteen agents because **the dispatch prompt told each of them to run it**.
+That was the dispatcher's line, repeated thirteen times, on one machine. The agents inferred a
+plausible source, four of them wrote it down, and the integrator repeated it here before checking.
+
+**The fix for the next wave is one sentence in the prompt: kill by PID, never by image name.**
+`Get-Process WorldShaper` reports a `Path`, and an agent's own executable lives under
+`.claude/worktrees/agent-<id>/build/bin/`, so telling one's own process from twelve others is a
+filter and not a guess. `LNK1168: cannot open bin\WorldShaper.exe for writing` is then answered by
+killing the one PID that holds *that* path.
+
+They also share one log file at `%LOCALAPPDATA%\WorldShaper\worldshaper.log`, so a tail of it during
+a wave is several runs interleaved and is worth nothing.
 
 **A SECOND AND THIRD WAVE WENT OUT AS FILES FREED, which is the arrangement working as intended.**
 The moment a stage merged, its files became dispatchable again, so four more agents went out during

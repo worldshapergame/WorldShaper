@@ -82,10 +82,17 @@ usize g_accelerate_from = Field::kAccelerateNever;
 
 void accelerate_unions_from(usize leaves) { g_accelerate_from = leaves; }
 
-// Whether every clip parsed after this is rewritten by `forge::compile_field`. `--compile-field`,
-// and it is OFF. A file-scope switch for exactly the reason above: it is a control arm, and a
-// control arm that has to be threaded through every call site is a control arm nobody takes.
-bool g_compile_field = false;
+// Whether every clip parsed after this is rewritten by `forge::compile_field`. **ON since D695**,
+// and `--no-compile-field` is the arm that turns it off. A file-scope switch for exactly the reason
+// above: it is a control arm, and a control arm that has to be threaded through every call site is
+// a control arm nobody takes.
+//
+// It shipped off at D690 for one stated reason and it is now gone: `script.parts` survived only
+// where a name's node came through the rewrite as itself, which on the estate was 0 of 5,091, so
+// `--part` answered "does not name anything" for every piece of the clip the game ships. The
+// witness pass carries all 5,091, and each one samples the same voxels wearing the same materials
+// as it does with the switch off.
+bool g_compile_field = true;
 
 void compile_fields(bool on) { g_compile_field = on; }
 
@@ -1807,22 +1814,25 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
 //
 // **Every index the script holds goes in, and every one comes back.** That is the whole of why this
 // is here rather than one line at the sampler: a compilation renumbers the field, and a `Script`
-// names nodes in four places at once —
+// names nodes in FIVE places at once —
 //
 //     script.solid                     what the matter is
 //     script.settings.bounds           which cells belong to the clip at all
 //     script.paint[i].test             what a rule is keyed on
 //     script.paint[i].place            where that rule is allowed to apply
+//     script.variation.by              how much a voxel's colour may stray, where
 //
 // — plus `script.parts` and `script.weather[].scope`, which are kept for the tools. Compiling from
-// the solid alone leaves the other three pointing at whatever now occupies their old index, which
+// the solid alone leaves the other four pointing at whatever now occupies their old index, which
 // is a building painted from the wrong shapes with no error anywhere.
 //
-// The four that BUILD are handed over as the root set, so they are exact by construction. The two
-// that DIAGNOSE go through `CompileReport::remap`, and a name whose node did not survive as itself
-// — flattened into its parent, folded to a number — is dropped rather than re-pointed at a guess.
-// `--part canopy` on a compiled clip then says "does not name anything", which is a refusal; the
-// alternative is an answer, and a wrong answer is the thing trap 7 exists about.
+// The five that BUILD are handed over as the root set, so they are exact by construction. The two
+// that DIAGNOSE go over as NAMES, which is a second list and deliberately not a root: a name is a
+// parent, and `gather` only flattens a child with one parent, so making them roots would answer
+// them and spend the whole rewrite doing it (D690). The witness pass in `forge::compile_field`
+// carries them after the roots are emitted instead. A name that still has no answer is dropped
+// rather than re-pointed at a guess, so `--part canopy` says "does not name anything", which is a
+// refusal; the alternative is an answer, and a wrong answer is the thing trap 7 exists about.
 void compile_whole_script(Script& script) {
     if (!script.has_solid || script.field.size() == 0) return;
 
@@ -1830,6 +1840,16 @@ void compile_whole_script(Script& script) {
     roots.push_back(script.solid);
     const usize bounds_at = script.settings.has_bounds ? roots.size() : 0;
     if (script.settings.has_bounds) roots.push_back(script.settings.bounds);
+    // The FIFTH thing that builds, and it was missed when this wiring was written.
+    //
+    // `variation by=<shape>` scales how far a voxel's colour may stray by how far inside that shape
+    // it is, so it is a field the sampler asks — not a diagnostic — and a renumber leaves it aimed
+    // at whatever now occupies its old index. It fails in the quietest way this project has: the
+    // building is the right shape, every material is the right material, and the GRAIN comes from
+    // somewhere else in the clip. `clips/facility.clip` does not use it, which is exactly why
+    // nothing caught it; `weather_demo.clip` and anything an author writes tomorrow do.
+    const usize variation_at = script.variation.has_by ? roots.size() : 0;
+    if (script.variation.has_by) roots.push_back(script.variation.by);
     std::vector<usize> test_at(script.paint.size(), 0);
     std::vector<usize> place_at(script.paint.size(), 0);
     for (usize i = 0; i < script.paint.size(); ++i) {
@@ -1841,8 +1861,25 @@ void compile_whole_script(Script& script) {
         }
     }
 
+    // And the names, which go in SEPARATELY and not as roots. `--part` and the tooling look them
+    // up, and D690 shipped this switch off because `apply_origin` wraps every named part in its own
+    // fresh translate that nothing else references — so 0 of the estate's 5,091 were reachable from
+    // anything above and every one of them was dropped. Handing them in as roots would answer them
+    // and cost the whole rewrite: `gather` only flattens a child with one parent, and a name is a
+    // parent. They are carried by the witness pass instead, which reads the decisions the roots
+    // took rather than taking part in them. See `forge::compile_field`'s names overload.
+    std::vector<u32> names;
+    names.reserve(script.parts.size() + script.weather.size());
+    for (const auto& entry : script.parts) names.push_back(entry.second);
+    std::vector<usize> scope_at(script.weather.size(), 0);
+    for (usize i = 0; i < script.weather.size(); ++i) {
+        if (!script.weather[i].has_scope) continue;
+        scope_at[i] = names.size();
+        names.push_back(script.weather[i].scope);
+    }
+
     CompileReport rep;
-    Field built = compile_field(script.field, roots, &rep);
+    Field built = compile_field(script.field, roots, names, &rep);
     if (!rep.ok) {
         // An op this pass was never taught. It refuses the whole clip and hands the original back,
         // so the arm reads as "no compilation happened" rather than as a clip with a shape missing.
@@ -1855,29 +1892,34 @@ void compile_whole_script(Script& script) {
 
     script.solid = rep.roots[0];
     if (script.settings.has_bounds) script.settings.bounds = rep.roots[bounds_at];
+    if (script.variation.has_by) script.variation.by = rep.roots[variation_at];
     for (usize i = 0; i < script.paint.size(); ++i) {
         script.paint[i].test = rep.roots[test_at[i]];
         if (script.paint[i].has_place) script.paint[i].place = rep.roots[place_at[i]];
     }
 
-    // The names, best effort and loudly when it is not enough.
+    // The names, and a name with no answer is still dropped rather than aimed at a guess.
     usize names_kept = 0;
     std::vector<std::pair<std::string, u32>> parts;
     parts.reserve(script.parts.size());
-    for (const auto& entry : script.parts) {
-        if (entry.second < rep.remap.size() && rep.remap[entry.second] != kUnmapped) {
-            parts.push_back({entry.first, rep.remap[entry.second]});
-            ++names_kept;
-        }
+    for (usize i = 0; i < script.parts.size(); ++i) {
+        if (rep.names[i] == kUnmapped) continue;
+        parts.push_back({script.parts[i].first, rep.names[i]});
+        ++names_kept;
     }
-    const usize names_dropped = script.parts.size() - names_kept;
+    const usize names_declared = script.parts.size();
+    const usize names_dropped = names_declared - names_kept;
     script.parts.swap(parts);
-    for (WeatherRequest& request : script.weather) {
-        if (!request.has_scope) continue;
-        if (request.scope < rep.remap.size() && rep.remap[request.scope] != kUnmapped) {
-            request.scope = rep.remap[request.scope];
+    for (usize i = 0; i < script.weather.size(); ++i) {
+        if (!script.weather[i].has_scope) continue;
+        const u32 answer = rep.names[scope_at[i]];
+        if (answer != kUnmapped) {
+            script.weather[i].scope = answer;
         } else {
-            request.has_scope = false;   // consumed by `apply_weather` already; kept honest anyway
+            // Consumed by `apply_weather` long before this line; kept honest anyway, because a
+            // scope left pointing at whatever now occupies its old index is exactly the silent
+            // wrong answer this whole wiring exists to refuse.
+            script.weather[i].has_scope = false;
         }
     }
 
@@ -1888,9 +1930,14 @@ void compile_whole_script(Script& script) {
     // whether that was a decision or a result. A pass that fires has to report that it fired.
     WS_LOG_INFO("clip",
                 "--compile-field: {} roots, {} nodes reachable of {} -> {}, deepest path {} -> {}, "
-                "{} names kept and {} dropped",
-                roots.size(), rep.nodes_before, rep.nodes_in_input, rep.nodes_after,
-                rep.depth_before, rep.depth_after, names_kept, names_dropped);
+                "{} of {} part names kept and {} dropped; over all {} names carried, {} answered "
+                "as themselves and {} were rebuilt, in {} more nodes and nought on the walk "
+                "({} unhandled, {} over budget)",
+                roots.size(), rep.nodes_before, rep.nodes_in_input, rep.nodes_for_roots,
+                rep.depth_before, rep.depth_after, names_kept, names_declared, names_dropped,
+                names.size(), rep.names_answered_as_themselves, rep.names_rebuilt,
+                rep.name_nodes_added, rep.names_dropped_unhandled,
+                rep.names_dropped_over_budget);
 }
 
 }  // namespace

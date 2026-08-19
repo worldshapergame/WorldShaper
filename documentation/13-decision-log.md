@@ -11839,3 +11839,107 @@ next reader does not tune them.
 | D704 | **D577's fault from the other side** | honesty | There, a constant with no writer; here, writers with no reader. A deletion leaves the two ends of a wire in different files |
 | D704 | **Three stale comments had counterparts that had MOVED, and were repointed** | correctness | `kMaxLights` to `node.glsl`, `material_of` to `pt_material.glsl`, the lamp weights to `shade_faces.comp` |
 | D704 | **`hash_u32` has three copies and the comment claimed one home** | correctness | It now says three, and that the mix changes in three places or the sky stops matching itself |
+
+---
+
+## D705 — a name is carried without being a reference, and `--compile-field` goes ON
+
+**2026-08-19.** D690 shipped the field compiler wired and OFF with one thing owed, and named it
+precisely: `script.parts` survived only where a name's node came through the rewrite **as itself**,
+and on the estate that was **0 of 5,091**. `--part` answered *"does not name anything"* for every
+piece of the clip the game ships. **That is done. All 5,091 are carried, and the switch is on.**
+
+### The move that would have worked, and why it could not be made
+
+`apply_origin` wraps every named part in its own fresh translate that nothing else references, so no
+name is reachable from `solid`, from the bounds, or from any of the 684 paint-rule nodes. The obvious
+fix is to hand the names in as roots, and D690 refused it in one line: **`gather` only flattens a
+child with one parent, and a name is a parent.** `refs` is the pass's whole safety mechanism; put
+5,091 names in the root set and every named intermediate of a building reads two references and stops
+flattening — and **flatten-and-re-balance IS the 1.19x**, the transform fold having measured 0.887x
+and stayed out. Answering the diagnostic that way spends the entire rewrite on it.
+
+Measured on a field small enough to count by hand: `union { union{a b} c }` with `wing` carried as a
+**name** compiles to **4 nodes with 1 flatten**; with `wing` as a **root** it is **5 nodes with 0
+flattens**.
+
+### The witness pass: a name reads the decisions instead of taking part in them
+
+The names go in as a **second list**. They take no part in `survey`, so `refs` is exactly what it
+would have been, and they are emitted **after every root**, through the same one door, against the
+`emitted` table the roots' own emission left behind. Three things fall out of that order:
+
+- a name whose node survived as itself is a table lookup — free and exact;
+- a name whose node **dissolved** — flattened into its parent, folded to a number — is re-emitted out
+  of the parts it dissolved into, landing on a node that is **equivalent rather than identical**,
+  built by the same rules the roots were and **not chosen by resemblance**;
+- a name over a subtree nothing else reaches is built now rather than never.
+
+**The building does not move, and that is asserted rather than argued.** With the names in the call
+and without, the estate's 686 output roots are the same indices, the same 10,836 nodes, the same
+depth, and the same flatten, re-balance, fold, identity and duplicate counts.
+
+**The counters had to be snapshotted and restored** for that to be true. The witness pass goes
+through the same `place`, `gather` and `assemble`, so leaving them shared moved the whole table the
+moment somebody asked `--part` a question — **997 flattens reported against 879**, a measurement
+changing under its own instrument.
+
+### Where a name still has no answer it is still dropped, and the first budget was wrong
+
+D690's property is kept and not softened: out of range, an op the pass was never taught reached only
+through the name, or over budget. But *"never past `in.size()`"* refused `slabs` on
+`clips/sampler.clip` — 47 nodes in, the roots compile to 43, all 28 names want 48 — so **a name was
+refused to hold a total one node under a line while the walk had gone 40 to 43.** A name is not on
+the walk: it costs an array slot and nothing per sample. It is `in.size() + names.size()` now, one
+node a name, which is what a name that dissolved into its parent is worth.
+
+### The FIFTH index that builds, found while wiring it
+
+**`script.variation.by` was not in the root set.** `variation by=<shape>` scales how far a voxel's
+colour may stray by how far inside that shape it is — so it is a field the sampler **asks**, and a
+renumber left it aimed at whatever occupied its old index.
+
+**Control arm, the fix patched out and rebuilt: 51 failed assertions on a nine-line clip** — 3,603
+distinct records against 15,722, largest group 14,384 against 6,392, and a different content hash
+after variation. Right building, right materials, **grain from somewhere else**.
+`clips/facility.clip` has no `by=`, which is exactly why nothing caught it — and is what would have
+made this a bug reported from somebody else's clip months later.
+
+### The numbers
+
+| | |
+|---|---|
+| names kept | **5,091 of 5,091**, 0 dropped |
+| what they cost | **5,060 nodes**, and nought on the walk |
+| the whole field | 18,250 → **15,896** |
+| the walk, from `solid` | 8,877 reachable → **8,536**, depth 146 → **134** |
+| the cost of asking | **1.192x**, against D690's 1.191x |
+| `--part`, 33 names in-suite over their own boxes | 33 compared, **33 agreed** — same hash, same voxel count |
+| `--part`, 13 names through the shipped CLI at metre 4 | whole report identical line for line, both arms |
+| `clips/sampler.clip --refine-all --no-despeckle` | **`a1f8bc6c656343b7` at 1,430,104**, both arms |
+
+### So it goes ON
+
+The one stated blocker is gone and every gate it was held to passes. **1.22x is still only 1.22x of
+the 30x R12c needs (D687)**, so this is a step and not an answer — but **a step nobody is opted out
+of is worth more than one nobody takes.**
+
+`--compile-field` is **kept** and still asks for what it always asked for, because it is written into
+scripts, into baseline rows and into two log entries, and an argument the exe does not recognise is
+warned about and ignored (trap 15 — and D702 found five harnesses doing exactly that).
+
+**Take the arm with `--no-clip-cache` in the game path.** `world_cache_key` is the source text, the
+resolution and the build stamp; **it does not know about this switch**, so two arms of one build share
+a key and the second reads the first one's world back off the disk and reports a hash identical for
+the reason a cache is identical. That is D673 item 4 for the third time this wave — D700 hit it too.
+The headless clip report never touches the cache and needs nothing.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D705 | **A name goes in as a second list and is emitted after every root** | build | `gather` only flattens a child with one parent, and a name is a parent |
+| D705 | **The building is node-for-node what it is with no names in the call** | build | Asserted on the estate: same 686 roots, same 10,836 nodes, same counters |
+| D705 | **The rewrite counters had to be snapshotted and restored** | fault | Shared, they read 997 flattens against 879 — the instrument moving under the measurement |
+| D705 | **"Never past `in.size()`" is the wrong budget** | fault | Refused a name to hold a total nobody reads; a name is not on the walk |
+| D705 | **`script.variation.by` was a fifth root and was missing** | fault | Control arm: 51 failed assertions, 3,603 distinct records against 15,722. The estate has no `by=`, which is why nothing caught it |
+| D705 | **`--compile-field` ships ON; `--no-compile-field` is the arm** | decision | 0 of 5,091 names was the stated blocker and it is 5,091 of 5,091 |
+| D705 | **The world cache key still does not know about the switch** | honesty | Third time this wave — D673 item 4. Take the arm with `--no-clip-cache` |

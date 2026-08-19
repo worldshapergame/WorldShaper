@@ -183,7 +183,11 @@ struct Compiler {
     Field out;
 
     std::vector<u32> refs;        // parent EDGES into each node, over what `root` can reach
-    std::vector<u8> visited;
+    // Two marks and not one, because the two walks below no longer run back to back: the witness
+    // pass surveys and classifies the NAMES after the roots have been emitted, and a single shared
+    // mark would have one of the two silently skip everything the other had already touched.
+    std::vector<u8> surveyed;
+    std::vector<u8> classified;
     std::vector<u8> reads;        // the value depends on where you ask
     std::vector<u8> has_param;    // ...and on a dial somebody can drag
     std::vector<u8> cost;         // 0, 1, or 2 meaning "two or more"
@@ -205,8 +209,8 @@ struct Compiler {
     // at most once — which is what makes "the output is never bigger than the input" a property
     // of the construction rather than a hope.
     void survey(u32 n) {
-        if (visited[n]) return;
-        visited[n] = 1;
+        if (surveyed[n]) return;
+        surveyed[n] = 1;
         const Node& s = in.node(n);
         for (u32 i = 0; i < s.children; ++i) {
             ++refs[s.child[i]];
@@ -215,8 +219,8 @@ struct Compiler {
     }
 
     void classify(u32 n) {
-        if (visited[n]) return;
-        visited[n] = 1;
+        if (classified[n]) return;
+        classified[n] = 1;
         const Node& s = in.node(n);
         bool r = reads_point_leaf(s.op) && s.children == 0;
         bool p = (s.op == Op::Parameter);
@@ -602,6 +606,59 @@ struct Compiler {
         return total;
     }
 
+    // --- the witness pass: what carrying a NAME would cost, asked before it is carried ---------
+
+    // A subtree the compilation has already finished with. Both walks below stop here, and for the
+    // same reason each time: whatever this node became, it is in the output, it was rebuildable
+    // because it WAS rebuilt, and re-emitting it will cost nothing.
+    bool already_answered(u32 n) const {
+        if (emitted[n] != kNone) return true;
+        // ...and an expression with no point in it will be folded to a number by `emit_fresh`
+        // before any op inside it is looked at, so the ops inside it are not this pass's problem
+        // and its nodes are not this pass's cost. `Field::eval` can read anything.
+        return opt.fold_constants && !reads[n] && !has_param[n];
+    }
+
+    // The most new nodes emitting `n` shift-free could add, which is an upper bound and not a
+    // guess: every rewrite in this file emits at most one output node per input node, and
+    // everything already in `emitted` is a lookup.
+    usize unemitted_size(u32 n) {
+        ++stamp;
+        return unemitted_walk(n);
+    }
+    usize unemitted_walk(u32 n) {
+        if (scratch[n] == stamp) return 0;
+        scratch[n] = stamp;
+        if (already_answered(n)) return 0;
+        usize total = 1;
+        const Node& s = in.node(n);
+        for (u32 i = 0; i < s.children; ++i) total += unemitted_walk(s.child[i]);
+        return total;
+    }
+
+    // Whether this pass could place every op under `n` back into a field.
+    //
+    // `compile_field` scans the ROOTS for this before it rewrites anything, and that scan cannot
+    // have reached here: a name is carried precisely because nothing reachable from a root leads to
+    // it. Without this the unhandled op would fall off the end of `construct`'s switch and become
+    // `constant(1e30)` — a name silently meaning "empty everywhere", which is the one reply trap 7
+    // says must never be how "I could not" comes out.
+    bool rebuildable(u32 n) {
+        ++stamp;
+        return rebuildable_walk(n);
+    }
+    bool rebuildable_walk(u32 n) {
+        if (scratch[n] == stamp) return true;
+        scratch[n] = stamp;
+        if (already_answered(n)) return true;
+        const Node& s = in.node(n);
+        if (!can_rebuild(s.op)) return false;
+        for (u32 i = 0; i < s.children; ++i) {
+            if (!rebuildable_walk(s.child[i])) return false;
+        }
+        return true;
+    }
+
     // --- the walk ---------------------------------------------------------------------------
 
     // Hand `t` to `c`, or give up and put a translate over it.
@@ -853,13 +910,15 @@ usize reachable_nodes(const Field& f, const std::vector<u32>& roots) {
     return count;
 }
 
-Field compile_field(const Field& in, const std::vector<u32>& roots, CompileReport* report,
+Field compile_field(const Field& in, const std::vector<u32>& roots,
+                    const std::vector<u32>& names, CompileReport* report,
                     const CompileOptions& options) {
     CompileReport local;
     CompileReport& rep = report ? *report : local;
     rep = CompileReport{};
     rep.roots = roots;
     rep.root = roots.empty() ? 0 : roots[0];
+    rep.names = names;
     rep.nodes_in_input = in.size();
     rep.nodes_before = reachable_nodes(in, roots);
     rep.depth_before = depth_from(in, roots);
@@ -872,6 +931,9 @@ Field compile_field(const Field& in, const std::vector<u32>& roots, CompileRepor
         if (unhandled_op) rep.unhandled = which;
         rep.roots = roots;
         rep.root = roots.empty() ? 0 : roots[0];
+        // The names come back as themselves for the same reason the roots and the remap do: the
+        // field handed back IS the input, so every index the caller holds still means what it meant.
+        rep.names = names;
         rep.remap.resize(in.size());
         for (usize i = 0; i < in.size(); ++i) rep.remap[i] = static_cast<u32>(i);
         rep.nodes_after = in.size();
@@ -921,6 +983,8 @@ Field compile_field(const Field& in, const std::vector<u32>& roots, CompileRepor
     c.cost_known.assign(n, 0);
     c.emitted.assign(n, kNone);
     c.scratch.assign(n, 0);
+    c.surveyed.assign(n, 0);
+    c.classified.assign(n, 0);
 
     // A root counts as a reference to itself, and that is the one line that makes a SET safe.
     //
@@ -929,12 +993,16 @@ Field compile_field(const Field& in, const std::vector<u32>& roots, CompileRepor
     // reads `refs == 1`, so a translate above it could be pushed into it for the solid's sake and
     // the rule's own emission would then build a second copy of the whole subtree. The output grows
     // instead of shrinking, which is the one failure nobody sees in a screenshot.
-    c.visited.assign(n, 0);
+    //
+    // **The names are deliberately NOT surveyed here**, and that is the whole of why they can be
+    // carried at all. A name is a parent too, so counting one would push every named intermediate
+    // of a building to two references and stop `gather` flattening it — which is the entire 1.19x
+    // spent on a diagnostic (D690). They are surveyed after the roots are emitted, where the count
+    // can no longer change a decision that has already been taken.
     for (u32 r : roots) {
         ++c.refs[r];
         c.survey(r);
     }
-    c.visited.assign(n, 0);
     for (u32 r : roots) c.classify(r);
 
     // Every parameter slot, in the input's own slot order, so a dial by name still moves the
@@ -951,13 +1019,113 @@ Field compile_field(const Field& in, const std::vector<u32>& roots, CompileRepor
     out_roots.reserve(roots.size());
     for (u32 r : roots) out_roots.push_back(c.emit(r, Vec3{0, 0, 0}));
 
+    // --- the witness pass ---------------------------------------------------------------------
+    //
+    // Everything above is finished before a single name is looked at, and the order is the design.
+    // The roots' output is node-for-node what it would have been with no names in the call at all,
+    // because `refs` never saw one; what the names do now is READ the decisions rather than take
+    // part in them.
+    //
+    // `emitted` is the table those decisions left behind, so a name whose node came through as
+    // itself is a lookup and costs nothing. A name whose node dissolved — flattened into its
+    // parent, folded to a number, or never reached because nothing but the name wanted it — is
+    // re-emitted through the same one door, out of the same parts, and lands on a node that is
+    // equivalent rather than identical. That is the honest answer to "which node in the OUTPUT is
+    // the shape this name meant", and it is a construction and not a resemblance.
+    const usize nodes_for_roots = c.out.size();
+    // Every counter as the ROOTS left it. The witness pass runs through the same `place`, `gather`
+    // and `assemble` as everything else and would otherwise add its own flattens and shares to the
+    // building's tallies — so the table in `tests/test_compile.cpp` would move because somebody
+    // asked a question, which is a measurement changing under its own instrument. Restored below.
+    const CompileReport roots_only = c.rep;
+    std::vector<u32> out_names(names.size(), kUnmapped);
+    if (!names.empty()) {
+        // Survey and classify EVERY name before emitting any of them. Two names over one subtree
+        // have to see two references or the first would flatten what the second still needs, which
+        // is the same duplication `refs` exists to refuse — the marks left by the roots' own walks
+        // stop either from touching a count the building already settled.
+        for (u32 nm : names) {
+            if (nm >= in.size()) continue;
+            ++c.refs[nm];
+            c.survey(nm);
+        }
+        for (u32 nm : names) {
+            if (nm < in.size()) c.classify(nm);
+        }
+
+        // The output may not grow past the input PLUS one node a name, and both halves of that are
+        // measured rather than chosen.
+        //
+        // The file's promise is "it will not make the field bigger", and the flat version of it —
+        // never past `in.size()` — was tried first and is WRONG. It refused `slabs` on
+        // `clips/sampler.clip`: a 47-node clip whose roots compile to 43, where carrying all 28
+        // names wants 48. One node over the input, and the arm came back with `--part slabs` saying
+        // "does not name anything" while the walk was 40 nodes → 43. **A name is not on the walk**,
+        // so paying an array slot for one costs nothing per sample, and refusing it to hold a total
+        // under a line is spending the only thing anybody notices to protect a number nobody reads.
+        //
+        // One node a name is what a name is WORTH: a name that dissolved dissolved into its parent,
+        // and putting it back is the one combine node that says where it ended. A name that wants
+        // more than that is one the rewrite genuinely spread over many places, and refusing it is
+        // the guard still doing its job — loudly, in `names_dropped_over_budget`.
+        const usize budget = in.size() + names.size();
+        for (usize i = 0; i < names.size(); ++i) {
+            const u32 nm = names[i];
+            if (nm >= in.size()) {
+                ++c.rep.names_dropped_out_of_range;
+                continue;
+            }
+            const bool free_of_charge = c.emitted[nm] != kNone;
+            if (!free_of_charge) {
+                if (!c.rebuildable(nm)) {
+                    ++c.rep.names_dropped_unhandled;
+                    continue;
+                }
+                if (c.out.size() + c.unemitted_size(nm) > budget) {
+                    ++c.rep.names_dropped_over_budget;
+                    continue;
+                }
+            }
+            out_names[i] = c.emit(nm, Vec3{0, 0, 0});
+            ++c.rep.names_kept;
+            if (free_of_charge) {
+                ++c.rep.names_answered_as_themselves;
+            } else {
+                ++c.rep.names_rebuilt;
+            }
+        }
+    }
+
+    const usize nodes_with_names = c.out.size();
+
+    // The rewrite counters describe the building; the name counters describe the names. Put back.
+    {
+        const usize kept_n = c.rep.names_kept;
+        const usize as_themselves = c.rep.names_answered_as_themselves;
+        const usize rebuilt = c.rep.names_rebuilt;
+        const usize unhandled_n = c.rep.names_dropped_unhandled;
+        const usize over_budget = c.rep.names_dropped_over_budget;
+        const usize out_of_range = c.rep.names_dropped_out_of_range;
+        c.rep = roots_only;
+        c.rep.names_kept = kept_n;
+        c.rep.names_answered_as_themselves = as_themselves;
+        c.rep.names_rebuilt = rebuilt;
+        c.rep.names_dropped_unhandled = unhandled_n;
+        c.rep.names_dropped_over_budget = over_budget;
+        c.rep.names_dropped_out_of_range = out_of_range;
+    }
+
     // With ONE root it is also the last node, so a caller who never looked at the report can still
     // find it. Sharing can steal that — an expression identical to the root's may already sit
     // inside it — so in that one case the root node is placed a second time, unshared.
     //
     // With several roots the promise cannot hold for all of them and is not made for any: they come
     // back through `report->roots` or not at all.
-    if (out_roots.size() == 1 && out_roots[0] + 1 != c.out.size()) {
+    //
+    // With NAMES in the call it cannot hold either — a name is emitted after every root and is a
+    // node of the same field — so it is not attempted, rather than attempted and then quietly
+    // untrue. `report->roots` is the answer in both of those cases.
+    if (names.empty() && out_roots.size() == 1 && out_roots[0] + 1 != c.out.size()) {
         const Node top = c.out.node(out_roots[0]);
         if (top.op != Op::Parameter) out_roots[0] = c.construct(top);
     }
@@ -969,6 +1137,7 @@ Field compile_field(const Field& in, const std::vector<u32>& roots, CompileRepor
     rep = c.rep;
     rep.roots = out_roots;
     rep.root = out_roots[0];
+    rep.names = out_names;
     rep.ok = true;
     rep.nodes_in_input = in.size();
     rep.nodes_before = before;
@@ -976,6 +1145,12 @@ Field compile_field(const Field& in, const std::vector<u32>& roots, CompileRepor
     rep.translates_before = trans_in;
     rep.parameter_nodes_kept = kept;
     rep.nodes_after = c.out.size();
+    // What the ROOTS came to, which is the figure `nodes_before` is the comparison for. A name is
+    // not on the walk — nothing reaches one from `solid` — so charging the walk for it would report
+    // a compiler that had stopped compressing when what it had done was start answering `--part`.
+    rep.nodes_for_roots = nodes_for_roots;
+    rep.name_nodes_added = nodes_with_names - nodes_for_roots;
+    // Both taken over the roots alone, and for the same reason.
     rep.depth_after = depth_from(c.out, out_roots);
     rep.translates_after = count_op(c.out, out_roots, Op::Translate);
 
@@ -988,12 +1163,22 @@ Field compile_field(const Field& in, const std::vector<u32>& roots, CompileRepor
         if (c.emitted[i] != kNone) rep.remap[i] = c.emitted[i];
     }
     for (usize i = 0; i < roots.size(); ++i) rep.remap[roots[i]] = out_roots[i];
+    // A name that WAS answered belongs in the remap too, so a caller holding one index does not
+    // have to know which of the two lists it came out of.
+    for (usize i = 0; i < names.size(); ++i) {
+        if (out_names[i] != kUnmapped && names[i] < in.size()) rep.remap[names[i]] = out_names[i];
+    }
     return c.out;
+}
+
+Field compile_field(const Field& in, const std::vector<u32>& roots, CompileReport* report,
+                    const CompileOptions& options) {
+    return compile_field(in, roots, std::vector<u32>{}, report, options);
 }
 
 Field compile_field(const Field& in, u32 root, CompileReport* report,
                     const CompileOptions& options) {
-    return compile_field(in, std::vector<u32>{root}, report, options);
+    return compile_field(in, std::vector<u32>{root}, std::vector<u32>{}, report, options);
 }
 
 }  // namespace forge

@@ -26,6 +26,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -35,6 +36,7 @@
 #include "forge/clip_script.hpp"
 #include "forge/compile.hpp"
 #include "forge/field.hpp"
+#include "forge/measure.hpp"
 #include "forge/sample.hpp"
 #include "game/clip.hpp"
 #include "world/tags.hpp"
@@ -124,7 +126,15 @@ struct Loaded {
     VoxelTypeTable types;
     TagRegistry tags;
     Script script;
-    Loaded() { script = load_clip_script(estate_path(), types, tags); }
+    // Explicitly the UNCOMPILED clip, and the two lines are not decoration. The switch ships ON
+    // since D695, so loading through the default would hand every case below a field that has
+    // already been compiled and then compile it a second time — and the table this file prints
+    // would silently be about what a SECOND pass is worth, which is nothing.
+    Loaded() {
+        compile_fields(false);
+        script = load_clip_script(estate_path(), types, tags);
+        compile_fields(true);
+    }
 };
 
 }  // namespace
@@ -432,6 +442,112 @@ TEST_CASE("a set of roots goes in and the same set comes out") {
     }
 }
 
+TEST_CASE("a name is carried without becoming a reference") {
+    // The whole design problem D690 left behind, on a field small enough to count by hand.
+    //
+    // `wing` is a union inside a union with ONE parent, so `gather` flattens it away and it has no
+    // node of its own in the output. It is also a name the author bound and `--part wing` has to
+    // keep working. Those two are in direct conflict the moment a name becomes a root: `refs[wing]`
+    // goes to two, the flatten is refused, and the rewrite this pass exists for stops firing.
+    Field f;
+    const u32 a = f.sphere({0, 0, 0}, 1.0);
+    const u32 b = f.sphere({2, 0, 0}, 1.0);
+    const u32 wing = f.unite({a, b});
+    const u32 c = f.sphere({4, 0, 0}, 1.0);
+    const u32 whole = f.unite({wing, c});
+
+    // What the building comes to with nobody asking about `wing` at all.
+    CompileReport bare;
+    const Field plain = compile_field(f, whole, &bare);
+    REQUIRE(bare.ok);
+    CHECK(bare.combines_flattened == 1);
+    CHECK(bare.nodes_for_roots == 4);          // three spheres and one union
+    CHECK(bare.remap[wing] == kUnmapped);      // it dissolved: `remap` alone cannot answer
+
+    // As a NAME. The building is node-for-node what it was, and `wing` still answers.
+    CompileReport named;
+    const Field kept = compile_field(f, std::vector<u32>{whole}, std::vector<u32>{wing}, &named);
+    REQUIRE(named.ok);
+    CHECK(named.combines_flattened == bare.combines_flattened);
+    CHECK(named.nodes_for_roots == bare.nodes_for_roots);
+    CHECK(named.depth_after == bare.depth_after);
+    CHECK(named.roots[0] == bare.roots[0]);
+    REQUIRE(named.names.size() == 1);
+    CHECK(named.names[0] != kUnmapped);
+    CHECK(named.names_rebuilt == 1);           // it had dissolved, so it was built out of its parts
+    CHECK(named.name_nodes_added == 1);        // and cost exactly the one union it is
+
+    // As a ROOT, which is the move that would have worked and is the move that ruins it.
+    CompileReport as_root;
+    compile_field(f, std::vector<u32>{whole, wing}, &as_root);
+    REQUIRE(as_root.ok);
+    CHECK(as_root.combines_flattened == 0);    // the flatten is refused: `wing` now has two parents
+    CHECK(as_root.nodes_for_roots > bare.nodes_for_roots);
+
+    // And the answer is the shape the name meant, not something near it.
+    for (f64 x = -3.0; x < 7.0; x += 0.11) {
+        const Vec3 p{x, 0.13, -0.07};
+        CHECK(kept.eval(named.names[0], p) == doctest::Approx(f.eval(wing, p)).epsilon(1e-12));
+        CHECK(kept.eval(named.roots[0], p) == doctest::Approx(f.eval(whole, p)).epsilon(1e-12));
+    }
+}
+
+TEST_CASE("a name over a translate nothing else references still answers") {
+    // The estate's own shape, and the exact reason 0 of 5,091 survived. `apply_origin` moves the
+    // clip by wrapping the solid, every paint rule AND every named part each in its own fresh
+    // translate — and the parts' translates are reachable from nothing at all.
+    Field f;
+    const u32 shaft = f.cylinder({0, 0, 0}, 0.2, 2.0, 1);
+    const u32 cap = f.box({0, 2.0, 0}, {0.3, 0.1, 0.3});
+    const u32 column = f.unite({shaft, cap});
+    const u32 whole = f.unite({column, f.sphere({3, 0, 0}, 1.0)});
+    const Vec3 by{0, -3.5, 0};
+    const u32 moved = f.translate(whole, by);
+    const u32 named = f.translate(column, by);   // what `apply_origin` binds the name to
+
+    CompileReport rep;
+    const Field out =
+        compile_field(f, std::vector<u32>{moved}, std::vector<u32>{named}, &rep);
+    REQUIRE(rep.ok);
+    REQUIRE(rep.names.size() == 1);
+    CHECK(rep.names[0] != kUnmapped);
+    for (f64 y = -6.0; y < 1.0; y += 0.07) {
+        const Vec3 p{0.05, y, 0.03};
+        CHECK(out.eval(rep.names[0], p) == doctest::Approx(f.eval(named, p)).epsilon(1e-12));
+    }
+}
+
+TEST_CASE("a name with no answer is dropped and not guessed") {
+    // The property D690 kept on purpose and this change does not soften: a name that cannot be
+    // answered comes back as `kUnmapped`, never as node 0 — which is a perfectly good node and
+    // would hand `--part` the first primitive of the clip instead of an error.
+    Field f;
+    const u32 b = f.box({0, 0, 0}, {1, 1, 1});
+    const u32 s = f.sphere({4, 0, 0}, 1.0);
+
+    CompileReport rep;
+    const Field out = compile_field(f, std::vector<u32>{b}, std::vector<u32>{s, b + 99, b}, &rep);
+    REQUIRE(rep.ok);
+    REQUIRE(rep.names.size() == 3);
+    CHECK(rep.names[0] != kUnmapped);              // reachable from nothing, and still carried
+    CHECK(rep.names[1] == kUnmapped);              // out of range
+    CHECK(rep.names[2] == rep.roots[0]);           // a name that is also a root is that root
+    CHECK(rep.names_dropped_out_of_range == 1);
+    CHECK(rep.names_kept == 2);
+    for (f64 x = 0.0; x < 6.0; x += 0.13) {
+        const Vec3 p{x, 0.2, 0.1};
+        CHECK(out.eval(rep.names[0], p) == doctest::Approx(f.eval(s, p)).epsilon(1e-12));
+    }
+
+    // And a refusal hands the names back as themselves, like the roots and the remap, so "I could
+    // not" needs no special case at the call site to be safe.
+    CompileReport bad;
+    compile_field(f, std::vector<u32>{b + 99}, std::vector<u32>{s}, &bad);
+    CHECK_FALSE(bad.ok);
+    REQUIRE(bad.names.size() == 1);
+    CHECK(bad.names[0] == s);
+}
+
 TEST_CASE("a compiled script builds the same building") {
     // The wiring, end to end and both arms of one build. Four paint rules keyed on four different
     // shapes, one of them confined by `on=`, and a `region` that is not the solid — which is the
@@ -469,7 +585,9 @@ solid all
     const Script plain = parse_clip_script(text, types, tags);
     compile_fields(true);
     const Script built = parse_clip_script(text, types, tags);
-    compile_fields(false);   // a switch left on is the next case's silent second arm
+    compile_fields(true);    // BACK TO THE DEFAULT, which is on since D695. Left off, every
+                             // clip every other case in the suite parses would quietly be the
+                             // arm the game does not ship, in whatever order doctest runs them.
 
     REQUIRE(plain.errors.empty());
     REQUIRE(built.errors.empty());
@@ -482,11 +600,299 @@ solid all
     const SampleResult a = sample(plain.field, plain.solid, plain.paint, plain.settings, nullptr);
     const SampleResult b = sample(built.field, built.solid, built.paint, built.settings, nullptr);
     CHECK(b.clip.content_hash() == a.clip.content_hash());
+
+    // --- and `--part`, which is the whole reason this switch was off -------------------------
+    //
+    // Every name the file bound, sampled on its own on both arms and compared by CONTENT HASH.
+    // `hollow` is in there deliberately: nothing builds with it, so it is a name over a subtree
+    // the roots never reach, and it is the case that has to be REBUILT rather than looked up.
+    REQUIRE(plain.parts.size() == 7);
+    CHECK(built.parts.size() == plain.parts.size());
+    for (const auto& entry : plain.parts) {
+        u32 piece = 0;
+        REQUIRE_MESSAGE(built.part(entry.first, piece), entry.first.c_str());
+        const SampleResult was =
+            sample(plain.field, entry.second, plain.paint, plain.settings, nullptr);
+        const SampleResult now = sample(built.field, piece, built.paint, built.settings, nullptr);
+        CHECK_MESSAGE(now.clip.content_hash() == was.clip.content_hash(), entry.first.c_str());
+        CHECK(measure(now.clip).solid == measure(was.clip).solid);
+    }
+}
+
+TEST_CASE("a compiled script keeps the shape the variation is scaled by") {
+    // The FIFTH index a `Script` holds that BUILDS, and it was not in the root set until now.
+    // `variation by=<shape>` asks a field how far inside that shape a voxel is and scales the
+    // colour stray by it, so a renumber leaves it aimed at whatever occupies its old index — the
+    // right building in the right materials with the grain coming from somewhere else. Nothing
+    // caught it because `clips/facility.clip` has no `by=`.
+    const char* text = R"(
+metre 16
+bounds -3 0 -3  3 4 3
+material stone rgb=120,120,116
+material moss  rgb=60,120,60
+let damp  = sphere 0 0.6 0 r=1.6
+let base  = box 0 0.5 0  5 1 5
+let post  = cylinder 0 2 0 r=0.4 h=2
+let all   = union { base post }
+paint stone
+paint moss where=damp below=0
+variation colour=0.25 rough=0.25 seed=9 by=damp
+solid all
+)";
+    // `damp` is declared FIRST and used LAST on purpose. The compilation emits what the solid needs
+    // before it reaches `by`, so the sphere moves from index 0 to index 3 — without that the two
+    // indices coincide, the case passes whether or not `variation.by` is re-pointed at all, and it
+    // proves nothing. That was the first version of this case, and it passed with the bug in.
+    VoxelTypeTable types;
+    TagRegistry tags;
+
+    compile_fields(false);
+    const Script plain = parse_clip_script(text, types, tags);
+    compile_fields(true);
+    const Script built = parse_clip_script(text, types, tags);
+    compile_fields(true);    // back to the default
+
+    REQUIRE(plain.errors.empty());
+    REQUIRE(built.errors.empty());
+    REQUIRE(plain.variation.has_by);
+    REQUIRE(built.variation.has_by);
+
+    // The renumber has to have MOVED it, or this case proves nothing about the re-pointing.
+    CHECK(built.variation.by != plain.variation.by);
+    for (f64 x = -3.0; x < 3.0; x += 0.13) {
+        const Vec3 p{x, 0.7, 0.2};
+        CHECK(built.field.eval(built.variation.by, p) ==
+              doctest::Approx(plain.field.eval(plain.variation.by, p)).epsilon(1e-12));
+    }
+
+    // And end to end: the variation is what mints the records, so a `by` pointing at the wrong
+    // shape comes out as a different number of distinct types over the same voxels.
+    SampleResult was = sample(plain.field, plain.solid, plain.paint, plain.settings, nullptr);
+    SampleResult now = sample(built.field, built.solid, built.paint, built.settings, nullptr);
+    REQUIRE(now.clip.content_hash() == was.clip.content_hash());
+    VoxelTypeTable a_types = types, b_types = types;
+    const VariationReport a =
+        apply_variation(was.clip, a_types, plain.field, plain.variation, plain.settings, was,
+                        nullptr);
+    const VariationReport b =
+        apply_variation(now.clip, b_types, built.field, built.variation, built.settings, now,
+                        nullptr);
+    CHECK(b.voxels == a.voxels);
+    CHECK(b.distinct_types == a.distinct_types);
+    CHECK(b.largest_group == a.largest_group);
+    CHECK(now.clip.content_hash() == was.clip.content_hash());
 }
 
 // --------------------------------------------------------------------------------------
 // The estate. The numbers, and the gate.
 // --------------------------------------------------------------------------------------
+
+TEST_CASE("the estate's names survive the compilation, and the building does not move") {
+    // The one thing that kept `--compile-field` OFF. D690: `script.parts` survived only where a
+    // name's node came through as itself, and on the estate that was **0 of 5,091**, because
+    // `apply_origin` wraps every named part in its own fresh translate that nothing else
+    // references. `--part` then answered "does not name anything" for every piece of the clip.
+    //
+    // Two halves, and the second is the one that makes the first worth having:
+    //
+    //   * every name answers the shape it named, over a dense grid in that name's own box;
+    //   * the BUILDING is node-for-node, counter-for-counter what it is with no names in the call
+    //     at all. That is the property adding the names as roots would have destroyed, and it is
+    //     asserted here rather than argued: one flatten refused is one node of the walk kept.
+    Loaded loaded;
+    REQUIRE_MESSAGE(loaded.script.errors.empty(), "clips/facility.clip did not parse");
+    REQUIRE(loaded.script.has_solid);
+    const Field& original = loaded.script.field;
+
+    // The root set `compile_whole_script` hands over: everything that BUILDS.
+    std::vector<u32> roots;
+    roots.push_back(loaded.script.solid);
+    if (loaded.script.settings.has_bounds) roots.push_back(loaded.script.settings.bounds);
+    for (const PaintRule& rule : loaded.script.paint) {
+        roots.push_back(rule.test);
+        if (rule.has_place) roots.push_back(rule.place);
+    }
+    // ...and the names, which are the other list and deliberately not roots.
+    std::vector<u32> names;
+    names.reserve(loaded.script.parts.size());
+    for (const auto& entry : loaded.script.parts) names.push_back(entry.second);
+    REQUIRE(names.size() > 1000);
+
+    CompileReport bare;
+    Field plain = compile_field(original, roots, &bare);
+    REQUIRE(bare.ok);
+
+    CompileReport with;
+    Field built = compile_field(original, roots, names, &with);
+    REQUIRE(with.ok);
+
+    // THE PROPERTY. Not "about the same" — the same. The names took no part in `refs`, so every
+    // decision the roots took was taken against the same counts, in the same order, at the same
+    // node indices.
+    REQUIRE(with.roots.size() == bare.roots.size());
+    for (usize i = 0; i < with.roots.size(); ++i) CHECK(with.roots[i] == bare.roots[i]);
+    CHECK(with.nodes_for_roots == bare.nodes_after);
+    CHECK(with.depth_after == bare.depth_after);
+    CHECK(with.translates_after == bare.translates_after);
+    CHECK(with.combines_flattened == bare.combines_flattened);
+    CHECK(with.combines_rebalanced == bare.combines_rebalanced);
+    CHECK(with.constant_subtrees_folded == bare.constant_subtrees_folded);
+    CHECK(with.identities_removed == bare.identities_removed);
+    CHECK(with.duplicate_children_dropped == bare.duplicate_children_dropped);
+
+    // And the promise the whole file is built on, with the names in: never bigger than the input.
+    CHECK(with.nodes_after <= with.nodes_in_input);
+
+    std::printf(
+        "\n--- the names on clips/facility.clip ------------------------------------------\n"
+        "  roots handed over            %zu\n"
+        "  names handed over            %zu\n"
+        "  names kept                   %zu   (%zu as themselves, %zu rebuilt)\n"
+        "  names dropped                %zu   (%zu unhandled, %zu over budget, %zu out of range)\n"
+        "  nodes: roots alone           %zu   (with no names in the call: %zu)\n"
+        "  nodes: the whole field       %zu   of an input of %zu\n"
+        "  the names cost               %zu nodes, and nought on the walk\n"
+        "  deepest path                 %zu  ->  %zu\n"
+        "-------------------------------------------------------------------------------\n",
+        roots.size(), names.size(), with.names_kept, with.names_answered_as_themselves,
+        with.names_rebuilt,
+        names.size() - with.names_kept, with.names_dropped_unhandled,
+        with.names_dropped_over_budget, with.names_dropped_out_of_range,
+        with.nodes_for_roots, bare.nodes_after, with.nodes_after, with.nodes_in_input,
+        with.name_nodes_added, with.depth_before, with.depth_after);
+
+    // D690's own number was 0. Anything short of all of them is a finding and has to read as one.
+    CHECK(with.names_kept == names.size());
+
+    // --- and every name answers the shape it named ------------------------------------------
+    //
+    // Over the name's OWN box rather than the clip's, because a part is a few metres of a
+    // 125 x 37 x 110 m site and a grid over the site would miss most of them entirely — which is
+    // how a comparison comes back "identical" while saying nothing.
+    Field built_cull = compile_field(original, roots, names, nullptr);
+    built_cull.build_bounds();
+
+    Agreement all;
+    usize checked = 0, boxless = 0;
+    for (usize i = 0; i < names.size(); ++i) {
+        // Every 37th, which is a stride coprime with nothing in particular and walks the whole
+        // list — the parts are declared building by building, so a prefix would be one building.
+        if (i % 37 != 0) continue;
+        const u32 a = names[i];
+        const u32 b = with.names[i];
+        REQUIRE(b != kUnmapped);
+        const Field::Aabb box = original.bounds_of(a);
+        if (box.infinite()) { ++boxless; continue; }
+        const Vec3 pad{0.25, 0.25, 0.25};
+        grid(box.low - pad, box.high + pad, 7, original, a, built_cull, b, all);
+        ++checked;
+    }
+    std::printf("  %zu names sampled over their own boxes (%zu boxless, skipped), %zu points\n"
+                "    worst %.3e m (%.2e voxel), near a surface %.3e m, %zu sign flips\n"
+                "-------------------------------------------------------------------------------"
+                "\n\n",
+                checked, boxless, all.points, all.worst, all.worst / kVoxel,
+                all.worst_near_surface, all.sign_flips);
+    CHECK(checked > 50);
+    CHECK(all.sign_flips == 0);
+    CHECK(all.worst_near_surface < 0.1 * kVoxel);
+}
+
+TEST_CASE("--part answers the same voxels on both arms of the estate") {
+    // The gate, in the terms the tool is used in: not "the field agrees" but "the same name cuts
+    // the same voxels wearing the same materials". Content hash and voxel count, name by name,
+    // across the whole parts list — which is the estate building by building, because the parts are
+    // declared in include order.
+    //
+    // `run_clip_tool` cannot take this comparison itself: it samples the clip's own box, and since
+    // D672 that box is 4016 x 1200 x 3536 = 17.0 billion cells, which is D693's silent exit. So each
+    // name is sampled over ITS OWN box here, which is what somebody looking at a part wants anyway
+    // and what `--clip-part` on the estate cannot currently give them.
+    //
+    // ONE materials table for both arms. A material interned in a different order carries a
+    // different id, and two hashes over two id spaces are not a comparison at all — D692's own
+    // fault, from the other end.
+    VoxelTypeTable types;
+    TagRegistry tags;
+
+    compile_fields(false);
+    const Script plain = load_clip_script(estate_path(), types, tags);
+    compile_fields(true);
+    const Script built = load_clip_script(estate_path(), types, tags);
+    compile_fields(true);    // BACK TO THE DEFAULT, which is on since D695. Left off, every
+                             // clip every other case in the suite parses would quietly be the
+                             // arm the game does not ship, in whatever order doctest runs them.
+
+    REQUIRE(plain.errors.empty());
+    REQUIRE(built.errors.empty());
+    REQUIRE(plain.parts.size() > 1000);
+    CHECK(built.parts.size() == plain.parts.size());
+
+    // Small enough to sample fifty times, fine enough that a part is more than a handful of cells.
+    // Eight to the metre is 12.5 cm, and the box is capped about the part's own centre so that
+    // `all` — which is the whole estate — costs what a doorway costs.
+    //
+    // The cap is what makes this affordable at all, and the reason is the paint: the estate carries
+    // 685 rules and every solid voxel is offered every one of them, so the bill is voxels times
+    // rules and not voxels. Three metres a side at 12.5 cm is 13,824 cells a name.
+    const i32 metre = 8;
+    const f64 kSpan = 1.5;   // ...a metre and a half either way of the centre, so three metres a side
+
+    usize compared = 0, with_matter = 0, agreed = 0, skipped = 0;
+    u64 total_voxels = 0;
+    std::printf("\n--- --part on clips/facility.clip, both arms ----------------------------------"
+                "\n    %-34s %10s  %s\n", "name", "voxels", "content hash");
+    for (usize i = 0; i < plain.parts.size(); ++i) {
+        // Every 149th, which walks the whole list and lands in a different building each time.
+        if (i % 149 != 0) continue;
+        const std::string& name = plain.parts[i].first;
+        u32 piece = 0;
+        REQUIRE_MESSAGE(built.part(name, piece), name.c_str());
+
+        const Field::Aabb box = plain.field.bounds_of(plain.parts[i].second);
+        if (box.infinite()) { ++skipped; continue; }
+        const Vec3 mid{(box.low.x + box.high.x) * 0.5, (box.low.y + box.high.y) * 0.5,
+                       (box.low.z + box.high.z) * 0.5};
+        SampleSettings where = plain.settings;
+        where.voxels_per_metre = metre;
+        where.has_bounds = false;   // the part's own box IS the region here
+        where.low = {std::max(box.low.x, mid.x - kSpan), std::max(box.low.y, mid.y - kSpan),
+                     std::max(box.low.z, mid.z - kSpan)};
+        where.high = {std::min(box.high.x, mid.x + kSpan), std::min(box.high.y, mid.y + kSpan),
+                      std::min(box.high.z, mid.z + kSpan)};
+        if (where.high.x <= where.low.x || where.high.y <= where.low.y ||
+            where.high.z <= where.low.z) { ++skipped; continue; }
+        SampleSettings same = where;
+
+        const SampleResult was =
+            sample(plain.field, plain.parts[i].second, plain.paint, where, nullptr);
+        const SampleResult now = sample(built.field, piece, built.paint, same, nullptr);
+        const u64 a = measure(was.clip, metre).solid;
+        const u64 b = measure(now.clip, metre).solid;
+        const bool same_hash = now.clip.content_hash() == was.clip.content_hash();
+        std::printf("    %-34s %10llu  %016llx%s\n", name.c_str(),
+                    static_cast<unsigned long long>(a),
+                    static_cast<unsigned long long>(was.clip.content_hash()),
+                    (same_hash && a == b) ? "" : "   <-- DIFFERS");
+        std::fflush(stdout);   // so a slow run says which name it is on rather than nothing
+        ++compared;
+        if (a > 0) { ++with_matter; total_voxels += a; }
+        if (same_hash && a == b) ++agreed;
+        CHECK_MESSAGE(same_hash, name.c_str());
+        CHECK_MESSAGE(a == b, name.c_str());
+    }
+    std::printf("    %zu names compared, %zu agreed, %zu of them with matter in "
+                "(%llu voxels), %zu skipped for want of a box\n"
+                "-------------------------------------------------------------------------------"
+                "\n\n",
+                compared, agreed, with_matter,
+                static_cast<unsigned long long>(total_voxels), skipped);
+    // Twenty names is the gate, and a name that comes back EMPTY on both arms agrees about
+    // nothing. Both are asserted, so a comparison cannot pass by measuring air.
+    CHECK(compared >= 20);
+    CHECK(with_matter >= 20);
+    CHECK(agreed == compared);
+}
 
 TEST_CASE("the estate compiles to the same shape") {
     Loaded loaded;

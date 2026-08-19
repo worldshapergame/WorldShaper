@@ -209,22 +209,34 @@ struct Script {
 void accelerate_unions_from(usize leaves);
 
 // Rewrite every clip parsed after this into an equivalent field that is cheaper to walk, for every
-// clip parsed after it is called. `--compile-field`, and it is OFF.
+// clip parsed after it is called. **ON since D695**, and `--no-compile-field` turns it off.
 //
-// **`forge::compile_field` is 1.20x on the cost of asking the field a point** (11.68 µs → 9.92 on
-// the estate) and bit-exact near every surface — see `forge/compile.hpp` for what it rewrites and
-// what it measured. It is off by default because 1.20x is 1.20x of the 30x R12c needs (D687), so it
-// is a step and not an answer, and because a pass that rewrites the expression a whole world is cut
-// from wants both arms of one build available to whoever is comparing hashes.
+// **`forge::compile_field` is 1.22x on the cost of asking the field a point** (17.97 µs → 14.77 on
+// the estate, under load) and bit-exact near every surface — see `forge/compile.hpp` for what it
+// rewrites and what it measured.
+//
+// It shipped OFF at D690 with one stated blocker and that blocker is gone: `script.parts` survived
+// only where a name's node came through as itself, which on the estate was 0 of 5,091. All 5,091
+// are carried now. **1.22x is still only 1.22x of the 30x R12c needs (D687)**, so this is a step
+// and not an answer — but a step nobody is opted out of is worth more than one nobody takes, and
+// `--no-compile-field` is there so the comparison can still be made in one build.
 //
 // **What makes this a switch here rather than a line in the sampler**: a `Script` names MANY nodes —
 // `solid`, `settings.bounds`, and every paint rule's `test` and `place` — and a compilation
-// renumbers all of them at once. They are handed over together and come back together. Anything the
-// script kept for DIAGNOSTICS rather than for building (`parts`, a weathering scope) is re-pointed
-// through the compiler's own remap, and a name whose node did not survive as itself is dropped
-// rather than left aimed at whatever now occupies its old index. So `--part` on a compiled clip
-// says "does not name anything" instead of sampling the wrong shape: trap 7, a refusal and a wrong
-// answer must not look alike.
+// renumbers all of them at once. They are handed over together and come back together.
+//
+// Anything the script kept for DIAGNOSTICS rather than for building — `script.parts`, a weathering
+// scope — goes over as NAMES, which is a second list and deliberately not a root. D690 shipped this
+// switch off because `apply_origin` wraps every named part in its own fresh translate that nothing
+// else references: 0 of the estate's 5,091 names were reachable from anything that builds, so every
+// one was dropped. Making them roots would have answered them and spent the whole rewrite doing it,
+// because `gather` only flattens a child with one parent and a name is a parent. The witness pass
+// in `forge::compile_field` carries them after the roots are emitted instead, where a name can read
+// the decisions without taking part in them.
+//
+// A name that still has no answer is dropped rather than left aimed at whatever now occupies its
+// old index, so `--part` on a compiled clip says "does not name anything" instead of sampling the
+// wrong shape: trap 7, a refusal and a wrong answer must not look alike.
 void compile_fields(bool on);
 
 Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const TagRegistry& tags);

@@ -1043,15 +1043,27 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         // The control arm for D610. Two flags of one build: with it, every lone voxel of the
         // wrong material stays exactly where the sampler put it.
         options.despeckle = false;
-    } else if (arg == "--compile-field") {
-        // Rewrite every clip's field into an equivalent one that is cheaper to walk: 1.20x on the
-        // cost of asking the field a point, bit-exact near every surface. OFF, and this is the arm
-        // that turns it on. See `forge::compile_fields` and `src/forge/compile.hpp`.
+    } else if (arg == "--compile-field" || arg == "--no-compile-field") {
+        // Rewrite every clip's field into an equivalent one that is cheaper to walk: 1.22x on the
+        // cost of asking the field a point, bit-exact near every surface. **ON since D695**, and
+        // `--no-compile-field` is the control arm that turns it off. See `forge::compile_fields`
+        // and `src/forge/compile.hpp`.
+        //
+        // `--compile-field` is kept and still asks for what it always asked for, because it is
+        // written into scripts, into baseline rows and into two decision-log entries, and an
+        // argument the exe does not recognise is WARNED about and ignored -- so dropping it would
+        // leave every one of those silently running the arm it thought it had opted into. Trap 15.
         //
         // Set here rather than carried in `Options` because the parse is what reads it and the
         // parse is reached from a dozen places in this file; a global switch taken at the flag is
         // one line, and an option threaded through all twelve is a control arm nobody takes.
-        ws::forge::compile_fields(true);
+        //
+        // **Take the arm with `--no-clip-cache`, in the GAME path.** `world_cache_key` is the
+        // source text, the resolution and the build stamp — it does not know about this switch, so
+        // two arms of one build share a key and the second one reads the first one's world back off
+        // the disk. It reports a hash identical for the reason a cache is identical. The headless
+        // clip report never touches the cache and needs nothing.
+        ws::forge::compile_fields(arg == "--compile-field");
     } else if (arg == "--no-clip-cache") {
         options.no_clip_cache = true;
     } else if (arg == "--no-paste-pool") {
