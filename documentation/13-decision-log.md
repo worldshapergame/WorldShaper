@@ -10136,6 +10136,15 @@ none of the others was done.
 **It is exact and the gate says so.** `clips/sampler.clip --refine-all --no-despeckle`, both arms:
 `a7660d52378d3c27`, **1,430,152 solid voxels, identical**.
 
+> **Corrected 2026-08-19, and the entry is left standing because both of its arms agreed with
+> each other — it measured something real.** That pair does not reproduce. On a clean tree at
+> `5be06c0`, three separate agents of the 2026-08-19 wave ran this exact gate independently and
+> all three got **`a1f8bc6c656343b7` at 1,430,104**, which is also what D615, D616, D622 and
+> D624 record. One of them said plainly that it never saw `a7660d52378d3c27` at all. **Whatever
+> moved the world between D683 and this wave is unfound**, and it is worth finding rather than
+> assuming — a world that changed without a decision behind it is the thing this log exists to
+> make impossible. Until then, quote `a1f8bc6c656343b7`.
+
 ### And it is worth two per cent
 
 **Estate, enclosed camera, cold, matched 45 s, CPU sampler:**

@@ -976,7 +976,9 @@ everything it can before the ladder sees a node. **The cost is what the clip IS.
 
 **And D683 is the one that settles it.** The best remaining idea was that 512 cells of a node each
 walk the same eighteen thousand nodes to each discover the same eighteen thousand are far away — so
-answer it once per box. Built, proved exact on the gate (`a7660d52378d3c27`, 1,430,152 voxels,
+answer it once per box. Built, proved exact on the gate (`a7660d52378d3c27`, 1,430,152 voxels —
+**that figure does not reproduce and must not be quoted; see the correction below and D700's
+note. The gate is `a1f8bc6c656343b7` at 1,430,104**,
 both arms identical), and **worth 2%**. The reason is the finding: the box cull already refuses a
 far child for the price of one box test, so **the 8,231 nodes a cell walks are all genuinely NEAR
 it**. A point inside the block is inside dozens of overlapping layers and every one really does
