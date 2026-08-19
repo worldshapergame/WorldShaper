@@ -78,23 +78,28 @@ void main() {
     s_tile[lane] = kBeamNoDepth;
     barrier();
     if (beam_temporal_enabled()) {
+        // `lane` is the invocation's index in the workgroup on the way IN and its corner on the way
+        // OUT, and the two readings are deliberately different. Reading in, it is which of the
+        // sixty-four COLUMNS this invocation walks, so consecutive lanes read consecutive floats.
+        // Reading out, it is `local.y * 8 + local.x` -- the tile at this corner. Both address
+        // `s_tile` as (tile row) * 8 + (tile column), which is what makes them agree.
         const ivec2 base = ivec2(gl_WorkGroupID.xy) * (8 * kBeamTile);
         const ivec2 last = ivec2(push.resolution.xy) - ivec2(1);
-        const int col = base.x + int(lane);
+        const int pixel_col = base.x + int(lane);
         float mine[8];
         for (int t = 0; t < 8; ++t) mine[t] = push.lens.y;
-        if (col <= last.x) {
+        if (pixel_col <= last.x) {
             for (int t = 0; t < 8; ++t) {
                 for (int s = 0; s < kBeamTile; ++s) {
-                    const int row = base.y + t * kBeamTile + s;
-                    if (row > last.y) break;
-                    mine[t] = min(mine[t], imageLoad(prev_depth, ivec2(col, row)).x);
+                    const int pixel_row = base.y + t * kBeamTile + s;
+                    if (pixel_row > last.y) break;
+                    mine[t] = min(mine[t], imageLoad(prev_depth, ivec2(pixel_col, pixel_row)).x);
                 }
             }
         }
-        const uint tile_x = uint(int(lane) / kBeamTile);
+        const uint tile_col = uint(int(lane) / kBeamTile);
         for (int t = 0; t < 8; ++t) {
-            atomicMin(s_tile[uint(t) * 8u + tile_x], floatBitsToUint(max(mine[t], 0.0)));
+            atomicMin(s_tile[uint(t) * 8u + tile_col], floatBitsToUint(max(mine[t], 0.0)));
         }
     }
     barrier();
