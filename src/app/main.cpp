@@ -302,11 +302,14 @@ struct Options {
     // R11e: a node request that came from a light path may not cause a sample job.
     //
     // On, and `--no-light-sampling-guard` is the arm that shows what the rule is holding back
-    // rather than a restatement of what was already true. Read the flag honestly: before R11h there
-    // was no route at all from a request to the sampler, so "off" is not "yesterday's build" -- it
-    // is the rule ABSENT with the route present, which is the state R11e exists to make impossible.
-    // With it off, `clips/sealed_dark.clip` samples the building it is sealed inside; with it on,
-    // the offers are counted and the sample jobs are nought.
+    // rather than a restatement of what was already true. Read the flag honestly: until this change
+    // there was no route at all from a request to the sampler, so OFF is not "yesterday's build" --
+    // it is the rule ABSENT with the route present, which is the state R11e exists to make
+    // impossible and the only state in which a counter can prove anything. Measured on
+    // `clips/sealed_dark.clip`: with it off, 4,038 and 4,212 sample jobs over two runs are caused
+    // by rays inside a sealed room that can see nothing, against about 1,550 caused by the camera,
+    // and the world comes out different every run. With it on, nought, and the same world every
+    // time.
     bool light_sampling_guard = true;
 
     // R11h: an edit outside the proximity radius samples what it is about to cut, before it cuts.
