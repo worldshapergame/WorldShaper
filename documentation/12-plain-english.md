@@ -3539,3 +3539,96 @@ That is not the carving being slow. It is how much building there is: seven buil
 So the real choice is between the two ends I have measured. **A third of a second to be standing in it, with the building arriving around you** -- which is what you have. Or **twenty-two seconds to be standing in something complete but made of half-metre blocks.** Everything in between is a dial, and it is yours to set.
 
 The one thing that would genuinely change the answer is a smaller estate. A world that builds a hundred times faster is a world with a hundred times less carved into it, and that is a decision about the building rather than about the engine.
+
+## The world you open is the whole world now, and the missing word was `--refine-all`
+
+You have been telling me for a long time that entering a world does not show all of it, and you sent
+me a photograph of a floor with no walls. **You were right every time, and now I know exactly why.**
+
+Baking a world saves what the building process *reached*, and what it reaches is driven by where a
+camera is standing and how much of the screen each piece takes up. So a bake made from the spawn
+point saves a world that is complete where that camera stood and coarse everywhere else. It is not
+that the bake was broken. It is that the bake was doing precisely what it was told, and what it was
+told was one person's walk through the building.
+
+There is a switch that takes the camera out of it entirely and carves every part of the world
+regardless of whether anything is looking at that part. The shipped bake now uses it. On the estate
+that is **647,797 of 647,797 pieces — all of them** — 128 million solid voxels, a **74 megabyte**
+file, and it opens in **446 milliseconds**. It was checked from three viewpoints the bake never came
+from, including one above the roof and one sixty metres outside the building, and at frame 60 the
+dome and its ribs, the balustrades, the corner urns, the portico and the steps were all there.
+
+**Two things came out of building it that are worth telling you.** One bake run can never finish the
+estate, and the reason is not the clock — there is a ceiling of thirty thousand frames that no
+deadline overrides, so a bake given half an hour was quietly stopping after two minutes with
+two-thirds of the world done. The bake is now a loop that carries on from where the last one stopped
+until the world is whole. And a release now **fails** rather than shipping a partial world, because
+a partial world reads, opens and photographs exactly like a complete one — which is how three of
+them shipped.
+
+## The graphics card is now faster than the processor at building the world
+
+This is the one that matters, because it is the thing standing between you and everything you asked
+for in the last big piece of work.
+
+The world is built by asking a mathematical description of the building — *is there stone at this
+exact point?* — a very large number of times. The processor does that today. The graphics card can
+do thousands of those at once and ought to be far faster, and when I measured it, it was **2.7 times
+SLOWER** on the view the game opens on. That made no sense, and it was the reason the whole thing sat
+switched off.
+
+The reason was almost silly. The estate is seven buildings. When the card asked *is there stone
+here?*, it went through those seven **in the order they happen to be written in the file**. So
+standing in the seventh building, it worked out the answer for the other six in full — every
+column, every urn, every step of six buildings you are nowhere near — before it had a number good
+enough to start ruling things out with. Then it ruled all six out.
+
+The processor has known better for a long time: it asks the **nearest** thing first, so it can
+dismiss everything else almost immediately. Two of those shortcuts had simply never been given to
+the card. With them, one point now looks at **2,876 pieces instead of 8,273** — and on a quiet
+machine the card has gone from 2.7 times slower to *faster* than the processor, on exactly the view
+where it was losing.
+
+Nothing about the picture changed: the card and the processor were checked against each other cell
+by cell and **not one disagreed**, which is the thing I care about most here. Two halves of the
+engine quietly building two different worlds would be far worse than a slow one.
+
+## What you carve is now kept properly when a world is saved
+
+A saved world holds every voxel, which is enormous and mostly wasteful — almost all of it can be
+worked out again from the recipe. What genuinely cannot is **what you changed**. So a saved world is
+becoming the recipe plus your edits, and on a test scene the part that stores voxels fell by
+**738 times**, with the whole thing reloading in a sixth of a second instead of the thirteen minutes
+it takes to work out from scratch.
+
+The reason this took care rather than an afternoon is that it is the one change in this whole project
+that can lose somebody's building. Three ways it still could were found and closed, and **not one of
+them announced itself** — in every case the world simply came back subtly wrong:
+
+- **A brick you carve out and then fill back in with the same stone.** Nothing differs from the
+  recipe, so nothing was saved, so it came back as the recipe's — wood where you had put stone. The
+  fix is that what counts as an edit is now *the fact that you swung the chisel there*, not whether
+  the result happens to differ.
+- **A chisel swing in empty air, far from any building.** It reached no part of the world the saving
+  code was looking at, so it was written down nowhere. That is the guarantee failing in exactly the
+  case it exists for.
+- **Materials coming back as the wrong materials.** The game numbers materials in the order it first
+  meets them, which depends on where you walked. Load a world in a different order and the numbers no
+  longer line up — **478,720 voxels of a single wall** came back as somebody else's material, and the
+  game blamed the recipe for it rather than noticing its own numbering had shifted.
+
+## Mirrors are getting there, and I can now say exactly what is missing
+
+Polished surfaces store what they reflect as a set of directions. Until now every reflective face got
+the same fixed number of directions whether it filled a quarter of your screen or was four pixels
+across on the far side of the room. That is now decided by **how many pixels are actually looking at
+it**, together with how polished the material is — with no cutoff anywhere, so nothing suddenly
+switches from blurry to sharp as you approach.
+
+On the test scene the chrome ball now has **the sky's own colour in it for the first time** — actual
+blue pixels, where before it was a flat grey dome. But it is **noise rather than a picture**, and I
+can now name the reason precisely instead of guessing: each of those directions is being measured
+with 24 samples, and 24 samples is 24 samples whether the surface is storing 36 directions or 144.
+The rule is right; the number of light rays behind it is not there yet. That is the next piece, and
+it is a known quantity now rather than a mystery — this is the fourth time that same limit has turned
+up, and the first time it has been the *only* thing left in the way.
