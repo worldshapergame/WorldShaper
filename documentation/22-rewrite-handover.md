@@ -5329,9 +5329,9 @@ allowed to look, as against what it finds when it gets there. A wrong bit there 
 request every frame for ever (D133) or geometry no feedback will ever ask for, and it is invisible
 to the other two. Read all three before concluding the tree is healthy.
 
-## §5.1 — NINE THINGS A PLAYER REPORTED ON 2026-08-19 AND WHAT IS KNOWN ABOUT EACH
+## §5.1 — TWELVE THINGS A PLAYER REPORTED ON 2026-08-19 AND WHAT IS KNOWN ABOUT EACH
 
-Two are fixed and pushed. **Seven are open, and every one of them is a report from playing rather
+Two are fixed and pushed. **Ten are open, and every one of them is a report from playing rather
 than a theory.** They are written here with what was actually established, so the next session starts
 from evidence rather than from the sentence.
 
@@ -5397,3 +5397,35 @@ from evidence rather than from the sentence.
    cache write at `main.cpp` is gated on `coarse <= 1 && !stop_for_button`, and with no up-front
    build there is nothing worth writing there. D717's design is that the world is kept **on the way
    out** (D673) instead. Whether that is firing is not established.
+
+**THREE MORE ON 2026-08-19, AFTER THE ABOVE WAS WRITTEN. Documented and NOT fixed, asked for
+directly: *"dont fix these only document them for the next session"*. Full write-up is D720.**
+
+10. **"doesnt handle sky properly behind it when theres another glass" — START HERE. It is an
+    UNINITIALISED READ and it is one of ours, from today.** `shaders/visibility.comp`'s refraction
+    loop declares `NodeHit far;` uninitialised and repairs it with `if (!bent)`. On a second medium
+    that repair cannot fire: the path to a second turn is the `continue`, which skips `far = beyond`,
+    while `bent` is already `true`. Either `break` in the loop then exits with `far` holding stack
+    garbage — including `far.hit`, **which is the bit that means "this ray reached the sky"**. That
+    is the report, clause for clause, including *"when theres another glass"*. Assign `far` before
+    the `continue`, or carry a `have_far` and let it fall through to the straight ray. Small.
+
+11. **"glass has some weird opposite color tinting effect."** The picture is olive-yellow glass with
+    magenta tracery — complements, not wrong tints. **Seen a second time today from the other end:** a
+    probe material of `absorb=180,4,90` on the middle pane of a stack should transmit `(≈0, 0.62, ≈0)`
+    over its 0.12 m and the wall behind it rendered **magenta**. **Do not start at `absorb`** — that
+    magenta was in the `--no-refract-stack` control arm too, where `absorb` is never read. Start at
+    the wire: `node_medium_through` returns a *transmittance*, and any `1 - x` across
+    `visibility_pack_behind`'s `lets_past` or `resolve.comp`'s `through` produces exactly the
+    complement.
+
+12. **"large edits still freeze the game" — and D719's 74.7 ms is why it was missed.**
+    `demand_sample_of` linearly scans `refine_regions_` **per key**, and `presample_for_edit` hands it
+    one key per finest node: **3,757 keys for 86 distinct demands** on the carve that was measured.
+    Cost is `O(keys x regions)` and **both grow** — keys with the size of the edit (the player's
+    *"bigger the bigger the amount"*), regions with how far the ladder has split the world, which
+    reached **63,307 nodes** on the facility this session. **D719 measured at `--edit-frame 200`**,
+    when that list was nearly empty. Dedupe the keys to distinct ladder nodes first (44x on the
+    measured carve, a sort and a `unique`), or ask once per covering coarse node.
+    **The lesson beyond the fix: a frame number is part of a measurement's scene, exactly as the
+    content hash is.**

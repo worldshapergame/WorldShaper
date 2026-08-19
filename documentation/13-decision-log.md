@@ -12872,3 +12872,120 @@ change is inert where the feature is. `--sync-edit-presample` is R11h exactly as
 | D719 | **One big sample is slower than many small ones here** | measurement | 64,507 ms against 8,825: per-node runs on the pool, one box runs on one thread |
 | D719 | **The work moves to the ladder, which already replays the op log** | design | R11h supplied arrival by doing the sampler's job on the main thread; a demand supplies it properly |
 | D719 | **The convergence is NOT gated and the entry says so** | honesty | The facility cannot settle in one run, and the clip that can does not exercise the feature |
+
+---
+
+## D720 — Three more from playing, documented and deliberately NOT fixed
+
+**2026-08-19.** *"glass has some weird opposite color tinting effect and doesnt handle sky properly
+behind it when theres another glass, large edits still freeze the game, dont fix these only document
+them for the next session"*.
+
+Written up at the point the evidence stops, on purpose. Two of the three have a **specific named
+suspect in code that shipped today**, and one of those is a defect I introduced in D718 and can point
+at by line. None of them is fixed here.
+
+### 1. The sky behind glass, when there is another glass — AND IT IS AN UNINITIALISED READ
+
+**This is D718's, it is mine, and it is the most concrete thing on the list.**
+`shaders/visibility.comp`'s refraction loop is:
+
+```glsl
+NodeHit far;              // <- not initialised
+bool bent = false;
+for (uint crossing = 0u; crossing < media; ++crossing) {
+    if (dot(into, into) <= 0.0) break;          // break A
+    ...
+    if (!inside.left_medium) break;             // break B
+    ...
+    bent = true;
+    if (!last && next_is_medium) { ...; continue; }   // <- `far` NOT assigned on this path
+    far = beyond; break;
+}
+if (!bent) { far = node_march(/* the straight ray */); }
+```
+
+On the **first** turn either break leaves `bent == false`, the fallback fires, and the pixel gets
+D604's straight ray — correct, and that is the case the code was written against. **On any LATER
+turn `bent` is already `true` and `far` has still never been assigned**, because the path that
+reaches a second turn is the `continue`, which skips the assignment. Break A or break B then exits
+the loop with `far` holding whatever was on the stack, and `if (!bent)` does not fire to repair it.
+
+`far` is then handed to `visibility_pack_behind`, which reads `far.hit`, `far.t`, `far.level`,
+`far.type_id`/`far.colour` and the face slot out of it. **`far.hit` is the bit that says "this ray
+reached the sky",** so the single most visible symptom of reading it uninitialised is the sky behind
+glass being wrong — which is exactly the report, including the *"when theres another glass"* clause,
+because a second turn is the only way to get there.
+
+Both breaks are reachable on a second pane: break A is total internal reflection at an entry face,
+break B is a ray that enters a medium and never finds its way out of it (a body of glass whose far
+side is solid, which this file's own comment describes as the fallback's whole reason).
+
+**The fix is small and is deliberately not applied here.** Either assign `far = beyond` before the
+`continue` so every exit has a valid one, or carry a `bool have_far` and let `!have_far` fall through
+to the straight ray the way `!bent` does. The second is closer to what the fallback means.
+
+### 2. "Weird opposite color tinting" — and there is a second sighting of it in this session
+
+The player's picture is a stained window: **olive-yellow glass with magenta tracery.** Magenta is
+green's complement and olive is blue's, so the whole panel reads as a channel inversion rather than
+as a wrong tint.
+
+**And the same thing was seen from the other end today and dismissed.** While instrumenting D718 a
+probe material was put on the middle pane of a stack — `absorb=180,4,90`, which over its 0.12 m path
+transmits `exp(-21.6), exp(-0.48), exp(-10.8)` = **(≈0, 0.62, ≈0)**, i.e. green, and nothing else.
+**The wall behind it came out magenta.** That was written off at the time as "the material changed,
+of course the picture changed". It is the complement of the right answer, in the same direction as
+the player's report, from a completely different scene.
+
+**The honest complication, which is where the next session should start rather than at `absorb`:**
+that magenta was present in the `--no-refract-stack` control arm too, and in that arm the middle
+pane's `absorb` is *never read*. So the inversion is **not** in D718's new code and probably not in
+`node_medium_absorb` at all. It is upstream of both, in whatever turns a transmission into a pixel:
+
+- `node_medium_through` returns `mix(vec3(1.0), tint, opacity) * (1.0 - opacity)`, raised to
+  `1/kVoxelsPerMetreF`. That is a transmittance. Anything downstream treating it as an *absorbance*
+  inverts it exactly.
+- `visibility_pack_behind` quantises `lets_past` to eight bits a channel; `resolve.comp` unpacks it
+  as `through` and blends near and far by it. A `1 - x` on either side of that wire produces the
+  complement and nothing else.
+
+Two independent sightings, one of them with a known input and a computable expected output, is a
+better starting point than most faults get.
+
+### 3. Large edits still freeze — and D719's own measurement is why that was not caught
+
+D719 took a four-metre carve from 8,610 ms to 74.7 ms and the player says it still freezes. **The
+74.7 ms is not representative of play, and the reason is in the method.**
+
+`demand_sample_of` is a **linear scan of `refine_regions_` for every key it is given**, and
+`presample_for_edit` hands it one key per finest-level node across the edit — 3,757 of them on the
+carve that was measured, which produced only **86 accepted demands** because thousands of keys fall
+inside the same ladder node.
+
+So the cost is `O(keys x regions)`, and **both factors grow**: keys with the size of the edit, which
+is the player's *"bigger the bigger the amount of the voxels placed"*, and regions with how much of
+the world the ladder has already split. **D719's figure was taken at `--edit-frame 200`**, when the
+ladder had barely started and the region list was tiny. In the same session a settle run on the
+facility reported **63,307 ladder nodes**. Late in a session the identical edit does the same scan
+against a list three orders of magnitude longer, and 74.7 ms is not what it costs.
+
+**Two fixes suggest themselves and neither is applied.** Dedupe the keys to distinct ladder nodes
+before asking — 3,757 into 86 is a 44x cut on its own, and it is a `std::sort` plus `unique` on a
+key the caller already has. Or ask once per coarse node covering the edit box instead of once per
+finest key, which is the same idea taken to its conclusion. Only if that is still not enough does
+`refine_regions_` need a spatial index.
+
+**And a note on method that is worth more than the fix.** D719's control arm was sound and its number
+was honest, and it was still misleading, because the *scene state* it was measured in was not the
+state the feature is used in. A frame number is part of a measurement's scene, exactly as the content
+hash is — an edit at frame 200 and the same edit at frame 20,000 are two different measurements.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D720 | **`far` is read uninitialised on any second medium** | fault | The `continue` path skips the assignment while `bent` is already true, so the `!bent` repair cannot fire |
+| D720 | **The glass inversion was seen twice today, once with a computable expected value** | measurement | `absorb=180,4,90` should transmit green and rendered magenta, in the control arm too |
+| D720 | **...so it is NOT in `absorb`, and the wire is the place to look** | honesty | The control arm never reads `absorb`; a `1 - x` across `lets_past`/`through` gives exactly the complement |
+| D720 | **`demand_sample_of` is O(keys x regions) and both grow** | trap | 3,757 keys for 86 distinct demands, scanned against a list that reached 63,307 nodes |
+| D720 | **A frame number is part of a measurement's scene** | method | D719's 74.7 ms was taken at frame 200 with a nearly empty region list, and is not what play costs |
+| D720 | **Documented and not fixed, asked for directly** | — | *"dont fix these only document them for the next session"* |
