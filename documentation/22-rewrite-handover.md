@@ -733,6 +733,31 @@ a fault in the change being measured and is not one. Two agents lost runs to it 
 integrator. They also share one log file at `%LOCALAPPDATA%\WorldShaper\worldshaper.log`, so a tail
 of it during a wave is several runs interleaved and is worth nothing.
 
+**A SECOND AND THIRD WAVE WENT OUT AS FILES FREED, which is the arrangement working as intended.**
+The moment a stage merged, its files became dispatchable again, so four more agents went out during
+the integration rather than after it:
+
+| dispatched | on | files it holds |
+|---|---|---|
+| wave 2 | **the  blocker** that keeps `--compile-field` OFF: named parts must survive the rewrite without becoming roots, because `gather` only flattens a child with one parent | `src/forge/compile.*`, `clip_script.*` |
+| wave 2 | **R12c's missing half** — the FIRST cold frame, which the marcher cannot reach: no chunks means no roots means nothing WANTED, so the pool must know the clip's extent before anything is pasted | `src/world/node_pool.*`, `src/gpu/node_buffers.*` |
+| wave 3 | **R5c and R5d's second halves** — the deterministic two-level blend (which closes §1's *no random numbers* clause, whose last holdout is `hash_u32` in the composite) and analytic edge AA over up to three partial hits | `shaders/resolve.comp` |
+| wave 3 | **R5b's temporal half and the sun seed**, plus **the one third of R9h that D589 says is actually missing** | `shaders/shade_faces.comp`, `face_terms.glsl`, `src/world/face_store.*`, `src/gpu/face_buffers.*`, `face_light.*` |
+
+**Still owed and NOT dispatched, because their files were held at the time:**
+
+- **R6a's bloom before the curve.** D702 handed the exact patch forward: the composite writes the
+  exposed radiance to a new binding before tone-mapping and post owns the curve. The shader half is
+  three lines; the host half is in `main.cpp`, which an agent holds. **Until it lands, a lamp a
+  hundred times over white and one four times over it glare identically.**
+- **R8a signed levels and R8e `--infinite-detail`**, and with them the `node.glsl` call site that
+  makes D696's hashed child source visible at all — the patch is written and in that entry.
+- **R7c**, the step count in the descent.
+- **R12d**, the CPU sampler writing only what is edited.
+- **D693's fix**: `run_clip_tool` exiting 1 silently on the estate. Confirmed at integration to be
+  about the SIZE of the sample rather than the estate's content — a bounded box works and the whole
+  clip does not.
+
 **Left for a second wave, because their files were taken:** R12d (the CPU sampler writes what is
 EDITED — it needs R12c on under it), R5b's temporal half and R5c/R5d's second halves (`resolve.comp`
 and `shade_faces.comp` were both spoken for), R7c (step count, in `node.glsl`), R8a signed levels and
