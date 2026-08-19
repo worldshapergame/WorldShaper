@@ -146,11 +146,31 @@ param(
     # timeout instead says nothing and leaves no report behind.
     [int]$TotalMinutes = 0,
 
+    # CARRY ON FROM THE `.world` THAT IS ALREADY THERE instead of deleting it and starting again.
+    #
+    # A whole-world bake of the estate is over an hour, and an hour is long enough that something
+    # ends it that is not the script: a build server's job timeout, a machine going to sleep, a
+    # background task being stopped. Without this, the next run deletes what the last one reached
+    # -- which is correct for a NORMAL bake, where a leftover file must never be mistaken for a
+    # success, and is exactly wrong for continuing one.
+    #
+    # It is safe by the same key everything else here is keyed on: if a stamp is beside the game
+    # and its key does not match this game and these clips, the file is from a different source
+    # and resuming from it would silently ship a world built from something else, so it refuses.
+    # If there is no stamp at all -- which is what an interrupted bake leaves, because the stamp
+    # is cleared before the first pass -- the file is taken on trust and the run says so.
+    [switch]$Resume,
+
     # FAIL IF THE WORLD IS NOT ALL THERE. Off by default so that baking by hand is still a thing
     # somebody can do in two minutes and look at, and ON in the release workflow, where a partial
     # world is the exact defect this feature exists to remove and shipping one quietly is how it
     # got shipped the first three times. It has nothing to say about a `-RefineAll:$false` bake,
     # which is partial on purpose, so it refuses that combination rather than failing it.
+    #
+    # It is checked TWICE and they are different questions. On a bake it reads the two numbers the
+    # baking run printed. On the gate it asks each viewpoint how many regions the shipped world
+    # still has to build -- which needs no knowledge of how the file was made, and is therefore
+    # what `-GateOnly -RequireWhole` can say about a download.
     [switch]$RequireWhole,
 
     # WHERE ELSE THE GATE STANDS. `x,y,z,yaw,pitch` each, and an empty string is the world's own
@@ -466,6 +486,20 @@ function Test-BakedWorldIsRead {
         if ($cam) { $vargs += @('--cam', $cam) }
         $vrun = Invoke-Game -What "view-$Stem" -Root $vroot -GameArgs $vargs
 
+        # A RUN THAT DIED IS NOT A WORLD THAT WAS REFUSED, and telling them apart is the whole of
+        # what the first gate above says at length. This check learned it the hard way: it reported
+        # "the world was not read from this camera -- that is D685 exactly" about a run that had
+        # been KILLED by something else on the machine obeying build.bat's "kill any stale
+        # WorldShaper.exe first". The same camera passed by hand a minute later. So the log is
+        # asked whether the game got far enough to say anything at all before the verdict is given.
+        $started = ($vrun.log -match 'put \d+ shipped worlds on the shelf')
+        if (-not $started) {
+            Remove-Item $vroot -Recurse -Force -ErrorAction SilentlyContinue
+            throw ("$Stem : the run from '$cam' never got as far as seeding its shelf (exit " +
+                   "$($vrun.code)). That is a run that did not happen, not a world that was " +
+                   "refused -- check whether something killed it. `-Exe` renames the executable " +
+                   "for exactly this reason; the log follows.`n" + $vrun.log)
+        }
         if ($vrun.log -notmatch "opened the world shipped at") {
             Remove-Item $vroot -Recurse -Force -ErrorAction SilentlyContinue
             throw ("$Stem : the shipped world was read from the spawn view and NOT from '$cam'. " +
@@ -488,9 +522,37 @@ function Test-BakedWorldIsRead {
             $tag = if ($cam) { ($cam -replace '[^0-9A-Za-z-]', '_') } else { 'spawn' }
             Copy-Item $vshot (Join-Path $GateShots "$Stem-$tag.png") -Force -ErrorAction SilentlyContinue
         }
-        Write-Host ("gate  $Stem from '{0}': {1:N0} solid voxels at frame 60, {2} nodes, content {3}" `
-                    -f $(if ($cam) { $cam } else { 'the spawn view' }), $vox, $sharp, $content)
-        $views += [pscustomobject]@{ cam = $cam; voxels = $vox; nodes = $sharp; content = $content }
+        # HOW MUCH THIS VIEWPOINT STILL HAS TO BUILD, AND IT IS THE WHOLE TEST.
+        #
+        # The game says `the world was still being sharpened - N regions left` on the way out, and
+        # N is exactly what a player standing here would be waiting for. Measured, both arms:
+        #
+        #   a WHOLE world  (sky_test)  60,136 of 60,136 nodes and 0 regions left, from ALL FOUR
+        #                              cameras, with the same voxel count from each
+        #   a PARTIAL one  (estate)    211,048-212,480 of 278,705-285,129, and 67,657 regions left
+        #                              from the spawn view against 72,678 from sixty metres out
+        #
+        # That second row IS the complaint: more left to build from outside than from where the
+        # bake stood, because the bake stood in one place. And the first row is why this can be a
+        # pass mark rather than a note -- a finished world answers zero from everywhere, so the
+        # number does not depend on which camera asks.
+        #
+        # Which makes `-GateOnly -RequireWhole` a complete check of a `.world` FILE, with no
+        # knowledge of how it was made. That is what the release runs against its own unpacked zip.
+        $leftM = [regex]::Match($vrun.log, "the world was still being sharpened - (\d+) regions left")
+        $left = if ($leftM.Success) { [int64]$leftM.Groups[1].Value } else { 0 }
+        if ($RequireWhole -and $left -gt 0) {
+            Remove-Item $vroot -Recurse -Force -ErrorAction SilentlyContinue
+            throw ("$Stem : -RequireWhole, and read from " +
+                   $(if ($cam) { "'$cam'" } else { 'the spawn view' }) +
+                   " the shipped world still has $left regions to build. It opens, it reads, and " +
+                   "it is not all there -- a player standing here waits for the rest. That is the " +
+                   "floor with no walls, and it is what this flag exists to refuse.")
+        }
+        Write-Host ("gate  $Stem from '{0}': {1:N0} solid voxels at frame 60, {2} nodes, {3:N0} regions still to build, content {4}" `
+                    -f $(if ($cam) { $cam } else { 'the spawn view' }), $vox, $sharp, $left, $content)
+        $views += [pscustomobject]@{ cam = $cam; voxels = $vox; nodes = $sharp
+                                     regions_left = $left; content = $content }
         Remove-Item $vroot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
@@ -523,14 +585,20 @@ foreach ($stem in $mine) {
     if ($GateOnly) {
         if (-not (Test-Path $world)) { throw "$stem : -GateOnly, and there is no clips\$stem.world" }
     } else {
-        # The stamp is `key|nodes|whole`, and only the key decides whether the file can be reused.
-        # The other two fields are carried so that a WARM row can still say whether the world it
-        # is reusing is the whole world -- a re-used partial world is still a partial world, and
+        # The stamp is `key|nodes|whole|state`, and TWO of those decide whether the file can be
+        # reused. The key says it was baked from this game and these clips. The state says the
+        # bake FINISHED -- it is written `running` after every pass and `done` only when the loop
+        # is over, so a bake that was interrupted leaves a perfectly good partial world that this
+        # will not mistake for a finished one. `-Resume` is for that file; the warm path is not.
+        #
+        # `nodes` and `whole` are carried so that a warm row can still say whether the world it is
+        # reusing is the whole world -- a re-used partial world is still a partial world, and
         # -RequireWhole has to be able to see that without re-baking to find out.
         $known = ''
         if ($stamps.ContainsKey($stem)) { $known = $stamps[$stem] }
         $knownParts = $known -split '\|'
-        if (-not $Force -and (Test-Path $world) -and $knownParts[0] -eq $key) {
+        $finished = ($knownParts.Count -ge 4 -and $knownParts[3] -eq 'done')
+        if (-not $Force -and (Test-Path $world) -and $knownParts[0] -eq $key -and $finished) {
             $warm = $true
             if ($knownParts.Count -ge 3) {
                 $nodes = $knownParts[1]
@@ -542,11 +610,29 @@ foreach ($stem in $mine) {
     }
 
     if (-not $GateOnly -and -not $warm) {
-        # Deleted first, always. A bake that fails must not leave the last one standing and be
-        # mistaken for a success by the size check below. It is also half of what replaces
-        # `--no-clip-cache` on a multi-pass bake: with no `.world` beside the clip, the first pass
-        # has no shipped world to find and starts from nothing exactly as it did before.
-        Remove-Item $world -Force -ErrorAction SilentlyContinue
+        # Deleted first, always -- unless -Resume. A bake that fails must not leave the last one
+        # standing and be mistaken for a success by the size check below. It is also half of what
+        # replaces `--no-clip-cache` on a multi-pass bake: with no `.world` beside the clip, the
+        # first pass has no shipped world to find and starts from nothing exactly as it did before.
+        $resuming = $false
+        if ($Resume -and (Test-Path $world)) {
+            $resuming = $true
+            $knownKey = ''
+            if ($stamps.ContainsKey($stem)) { $knownKey = ($stamps[$stem] -split '\|')[0] }
+            if ($knownKey -and $knownKey -ne $key) {
+                throw ("$stem : -Resume, and the world already there was baked from a different " +
+                       "game or different clips. Resuming from it would ship a world built from " +
+                       "something else. Delete clips\$stem.world, or drop -Resume.")
+            }
+            Write-Host ("bake  $stem RESUMING from the {0:N2} MB already there" -f `
+                        ((Get-Item $world).Length / 1MB))
+            if (-not $knownKey) {
+                Write-Host ("bake  ...and there is no stamp beside it, which is what an " +
+                            "interrupted bake leaves. Taken on trust that it is this source.")
+            }
+        } else {
+            Remove-Item $world -Force -ErrorAction SilentlyContinue
+        }
         if ($stamps.ContainsKey($stem)) { $stamps.Remove($stem) }
         Write-Stamps -Stamps $stamps
 
@@ -634,6 +720,16 @@ foreach ($stem in $mine) {
             $nodes = "$done of $all"
             $whole = ($done -ge $all)
 
+            # THE STAMP AFTER EVERY PASS, not only at the end. An hour-long bake is long enough
+            # that something other than this script ends it -- a job timeout, a machine sleeping,
+            # a task being stopped -- and what that used to leave behind was a perfectly good
+            # partial world with no record of what made it. Written here, an interrupted bake
+            # leaves a file AND its key, so `-Resume` can check the one against the other instead
+            # of taking it on trust.
+            $stamps[$stem] = "$key|$nodes|" +
+                             $(if ($whole) { 'whole' } else { 'partial' }) + "|running"
+            Write-Stamps -Stamps $stamps
+
             # EVERY NODE, which is the only outcome that means the file is the world. The game
             # prints the two numbers and they are equal when there is nothing left to sharpen.
             if ($whole) {
@@ -686,20 +782,45 @@ foreach ($stem in $mine) {
     }
 
     if (-not $GateOnly -and -not $warm) {
-        $stamps[$stem] = "$key|$nodes|" + $(if ($whole) { 'whole' } else { 'partial' })
+        $stamps[$stem] = "$key|$nodes|" +
+                         $(if ($whole) { 'whole' } else { 'partial' }) + "|done"
         Write-Stamps -Stamps $stamps
     }
 }
 
-# The budget, before the gate, because a download that is too big is a decision and not a defect
-# and there is no point spending three minutes proving an oversized world reads.
+# The budget, before the gate, because a world that is too big is a decision and not a defect and
+# there is no point spending three minutes proving an oversized world reads.
+#
+# IT IS THE SIZE ON DISK, NOT THE SIZE OF THE DOWNLOAD, and this comment used to say the opposite.
+# A `.world` is very compressible and the zip compresses it: measured here, 28,668,002 bytes of
+# baked estate went into `Compress-Archive` and came out at 3,436,685 -- **8.3x**, so a world that
+# adds 27 MB to an installed folder adds about 3 MB to what anybody downloads. Both numbers are
+# real and they are answers to different questions; this budget is the first one, because it is the
+# one that is true after the zip has been thrown away.
 $totalBytes = 0
 foreach ($row in $rows) { $totalBytes += $row.bytes }
 $totalMB = [math]::Round($totalBytes / 1MB, 2)
 if ($totalMB -gt $BudgetMB) {
-    throw ("the baked worlds come to $totalMB MB and the budget is $BudgetMB MB. That is how much " +
-           "bigger every download gets. Raise -BudgetMB on purpose, or bake fewer worlds, or bake " +
-           "from a tighter camera -- but decide it rather than shipping it.")
+    throw ("the baked worlds come to $totalMB MB on disk and the budget is $BudgetMB MB. The zip " +
+           "compresses that by roughly 8x, so the download grows by less -- but the installed " +
+           "folder grows by all of it. Raise -BudgetMB on purpose, or bake fewer worlds, but " +
+           "decide it rather than shipping it.")
+}
+
+# AND THAT THE WORLD IS ALL OF IT, when somebody has asked for that -- before the gate, for the
+# budget's reason exactly: a partial world reads perfectly well and proving that it does answers a
+# question nobody asked. `-GateOnly` is exempt because it baked nothing and has nothing to say
+# about how what it is proving was made; that judgement belongs to the run that made it.
+if ($RequireWhole -and -not $GateOnly) {
+    $short = @($rows | Where-Object { -not $_.whole })
+    if ($short.Count -gt 0) {
+        throw ("-RequireWhole, and " +
+               (($short | ForEach-Object { "$($_.stem) got to $($_.nodes) nodes" }) -join '; ') +
+               ". A world that stops where the ladder stopped is complete where the baking " +
+               "camera reached and coarse past it, which is the floor with no walls this whole " +
+               "feature exists to remove. Raise -Passes or -Seconds, or bake it somewhere with " +
+               "a graphics card and package by hand.")
+    }
 }
 
 # AND THAT THE WORLD IS ALL OF IT, when somebody has asked for that -- before the gate, for the

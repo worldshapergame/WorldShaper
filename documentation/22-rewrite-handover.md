@@ -637,8 +637,8 @@ there are expected and are the integrator's.
 **Nobody was allowed into `documentation/`** — every agent hands its decision-log entry back as text
 and it is written here. That is why this file is one voice and not twelve.
 
-**NINE ARE IN AS OF THIS WRITING, each built and tested on its own before the next was touched**,
-and the suite grew 637 → 683 cases with 0 failed at every step:
+**ELEVEN ARE IN AS OF THIS WRITING, each built and tested on its own before the next was touched**,
+and the suite grew 637 → 687 cases with 0 failed at every step:
 
 | landed | what it turned out to be |
 |---|---|
@@ -651,12 +651,28 @@ and the suite grew 637 → 683 cases with 0 failed at every step:
 | R11e + R11h far (D697) | light paths cause **0** sample jobs out of 150,584 offers, and at ten times the frames still 0 with the same world to the digit. **The far chisel now carves what the near one carves, byte for byte** — `ba1059f44662e644` from 60 m and from 1 m |
 | R7a + R7b (D698) | the beam pre-pass, one coarse ray per tile CORNER. **4K, arm to arm: 1.18 ms against 16.81 outdoors, 1.96 against 15.07 close** — and 0.76 against 0.56 at distant, where the ray was already trivial. `start = min(beam, temporal)` is the safety property: a wrong reprojection can only cost time |
 | R12c (D699) | **the marcher derives rather than stops — step 12's headline, built and OFF.** Enclosed 7.57 ms against 6.60; uncapped it is a 38-second frame. **A cap on CELLS is a cap on nothing** and a visit budget read after the fact bounds nothing; each cost a device before it was understood. D687's thirty-times verdict stands |
+| the rule bounds (D700) | **the best result of the wave.** The eight unbounded rules were TWO withheld boxes; 8 asked at every solid voxel → **0**. The estate builds in **13.9 s against 31.1**, the campanile loses 619 voxels of courtyard weed and stone, and `max` is settled as the INTERSECTION by a factor of twenty-seven. **The estate's paint moves — every estate hash and baseline before this commit is stale** |
+| the bake, second half (D701) | **a whole world and a partial one are told apart AT READ TIME**: 0 regions left and one hash from four cameras, against four hashes and *more left from outside than from where the bake stood*. `-Resume` and a stamp that knows interrupted from finished. The size budget was the RAW size and was 8.3x out |
 
 **And one fault found by the integrator rather than by an agent, D693**: `run_clip_tool` exits 1
 silently on `clips/facility.clip` and works on `clips/sampler.clip`. **That is why every sampler gate
 this wave ran on `sampler.clip` alone** — three agents wanted a facility gate and none could take
 one. It is pre-existing, it is not fixed yet because the fix is in `main.cpp` and six agents are
 holding that file, and **it is the first thing to do when the wave is in.**
+
+**A DECISION THE NEXT RELEASE RESTS ON, and it is the integrator's rather than the agent's.**
+`release.yml` now passes `require_whole: 'true'`, and since D672 `clips/facility.clip` **is** the
+estate — so the release bakes a world that took 75 minutes to reach 210,944 of 278,362 nodes on a
+graphics card and was still climbing. CI has no card; it runs lavapipe. **So the first release
+attempt after this wave either finishes inside its 200 minutes or fails the job.**
+
+That failure is the correct one and it is cheap: the workflow is dispatched rather than tag-pushed,
+so a failure leaves **no tag pointing at a build that does not exist**, which is the whole reason
+dispatch was chosen. And D700 has just made the estate build **2.24x** faster, which nobody has yet
+measured against this budget. The alternatives, in order of preference: raise `total_minutes`; bake
+by hand and gate with `-GateOnly -RequireWhole`; or turn `require_whole` off, **which reintroduces
+exactly the defect this wave existed to remove** and should be a deliberate, recorded choice rather
+than a convenience.
 
 **A trap D700 leaves behind, and it will catch the next measurement rather than the next build:**
 `build/bin/clips/facility.world` is a derived cache, ignored by git, and after D700 it holds the

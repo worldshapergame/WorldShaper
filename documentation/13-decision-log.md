@@ -11427,3 +11427,72 @@ equally often. Nothing in it suggests a fault in the build.
 | D700 | **8 rules asked at every solid voxel → 0, and the deep cell falls 6–17x** | measurement | 195 paint evaluations against 435 in the metre under the podium |
 | D700 | **The estate's paint moves by 11,443 voxels, on purpose** | honesty | Every estate content hash and baseline row is stale across this commit |
 | D700 | **The world cache key still does not name this arm** | honesty | Two arms that build different worlds share a key — D673 item 4, one layer along |
+
+---
+
+## D701 — a whole world and a partial one can be told apart AT READ TIME, and that is the gate
+
+**2026-08-19, the second half of D695.** The bake now carries `--refine-all` and resumes across
+passes. What was still missing was a way to *judge the file* — and the answer turns out not to need
+any knowledge of how the file was made.
+
+**A whole world, opened from four different viewpoints, reports `0 regions left to build` and the
+SAME content hash from every one. A partial world reports four different hashes and, from sixty
+metres out, MORE left to build than from where the bake stood.**
+
+| read from the shelf, frame 60 | whole (`sky_test`) | partial (the estate) |
+|---|---|---|
+| nodes | 60,136 of 60,136 | 211,048 of 278,705 |
+| regions still to build | **0 from all four cameras** | 67,657 at spawn vs **72,678** sixty metres out |
+| content hash | **the same from all four** | four different |
+
+That second row *is* the user's complaint stated as a number: more left to build from outside than
+from where the bake stood, because the bake stood in one place. `-GateOnly -RequireWhole` is
+therefore a judgement about a `.world` and not about the run that produced it — **it can be pointed
+at a download**. Tried both ways: it passes `sky_test` and refuses the estate by name and number.
+
+**And the picture is the user's photograph, reproduced deliberately from the shipping path.** At
+210,944 of 278,362 nodes the estate reads off the shelf in **417 ms** and from above the roof is a
+rotunda drum and fragments of the main block floating with **no ground, no wings, no portico**; from
+76 m south and from the far side it is a small cluster adrift with no site under it. Only the spawn
+view is complete. That is what `-RequireWhole` now refuses to publish.
+
+**`-Resume`, and a stamp that knows interrupted from finished.** A whole-estate bake is over an hour,
+which is long enough that something other than the script ends it — a job timeout, a machine
+sleeping, a background task being stopped. The stamp gains a fourth field: `running` after every
+pass, `done` only when the loop is over. So **an interrupted bake leaves a perfectly good partial
+world that the warm path will not mistake for a finished one**, and `-Resume` is the flag that
+deliberately continues from it. Without that distinction the next run either deletes an hour's work
+or ships it as complete, and both have happened.
+
+**The size budget was wrong by 8.3x in the direction that matters.** The estate's 28,668,002 bytes of
+world compress to **3,436,685 in the zip**, and the whole download came to 8.32 MB. A finished 74 MB
+estate adds roughly **9 MB** to a download, not 74. The figure that was being quoted was the raw
+size, and nothing ships raw.
+
+**Three faults in `package.ps1`, all found by running it** rather than by reading it: it died on a
+stderr WARN line, it matched `the world is empty` inside a *success* line, and it demanded voxels at
+frame 3 — which R11d removed the reason for. None would have been found without an end-to-end run.
+
+**And a gate that was KILLED reported itself as D685.** The check said *"the world was not read from
+this camera — that is D685 exactly"* about a run that another agent's `taskkill /F /IM
+WorldShaper.exe` had ended; the same camera passed by hand a minute later. The log is now asked
+whether the game got far enough to say anything at all **before** the verdict is given. **A run that
+died is not a world that was refused**, and telling them apart is most of what a gate is for.
+
+**What was not reached: the whole estate.** 210,944 of 278,362 nodes over about 75 minutes and eight
+passes, still climbing rather than stalled when it was stopped deliberately. Finishing it is a job of
+hours. **And the open question the release now rests on: whether lavapipe can finish the estate
+inside 200 minutes on CI.** On a card it is hours; on a CPU renderer it will be worse, so
+`require_whole` will most likely fail the job rather than publish a partial world — **which is the
+correct failure**, and the by-hand route is documented beside it.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D701 | **Wholeness is checkable at READ time, from four cameras** | instrument | 0 regions left and one hash from all four; a partial world gives four hashes |
+| D701 | **`-GateOnly -RequireWhole` judges a `.world`, not the run that made it** | decision | So it can be pointed at a download |
+| D701 | **The stamp's fourth field separates `running` from `done`** | fault | An interrupted hour-long bake was indistinguishable from a finished one |
+| D701 | **The size budget was the RAW size and nothing ships raw** | fault | 28.7 MB → 3.4 MB in the zip; the estate adds ~9 MB to a download, not 74 |
+| D701 | **A run that DIED is not a world that was refused** | trap | The gate blamed D685 for another agent's `taskkill` |
+| D701 | **Three `package.ps1` faults, all found only by running it** | fault | A stderr WARN, a match inside a success line, and voxels demanded at frame 3 |
+| D701 | **Whether lavapipe can finish the estate in 200 minutes is open** | honesty | `require_whole` failing the job is the correct failure if it cannot |

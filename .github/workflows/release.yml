@@ -305,8 +305,15 @@ jobs:
           # No exit-code test after it: the script throws, and a throw is already a failed step.
           # Testing $LASTEXITCODE here would read whatever the last NATIVE command left behind,
           # which is not the script and is usually zero.
+          #
+          # `-RequireWhole` here as well as on the bake, and it is a DIFFERENT check with the same
+          # name. On the bake it reads the two numbers the baking run printed. Here it opens the
+          # world that is actually in the zip and asks each viewpoint how much it still has to
+          # build — measured, a finished world answers zero from every camera and a world baked
+          # from one camera answers more from the others. So this needs no knowledge of how the
+          # file was made, which is the right shape for a check on a download.
           $out = Join-Path $env:RUNNER_TEMP "unpacked"
-          .\tools\bake_world.ps1 -Game $out -Clips facility -GateOnly
+          .\tools\bake_world.ps1 -Game $out -Clips facility -GateOnly -RequireWhole
 
       # Signs a statement, in GitHub's name, that this exact file came out of this exact
       # commit through this exact workflow. Free, and verifiable with `gh attestation verify`.

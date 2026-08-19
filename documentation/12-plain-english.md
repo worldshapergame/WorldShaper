@@ -3747,3 +3747,28 @@ milliseconds to **7.5**.
 
 One consequence worth knowing: this genuinely changes what the estate looks like, so any world baked
 before today is out of date and wants rebuilding.
+
+## The game can now tell whether a shipped world is complete
+
+The awkward thing about a half-finished world is that it looks exactly like a finished one. It opens
+in half a second, it draws, it photographs beautifully — from where you happen to be standing. Three
+releases shipped that way.
+
+There is now a test that cannot be fooled by that, and it is pleasingly simple: **open the world from
+four different viewpoints and ask each one how much it still has to build.**
+
+| | a complete world | a partial one |
+|---|---|---|
+| still to build | **nothing, from all four** | 67,657 at the spawn point — and **72,678** from sixty metres out |
+| fingerprint | **the same from all four** | four different ones |
+
+That middle number is your complaint written as arithmetic: *more of the building missing from
+outside than from where the bake happened to stand.* And because the test only ever asks the file
+questions — never the process that made it — it can be pointed at a finished download. A release now
+**fails** rather than publishing a world that answers wrong.
+
+Two other things came out of building it. An hour-long bake that gets interrupted used to be
+indistinguishable from one that finished, so the next run either threw away the hour or shipped the
+half — it now records which, and can deliberately carry on. And the size worry was overstated by
+**8.3×**: a complete estate adds about **9 MB** to a download, not the seventy-odd I had been
+quoting, because worlds compress extremely well and nothing ships raw.

@@ -85,9 +85,34 @@ after it, and the shipped `.world` is deleted before the first pass. There is no
 | how | the game itself: `--world <the clip> --bake-world --refine-all`, over as many resuming passes as it takes |
 | where it ends up | `build\bin\clips`, which is the folder `Copy-Item build\bin\clips` puts in the zip |
 | how the game finds it | a shelf world looks beside itself **and** in the shipped `clips/`, paired by stem, and the key is hashed from the clip's source text so a wrong file is refused rather than believed (D685) |
-| what the download costs | see the measured table below. The workflow refuses to go over **128 MB** without somebody raising the budget on purpose |
-| what a warm bake costs | the gate alone. The cache is keyed on `clips/**`, `src/**`, **`tools/bake_world.ps1` and the pass numbers**, so a run with nothing changed re-proves the world and bakes nothing — and a change to how it is baked misses, which is what stops a camera-shaped world from being handed back to a release that asked for the whole thing |
-| how long it may take | `passes × seconds` per world, with a wall clock (`total_minutes`) over the lot of it, because `passes × seconds` leaves out how long a run takes to START and that is a minute a pass on a software Vulkan |
+| what the download costs | **much less than the world weighs.** A `.world` compresses about **8.3x**: 28,668,002 bytes of baked estate went into `Compress-Archive` and came out at 3,436,685. The 128 MB budget is on the size ON DISK, which is the number that is still true after the zip is thrown away |
+| what a warm bake costs | the gate alone. The cache is keyed on `clips/**`, `src/**`, **`tools/bake_world.ps1` and the pass numbers** — so a change to how a world is baked misses the cache, which is what stops a camera-shaped one being handed back to a release that asked for the whole thing |
+| how long it may take | `passes × seconds` a world, under a wall clock (`total_minutes`) — because that product leaves out how long a run takes to START, and that is a minute a pass on a software Vulkan |
+
+### What a whole-world bake of the estate actually costs, measured
+
+**It is hours, and that is the number that decides whether CI can do this at all.** On an RTX 5060
+Ti, with `--refine-all`, the estate goes:
+
+| after | nodes | on disk |
+|---|---|---|
+| pass 1 (settle-capped, ~10 min) | 44,032 of 55,627 | 5 MB |
+| pass 2 (uncapped, 20 min) | 99,200 of 114,139 | 11 MB |
+| pass 3 (uncapped, 20 min) | 156,288 of 226,028 | 21 MB |
+| four more passes (10 min each) | **210,944 of 278,362** | **27.34 MB** |
+
+The node total roughly **doubles** for the first few passes as splitting propagates outward, then
+the rate settles to about **13,000 nodes per ten-minute pass** — and `still to sharpen` holds almost
+constant near 69,000, because the ladder splits about as fast as it sharpens. It was stopped there
+deliberately, not because it stalled. Finishing it is a job of hours, not minutes.
+
+**Which is the open question for the release, and it is honest to state it as one.** A hosted runner
+has no graphics card and runs Mesa's `lavapipe` on the CPU, which is much slower than the card these
+figures come from — so `require_whole` may well fail the job rather than publish a partial world.
+That is the correct failure, and the fallback below is the route that works today.
+
+The one thing that is settled: **at 8.3x compression a finished estate is comfortably shippable.**
+27.34 MB of partial world became 3.44 MB in the zip, and the whole download came to 8.32 MB.
 
 ### Why it is a `needs:` job and not a step somebody remembers
 
@@ -129,10 +154,14 @@ and the game fills it, which is the whole point:
 library  shelf 'worlds' at '<a fresh data root>\WorldShaper\worlds': 0 things
 library  put 20 shipped worlds on the shelf
 world    opened the world shipped at 'clips\facility.world'; nothing to sample
-world    '...\worlds\facility.wsworld' loaded from cache in 133 ms [t+166 ms]:
-         22 chunks, 1049158 solid voxels
-load     everything ready  [t+404 ms]
+world    '...\worlds\facility.wsworld' loaded from cache in 135 ms:
+         62 chunks, 25124052 solid voxels
+load     everything ready  [t+417 ms]
 ```
+
+That is the estate read **out of an unpacked download** — `tools\package.ps1` staged it, zipped it,
+expanded it into a directory with none of the source tree in reach, and the game found the world
+there off a shelf it had just seeded for itself. 25.1 million solid voxels, ready in **417 ms**.
 
 ### Running it by hand
 
@@ -147,11 +176,22 @@ tools\bake_world.ps1 -Game C:\unpacked    # against an unpacked download rather 
 tools\bake_world.ps1 -RefineAll:$false    # the control arm: what ONE CAMERA reached, the old way
 tools\bake_world.ps1 -RequireWhole        # what the release does: fail unless every node is baked
 tools\bake_world.ps1 -GateShots renders\gate   # keep the gate's four frames to look at
+tools\bake_world.ps1 -Resume              # carry on from the world a killed bake left behind
 ```
 
-`-Seconds` is the deadline for one PASS and `-Passes` the most passes a world gets. The loop stops
-the moment the world is whole, so a small clip never sees the second one; the estate is what the
-numbers above are about.
+`-Seconds` is the deadline for one PASS and `-Passes` the most passes a world gets, with
+`-TotalMinutes` a wall clock over the lot. The loop stops the moment the world is whole, so a small
+clip never sees the second pass; the estate is what the numbers above are about.
+
+**`-Resume` exists because an hour-long bake gets interrupted.** One was killed here forty minutes
+in, at 22.6 MB, and without it the next run deletes that file and starts again — which is right for
+a normal bake, where a leftover world must never be mistaken for a success, and wrong for
+continuing one. It is safe by the same key everything else is: a stamp naming a different game or
+different clips refuses, and no stamp at all is taken on trust and said so out loud.
+
+The stamp beside the game is `key|nodes|whole|state`, and **the warm path needs `done` as well as a
+matching key.** It is written after every pass, so without that fourth field an interrupted bake
+would look finished and the next run would reuse half an estate having baked nothing.
 
 Only the facility is baked by default, and that is a decision about the size of the download rather
 than an oversight: the shelf seeds every top-level clip, but the other nineteen are test scenes — a
@@ -197,6 +237,34 @@ Each has to say `opened the world shipped at` in its turn, and each has to come 
 voxels in the frame at **frame 60** — a frame counted from a standing start, which is what a
 player's first second is. `-GateCams` changes them and `-GateShots <dir>` keeps the pictures.
 
+**And `-RequireWhole` turns those four reads into a test of the FILE**, needing no knowledge of how
+it was made. The game says `the world was still being sharpened - N regions left` on the way out.
+Both arms, measured on this machine:
+
+| read from the shelf, frame 60 | a WHOLE world (`sky_test`) | a PARTIAL one (the estate, stopped on purpose) |
+|---|---|---|
+| nodes | **60,136 of 60,136** from all four cameras | 211,048–212,480 of 278,705–285,129, different from each |
+| regions still to build | **0 from all four** | **67,657** from the spawn view, **72,678** from sixty metres out |
+| content hash | **`14dd7ac97b3b098c`, the same from all four** | four different hashes |
+| solid voxels | 13,631,216, the same from all four | 25,124,052–25,136,888 |
+
+The second column is the complaint itself, in numbers: **more left to build from outside than from
+where the bake stood**, because the bake stood in one place. And the first column is why this can be
+a pass mark rather than a note — a finished world answers zero from everywhere, and answers with the
+same content hash from everywhere, so neither number depends on which camera asks.
+
+So `tools\bake_world.ps1 -GateOnly -RequireWhole` is a complete check of a `.world` in a download,
+and it is what `release.yml` runs against its own unpacked zip. It was tried both ways round: it
+passes `sky_test` and refuses the estate with *"read from the spawn view the shipped world still has
+67815 regions to build"*.
+
+A run that dies is not a world that was refused, and the gate says which: it asks whether the game
+got as far as `put N shipped worlds on the shelf` before it judges anything. That check exists
+because this gate once reported "the world was not read from this camera — that is D685 exactly"
+about a run that had been **killed** by something else obeying build.bat's *kill any stale
+`WorldShaper.exe` first*. The same camera passed by hand a minute later. `-Exe` renames the
+executable out of the way of that, and is why the workflow and this document both use it.
+
 ### The one part of this that is a bet
 
 **A hosted runner has no graphics card, and a world cache cannot be built without one.** The clip
@@ -237,6 +305,24 @@ the rest: stage, zip, **unpack to a clean directory and run it there**, gate the
 that unpacked shelf, hash. That unpack-and-run gate is the one that caught v0.6.0 shipping with a
 shader path hard-coded to the build machine; the shelf gate beside it is D685's, and both now run
 from the same file the workflow calls.
+
+**Three things in that script were broken and were found by running it**, which is the argument for
+running it rather than reading it:
+
+- **A WARN on stderr killed the packaging.** `$ErrorActionPreference = "Stop"` plus Windows
+  PowerShell wrapping every stderr line from a native program in a `NativeCommandError` means the
+  FIRST warning ends the script with a message naming PowerShell's own plumbing. `ws_tests.exe`
+  printed one warning about a clip taken from beside a world, 637 of 637 tests passed, and the
+  packaging died on the warning. Native calls go through a `Start-Process` helper now, the same
+  shape and for the same reason as the one in `tools/bake_world.ps1`.
+- **`the world is empty` matched a line that is not a failure.** The frame report carries
+  `feedback 0 reports (0 dropped, 0 for places the world is empty at)` — nought went wrong, and the
+  words are there verbatim. It failed a perfectly good zip.
+- **A voxel count at frame 3 is not available any more.** R11d removed the up-front build (D673), so
+  a cold run correctly logs `'clips\facility.clip' built in 222 ms: 0 chunks, 0 solid voxels` and
+  fills in over the following frames. The smoke run now proves what only it can — that an executable
+  out of the zip, with no source tree in reach, starts, finds its shaders and its clips, and draws —
+  and whether there is a WORLD in the download is proved underneath it by the shelf gate.
 
 That download carries **no provenance attestation** — say so in the release notes, as this document
 already requires for any zip built that way, and as the script now prints when it finishes. A CI
