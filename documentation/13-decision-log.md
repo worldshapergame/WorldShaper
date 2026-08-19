@@ -10144,6 +10144,24 @@ none of the others was done.
 > moved the world between D683 and this wave is unfound**, and it is worth finding rather than
 > assuming — a world that changed without a decision behind it is the thing this log exists to
 > make impossible. Until then, quote `a1f8bc6c656343b7`.
+>
+> **FOUND, the same day, and it is a trap rather than a mystery.** `git diff 1b0cd32 5be06c0 --
+> src/forge ':!src/forge/compile.*'` is **empty**, and so is the same diff over `clips/`. The
+> sampler and the clip are **byte-identical** between D683's own commit and the base this wave
+> branched from — the only changes in between were adding and removing a `compile.cpp` that nothing
+> ever called. **So the tree D683 COMMITTED answers `a1f8bc6c656343b7`, exactly as this one does.**
+>
+> The only tree that can have produced `a7660d52378d3c27` is the one D683 was *measured* on, and
+> D683 says in its own words what that was: `Field::pruned_to` **built, proved exact, and reverted**.
+> That scaffolding was present on **both** of its arms, and whatever in it moved the world by 48
+> voxels sat outside the flag being tested.
+>
+> **So both arms of that comparison were inside the change.** CLAUDE.md's standing rule is *a
+> counter taken from inside the change is not a control*; this is that rule one step worse, because
+> the arm that looked like the control was inside it too. The two arms agreed with each other
+> perfectly and both disagreed with the repository — which is exactly what "exact" looked like, and
+> is why nobody caught it. **The control that would have caught it is `git stash` + rebuild + the
+> same command**, which is what CLAUDE.md already says to reach for before the third theory.
 
 ### And it is worth two per cent
 
