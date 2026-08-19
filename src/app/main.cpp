@@ -2553,6 +2553,12 @@ private:
     // proximity radius, or one whose nodes the ladder has already brought to full detail, has
     // nothing to do here and pays nothing for asking.
     u32 presample_for_edit(const std::vector<Op>& ops);
+    // The volume the last edit touched, and its content hash. R11h's gate is byte-for-byte over
+    // exactly this box and over nothing else; see `edit_box_hash`.
+    bool last_edit_box_ = false;
+    i64 last_edit_lo_[3]{};
+    i64 last_edit_hi_[3]{};
+    u64 edit_box_hash() const;
     // ...and the boxes it has sampled, in metres, so a coarser ladder node can never Replace-paste
     // over one. See `refine_would_improve`.
     std::vector<std::pair<forge::Vec3, forge::Vec3>> refine_presampled_;
@@ -6550,22 +6556,55 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
 //
 // The edit knows exactly which chunks it touched, so it says so.
 void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
-    bool first = true;
     i64 lo[3]{};
     i64 hi[3]{};
-    for (const Op& raw : ops) {
-        Op op = raw;
-        op.normalise();
-        const i64 op_lo[3] = {op.x0, op.y0, op.z0};
-        const i64 op_hi[3] = {op.x1, op.y1, op.z1};
-        for (u32 axis = 0; axis < 3; ++axis) {
-            lo[axis] = first ? op_lo[axis] : std::min(lo[axis], op_lo[axis]);
-            hi[axis] = first ? op_hi[axis] : std::max(hi[axis], op_hi[axis]);
-        }
-        first = false;
+    // `edit_bounds` rather than a second copy of the same loop: the pre-sample decides what to
+    // sample from that box and this decides what to invalidate from it, and the two answering
+    // slightly different boxes is a cut with a rim of stale geometry round it. R11h.
+    if (!edit_bounds(ops, lo, hi)) return;   // no ops, so nothing changed
+    for (u32 axis = 0; axis < 3; ++axis) {
+        last_edit_lo_[axis] = lo[axis];
+        last_edit_hi_[axis] = hi[axis];
     }
-    if (first) return;   // no ops, so nothing changed
+    last_edit_box_ = true;
     announce_world_change(lo, hi);
+}
+
+// R11h's gate needs this and there was no way to ask it.
+//
+// The gate is *chiselling a surface sixty metres away produces the same world, byte for byte, as
+// chiselling it from one metre*, and the world's own content hash cannot answer it: after R11d the
+// world is what a camera asked for, so two cameras settle on two different worlds whatever the
+// chisel did, and the one volume they must agree about is drowned in the two they need not. So
+// this hashes the volume the LAST EDIT touched and nothing else.
+//
+// Every voxel, in a fixed order, including the air: what the far case gets wrong is a surface at
+// metre 8 instead of metre 32, and half of that difference is which cells are EMPTY. Order-
+// dependent on purpose — this is one box walked one way, not a set of chunks in a hash map.
+//
+// **Out to whole BRICKS, and the box on its own is the wrong question.** A carve fills its box with
+// air in every arm, coarse world or fine, so the box's own contents are identical whatever was
+// there before and a hash of them says nothing — measured: the treated and untreated far arms
+// agreed to the digit on the box while differing by 6,624 voxels in the world. What differs, and
+// what R11f will make permanent, is the brick the cut ENDS in: a brick the edit partially emptied
+// is written into the `.world` file as authoritative and is never re-derived, so whatever detail
+// it was holding at that moment is the building for ever. Snapped out to eight voxels, which is one
+// brick and is also one node at `kLeafLevel` — the same volume `presample_for_edit` samples.
+u64 Application::edit_box_hash() const {
+    if (!last_edit_box_) return 0;
+    const i64 lo[3] = {last_edit_lo_[0] & ~i64{7}, last_edit_lo_[1] & ~i64{7},
+                       last_edit_lo_[2] & ~i64{7}};
+    const i64 hi[3] = {last_edit_hi_[0] | i64{7}, last_edit_hi_[1] | i64{7},
+                       last_edit_hi_[2] | i64{7}};
+    u64 h = 0x57534850ull;
+    for (i64 z = lo[2]; z <= hi[2]; ++z) {
+        for (i64 y = lo[1]; y <= hi[1]; ++y) {
+            for (i64 x = lo[0]; x <= hi[0]; ++x) {
+                h = hash_combine(h, static_cast<u64>(world_.get(x, y, z)) + 1ull);
+            }
+        }
+    }
+    return h;
 }
 
 // One box of the world is not what the renderer is holding a copy of, and everything that holds
@@ -10284,6 +10323,23 @@ int Application::play(const Options& options) {
                         sample_jobs_by_cause_[static_cast<u8>(SampleCause::kEdit)],
                         presample_voxels_, presample_ms_, presample_nodes_,
                         options_.edit_presample ? "" : " -- OFF, --no-edit-presample");
+            if (last_edit_box_) {
+                // R11h's gate, and the world's own hash cannot stand in for it: two cameras settle
+                // on two different worlds after R11d whatever the chisel did. This is the one
+                // volume they are obliged to agree about.
+                const i64 hash_lo[3] = {last_edit_lo_[0] & ~i64{7}, last_edit_lo_[1] & ~i64{7},
+                                        last_edit_lo_[2] & ~i64{7}};
+                const i64 hash_hi[3] = {last_edit_hi_[0] | i64{7}, last_edit_hi_[1] | i64{7},
+                                        last_edit_hi_[2] | i64{7}};
+                WS_LOG_INFO("frame",
+                            "the edit's own bricks: ({}, {}, {}) to ({}, {}, {}), {} voxels, "
+                            "content {:016x}",
+                            hash_lo[0], hash_lo[1], hash_lo[2], hash_hi[0], hash_hi[1], hash_hi[2],
+                            static_cast<u64>(hash_hi[0] - hash_lo[0] + 1) *
+                                static_cast<u64>(hash_hi[1] - hash_lo[1] + 1) *
+                                static_cast<u64>(hash_hi[2] - hash_lo[2] + 1),
+                            edit_box_hash());
+            }
             // The two ways the world can lie to the render tree, counted where they are standing
             // rather than where they were made. `world_has` asks whether a brick is ALLOCATED and
             // answers level 8 and above out of the set of chunks that EXIST, so either of these
