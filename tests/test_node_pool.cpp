@@ -8,7 +8,19 @@
 
 #include <doctest/doctest.h>
 
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+#include "core/jobs.hpp"
+#include "core/time.hpp"
+#include "forge/clip_script.hpp"
+#include "forge/sample.hpp"
+#include "game/clip.hpp"
+#include "world/ledger.hpp"
 #include "world/node_pool.hpp"
+#include "world/tags.hpp"
 #include "world/voxel_type.hpp"
 
 using namespace ws;
@@ -1018,4 +1030,439 @@ TEST_CASE("announcing a large empty box costs what the pool holds, not what the 
     CHECK(f.pool.stale_masks(f.world) == 0);
     CHECK(f.pool.stale_leaves(f.world) == 0);
     CHECK(f.pool.validate());
+}
+
+// ==================================================================================================
+// R8b -- hashed variation: where a node's children come from when nothing else can answer
+// ==================================================================================================
+//
+// The child source for a world with no field behind it. `21-renderer-rewrite.md` section 7 lists
+// three, in the order they are tried -- the material's own field, then this, then what the player
+// carved -- and this is the middle one and the only one that is ALWAYS available. A hand-carved
+// world has no field by construction; nor has a world loaded from a file whose clip is gone.
+//
+// Everything below is headless and there is a reason it is headless FIRST. Residency was built this
+// way in Stage 2, two of R1a's four bugs were caught by a mirror walker and by nothing else, and
+// the sentence that explains both is that a structure the renderer walks and nobody compares
+// against the world is a renderer debugging a mirage. So `mirror_variation` exists, walks the tree
+// exactly as `shaders/variation.glsl` walks it, and is asserted against the world before the
+// renderer is allowed anywhere near it.
+
+namespace {
+
+// The pool, with the source switched to whichever arm the case wants. One binary, one flag (D407).
+struct VariationFixture {
+    VoxelTypeTable types;
+    World world;
+    NodePool pool;
+    VoxelTypeId stone = kAir;
+    VoxelTypeId brass = kAir;
+
+    explicit VariationFixture(bool source_on, u32 seed = kVariationSeed) {
+        VisualRecord grey{};
+        grey.red = 128; grey.green = 130; grey.blue = 126;
+        stone = types.intern(grey, BehaviourRecord{});
+        VisualRecord yellow{};
+        yellow.red = 200; yellow.green = 170; yellow.blue = 40;
+        brass = types.intern(yellow, BehaviourRecord{});
+
+        NodePoolBudget budget;
+        budget.max_nodes = 1u << 16;
+        budget.max_occupancy_leaves = 1u << 14;
+        budget.payload_bytes = 4ull * 1024 * 1024;
+        budget.proximity_voxels = 0;
+        budget.hashed_variation = source_on;
+        budget.variation_seed = seed;
+        pool.create(budget, types);
+    }
+
+    void fill_box(i64 x0, i64 y0, i64 z0, i64 x1, i64 y1, i64 z1, VoxelTypeId type) {
+        for (i64 z = z0; z <= z1; ++z) {
+            for (i64 y = y0; y <= y1; ++y) {
+                for (i64 x = x0; x <= x1; ++x) world.set(x, y, z, type);
+            }
+        }
+    }
+
+    void want_box(i64 x0, i64 y0, i64 z0, i64 x1, i64 y1, i64 z1) {
+        for (i64 z = z0; z <= z1; z += 8) {
+            for (i64 y = y0; y <= y1; y += 8) {
+                for (i64 x = x0; x <= x1; x += 8) pool.request(node_key_of(x, y, z, kLeafLevel));
+            }
+        }
+    }
+
+    void serve(u64 frame) {
+        const f64 camera[3] = {0.0, 0.0, 0.0};
+        pool.update(world, camera, frame);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("the variation chain is integer from end to end, and its constants are pinned") {
+    // Not a tautology, and it is worth saying why. `shaders/variation.glsl` is a second
+    // implementation of every function in this block, and the only thing that keeps two
+    // implementations in step is a set of values written down where a change to either has to come
+    // and edit them. If one of these moves, the shader moves with it.
+    CHECK(node_hash_mix(0u) == 0u);
+    CHECK(variation_root_hash(0, 0, 0, 0u) ==
+          node_hash_mix(node_hash_mix(node_hash_mix(node_hash_mix(0x9E3779B9u)))));
+
+    // The quantiser, which is the one floating-point step in the whole source and happens once.
+    CHECK(variation_amount_q(0.0f) == 0u);
+    CHECK(variation_amount_q(-1.0f) == 0u);
+    CHECK(variation_amount_q(0.05f) == 13u);     // section 7's own worked example: colour=0.05
+    CHECK(variation_amount_q(1.0f) == 256u);
+    CHECK(variation_amount_q(4.0f) == 256u);     // clamped, never wrapped
+
+    // With no amount at all, a child is its parent exactly. That is the control arm's arithmetic
+    // and it has to be an identity rather than "very nearly".
+    for (u32 channel = 0; channel < 256; ++channel) {
+        CHECK(variation_nudge(channel, 0u, 0u) == channel);
+        CHECK(variation_nudge(channel, 255u, 0u) == channel);
+    }
+
+    // Full scale saturates and never wraps. A wrapped byte is a black speck in a white wall.
+    CHECK(variation_nudge(0u, 0u, 256u) == 0u);
+    CHECK(variation_nudge(255u, 255u, 256u) == 255u);
+    CHECK(variation_nudge(128u, 0u, 256u) == 0u);
+    CHECK(variation_nudge(128u, 255u, 256u) == 255u);
+
+    // And at the shipping amount it is a nudge rather than a repaint: 0.05 of full scale is about
+    // thirteen of 255, either side, and the two extremes of the byte are what those look like.
+    CHECK(variation_nudge(128u, 255u, variation_amount_q(0.05f)) == 140u);
+    CHECK(variation_nudge(128u, 0u, variation_amount_q(0.05f)) == 116u);
+    CHECK(variation_nudge(128u, 128u, variation_amount_q(0.05f)) == 128u);   // the middle moves not
+
+    // Alpha is coverage and is carried through untouched, at every amount.
+    for (u32 amount = 0; amount <= 256; amount += 32) {
+        CHECK((variation_child_colour(0xC0806040u, 0x12345678u, amount) & 0xFF000000u) ==
+              0xC0000000u);
+    }
+}
+
+TEST_CASE("same key, same children -- twice, on two pools that never met") {
+    // The promise the source makes, and the only way to check it is to make it twice from nothing.
+    VariationFixture a(true);
+    VariationFixture b(true);
+    a.fill_box(0, 0, 0, 15, 15, 15, a.stone);
+    b.fill_box(0, 0, 0, 15, 15, 15, b.stone);
+    a.want_box(0, 0, 0, 15, 15, 15);
+    b.want_box(0, 0, 0, 15, 15, 15);
+    a.serve(1);
+    b.serve(1);
+
+    const i64 lo[3] = {0, 0, 0};
+    const i64 hi[3] = {15, 15, 15};
+    u64 cells_a = 0, cells_b = 0;
+    const u64 hash_a = a.pool.variation_fingerprint(a.world, lo, hi, 1, 4, &cells_a);
+    const u64 hash_b = b.pool.variation_fingerprint(b.world, lo, hi, 1, 4, &cells_b);
+    CHECK(cells_a == 4096);
+    CHECK(cells_a == cells_b);
+    CHECK(hash_a == hash_b);
+
+    // ...and the same walk, cell for cell, two levels down, over the whole box. A fingerprint that
+    // agreed while a cell did not would be a fingerprint reading past what it is supposed to cover.
+    for (i64 z = 0; z < 16 * 4; ++z) {
+        for (i64 y = 0; y < 16 * 4; ++y) {
+            for (i64 x = 0; x < 16 * 4; ++x) {
+                const VariationSample sa = a.pool.mirror_variation(x, y, z, 2);
+                const VariationSample sb = b.pool.mirror_variation(x, y, z, 2);
+                REQUIRE(sa.hash == sb.hash);
+                REQUIRE(sa.colour == sb.colour);
+                REQUIRE(sa.matter == sb.matter);
+            }
+        }
+    }
+
+    // A different seed is a different world's grain. Without this the case above would pass on a
+    // source that ignored its seed entirely.
+    VariationFixture other(true, kVariationSeed ^ 0xABCDu);
+    other.fill_box(0, 0, 0, 15, 15, 15, other.stone);
+    other.want_box(0, 0, 0, 15, 15, 15);
+    other.serve(1);
+    CHECK(other.pool.variation_fingerprint(other.world, lo, hi, 1, 4, nullptr) != hash_a);
+}
+
+TEST_CASE("the variation mirror agrees with the shader's descent, voxel for voxel") {
+    // The standard every reader in this file is held to. At depth 0 the source must answer exactly
+    // what `mirror_voxel` answers -- the walk the shader performs -- and at every depth below it
+    // the MATTER must still be that answer, because this source varies the material and never the
+    // shape.
+    VariationFixture f(true);
+    f.fill_box(0, 0, 0, 23, 23, 23, f.stone);
+    f.fill_box(8, 8, 8, 15, 15, 15, f.brass);      // a different material inside it
+    f.fill_box(10, 10, 10, 13, 13, 13, kAir);      // and a void inside that
+    f.want_box(-8, -8, -8, 31, 31, 31);
+    f.serve(1);
+    REQUIRE(f.pool.stale_masks(f.world) == 0);
+    REQUIRE(f.pool.stale_leaves(f.world) == 0);
+
+    u64 solid = 0;
+    for (i64 z = -8; z < 32; ++z) {
+        for (i64 y = -8; y < 32; ++y) {
+            for (i64 x = -8; x < 32; ++x) {
+                const VoxelTypeId walked = f.pool.mirror_voxel(x, y, z);
+                REQUIRE(walked == f.world.get(x, y, z));
+
+                const VariationSample at = f.pool.mirror_variation(x, y, z, 0);
+                REQUIRE(at.type == walked);
+                REQUIRE(at.matter == (walked != kAir));
+                if (walked != kAir) ++solid;
+
+                // Three levels down, in the near cell and the far cell of the same voxel. Matter is
+                // the voxel's; the chain seed is not.
+                for (u32 depth = 1; depth <= 3; ++depth) {
+                    const i64 base = static_cast<i64>(1) << depth;
+                    const VariationSample near_cell =
+                        f.pool.mirror_variation(x * base, y * base, z * base, depth);
+                    const VariationSample far_cell = f.pool.mirror_variation(
+                        x * base + base - 1, y * base + base - 1, z * base + base - 1, depth);
+                    REQUIRE(near_cell.matter == (walked != kAir));
+                    REQUIRE(far_cell.matter == (walked != kAir));
+                    REQUIRE(near_cell.type == walked);
+                    REQUIRE(far_cell.type == walked);
+                    if (walked != kAir) REQUIRE(near_cell.hash != far_cell.hash);
+                }
+            }
+        }
+    }
+    CHECK(solid > 0);
+}
+
+TEST_CASE("a negative coordinate is one voxel out or it is not, and the mirror says which") {
+    // `node_key_of`'s trap, one level further down. A cell at -1 belongs to voxel -1, not to voxel
+    // 0, and an implementation that divides instead of shifting puts every negative coordinate one
+    // voxel out -- silently, and only over the half of the world nobody's test world covers.
+    VariationFixture f(true);
+    f.fill_box(-16, -16, -16, -1, -1, -1, f.stone);
+    f.want_box(-16, -16, -16, -1, -1, -1);
+    f.serve(1);
+
+    for (u32 depth = 1; depth <= 3; ++depth) {
+        const i64 span = static_cast<i64>(1) << depth;
+        CHECK(f.pool.mirror_variation(-1, -1, -1, depth).matter);
+        CHECK(f.pool.mirror_variation(-span, -span, -span, depth).matter);
+        CHECK_FALSE(f.pool.mirror_variation(0, 0, 0, depth).matter);
+        CHECK(f.pool.mirror_variation(-1, -1, -1, depth).type == f.stone);
+        CHECK(f.pool.mirror_variation(-span * 16, 0, 0, depth).type == kAir);
+    }
+}
+
+TEST_CASE("the grain compounds down the chain, and the control arm has none of it") {
+    VariationFixture on(true);
+    VariationFixture off(false);
+    on.fill_box(0, 0, 0, 7, 7, 7, on.stone);
+    off.fill_box(0, 0, 0, 7, 7, 7, off.stone);
+    on.want_box(0, 0, 0, 7, 7, 7);
+    off.want_box(0, 0, 0, 7, 7, 7);
+    on.serve(1);
+    off.serve(1);
+
+    const VariationSample voxel = on.pool.mirror_variation(3, 3, 3, 0);
+    REQUIRE(voxel.matter);
+
+    // Off: a sub-voxel cell is its voxel, exactly. That is what a build with no child source draws
+    // -- the parent stands in -- so the control arm is a real arm and not a disabled feature.
+    CHECK_FALSE(off.pool.hashed_variation());
+    const u32 plain = off.pool.mirror_variation(3, 3, 3, 0).colour;
+    for (u32 depth = 1; depth <= 6; ++depth) {
+        const i64 base = static_cast<i64>(1) << depth;
+        CHECK(off.pool.mirror_variation(3 * base + 1, 3 * base + 2, 3 * base + 3, depth).colour ==
+              plain);
+    }
+
+    // On: it moves, and it never leaves the byte or touches the coverage.
+    CHECK(on.pool.hashed_variation());
+    u32 moved = 0;
+    for (u32 depth = 1; depth <= 6; ++depth) {
+        const i64 base = static_cast<i64>(1) << depth;
+        const VariationSample cell =
+            on.pool.mirror_variation(3 * base + 1, 3 * base + 2, 3 * base + 3, depth);
+        REQUIRE(cell.matter);
+        CHECK((cell.colour >> 24) == (voxel.colour >> 24));   // coverage untouched
+        if (cell.colour != voxel.colour) ++moved;
+    }
+    CHECK(moved >= 5);
+
+    // The eight children of one parent are eight different chains. A source whose siblings shared
+    // a seed would draw eight identical cells and read as no variation at all.
+    const VariationChildren kids = on.pool.variation_children_of(3, 3, 3, 0);
+    CHECK(kids.mask == 0xFFu);
+    u32 distinct = 0;
+    for (u32 a = 0; a < 8; ++a) {
+        bool unique = true;
+        for (u32 b = 0; b < a; ++b) unique = unique && kids.hash[a] != kids.hash[b];
+        distinct += unique ? 1u : 0u;
+    }
+    CHECK(distinct == 8);
+
+    // Air has no children, on either arm. A source that gave air eight colours would be a source
+    // with an opinion about shape.
+    const VariationChildren nothing = on.pool.variation_children_of(64, 64, 64, 0);
+    CHECK(nothing.mask == 0u);
+    for (u32 octant = 0; octant < 8; ++octant) CHECK(nothing.colour[octant] == 0u);
+}
+
+TEST_CASE("a hand-carved world with no clip behind it subdivides, and keeps subdividing") {
+    // The case the source exists for: nobody sampled this, no field can be asked about it, and it
+    // still has to have children at whatever depth somebody walks to.
+    VariationFixture f(true);
+    for (i64 i = 0; i < 64; ++i) f.world.set(i, i / 2, (i * 3) % 17, f.stone);   // a carved scrawl
+    f.want_box(-8, -8, -8, 71, 39, 23);
+    f.serve(1);
+
+    for (i64 i = 0; i < 64; ++i) {
+        const i64 x = i, y = i / 2, z = (i * 3) % 17;
+        REQUIRE(f.pool.mirror_variation(x, y, z, 0).matter);
+        // Twenty levels below a voxel is 3.125 cm / 2^20 -- thirty nanometres, past anything a
+        // 32-bit ray can tell apart (D156), and it still answers. Depth is unbounded because the
+        // tree is the coordinate: there is no sub-voxel coordinate anywhere to overflow.
+        for (u32 depth : {1u, 4u, 12u, 20u}) {
+            const i64 base = static_cast<i64>(1) << depth;
+            const VariationSample deep =
+                f.pool.mirror_variation(x * base, y * base, z * base, depth);
+            REQUIRE(deep.matter);
+            REQUIRE(deep.type == f.stone);
+            REQUIRE(deep.depth == depth);
+        }
+    }
+
+    // Walking towards it and away again is the same grain. Asked twice, six hundred frames apart,
+    // because the fault this rules out is a source that remembers anything at all.
+    const i64 lo[3] = {0, 0, 0};
+    const i64 hi[3] = {63, 31, 16};
+    const u64 first = f.pool.variation_fingerprint(f.world, lo, hi, 1, 3, nullptr);
+    f.serve(2);
+    f.serve(600);
+    CHECK(f.pool.variation_fingerprint(f.world, lo, hi, 1, 3, nullptr) == first);
+}
+
+// ==================================================================================================
+// The facility, voxel for voxel. Skipped by default -- it samples a real clip.
+//
+//   build\bin\ws_tests.exe --no-skip --test-case="R8b over the whole facility"
+//
+// This is R8b's gate and it is deliberately not a synthetic box. The synthetic cases above prove
+// the arithmetic; this one proves that the walk lands on the same voxels the shader's descent lands
+// on over a real building, with real materials, real openings and real coordinates -- which is the
+// thing a hand-written test world cannot be trusted to cover, because it was written by whoever
+// also wrote the walk.
+// ==================================================================================================
+
+TEST_CASE("R8b over the whole facility" * doctest::skip()) {
+    const char* candidates[] = {"clips/facility.clip", "../clips/facility.clip",
+                                "../../clips/facility.clip", "../../../clips/facility.clip"};
+    std::string clip_path;
+    for (const char* candidate : candidates) {
+        if (std::filesystem::exists(candidate)) {
+            clip_path = candidate;
+            break;
+        }
+    }
+    REQUIRE_MESSAGE(!clip_path.empty(), "clips/facility.clip is not beside the test binary");
+
+    // Four voxels a metre, and `WS_FACILITY_PER_METRE` to raise it. The walk below is every voxel
+    // of the building four times over, so the resolution sets the runtime cubed: metre 4 is a
+    // couple of million voxels and a minute, metre 8 is twenty million and long enough that nobody
+    // runs it twice. The question this asks -- does the walk land on the same voxels the shader's
+    // descent lands on, over a real building with real materials and real openings -- is the same
+    // question at either.
+    i32 per_metre = 4;
+    if (const char* asked = std::getenv("WS_FACILITY_PER_METRE")) per_metre = std::atoi(asked);
+
+    JobSystem jobs;
+    TagRegistry tags;
+    VoxelTypeTable types;
+    forge::Script script = forge::load_clip_script(clip_path, types, tags);
+    script.settings.voxels_per_metre = per_metre;
+
+    const u64 sample_began = now_ns();
+    const forge::SampleResult built =
+        forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
+    const f64 sample_ms = ns_to_ms(now_ns() - sample_began);
+    REQUIRE_FALSE(built.clip.empty());
+
+    World world;
+    MatterLedger ledger;
+    paste_clip(world, ledger, built.clip, built.origin_voxel[0], built.origin_voxel[1],
+               built.origin_voxel[2], PasteMode::Replace, MatterReason::Generation, 1, &jobs,
+               types.type_count());
+
+    NodePoolBudget budget;
+    budget.proximity_voxels = 0;
+    budget.hashed_variation = true;
+    NodePool pool;
+    pool.create(budget, types);
+
+    // Ask for the whole thing at brick resolution, and keep serving until it stops building. The
+    // pool is depth-bounded, so a test that checks voxels has to ask for voxels.
+    const i64 lo[3] = {built.origin_voxel[0], built.origin_voxel[1], built.origin_voxel[2]};
+    const i64 hi[3] = {lo[0] + static_cast<i64>(built.clip.size[0]) - 1,
+                       lo[1] + static_cast<i64>(built.clip.size[1]) - 1,
+                       lo[2] + static_cast<i64>(built.clip.size[2]) - 1};
+    for (i64 z = lo[2]; z <= hi[2]; z += 8) {
+        for (i64 y = lo[1]; y <= hi[1]; y += 8) {
+            for (i64 x = lo[0]; x <= hi[0]; x += 8) {
+                pool.request(node_key_of(x, y, z, kLeafLevel));
+            }
+        }
+    }
+    const f64 camera[3] = {0.0, 0.0, 0.0};
+    for (u64 frame = 1; frame <= 64; ++frame) pool.update(world, camera, frame);
+
+    REQUIRE(pool.stale_masks(world) == 0);
+    REQUIRE(pool.stale_leaves(world) == 0);
+
+    // Every voxel of the building, through the same walk the shader performs, at the voxel and at
+    // three levels below it. `mirror_voxel` against the world is the standard; `mirror_variation`
+    // against `mirror_voxel` is the claim that the child source did not move anything.
+    u64 voxels = 0, solid = 0, disagreed = 0, sub_disagreed = 0;
+    for (i64 z = lo[2]; z <= hi[2]; ++z) {
+        for (i64 y = lo[1]; y <= hi[1]; ++y) {
+            for (i64 x = lo[0]; x <= hi[0]; ++x) {
+                ++voxels;
+                const VoxelTypeId truth = world.get(x, y, z);
+                const VoxelTypeId walked = pool.mirror_voxel(x, y, z);
+                if (walked != truth) ++disagreed;
+                if (truth != kAir) ++solid;
+
+                const VariationSample at = pool.mirror_variation(x, y, z, 0);
+                if (at.type != walked || at.matter != (walked != kAir)) ++sub_disagreed;
+                for (u32 depth = 1; depth <= 3; ++depth) {
+                    const i64 base = static_cast<i64>(1) << depth;
+                    const VariationSample cell = pool.mirror_variation(
+                        x * base + base - 1, y * base + base - 1, z * base + base - 1, depth);
+                    if (cell.matter != (walked != kAir) || cell.type != walked) ++sub_disagreed;
+                }
+            }
+        }
+    }
+
+    u64 cells = 0;
+    const u64 print = pool.variation_fingerprint(world, lo, hi, 4, 3, &cells);
+    std::printf(
+        "\nR8b facility  %s at %d voxels a metre, sampled in %.0f ms\n"
+        "world         %llu voxels in the clip's box, %llu solid, %llu nodes built\n"
+        "mirror        %llu voxels disagree with the world, %llu sub-voxel cells disagree with the "
+        "mirror\n"
+        "fingerprint   %016llx over %llu solid voxels, stride 4, three levels down\n",
+        clip_path.c_str(), per_metre, sample_ms, static_cast<unsigned long long>(voxels),
+        static_cast<unsigned long long>(solid),
+        static_cast<unsigned long long>(pool.node_watermark()),
+        static_cast<unsigned long long>(disagreed),
+        static_cast<unsigned long long>(sub_disagreed),
+        static_cast<unsigned long long>(print), static_cast<unsigned long long>(cells));
+
+    CHECK(disagreed == 0);
+    CHECK(sub_disagreed == 0);
+    CHECK(solid > 0);
+
+    // Two pools, one world: the same fingerprint. The two-RUN half of this gate is the exe's own
+    // `R8b fingerprint` line under `--hashed-variation --settle`; this is the half a suite can
+    // assert on every build.
+    NodePool second;
+    second.create(budget, types);
+    CHECK(second.variation_fingerprint(world, lo, hi, 4, 3, nullptr) == print);
 }

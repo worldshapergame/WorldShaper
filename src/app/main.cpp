@@ -387,6 +387,12 @@ struct Options {
     u32 clip_coarse = 4;
     i32 clip_metre = 0;                     // override the file's resolution, for quick previews
 
+    // R2b's second half, and R8b's child source. Both off, both with a control arm that is the
+    // same binary run without the flag (D407), because two builds that differ by a rebuild cannot
+    // be diffed against one another.
+    bool subpixel_rule = false;         // --subpixel-rule: never STORE finer than a pixel
+    bool hashed_variation = false;      // --hashed-variation: R8b's always-available child source
+
     // R11a's instrument: what one NODE costs to sample, per level, and whether a node sampled on
     // its own is the same voxels as that node inside a bigger box. Headless, beside `--clip-file`,
     // and it opens no window. `tools/samplecost.ps1` is what runs it.
@@ -956,6 +962,13 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         options.clip_align = true;
     } else if (arg == "--clip-metre") {
         options.clip_metre = static_cast<i32>(next_number(0));
+    } else if (arg == "--subpixel-rule") {
+        // R2b's second half. Off is the arm every build before this one ran, so leaving the flag
+        // out IS the control and the two arms are one binary.
+        options.subpixel_rule = true;
+    } else if (arg == "--hashed-variation") {
+        // R8b's child source, for a world with no field behind it. Off is the control arm.
+        options.hashed_variation = true;
     } else if (arg == "--no-despeckle") {
         // The control arm for D610. Two flags of one build: with it, every lone voxel of the
         // wrong material stays exactly where the sampler put it.
@@ -1464,6 +1477,10 @@ void print_help() {
         "  --clip-align          report parts that nearly line up but do not\n"
         "  --clip-at x,y,z       where to stamp it, in voxels (default the origin)\n"
         "  --clip-metre N        sample at N voxels per metre instead of the file's\n"
+        "  --subpixel-rule       R2b: never store a node finer than a pixel can resolve. Off by\n"
+        "                        default, and leaving it out is the control arm\n"
+        "  --hashed-variation    R8b: derive a node's children by hashing its key when nothing\n"
+        "                        else can. Off by default; prints a determinism hash at load\n"
         "  --refine-batch N      nodes the ladder picks and samples per wake (default 128). 16\n"
         "                        is what it was when a batch was sampled one node at a time\n"
         "  --refine-workers N    workers the background sampler gets (default half the machine).\n"
@@ -7216,6 +7233,20 @@ void Application::record_frame(f32 time_seconds) {
                                ? static_cast<f32>(render_extent.width) /
                                      static_cast<f32>(render_extent.height)
                                : 1.0f;
+        // How big a pixel is, from the same three numbers the rays get it from -- and this is the
+        // one decision R2b was owed. Without it the pool falls back to a 1280x800 constant, which
+        // is conservative at or below 1280 lines and UNSAFE above: a 2160-line screen has a pixel
+        // angle 2.7x smaller, so its rays address nodes two levels finer than the constant admits
+        // and a pool trusting the constant would evict what they are looking at.
+        //
+        // `2 * lens.x / resolution.y * lens.z` is visibility.comp's `pixel_angle` times node.glsl's
+        // `footprint` bias, verbatim. Trap 13 is two structures answering one question, so the
+        // answer to "how big is a pixel" comes from here and the pool never derives its own.
+        node_view.pixel_angle =
+            (render_extent.height > 0)
+                ? 2.0f * camera_.tan_half_fov() / static_cast<f32>(render_extent.height) *
+                      detail_bias_
+                : 0.0f;
         node_view.valid = true;
 
         const u64 node_start = now_ns();
@@ -8783,6 +8814,10 @@ int Application::play(const Options& options) {
             node_budget.payload_bytes =
                 std::min<u64>(node_budget.payload_bytes, options_.node_payload_mb << 20);
         }
+        // R2b and R8b, both off unless asked for. The pool logs which arm it is on at `create`,
+        // so a table of numbers taken over two runs cannot be read without its flag.
+        node_budget.subpixel_rule = options_.subpixel_rule;
+        node_budget.hashed_variation = options_.hashed_variation;
         WS_LOG_INFO("load", "type tables {:.0f} ms  [t+{:.0f} ms]",
                 ns_to_ms(now_ns() - t_tables), ns_to_ms(now_ns() - load_began_ns_));
         const u64 t_pool = now_ns();

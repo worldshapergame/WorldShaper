@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <bit>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include "core/assert.hpp"
@@ -61,6 +63,8 @@ void NodeUploadBatch::clear() {
     churned = 0;
     deferred = 0;
     no_room = 0;
+    refused_subpixel = 0;
+    evicted_subpixel = 0;
     out_of_memory = false;
 }
 
@@ -125,6 +129,39 @@ void NodePool::create(const NodePoolBudget& budget, const VoxelTypeTable& types)
     churn_never_read_ = 0;
     for (u64& count : churn_by_source_) count = 0;
     requested_source_.clear();
+
+    // R2b's second half, and its arm.
+    //
+    // Read ONCE, at create, and logged: a policy that can be switched has to say which way it was
+    // switched, or a table of numbers taken over two runs means nothing (D621's leaf ceiling is
+    // exactly that mistake). `--subpixel-rule` is what sets it; the `WS_SUBPIXEL` environment
+    // stopgap this arrived with is gone, because a run's arm belongs in the run's own command line
+    // where the log records it (trap 15).
+    subpixel_rule_ = budget_.subpixel_rule;
+    pixel_angle_ = (budget_.pixel_angle > 0.0) ? budget_.pixel_angle : kSubPixelAngle;
+    subpixel_margin_ = budget_.subpixel_margin_levels;
+    camera_known_ = false;
+    camera_voxel_[0] = camera_voxel_[1] = camera_voxel_[2] = 0.0;
+    subpixel_refused_ = 0;
+    subpixel_evicted_ = 0;
+    subpixel_said_ = 0;
+    WS_LOG_INFO("pool",
+                "R2b sub-pixel residency is {} (pixel angle {:.5f} rad, {} level{} of slack); a node "
+                "finer than the marcher's own descent target is {}",
+                subpixel_rule_ ? "ON" : "OFF -- control arm", pixel_angle_, subpixel_margin_,
+                subpixel_margin_ == 1 ? "" : "s",
+                subpixel_rule_ ? "refused and given up" : "built and kept, as before");
+
+    // R8b's arm, on the same terms and for the same reason.
+    hashed_variation_ = budget_.hashed_variation;
+    variation_seed_ = budget_.variation_seed;
+    variation_amount_ = variation_amount_q(budget_.variation_colour);
+    variation_said_ = 0;
+    WS_LOG_INFO("pool",
+                "R8b hashed variation is {} (seed {:#010x}, colour +/-{}/256 of full scale); a node "
+                "with no field behind it gets its children {}",
+                hashed_variation_ ? "ON" : "OFF -- control arm", variation_seed_, variation_amount_,
+                hashed_variation_ ? "from the hash of its own key" : "from nowhere, as before");
 }
 
 // ---- allocation ----------------------------------------------------------------------------
@@ -376,6 +413,132 @@ VoxelTypeId NodePool::mirror_voxel(i64 x, i64 y, i64 z) const {
                          ? nullptr
                          : payload_.data() + header.payload_offset;
     return decode_voxel(header, base, index);
+}
+
+// ---- R8b: the hashed child source ---------------------------------------------------------------
+//
+// Four functions and one chain. The chain is the whole of it: a hash of the voxel a descent starts
+// in, then one mix per octant on the way down, with the colour perturbed at every step from the
+// hash of the step. There is no coordinate below a voxel anywhere in here, which is what makes the
+// depth unbounded rather than large.
+//
+// Everything in this block is a QUERY. Nothing it computes is stored, nothing it computes is
+// uploaded, and with `--hashed-variation` off the chain is not walked at all -- the colour of a
+// sub-voxel cell is then its voxel's own, which is a stand-in parent and exactly what a build
+// without this source draws. That is the control arm, and it is one binary.
+
+namespace {
+
+// A 64-bit fold, for the fingerprint and for nothing else. Deliberately not the 32-bit mix the
+// source itself uses: a fingerprint that shares arithmetic with the thing it is fingerprinting can
+// agree with it for the wrong reason.
+constexpr u64 fold64(u64 h, u64 value) {
+    h ^= value + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+    return h;
+}
+
+}  // namespace
+
+// The depth-0 sample: a voxel's own type, its own colour, and the seed its children come from.
+//
+// Alpha is 255 rather than a folded coverage, and the difference matters. A node's `colour` alpha
+// is coverage summarised over a subtree (D139); a VOXEL is either there or it is not, and the cell
+// this source is about to derive is a solid piece of a solid voxel.
+VariationSample NodePool::variation_at_voxel(VoxelTypeId type, i64 x, i64 y, i64 z) const {
+    VariationSample out{};
+    out.type = type;
+    out.matter = (type != kAir);
+    out.hash = variation_root_hash(x, y, z, variation_seed_);
+    if (!out.matter || types_ == nullptr) return out;
+    const VisualRecord& visual = types_->visual_of(type);
+    out.colour = (255u << 24) | (static_cast<u32>(visual.blue) << 16) |
+                 (static_cast<u32>(visual.green) << 8) | static_cast<u32>(visual.red);
+    return out;
+}
+
+VariationSample NodePool::mirror_variation(i64 sx, i64 sy, i64 sz, u32 depth) const {
+    // Which voxel the cell is in. An arithmetic shift, not a division, for the reason
+    // `node_key_of` states: a cell at -1 belongs to voxel -1, not to voxel 0, and getting it wrong
+    // puts every negative coordinate one voxel out.
+    const i64 vx = sx >> depth;
+    const i64 vy = sy >> depth;
+    const i64 vz = sz >> depth;
+
+    // Read the voxel the way the shader reads it -- entry hash, descent, child mask, leaf payload.
+    // This is `mirror_voxel` and not a second reader: if the two ever disagreed, the mirror would
+    // be agreeing with itself about a walk nobody had checked.
+    VariationSample out = variation_at_voxel(mirror_voxel(vx, vy, vz), vx, vy, vz);
+    out.depth = depth;
+    if (!out.matter || depth == 0) return out;
+
+    // The control arm stops here: with the source off there are no children below a voxel, and the
+    // voxel itself is what stands in for the cell. Same shape, no grain.
+    if (!hashed_variation_) return out;
+
+    for (u32 step = depth; step > 0; --step) {
+        const u32 octant = octant_of(sx >> (step - 1), sy >> (step - 1), sz >> (step - 1));
+        out.hash = variation_child_hash(out.hash, octant);
+        out.colour = variation_child_colour(out.colour, out.hash, variation_amount_);
+    }
+    return out;
+}
+
+VariationChildren NodePool::variation_children_of(i64 sx, i64 sy, i64 sz, u32 depth) const {
+    const VariationSample at = mirror_variation(sx, sy, sz, depth);
+    return variation_children(at.hash, at.colour, at.matter,
+                              hashed_variation_ ? variation_amount_ : 0u);
+}
+
+u64 NodePool::variation_fingerprint(const World& world, const i64 lo[3], const i64 hi[3],
+                                    i64 stride, u32 depth, u64* cells_out) const {
+    if (stride < 1) stride = 1;
+    const u32 amount = hashed_variation_ ? variation_amount_ : 0u;
+
+    // The question is folded in first, so a hash cannot be compared against one taken over a
+    // different box, a different stride or a different seed without the difference showing.
+    u64 h = 0xCBF29CE484222325ull;
+    for (u32 axis = 0; axis < 3; ++axis) {
+        h = fold64(h, static_cast<u64>(lo[axis]));
+        h = fold64(h, static_cast<u64>(hi[axis]));
+    }
+    h = fold64(h, static_cast<u64>(stride));
+    h = fold64(h, depth);
+    h = fold64(h, variation_seed_);
+
+    u64 cells = 0;
+    for (i64 z = lo[2]; z <= hi[2]; z += stride) {
+        for (i64 y = lo[1]; y <= hi[1]; y += stride) {
+            for (i64 x = lo[0]; x <= hi[0]; x += stride) {
+                // The WORLD, not the pool. Residency is a race between two runs and world content
+                // is not, so a fingerprint read off the pool would differ for reasons that have
+                // nothing to do with the hash -- which is the whole thing this number is for.
+                const VoxelTypeId type = world.get(x, y, z);
+                if (type == kAir) continue;
+                ++cells;
+
+                VariationSample at = variation_at_voxel(type, x, y, z);
+                h = fold64(h, at.hash);
+                h = fold64(h, at.colour);
+                for (u32 level = 0; level < depth; ++level) {
+                    const VariationChildren kids =
+                        variation_children(at.hash, at.colour, true, amount);
+                    h = fold64(h, kids.mask);
+                    for (u32 octant = 0; octant < 8; ++octant) {
+                        h = fold64(h, kids.colour[octant]);
+                        h = fold64(h, kids.hash[octant]);
+                    }
+                    // One fixed path down, so the cost is `depth * 8` per voxel rather than
+                    // `8^depth`. Which path does not matter and that it is FIXED does.
+                    const u32 pick = (level * 3u + 1u) & 7u;
+                    at.hash = kids.hash[pick];
+                    at.colour = kids.colour[pick];
+                }
+            }
+        }
+    }
+    h = fold64(h, cells);
+    if (cells_out != nullptr) *cells_out = cells;
+    return h;
 }
 
 u32 NodePool::stale_leaves(const World& world, NodeKey* first) const {
@@ -696,9 +859,40 @@ u32 NodePool::refine(const World& world, const NodeKey& key, u32 root_slot, u32&
     u32 slot = root_slot;
     chain[depth++] = slot;
 
+    // R2b: the finest level anything at this node's distance can address. Computed once for the
+    // whole descent rather than per level -- every node on the chain contains the requested one, so
+    // its box is at least as near, and a per-level answer would only ever be coarser.
+    const u32 finest = subpixel_rule_ ? subpixel_finest_for(key) : kLeafLevel;
+    // True when the descent stopped because of the rule rather than because it arrived, which is
+    // the one case whose fold has to be skipped. See below, and `fold_children`.
+    bool stopped_subpixel = false;
+
     for (u32 level = kEntryLevel; level > key.level; --level) {
         const GpuNode& node = nodes_[slot];
         if ((node_flags(node) & kNodeLeaf) != 0) break;
+
+        // R2b's second half, and the whole of "never STORED".
+        //
+        // The child about to be built is one level finer than `level`. If that is finer than the
+        // marcher's own descent target here, no ray will ever address it -- `node_march` clamps its
+        // target with `max(level, kLeafLevel)` where `level` is `floor(log2(footprint)) + dither`
+        // and the dither is never negative. So the node would be built, folded, uploaded, swept
+        // past and never read.
+        //
+        // The colour test is not a hedge; it is the condition that makes this safe, and it is the
+        // sentence D259 blocked this on read the other way round. A node stands in for its subtree
+        // by drawing the colour it was FOLDED from, and a node that has never had a built child has
+        // no colour -- so refusing its first descent would leave a shell with nought alpha, which
+        // `node_march` correctly refuses to draw and correctly goes on reporting, for ever. Build it
+        // once, let the fold run up the chain, and refuse every request after that. What eviction
+        // "can afford to rebuild" turns out not to be the question: the pool never has to, because
+        // the marcher stops here and reads this node's own colour as an ordinary coarse hit.
+        if (subpixel_rule_ && level - 1 < finest && (nodes_[slot].colour >> 24) != 0) {
+            ++batch_.refused_subpixel;
+            ++subpixel_refused_;
+            stopped_subpixel = true;
+            break;
+        }
 
         const u32 shift = level - 1 - key.level;
         const u32 octant = octant_of(key.x >> shift, key.y >> shift, key.z >> shift);
@@ -748,8 +942,20 @@ u32 NodePool::refine(const World& world, const NodeKey& key, u32 root_slot, u32&
     //
     // It costs nothing: the chain is already in hand, and the array is the one the erode sweep
     // reads first precisely because it is four bytes and sequential.
+    //
+    // R2b adds one exception and it is load-bearing rather than tidy. `fold_children` sets a node's
+    // colour to nought when none of its children are built, which is right for a node that has never
+    // had any and WRONG for one whose children have been given up: the moment the rule takes a
+    // subtree, the node standing in for it is the thing being drawn, and re-folding it from eight
+    // empty slots paints it black. So the node the rule stopped at keeps the colour it already has.
+    // Its ancestors still fold, and they read that colour, which is intact -- nothing above it
+    // learns anything wrong.
+    //
+    // It is still STAMPED, because a node the marcher is drawing is a node in use, and letting the
+    // erosion sweep age it out would be D247 arriving through a new door.
+    const u32 fold_from = (stopped_subpixel && depth > 0) ? depth - 1 : depth;
     for (u32 i = depth; i > 0; --i) {
-        fold_children(chain[i - 1]);
+        if (i <= fold_from) fold_children(chain[i - 1]);
         node_last_read_[chain[i - 1]] = static_cast<u32>(touch_frame_);
     }
     return slot;
@@ -859,6 +1065,52 @@ void NodePool::touch_slot(u32 slot) {
     // Instrument, and the ONLY place it is written: this array counts what a ray said, where
     // `node_last_read_` above also carries builds and the proximity sweep. D426.
     if (slot < node_reads_.size() && node_reads_[slot] != 0xFFFFFFFFu) ++node_reads_[slot];
+}
+
+// ---- R2b's second half: the rule ----------------------------------------------------------------
+//
+// Three small functions and one distance, kept together because the whole of the policy is here and
+// because the trap this stage has is two copies of one piece of arithmetic drifting apart. D674 was
+// an evening spent on a rule that was working, read through a line that could not tell "correct"
+// from "broken"; the defence is that there is exactly one distance test and everything asks it.
+
+// From the camera to the nearest point of a node's box, in voxels.
+//
+// Nearest rather than centre, and the direction is the safety. A ray that reaches any part of this
+// node has travelled at least this far, so its footprint is at least `this * pixel_angle` and its
+// descent target is at least the level that implies. Measuring to the centre would let a node be
+// declared unaddressable while rays are addressing its near face.
+f64 NodePool::distance_to_box(i64 x, i64 y, i64 z, u32 level) const {
+    if (!camera_known_) return 0.0;
+    const i64 span = i64{1} << level;
+    const i64 lo[3] = {x << level, y << level, z << level};
+    f64 sum = 0.0;
+    for (u32 axis = 0; axis < 3; ++axis) {
+        const f64 low = static_cast<f64>(lo[axis]);
+        const f64 high = static_cast<f64>(lo[axis] + span);
+        const f64 at = camera_voxel_[axis];
+        const f64 gap = (at < low) ? (low - at) : ((at > high) ? (at - high) : 0.0);
+        sum += gap * gap;
+    }
+    return std::sqrt(sum);
+}
+
+u32 NodePool::subpixel_finest_for(const NodeKey& key) const {
+    const u32 finest = subpixel_finest_level(distance_to_box(key.x, key.y, key.z, key.level),
+                                             pixel_angle_);
+    // The margin is slack in the KEEP direction -- more levels held, not fewer -- so it can only
+    // ever make the rule quieter. A margin that could evict more would be a second policy.
+    return (finest > kLeafLevel + subpixel_margin_) ? finest - subpixel_margin_ : kLeafLevel;
+}
+
+bool NodePool::node_is_subpixel(const GpuNode& node) const {
+    if (!subpixel_rule_ || !camera_known_) return false;
+    const u32 level = node_level(node);
+    // A free slot, a root the entry table owns, and anything at or above the marcher's coarsest
+    // march level are all off limits: the first is not a node, and the other two are what a descent
+    // has to pass THROUGH to reach anything at all.
+    if (level == 0 || level >= kEntryLevel || level >= kMarcherMaxDetail) return false;
+    return level < subpixel_finest_for(NodeKey{node.x, node.y, node.z, level});
 }
 
 // ---- the eviction instrument -------------------------------------------------------------------
@@ -1057,6 +1309,19 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     // Instrument only. A caller that passes nothing gets a view that answers "no" to everything,
     // which is what the tests want and what makes this free where it is not asked for.
     view_ = (view != nullptr) ? *view : NodeView{};
+    // R2b measures from here. The same array the proximity radius uses, so there is one answer in
+    // this file to "where is the camera" and the rule cannot drift from the twenty metres that are
+    // being held resident regardless of it.
+    camera_voxel_[0] = camera_voxel[0];
+    camera_voxel_[1] = camera_voxel[1];
+    camera_voxel_[2] = camera_voxel[2];
+    camera_known_ = true;
+    // ...and how big a pixel is, from the caller when it knows and from the budget when it does
+    // not. Taken per frame rather than at create because the render extent changes on a resize and
+    // a rule measured against last frame's pixel is a rule measured against nothing.
+    if (view != nullptr && view->valid && view->pixel_angle > 0.0f) {
+        pixel_angle_ = static_cast<f64>(view->pixel_angle);
+    }
     batch_.clear();
     out_of_room_ = false;
     u32 budget = budget_.max_builds_per_frame;
@@ -1434,11 +1699,26 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
             for (u32 slot = first; slot < last; ++slot) {
                 // The cheap one first. In a settled frame almost every slot stops here, and this
                 // array is a quarter the width of a node record and read in order.
-                if (now - node_last_read_[slot] <= cold) continue;
+                //
+                // R2b's second half is the one thing that cannot be answered from this array, and
+                // that costs what it costs: the rule is about where a node IS, so it needs the
+                // node's coordinates, which are in the 32-byte record. With the rule off the cheap
+                // test still short-circuits, so the control arm reads exactly the memory it always
+                // did and a timing difference between the arms is attributable to this line.
+                const bool cold_enough = (now - node_last_read_[slot]) > cold;
+                if (!cold_enough && !subpixel_rule_) continue;
 
                 const GpuNode& node = nodes_[slot];
                 const u32 level = node_level(node);
                 if (level == 0 || level >= kEntryLevel) continue;   // unbuilt, or a root live_ owns
+
+                // Age is one reason to give a node up and being unaddressable is another, and they
+                // are not the same reason: a cold node MIGHT be wanted again the moment the camera
+                // turns round, which is what `cold_frames` is six hundred frames long for, and a
+                // sub-pixel node cannot be wanted at all until the camera moves closer -- at which
+                // point the request that arrives is served by the ordinary build path.
+                const bool subpixel = node_is_subpixel(node);
+                if (!cold_enough && !subpixel) continue;
 
                 if ((node_flags(node) & kNodeLeaf) == 0) {
                     if (node.children == kNoNode) continue;   // a shell already; nothing under it
@@ -1446,6 +1726,12 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
                     for (u32 octant = 0; octant < 8 && !any_built; ++octant) {
                         any_built = node_level(nodes_[node.children + octant]) != 0;
                     }
+                    // Unchanged, and it is what keeps the sub-pixel arm safe as well: a node is
+                    // only ever taken once nothing is left under it, so the pass below collapses a
+                    // sub-pixel subtree from the leaves up rather than pulling a parent out from
+                    // under a child a ray is still reading. Everything under a sub-pixel node is
+                    // sub-pixel too -- it is finer and no further away -- so the repeat reaches all
+                    // of it, and allocation being a bump pointer keeps a subtree inside one slice.
                     if (any_built) continue;   // something below is still in use
                 }
 
@@ -1455,6 +1741,15 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
                 nodes_[slot] = GpuNode{};
                 dirty_nodes_.mark(slot);
                 ++batch_.evicted;
+                // Attributed rather than inferred. `evicted` alone cannot say whether a frame gave
+                // up four hundred nodes because the camera turned or because the rule reached a
+                // subtree it had been holding since the load, and those are opposite readings of
+                // the same number -- the first is churn to be explained, the second is the policy
+                // working.
+                if (subpixel && !cold_enough) {
+                    ++batch_.evicted_subpixel;
+                    ++subpixel_evicted_;
+                }
             }
             if (batch_.evicted == before_pass) break;   // nothing both cold and childless left
         }
@@ -1532,6 +1827,70 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
         ++batch_.evicted;
     }
 
+    // ---- R2b's own audit line ---------------------------------------------------------------
+    //
+    // The pool says this itself rather than waiting for the frame report to be taught about it, and
+    // that is not impatience: the two arms of this change have to be readable from a `--settle` run
+    // on a build whose `main.cpp` knows nothing about the rule, or the measurement cannot be taken
+    // at all. `edit refresh` above is here for the same reason.
+    //
+    // Both arms print it. A control arm that says nothing is a control arm whose numbers have to be
+    // inferred from a different instrument, and D621's leaf-ceiling table is what that costs.
+    //
+    // `held` is the walk, and it is the number that is not taken from the policy -- see `stats()`.
+    // 600 frames is `cold_frames`, so one line is one full eviction window and the walk costs a
+    // read of the node array once every ten seconds.
+    if (frame >= subpixel_said_ + 600 && next_free_ > 0) {
+        subpixel_said_ = frame;
+        u32 held = 0;
+        u64 held_bytes = 0;
+        u32 held_leaves = 0;
+        for (u32 slot = 0; slot < next_free_; ++slot) {
+            const GpuNode& node = nodes_[slot];
+            const u32 level = node_level(node);
+            if (level == 0 || level >= kEntryLevel || level >= kMarcherMaxDetail) continue;
+            if (level >= subpixel_finest_for(NodeKey{node.x, node.y, node.z, level})) continue;
+            ++held;
+            held_bytes += sizeof(GpuNode);
+            if ((node_flags(node) & kNodeLeaf) != 0 && node.children != kNoNode &&
+                node.children < leaves_.size()) {
+                ++held_leaves;
+                held_bytes += kBrickWords * sizeof(u64) + leaf_payload_size_[node.children];
+            }
+        }
+        const NodePoolStats live = live_stats();
+        WS_LOG_INFO("pool",
+                    "R2b {} at frame {}: {} nodes, {} leaves held; sub-pixel STILL HELD {} ({} of "
+                    "them leaves, {} bytes); lifetime {} refused, {} given up for being "
+                    "unaddressable",
+                    subpixel_rule_ ? "ON" : "OFF", frame, live.nodes, live.leaves, held,
+                    held_leaves, held_bytes, subpixel_refused_, subpixel_evicted_);
+    }
+
+    // ---- R8b's own line, and it is the gate rather than an instrument ---------------------------
+    //
+    // "Same key, same children, for ever and on every machine" is a claim two runs can settle and
+    // nothing else can, so the source prints the number those two runs are compared on. Off by
+    // default with the flag, because it reads a quarter of a million voxels out of the world every
+    // six hundred frames and a control arm that pays for an instrument it is not using is a control
+    // arm with a limp.
+    //
+    // The box is FIXED and stated in the line. A fingerprint over whatever was resident, or over
+    // whatever the camera happened to be near, would differ between two runs for reasons that have
+    // nothing to do with the hash -- and a determinism gate that can fail for an unrelated reason
+    // is a gate nobody will believe the second time it goes red.
+    if (hashed_variation_ && frame >= variation_said_ + 600) {
+        variation_said_ = frame;
+        const i64 lo[3] = {-128, -128, -128};
+        const i64 hi[3] = {127, 127, 127};
+        u64 cells = 0;
+        const u64 print = variation_fingerprint(world, lo, hi, 4, 3, &cells);
+        WS_LOG_INFO("pool",
+                    "R8b fingerprint {:016x} at frame {}: {} solid voxels in the 8 m cube at the "
+                    "origin, stride 4, three levels below the voxel, seed {:#010x}",
+                    print, frame, cells, variation_seed_);
+    }
+
     return batch_;
 }
 
@@ -1561,6 +1920,9 @@ NodePoolStats NodePool::live_stats() const {
     if (evicted_leaves_ > 0) {
         s.evicted_fill = static_cast<f64>(evicted_fill_sum_) / static_cast<f64>(evicted_leaves_);
     }
+    s.subpixel_refused = subpixel_refused_;
+    s.subpixel_evicted = subpixel_evicted_;
+    s.subpixel_rule = subpixel_rule_;
     s.requests = requests_;
     s.hits = hits_;
     return s;
@@ -1571,6 +1933,29 @@ NodePoolStats NodePool::stats() const {
     for (u32 slot = 0; slot < next_free_; ++slot) {
         const u32 level = node_level(nodes_[slot]);
         if (level != 0 && level < 32) ++s.per_level[level];
+
+        // R2b's independent witness, and the reason it is HERE rather than beside the counters.
+        //
+        // `subpixel_refused` and `subpixel_evicted` are incremented by the rule as it works, so
+        // they agree with the rule by construction -- a pool whose distance test is wrong reports
+        // them just as briskly, and trap 26 is the session this project lost to three checks that
+        // all agreed because all three read the same liar. This asks a different question of a
+        // different set: of every node the pool is holding right now, how many does the rule say
+        // nothing can address? With the rule on it must be nothing and stay nothing; with the rule
+        // off it is what the rule would be worth, measured on a build that is not taking it.
+        //
+        // Deliberately NOT gated on `subpixel_rule_` -- the control arm has to be able to report
+        // the size of the prize, or the two arms have nothing to compare.
+        if (level == 0 || level >= kEntryLevel || level >= kMarcherMaxDetail) continue;
+        const GpuNode& node = nodes_[slot];
+        if (level >= subpixel_finest_for(NodeKey{node.x, node.y, node.z, level})) continue;
+        ++s.subpixel_resident;
+        if (level < 32) ++s.subpixel_per_level[level];
+        s.subpixel_bytes += sizeof(GpuNode);
+        if ((node_flags(node) & kNodeLeaf) != 0 && node.children != kNoNode &&
+            node.children < leaves_.size()) {
+            s.subpixel_bytes += kBrickWords * sizeof(u64) + leaf_payload_size_[node.children];
+        }
     }
     // The baseline: every leaf the pool is holding right now. Walked rather than tracked, because
     // this is read once at an audit and tracking it would be a running total to keep in step with

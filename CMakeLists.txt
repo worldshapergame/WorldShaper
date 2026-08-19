@@ -227,6 +227,7 @@ set(WS_TEST_SOURCES_HEADLESS
     tests/test_light_list.cpp
     tests/test_pass_ledger.cpp
     tests/test_node_pool.cpp
+    tests/test_node_pool_evict.cpp
     tests/test_world_cache.cpp
     tests/test_world_cache_edits.cpp
     tests/test_compile.cpp

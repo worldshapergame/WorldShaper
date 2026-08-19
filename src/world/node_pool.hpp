@@ -56,6 +56,7 @@
 // writes chunk-sized records. None of that is rendering and none of it benefits from being torn
 // up. Chunks leave the *renderer*; they remain a storage grouping the renderer never sees.
 
+#include <bit>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -87,6 +88,92 @@ inline constexpr u32 kMaxNodeLevel = 24;
 // probe stays in cache. This is a performance knob and nothing depends on its value being right,
 // which is the property to preserve when tuning it.
 inline constexpr u32 kEntryLevel = 14;
+
+// ---- R2b's second half: a node finer than the pixel is never STORED ---------------------------
+//
+// *Never requested* has been done since D190. *Never stored* has been blocked since D259 on one
+// sentence -- "eviction can only drop what it can afford to rebuild" -- and R12 was named as what
+// unblocks it, because a node the card can derive in a dispatch costs nothing to throw away.
+//
+// **That is not the only way out, and the other one needs no card at all.** The pool does not have
+// to be able to rebuild a node it never has to serve again. A node the MARCHER's own descent will
+// never target is a node no ray will ever report missing, so giving it up is not a bet on being
+// able to rebuild it -- it is the observation that nothing will ask.
+//
+// So the rule is the marcher's rule, read off `node_march` rather than invented beside it:
+//
+//     footprint = t * pixel_angle          (voxels, in shaders/node.glsl)
+//     level     = floor(log2(footprint)) + dither,   dither in [0,1)
+//     target    = max(level, kLeafLevel)
+//
+// `dither` is never negative, so the FINEST level any ray at distance t will ever descend to is
+// `max(floor(log2(t * pixel_angle)), kLeafLevel)`. Anything finer than that is detail the walk
+// cannot reach: it is not "probably invisible", it is unaddressable.
+//
+// # Why this agrees with the ladder rather than competing with it
+//
+// `main.cpp`'s `kRefineSplitAt` is `8.0 * 0.002` and D674 reads it as eight pixels at 0.002 of
+// their own distance, a ladder node being eight CELLS a side. Take the eight back out and what is
+// left is the angle one pixel subtends -- which is the marcher's `pixel_angle` and this constant.
+// The two rules then land on the same place by arithmetic rather than by agreement: a ladder node
+// settles at level L when `2^L >= 0.512 * d_metres`, so its cells are `2^(L-3)` voxels across,
+// which is `0.064 * d_metres` -- exactly `t * 0.002` in voxels. **The finest content the world is
+// ever given at a distance is the finest node the marcher will ever ask for there.** A pool holding
+// anything finer is holding something neither the world nor the screen has an opinion about.
+//
+// # What it costs to give one up, and why the picture does not move
+//
+// A node's slot is cleared and its parent's run of eight is KEPT. The descent then stops at the
+// parent, which still carries the colour and the per-direction coverage it was folded from, and
+// `node_march` reports `kFoundHere` on it -- an ordinary coarse hit at exactly the level the pixel
+// asked for. No stand-in, no `kFoundWanted`, no report, no rebuild. That is the whole safety
+// argument and it is an argument rather than a counter: trap 20 says a pass that gets cheaper by
+// building less is a regression in improvement's clothes, and the defence has to be a reason the
+// picture cannot change, checked against a content hash.
+//
+// One thing had to be repaired for it to hold. `fold_children` sets a node's colour to nought when
+// none of its children are built, which is right for a node that has never had any and wrong for
+// one whose children have been given up -- it turns the parent black at the moment it becomes the
+// thing being drawn. The fold of a node the rule stopped at is therefore skipped; its ancestors
+// still fold, and they read its colour, which is intact.
+
+// The angle one pixel subtends, in radians, at 1280x800 through a 90-degree lens.
+//
+// Written as `kRefineSplitAt / 8` rather than as `0.002` so the derivation is in the source and
+// not only in this comment: it is main.cpp's ladder constant with the ladder's eight cells taken
+// back out. It cannot be shared with main.cpp's own `kRefineSplitAt` -- that is a translation unit
+// constant in the same namespace, and declaring it here as well is a redefinition -- so if one
+// moves, the other must, and `test_node_pool_evict.cpp` pins both against D674's distances.
+inline constexpr f64 kLadderSplitAt = 8.0 * 0.002;
+inline constexpr f64 kLadderCellsPerSide = 8.0;
+inline constexpr f64 kSubPixelAngle = kLadderSplitAt / kLadderCellsPerSide;
+
+// The coarsest level `node_march` will march at. Must match `kNodeMaxDetail` in shaders/node.glsl.
+//
+// It matters here and it is easy to miss: the marcher clamps its descent target to this, so past
+// about 1.6 km it stops asking coarser and goes on asking for level 7. A rule that let the pool
+// erode past level 7 would take the very node those rays land on.
+inline constexpr u32 kMarcherMaxDetail = 7;
+
+// The finest node level a ray at this distance will ever descend to.
+//
+// `floor(log2(footprint))`, done with bit_width rather than std::log2 so it cannot round the other
+// way from the shader's `floor` on a boundary value -- 16.0 must answer 4 and 15.999 must answer 3,
+// and a float log2 of an exact power of two is not reliably exact.
+//
+// Distance is to the NEAREST point of the node's box, which is the conservative direction: a ray
+// reaching the node has travelled at least that far, so its own footprint is at least this one and
+// its own target is at least this level. Erring the other way -- centre distance, or the far face --
+// would evict nodes rays still address.
+inline u32 subpixel_finest_level(f64 distance_voxels, f64 pixel_angle) {
+    const f64 footprint = distance_voxels * pixel_angle;
+    // Also the NaN guard: a comparison against NaN is false, so a camera that has not been set
+    // answers "keep everything".
+    if (!(footprint > 1.0)) return kLeafLevel;
+    const u32 level = static_cast<u32>(std::bit_width(static_cast<u64>(footprint))) - 1u;
+    if (level < kLeafLevel) return kLeafLevel;
+    return (level > kMarcherMaxDetail) ? kMarcherMaxDetail : level;
+}
 
 // Where the proximity sweep anchors itself. 64 voxels is two metres.
 //
@@ -186,6 +273,179 @@ constexpr u32 entry_hash32(i32 x, i32 y, i32 z, u32 level) {
     h = node_hash_mix(h ^ static_cast<u32>(z));
     return node_hash_mix(h ^ level);
 }
+
+// ---- R8b: hashed variation, the child source for a world with no field behind it ---------------
+//
+// R8's mechanism, after R11 took the two general halves of it (R8c is the field answering at any
+// resolution, R8d is a derived node being evictable). What is left is the source of last resort:
+// **where a node's children come from when there is no field to ask.** A hand-carved world has
+// none by construction, and so does a world loaded from a file whose clip is gone -- and those are
+// not edge cases, they are what a player who has been building for a week is standing in.
+//
+// The plan's §7 names three sources in the order they are tried: the material's own field, then
+// this, then whatever the player has actually carved. This one is the middle: "cheap, always
+// available, never wrong-looking".
+//
+// # The tree is the coordinate, so depth is unbounded
+//
+// A sub-voxel node is identified by *(its parent, which of the eight children it is)* and by
+// nothing else. So the seed of the chain is a hash of the VOXEL the chain starts in, and every
+// step down is one more mix with the octant. There is no fixed-width sub-voxel coordinate to
+// overflow, which is what makes "no cap -- infinite" a property of the construction rather than a
+// number written down somewhere and hoped for.
+//
+// Same key, same children, for ever and on every machine: the whole chain is integer arithmetic
+// over 32-bit words, so it has no rounding to disagree about. That is what makes a sub-voxel
+// surface stable when you walk towards it and away again -- the grain does not swim, because it
+// was never computed from where you are standing.
+//
+// # It varies the MATERIAL and not the SHAPE, and that is a decision rather than an omission
+//
+// All eight children of a solid voxel are solid, and the eight children of air are air. Hashing
+// the shape as well would be one line and it is wrong twice over: it changes the silhouette of a
+// wall as you approach it, which is the swimming this mode exists to avoid, and it does not
+// conserve matter -- `21-renderer-rewrite.md` §7 is explicit that simulation, physics and the
+// matter ledger stay at level 0, and a child source that erodes a voxel into seven-eighths of one
+// has quietly given the renderer a different world from the one the chisel reads.
+//
+// So what descends is `20-clip-forge.md` §7's perturbation, taken below the voxel: colour, hashed
+// from position, compounding down the chain so that sub-cells sharing a parent are more alike than
+// sub-cells that do not. That is what a real surface does. Roughness is the other half of §7 and
+// it is NOT here, because roughness lives in the type table and minting a record per sub-voxel is
+// the thing §7's own budget exists to stop; the node carries rgba8 and this varies the rgb of it.
+//
+// # Why the arithmetic is 32-bit
+//
+// `node_hash_mix`'s comment gives the reason and it applies here word for word: the shader has to
+// compute the identical value, and a 32-bit mix is short enough that the two implementations can
+// be compared by eye rather than trusted. `shaders/variation.glsl` is the other copy, and
+// `test_node_pool_evict.cpp` pins the constants either side would have to change together.
+
+// The default world seed for the child source. Nothing derives it from the clip on purpose: a
+// world with no clip behind it is exactly the case this serves, so the seed cannot come from one.
+inline constexpr u32 kVariationSeed = 0x57538B01u;
+
+// How far a child's colour may move from its parent's, as a fraction of full scale. 0.05 is
+// `20-clip-forge.md` §7's own worked example -- `variation colour=0.05` -- and it is deliberately
+// small: this is grain, not pattern.
+inline constexpr f32 kVariationColour = 0.05f;
+
+// The seed of the chain at a voxel. Must match `variation_root_hash` in shaders/variation.glsl.
+//
+// Truncated to 32 bits per axis, the same way `entry_hash32` truncates: the shader works in 32-bit
+// integers throughout, and two voxels 2^32 apart getting the same grain is not a defect anybody
+// will ever be in a position to see.
+constexpr u32 variation_root_hash(i64 x, i64 y, i64 z, u32 seed) {
+    u32 h = node_hash_mix(0x9E3779B9u ^ seed);
+    h = node_hash_mix(h ^ static_cast<u32>(static_cast<i64>(x)));
+    h = node_hash_mix(h ^ static_cast<u32>(static_cast<i64>(y)));
+    h = node_hash_mix(h ^ static_cast<u32>(static_cast<i64>(z)));
+    return h;
+}
+
+// One step down: this node's chain seed from its parent's, and which of the eight it is.
+//
+// The octant is folded in through an odd multiplier rather than XORed raw, so that the eight
+// children of one parent do not share their low bits -- eight values differing only in three bits
+// put through one mix are eight values that are still visibly related in the low byte, and the low
+// byte is what the colour is read out of.
+//
+// Must match `variation_child_hash` in shaders/variation.glsl.
+constexpr u32 variation_child_hash(u32 parent_hash, u32 octant) {
+    return node_hash_mix(parent_hash ^ (0x85EBCA6Bu + octant * 0x9E3779B9u));
+}
+
+// The perturbation amount, quantised to 1/256ths, so that everything below it is integer.
+//
+// This conversion is the ONLY floating-point step in the source and it happens once, at `create`,
+// from a knob a human wrote. `shaders/field_leaf.glsl` states the rule this follows and states it
+// better than a restatement would: the one place not allowed to lose precision is the hashing,
+// because a cell that has lost a low bit is not a slightly wrong grain, it is a different grain on
+// one machine and not the other. Two floating-point pipelines that agree to within an ulp are two
+// pipelines that disagree about a rounded byte a few times in a thousand -- and a few times in a
+// thousand over a wall is a wall that shimmers on one computer.
+constexpr u32 variation_amount_q(f32 amount) {
+    if (!(amount > 0.0f)) return 0u;            // also the NaN guard
+    const f32 scaled = amount * 256.0f + 0.5f;
+    return (scaled >= 256.0f) ? 256u : static_cast<u32>(scaled);
+}
+
+// Eight bits of a hash. `which` picks the byte: 0 red, 1 green, 2 blue, 3 spare.
+constexpr u32 variation_byte(u32 h, u32 which) { return (h >> (which * 8u)) & 0xFFu; }
+
+// One channel nudged and clamped, in integer arithmetic from end to end.
+//
+// The byte is read as a signed offset in [-128, 127] and scaled by `amount_q / 256` of full scale:
+// `delta = (bits - 128) * amount_q * 255 / (128 * 256)`, which is one multiply and a shift of 15.
+// The magnitude is shifted rather than the signed value, because a right shift of a negative
+// integer is implementation-dependent in GLSL and defined in C++20 -- so the one form that is the
+// same on both sides is the one that never shifts a negative.
+//
+// Must match `variation_nudge` in shaders/variation.glsl.
+constexpr u32 variation_nudge(u32 base, u32 bits, u32 amount_q) {
+    const i32 offset = static_cast<i32>(bits) - 128;
+    const u32 magnitude = static_cast<u32>(offset < 0 ? -offset : offset);
+    const i32 scaled = static_cast<i32>((magnitude * amount_q * 255u) >> 15u);
+    const i32 moved = static_cast<i32>(base) + ((offset < 0) ? -scaled : scaled);
+    if (moved < 0) return 0u;
+    if (moved > 255) return 255u;
+    return static_cast<u32>(moved);
+}
+
+// A child's colour from its parent's, perturbed by the child's own chain seed.
+//
+// Alpha is carried through untouched. Alpha is COVERAGE (D139), not opacity, and a solid child of
+// a solid parent covers exactly what its parent covered -- inventing a new coverage here would be
+// this source having an opinion about shape, which is the thing it does not have.
+//
+// Must match `variation_child_colour` in shaders/variation.glsl.
+constexpr u32 variation_child_colour(u32 parent_colour, u32 child_hash, u32 amount_q) {
+    const u32 r = variation_nudge(parent_colour & 0xFFu, variation_byte(child_hash, 0), amount_q);
+    const u32 g =
+        variation_nudge((parent_colour >> 8) & 0xFFu, variation_byte(child_hash, 1), amount_q);
+    const u32 b =
+        variation_nudge((parent_colour >> 16) & 0xFFu, variation_byte(child_hash, 2), amount_q);
+    return (parent_colour & 0xFF000000u) | (b << 16) | (g << 8) | r;
+}
+
+// The eight children of a node, derived and not stored.
+//
+// `mask` is the parent's own presence spread over all eight, for the reason above: this source
+// varies the material and never the shape. It is a field rather than a constant 0xFF so that a
+// later source -- R11c's field, which genuinely does know the shape -- can fill the same struct.
+struct VariationChildren {
+    u32 mask = 0;
+    u32 colour[8]{};
+    u32 hash[8]{};
+};
+
+// Must match `variation_children` in shaders/variation.glsl.
+constexpr VariationChildren variation_children(u32 parent_hash, u32 parent_colour, bool parent_has,
+                                               u32 amount_q) {
+    VariationChildren out{};
+    out.mask = parent_has ? 0xFFu : 0u;
+    for (u32 octant = 0; octant < 8; ++octant) {
+        out.hash[octant] = variation_child_hash(parent_hash, octant);
+        out.colour[octant] =
+            parent_has ? variation_child_colour(parent_colour, out.hash[octant], amount_q) : 0u;
+    }
+    return out;
+}
+
+// What a walk down the hashed source found, at whatever sub-voxel depth it was asked for.
+//
+// `depth` is levels BELOW a voxel: 0 is the voxel itself, 1 is a cell 1.5625 cm across, k is
+// 3.125/2^k cm. It is a plain count rather than a signed level because R8a -- signed levels
+// through `NodeKey`, the descent and the face key -- is not built yet, and inventing half of it
+// here would leave two ideas of what a negative level means. When R8a lands this becomes
+// `-level` and nothing else about the source changes.
+struct VariationSample {
+    bool matter = false;
+    VoxelTypeId type = kAir;
+    u32 colour = 0;    // rgba8, alpha carried down from the voxel's own coverage
+    u32 hash = 0;      // this cell's chain seed, which is what its own children come from
+    u32 depth = 0;
+};
 
 // What the GPU sees. Thirty-two bytes, one cache line per two nodes.
 struct GpuNode {
@@ -309,6 +569,74 @@ struct NodePoolBudget {
     // anything the sweep did. A quarter of the slice is four times as long to reach twenty
     // metres, and that is a real cost paid for nothing.
     u32 proximity_per_frame = 32768;
+
+    // ---- R2b's second half, and why it ships OFF -----------------------------------------------
+    //
+    // On is the policy; off is the behaviour of every build before this one, so the two arms are
+    // one binary and one flag (D407) rather than two builds that differ by a rebuild as well.
+    //
+    // **It defaults to OFF, and the reason is a measurement rather than a doubt about the rule.**
+    // The rule is right and the tests pin it against the ladder at every metre from 1 to 4000. It
+    // simply does not fire on this scene: at 1280x800 the marcher addresses a LEAF out to 250 m,
+    // and nothing on either measured camera is that far away.
+    //
+    //   enclosed `0,0,0,-90,0`, warm cache and again on a cold --no-clip-cache load:
+    //       0 refused, 0 given up, and the independent witness reads 0 sub-pixel nodes held on
+    //       BOTH arms, every 600 frames, from the first frame to the last.
+    //   outdoor `0,10,-60,90,-6`: the same, 0 throughout, to frame 20,400.
+    //   a camera 400 m out, which is the nearest one where it fires at all: the control arm held
+    //       6,837 sub-pixel leaves and 1,119,960 bytes -- 55% of the 2.05 MB the screen was paying
+    //       for -- and this arm held none. The estate is ten pixels across at that range.
+    //
+    // And it is not free. The erosion sweep can answer "is this cold" from a four-byte timestamp
+    // and cannot answer "where is this" from anything but the 32-byte record, so switching it on
+    // costs the sweep its short-circuit: measured 0.187 and 0.214 ms of pool CPU against a
+    // control's 0.067, on a frame whose whole node pass has a 0.80 ms budget. Inside the budget,
+    // three times the line, nothing bought.
+    //
+    // So: kept, pinned and dormant, rather than deleted. Turn it on for a world large enough to
+    // have a quarter of a kilometre in it, and turn it on at 4K only after `NodeView::pixel_angle`
+    // is wired -- see `pixel_angle` below for which direction that error runs in.
+    //
+    // **The witness is worth more than the policy right now, and it is not gated on this flag.**
+    // D621 left "the load's peak leaf demand is eight times the settled demand" undiagnosed. It
+    // reads 0 through an entire cold load, on the control arm, which rules out one whole class of
+    // answer: whatever the pool is holding eight times too much of, it is not detail finer than the
+    // pixel.
+    //
+    // Nothing in `main.cpp` sets this yet -- the integrator owns that wiring -- so it is also
+    // readable from the environment as `WS_SUBPIXEL=1`, which is what the measurements above were
+    // taken with. That is a stopgap and it says so: it belongs on the command line beside
+    // `--no-paste-drop`, where a run's arm is visible in the run's own log.
+    bool subpixel_rule = false;
+
+    // The angle one pixel subtends. Overridden per frame by `NodeView::pixel_angle` when the caller
+    // fills it in; this is what the pool falls back to, and what the tests use.
+    //
+    // The fallback is the 1280x800 figure, and the direction of the error is the one that matters:
+    // a HIGHER resolution has a smaller pixel angle, so rays there address finer nodes than this
+    // constant admits, and a pool trusting the constant would evict what they are looking at. It is
+    // safe at or below 1280 lines and it is not safe above them, which is why `NodeView` carries the
+    // real one and why this is only the default.
+    f64 pixel_angle = kSubPixelAngle;
+
+    // How many levels finer than the marcher's own target the pool may still keep. Nought is the
+    // rule exactly; one is a level of slack for measuring what the rule is worth without changing
+    // its shape. Not a tuning knob -- a way to price the margin.
+    u32 subpixel_margin_levels = 0;
+
+    // ---- R8b: the hashed child source ----------------------------------------------------------
+    //
+    // Off by default, and off is the arm every build before this one ran. It changes nothing that
+    // is drawn while it is off and nothing that is drawn while it is on either, until R8a's signed
+    // levels and the `node.glsl` call site land -- what it does today is derive, mirror and
+    // fingerprint, headless, so that the renderer is walking a structure something has already
+    // compared against the world. That order is Stage 2's and the reason for it is that a
+    // structure the renderer walks and nobody compares against the world is a renderer debugging a
+    // mirage.
+    bool hashed_variation = false;
+    u32 variation_seed = kVariationSeed;
+    f32 variation_colour = kVariationColour;
 };
 
 // What changed this frame and must be copied to the GPU.
@@ -346,6 +674,15 @@ struct NodeUploadBatch {
     // as `built`. That is trap 7 living in the instrument: "I could not fit it" arriving as
     // "here you are". D621.
     u32 no_room = 0;
+    // R2b: requests the pool declined to descend into because the node asked for is finer than any
+    // ray at that distance can address, and evictions taken for the same reason rather than for age.
+    //
+    // Separate from `deferred` and `no_room` on purpose, and it is the same distinction those two
+    // were split for. "I ran out of budget", "I had nowhere to put it" and "nothing will ever look
+    // at this" are three different facts about a frame, and a pool that reports the third as either
+    // of the first two reads as jammed while it is working exactly as designed.
+    u32 refused_subpixel = 0;
+    u32 evicted_subpixel = 0;
     bool out_of_memory = false;
     void clear();
 };
@@ -364,6 +701,21 @@ struct NodeView {
     f32 tan_half_fov = 0.0f;   // lens.x, the vertical half-angle
     f32 aspect = 1.0f;         // width / height, which is how the marcher widens it
     bool valid = false;        // false disables the test rather than making it always true
+
+    // What one pixel subtends, for R2b's rule and for nothing else. Nought means "not told", and
+    // the pool falls back to `NodePoolBudget::pixel_angle`.
+    //
+    // It is a field rather than something derived from `tan_half_fov` because the marcher's own
+    // expression carries two things this struct does not have and must not grow a second opinion
+    // about -- the render height and the detail bias:
+    //
+    //     pixel_angle = 2.0 * push.lens.x / push.resolution.y      (visibility.comp)
+    //     footprint   = t * pixel_angle * push.lens.z              (node.glsl, lens.z is the bias)
+    //
+    // so the value to put here is `2 * tan_half_fov / render_height * detail_bias`. Trap 13 is what
+    // happens when two structures answer one question, and the answer to "how big is a pixel" has
+    // to come from the same place the rays got it.
+    f32 pixel_angle = 0.0f;
 };
 
 struct NodePoolStats {
@@ -413,6 +765,35 @@ struct NodePoolStats {
     // level coarser, so the histogram should shift by one and lose three quarters of its finest
     // level. A single number says memory fell by 22% and cannot say which levels did not move.
     u32 per_level[32]{};
+
+    // ---- R2b's second half, and the one number that is not taken from the policy ---------------
+    //
+    // The first two are counters the rule increments as it works, and they are worth exactly what
+    // trap 26 says such counters are worth: they agree with the rule because they ARE the rule. A
+    // pool whose distance test is wrong reports refusals and evictions just as briskly.
+    //
+    // `subpixel_resident` is the independent witness. It is computed in `stats()` by walking every
+    // slot in the pool and asking the rule about the node that is actually there -- a different
+    // reader, over a different set (the whole array, not the erosion slice), at a different time
+    // (an audit, not a frame). With the rule ON it must fall to nothing and STAY there; with the
+    // rule OFF it is the size of the prize, measured on a build that is not taking it. Those two
+    // readings are the measurement, and neither of them is a timing figure.
+    u64 subpixel_refused = 0;
+    u64 subpixel_evicted = 0;
+    u32 subpixel_resident = 0;
+    // ...and what they occupy: 32 bytes a node, plus the occupancy and payload of any that are
+    // leaves. Bytes rather than a count because a leaf costs a hundred times what an interior node
+    // does, and R2b's claim is about bytes.
+    u64 subpixel_bytes = 0;
+    // Which levels they are at. A pool holding sub-pixel LEAVES is holding bricks nobody can
+    // resolve; a pool holding sub-pixel interior nodes is holding 32-byte records, which is a
+    // different and much smaller problem wearing the same name.
+    u32 subpixel_per_level[32]{};
+    // Which arm the run was taken on, printed beside the figures so a table of numbers cannot be
+    // read without it. D621's leaf-ceiling table is the argument for this: three rows of counters
+    // that mean opposite things depending on a flag nothing recorded.
+    bool subpixel_rule = false;
+
     u64 requests = 0;
     u64 hits = 0;
     f64 hit_rate() const {
@@ -574,6 +955,52 @@ public:
     NodePoolStats stats() const;
     bool validate() const;
 
+    // Which arm this pool is running, after the budget and the environment have both had their say.
+    // Read by the tests, and by anything that prints a figure R2b changes the meaning of.
+    bool subpixel_rule() const { return subpixel_rule_; }
+
+    // The finest level the pool will keep at this node's position, from wherever the camera was on
+    // the last `update`. Public because the rule is the interesting part of this change and a test
+    // that cannot ask the pool what it thinks has to re-derive it -- which is a second copy of the
+    // arithmetic and the exact way D674 went wrong.
+    u32 subpixel_finest_for(const NodeKey& key) const;
+
+    // ---- R8b -----------------------------------------------------------------------------------
+
+    // Which arm the child source is running, after the budget has had its say.
+    bool hashed_variation() const { return hashed_variation_; }
+    u32 variation_seed() const { return variation_seed_; }
+
+    // The mirror walker: one sub-voxel cell, read the way the shader will read it.
+    //
+    // `(sx, sy, sz)` are the cell's coordinates at `depth` levels below a voxel, so the voxel that
+    // contains it is `(sx >> depth, ...)` -- the same arithmetic `node_key_of` does one direction
+    // up, and the same arithmetic `node_descend` does with a point and a target. At depth 0 this
+    // must answer exactly what `mirror_voxel` answers, and the test asserts that over the whole
+    // facility rather than taking it as read.
+    //
+    // This exists BEFORE the renderer touches the source, and that ordering is the point. Residency
+    // was built this way in Stage 2 and two of R1a's four bugs were caught by a mirror and by
+    // nothing else, because a structure the renderer walks and nobody compares against the world is
+    // a renderer debugging a mirage.
+    VariationSample mirror_variation(i64 sx, i64 sy, i64 sz, u32 depth) const;
+
+    // The eight children this source derives for a voxel, or for a cell below one. Air in gives
+    // nothing out; the mask is the parent's own presence, never a hashed shape.
+    VariationChildren variation_children_of(i64 sx, i64 sy, i64 sz, u32 depth) const;
+
+    // A fingerprint of what the source derives, over a fixed box of the world at a fixed stride.
+    //
+    // Fixed, and stated in the call rather than chosen from the camera, because "same key, same
+    // children, across two runs" is only a claim if the two runs asked the same question. A
+    // fingerprint taken over whatever happened to be resident would differ between two runs for
+    // reasons that have nothing to do with the hash.
+    //
+    // It reads the WORLD rather than the pool for the same reason: residency is a race and world
+    // content is not.
+    u64 variation_fingerprint(const World& world, const i64 lo[3], const i64 hi[3], i64 stride,
+                              u32 depth, u64* cells_out = nullptr) const;
+
 private:
     struct Resident {
         u32 slot = kNoNode;
@@ -634,6 +1061,21 @@ private:
 
     // Remembers that this node was evicted, so a request for it can be recognised as a rebuild.
     void note_eviction(const GpuNode& node, u64 frame, u32 slot);
+
+    // R2b. Is this node finer than any ray at its distance can address?
+    //
+    // Takes the record rather than a key because the erosion sweep has the record in hand and a key
+    // would mean rebuilding one from it. Answers false with the rule off, so every caller reads as
+    // the control arm without a second branch at each site.
+    bool node_is_subpixel(const GpuNode& node) const;
+    // The box the two above measure to, in voxels, and the distance from the camera to its nearest
+    // point. One place, so the sweep and the request path cannot disagree about where a node is.
+    f64 distance_to_box(i64 x, i64 y, i64 z, u32 level) const;
+
+    // R8b. The depth-0 sample: a voxel's own colour and the seed its children come from. Takes the
+    // type rather than reading it, because the mirror gets it from the POOL and the fingerprint
+    // gets it from the WORLD, and those are two different questions on purpose.
+    VariationSample variation_at_voxel(VoxelTypeId type, i64 x, i64 y, i64 z) const;
 
     NodePoolBudget budget_;
     const VoxelTypeTable* types_ = nullptr;
@@ -768,6 +1210,35 @@ private:
     u64 evicted_never_read_ = 0;
     u64 churn_never_read_ = 0;
     u64 churn_by_source_[kRequestSourceCount]{};
+
+    // ---- R2b's second half ---------------------------------------------------------------------
+    //
+    // The camera the rule measures from, kept from the last `update`. It is the same array the
+    // caller passes for the proximity sweep, so there is one answer to "where is the camera" in
+    // this file and the rule cannot drift from the radius that is holding twenty metres resident.
+    f64 camera_voxel_[3] = {0.0, 0.0, 0.0};
+    bool camera_known_ = false;
+    bool subpixel_rule_ = false;
+    f64 pixel_angle_ = kSubPixelAngle;
+    u32 subpixel_margin_ = 0;
+    u64 subpixel_refused_ = 0;
+    u64 subpixel_evicted_ = 0;
+    // Frame of the last line this pool logged about the rule, so a policy that is doing something
+    // is visible in a `--settle` run without the frame report having to be taught about it, and a
+    // policy that is doing nothing costs one compare a frame. The pool already logs its own edit
+    // refreshes on the same principle.
+    u64 subpixel_said_ = 0;
+
+    // ---- R8b ------------------------------------------------------------------------------------
+    bool hashed_variation_ = false;
+    u32 variation_seed_ = kVariationSeed;
+    // Quantised once at `create`. Everything downstream of it is integer, which is what makes
+    // "and on every machine" a property rather than a hope.
+    u32 variation_amount_ = variation_amount_q(kVariationColour);
+    // Frame of the last fingerprint this pool logged, on the same principle as `subpixel_said_`:
+    // the two runs whose hashes have to match are `--settle` runs of a binary whose `main.cpp`
+    // knows nothing about the source, so the source says it itself.
+    u64 variation_said_ = 0;
 };
 
 }  // namespace ws
