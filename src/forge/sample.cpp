@@ -487,6 +487,11 @@ struct Descent {
     const std::vector<Field::Aabb>* rule_piece = nullptr;
     const std::vector<u32>* rule_piece_at = nullptr;
 
+    // Whether the boxes above are also applied per CELL, in `paint_solid`. Carried from the plan
+    // rather than read from the setting, so that a plan says what it is and a sample taken from it
+    // cannot be built under one rule and read under another.
+    bool rule_bounds = true;
+
     // Optional: one counter per paint rule, so a build can say which rules it spent itself on.
     //
     // Off unless asked for. Paint has been the majority of every expensive build this project has
@@ -608,6 +613,26 @@ struct Tally {
 void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_covered,
              const u8* parent_state, bool inherited, Tally& local);
 
+// Whether a rule could apply AT THIS POINT, from its boxes alone.
+//
+// The same two tests the descent runs over a box, run over one voxel, and it is not a repetition:
+// a box that straddles the edge of a rule's place cannot settle the rule for all of it, so every
+// cell of that box — including the ones outside the place entirely — reached the evaluation. That
+// made `on=<shape>` mean "inside the shape's box, or in any box that touches it", which is a
+// promise nobody can state, and it is the last part of the leak this change is about. Three
+// comparisons against six doubles, against a walk of the whole expression.
+bool rule_reaches(const Descent& d, usize i, Vec3 p) {
+    if (d.rule_box != nullptr && away_from((*d.rule_box)[i], p) > 0.0) return false;
+    if (d.rule_piece_at == nullptr) return true;
+    const u32 from = (*d.rule_piece_at)[i];
+    const u32 to = (*d.rule_piece_at)[i + 1];
+    if (from == to) return true;
+    for (u32 piece = from; piece < to; ++piece) {
+        if (away_from((*d.rule_piece)[piece], p) <= 0.0) return true;
+    }
+    return false;
+}
+
 // A box that is solid all through, so the shape need not be asked again — but whose paint still
 // has rules nobody could settle. Walks the voxels evaluating only those.
 void paint_solid(const Descent& d, const i32 low[3], const i32 high[3], const u8* state,
@@ -631,6 +656,7 @@ void paint_solid(const Descent& d, const i32 low[3], const i32 high[3], const u8
                         type = paint[i].type;
                         continue;
                     }
+                    if (d.rule_bounds && !rule_reaches(d, i, p)) continue;
                     const PaintRule& rule = paint[i];
                     const f64 value = d.field->eval(rule.test, p);
                     ++local.paint;
@@ -902,6 +928,7 @@ SamplePlan plan_sample(const Field& field, u32 root, const std::vector<PaintRule
     SamplePlan plan;
     plan.field = &field;
     plan.root = root;
+    plan.rule_bounds = rule_bounds_used();
 
     // How far it is safe to jump ahead through empty space.
     //
@@ -976,7 +1003,26 @@ SamplePlan plan_sample(const Field& field, u32 root, const std::vector<PaintRule
         // exactly the rules it was written for, and changed nothing at all.
         rule_piece_at[i] = static_cast<u32>(rule_piece.size());
         if (paint[i].has_place) {
-            const Field::Aabb where = field.bounds_of(paint[i].place);
+            // Asked of `containing_bounds_of` and not of `bounds_of`, and the difference is the
+            // whole of this rule's bound.
+            //
+            // A place is a CONTAINMENT question. The descent never evaluates it — it compares the
+            // sample box against this box and settles the rule to "no" when the two do not meet —
+            // so what it needs is "the shape is inside here" and not "a point outside here is told
+            // an honest distance". `bounds_of` promises both, which is why it refuses a box to a
+            // non-uniformly scaled shape however well it knows where that shape is, and refusing
+            // one node takes the box off everything standing over it. The pavilion scales its
+            // coping and `weather overgrown ... on=pav_coping` stands on the result: two coats, of
+            // 628, asked at every solid voxel of the estate for a box that was known and withheld.
+            //
+            // The test below is deliberately NOT asked this way. A test's box is grown by the
+            // band the rule accepts, which is an argument about distance, and an uneven scale
+            // under-reports distance — so the grown box could be smaller than the set the rule
+            // accepts, and a rule settled to "no" over cells it would have painted is paint that
+            // silently disappears.
+            const Field::Aabb where = rule_bounds_used()
+                                          ? field.containing_bounds_of(paint[i].place)
+                                          : field.bounds_of(paint[i].place);
             if (!where.infinite()) {
                 // Grown by the whole-clip displacement, because that is what can carry a voxel out
                 // of the shape it belongs to.
@@ -1004,7 +1050,12 @@ SamplePlan plan_sample(const Field& field, u32 root, const std::vector<PaintRule
                     f64 piece_volume = 0.0;
                     const usize first = rule_piece.size();
                     for (const Field::Part& part : parts) {
-                        Field::Aabb box = field.bounds_of(part.node);
+                        // The same containment question as the zone's own box above, one level
+                        // down, so a zone whose pieces the plain bounds refuse does not lose them
+                        // all to the one piece that was scaled.
+                        Field::Aabb box = rule_bounds_used()
+                                              ? field.containing_bounds_of(part.node)
+                                              : field.bounds_of(part.node);
                         if (box.infinite()) {   // one unbounded piece and the zone is the box again
                             rule_piece.resize(first);
                             piece_volume = -1.0;
@@ -1220,6 +1271,7 @@ SampleResult sample(const SamplePlan& plan, const SampleSettings& settings, JobS
         descent.rule_piece = &plan.rule_piece;
         descent.rule_piece_at = &plan.rule_piece_at;
     }
+    descent.rule_bounds = plan.rule_bounds;
     descent.voxel = voxel;
     descent.centre_shift = centre_shift;
     descent.slack = plan.slack;

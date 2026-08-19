@@ -1857,6 +1857,143 @@ Field::Aabb Field::bounds_of(u32 node) const {
     return everywhere();
 }
 
+namespace {
+
+// The walk behind `containing_bounds_of`. See the declaration for what separates it from
+// `bounds_of` and why the separation is the whole point.
+//
+// `budget` is a node count and not a depth, because the thing being walked is a DAG: a shared `let`
+// binding is one node with many parents, and a recursion with no memo can visit it once per path.
+// Falling straight through wherever `bounds_of` already has an answer keeps that from mattering in
+// practice — only the spine of unbounded nodes is descended, and on the estate that is 15% of the
+// field — but a budget costs one decrement and makes "in practice" not have to be true.
+Field::Aabb containing_walk(const Field& f, u32 at, u32& budget) {
+    const Field::Aabb known = f.bounds_of(at);
+    if (!known.infinite()) return known;
+    if (budget == 0) return known;
+    --budget;
+
+    const Node& n = f.node(at);
+    const f64* a = n.a;
+    switch (n.op) {
+        // A scale puts the shape where the child's box goes when its corners are scaled. That is
+        // true whether or not the factors match; what does not survive an uneven scale is the
+        // DISTANCE the node reports, and nothing here reads one.
+        case Op::Scale: {
+            if (n.children < 1) break;
+            const Field::Aabb child = containing_walk(f, n.child[0], budget);
+            if (child.infinite()) break;
+            const Vec3 s{a[0] != 0.0 ? a[0] : 1.0, a[1] != 0.0 ? a[1] : 1.0,
+                         a[2] != 0.0 ? a[2] : 1.0};
+            const Vec3 one{child.low.x * s.x, child.low.y * s.y, child.low.z * s.z};
+            const Vec3 two{child.high.x * s.x, child.high.y * s.y, child.high.z * s.z};
+            return Field::Aabb{
+                {std::min(one.x, two.x), std::min(one.y, two.y), std::min(one.z, two.z)},
+                {std::max(one.x, two.x), std::max(one.y, two.y), std::max(one.z, two.z)}};
+        }
+
+        // And the structure above it, so that one unbounded leaf does not take the box off the
+        // assembly it was carried into. Every one of these is the same rule `build_bounds` uses;
+        // the only difference is which child boxes they are asked to combine.
+        //
+        // **Every case here is growth-free, and that is a condition rather than a coincidence.**
+        // The ops `build_bounds` widens by a distance — `shell`, `round`, `offset`, a smooth or
+        // chamfered union — are all sound only if the child reports an honest distance, and the
+        // whole reason this walk exists is that it descends into shapes that do not. An uneven
+        // scale UNDER-states distance, so `{ d <= t }` reaches further than the scaled box grown by
+        // `t`, and a box grown that way would be smaller than the shape it claims to hold. Those
+        // ops are left to fall through to the infinite box they already had. What is here is
+        // exact set arithmetic and assumes nothing about what the children report.
+        case Op::Translate: {
+            if (n.children < 1) break;
+            Field::Aabb child = containing_walk(f, n.child[0], budget);
+            if (child.infinite()) break;
+            const Vec3 by{a[0], a[1], a[2]};
+            child.low = child.low + by;
+            child.high = child.high + by;
+            return child;
+        }
+        // `min(a, b) <= 0` exactly where either child is, and `max(a, b) <= 0` exactly where both
+        // are. Two set identities, true of any two functions whatever either of them reports.
+        case Op::Union:
+        case Op::Min: {
+            if (n.children < 1) break;
+            Field::Aabb box = containing_walk(f, n.child[0], budget);
+            for (u32 c = 1; c < n.children; ++c) {
+                box = merged(box, containing_walk(f, n.child[c], budget));
+            }
+            if (box.infinite()) break;
+            return box;
+        }
+        case Op::Intersection:
+        case Op::Max: {
+            if (n.children < 1) break;
+            Field::Aabb box = containing_walk(f, n.child[0], budget);
+            for (u32 c = 1; c < n.children; ++c) {
+                box = overlapped(box, containing_walk(f, n.child[c], budget));
+            }
+            if (box.infinite()) break;
+            return box;
+        }
+        // Carving only removes, however it is carved, so what is left is inside what it started as.
+        case Op::Difference:
+        case Op::SmoothDifference:
+        case Op::ChamferDifference: {
+            if (n.children < 1) break;
+            const Field::Aabb box = containing_walk(f, n.child[0], budget);
+            if (box.infinite()) break;
+            return box;
+        }
+        // A rotation puts the shape inside the box its child's corners land in, and a mirror puts
+        // it inside the child's box and the child's box reflected. Both are where the shape is and
+        // neither is a distance.
+        case Op::Rotate: {
+            if (n.children < 1) break;
+            const Field::Aabb child = containing_walk(f, n.child[0], budget);
+            if (child.infinite()) break;
+            const f64 cx = std::cos(a[0] * kTau), sx = std::sin(a[0] * kTau);
+            const f64 cy = std::cos(a[1] * kTau), sy = std::sin(a[1] * kTau);
+            const f64 cz = std::cos(a[2] * kTau), sz = std::sin(a[2] * kTau);
+            Vec3 lo{1e30, 1e30, 1e30};
+            Vec3 hi{-1e30, -1e30, -1e30};
+            for (u32 corner = 0; corner < 8; ++corner) {
+                Vec3 q{(corner & 1u) ? child.high.x : child.low.x,
+                       (corner & 2u) ? child.high.y : child.low.y,
+                       (corner & 4u) ? child.high.z : child.low.z};
+                q = {q.x * cz - q.y * sz, q.x * sz + q.y * cz, q.z};
+                q = {q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy};
+                q = {q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx};
+                lo = {std::min(lo.x, q.x), std::min(lo.y, q.y), std::min(lo.z, q.z)};
+                hi = {std::max(hi.x, q.x), std::max(hi.y, q.y), std::max(hi.z, q.z)};
+            }
+            return Field::Aabb{lo, hi};
+        }
+        case Op::Mirror: {
+            if (n.children < 1) break;
+            Field::Aabb child = containing_walk(f, n.child[0], budget);
+            if (child.infinite()) break;
+            const u32 axis = static_cast<u32>(a[0]);
+            const f64 reach = std::max(std::abs(axis_of(child.low, axis)),
+                                       std::abs(axis_of(child.high, axis)));
+            child.low = with_axis(child.low, axis, -reach);
+            child.high = with_axis(child.high, axis, reach);
+            return child;
+        }
+        default: break;
+    }
+    return known;
+}
+
+}  // namespace
+
+Field::Aabb Field::containing_bounds_of(u32 node) const {
+    if (node >= nodes_.size()) return everywhere();
+    // Enough to walk the whole field once over, so the only thing the budget can stop is a DAG
+    // being re-walked, never an honest expression being cut short.
+    u32 budget = static_cast<u32>(nodes_.size()) + 64u;
+    return containing_walk(*this, node, budget);
+}
+
 // Everything a plain union finally reaches. A nested union is walked through; anything else is a
 // leaf, however large — a carved wall is one leaf, and the right one, because its box is tight
 // around the wall rather than around the layer the wall was filed in.
@@ -2463,6 +2600,13 @@ const char* op_name(Op op) {
     return "?";
 }
 
+// See the declaration in field.hpp. One `bool` for a whole feature's control arm, because the
+// thing it switches is read from three functions and none of them has a caller that could pass it.
+bool g_rule_bounds = true;
+
+void use_rule_bounds(bool on) { g_rule_bounds = on; }
+bool rule_bounds_used() { return g_rule_bounds; }
+
 bool Field::value_range(u32 at, f64& low, f64& high) const {
     if (at >= nodes_.size()) return false;
     const Node& n = nodes_[at];
@@ -2586,6 +2730,64 @@ bool Field::value_range(u32 at, f64& low, f64& high) const {
             if (lo[0] >= 0.0) return span(std::pow(lo[0], e), reach);
             if (hi[0] <= 0.0) return span(-reach, -std::pow(std::abs(hi[0]), e));
             return span(-reach, reach);
+        }
+
+        // ---- the operations that ask somewhere else and hand back what they were told ----------
+        //
+        // Every one of these evaluates its child at some OTHER point and returns that answer
+        // unchanged. A mirror folds the point, a translate shifts it, a tiling wraps it, a twist
+        // turns it. So the values the parent can take are a SUBSET of the values the child can
+        // take, and the child's range bounds the parent's — conservatively, which is the only
+        // direction that is safe here.
+        //
+        // `repeat` takes the smallest of several such answers and `polar-repeat` folds by angle;
+        // both are still the child's own values, so the same bound holds for them.
+        //
+        // Refusing these was a hole with one loud symptom and several silent ones. `value_range` is
+        // asked exactly one question — how far can a displacement move a surface — and a refusal
+        // means "as far as you like". `clips/facility/site.clip` displaces its gravel court and its
+        // flagged apron by `mirror { fbm }`; both zones therefore had no bounding box at all, so
+        // eight paint rules keyed on or placed on them were asked at every solid voxel of the
+        // estate (62% of all its paint evaluations), and `skip_slack` — which is a sum over every
+        // displacement in the field — was infinite for the whole seven-building site because of
+        // those three nodes.
+        //
+        // `scatter` is deliberately not here: it scales each copy by a per-cell factor as well as
+        // moving it, so its range is its child's times a factor this does not work out, and a
+        // guess in this function is how voxels disappear.
+        case Op::Translate:
+        case Op::Rotate:
+        case Op::Mirror:
+        case Op::Repeat:
+        case Op::PolarRepeat:
+        case Op::Twist:
+        case Op::Bend: {
+            if (!g_rule_bounds) return false;
+            if (!children()) return false;
+            return span(lo[0], hi[0]);
+        }
+
+        // A scale asks its child at `p / s` and multiplies the answer by the SMALLEST factor, so
+        // the range comes back multiplied by that same factor. Reading the multiplier off `eval`
+        // rather than assuming it is one is the whole of the case.
+        case Op::Scale: {
+            if (!g_rule_bounds) return false;
+            if (!children()) return false;
+            const f64 least = std::min(std::abs(a[0] != 0.0 ? a[0] : 1.0),
+                                       std::min(std::abs(a[1] != 0.0 ? a[1] : 1.0),
+                                                std::abs(a[2] != 0.0 ? a[2] : 1.0)));
+            return span(lo[0] * least, hi[0] * least);
+        }
+
+        // And the two that shift an answer by a known amount. `shell` is left out for the same
+        // reason `abs` needed its own case: it is |d| - t, which is not the interval its child
+        // hands over.
+        case Op::Round:
+        case Op::Offset: {
+            if (!g_rule_bounds) return false;
+            if (!children()) return false;
+            const f64 by = (n.op == Op::Round) ? -a[0] : a[0];
+            return span(lo[0] + by, hi[0] + by);
         }
 
         default:

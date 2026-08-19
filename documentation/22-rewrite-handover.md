@@ -658,6 +658,14 @@ this wave ran on `sampler.clip` alone** — three agents wanted a facility gate 
 one. It is pre-existing, it is not fixed yet because the fix is in `main.cpp` and six agents are
 holding that file, and **it is the first thing to do when the wave is in.**
 
+**A trap D700 leaves behind, and it will catch the next measurement rather than the next build:**
+`build/bin/clips/facility.world` is a derived cache, ignored by git, and after D700 it holds the
+estate's OLD paint. Nothing stale ships — no `.world` is tracked — but a local run that finds one
+loads it, and the run then measures a building that no longer exists. **Delete it before taking any
+estate figure across that commit.** The same applies to every estate row already in
+`documentation/baselines/`: they are not comparable across D700 and the harness cannot tell, because
+the matter is identical to the voxel and only the materials moved.
+
 **A trap this wave produced and it will recur every time agents run in parallel:** `build.bat` runs
 `taskkill /F /IM WorldShaper.exe`, which kills **every** agent's game and not only its own. A
 measured run dies with exit −1, truncated buffered stdout and no crash dump, which looks exactly like
@@ -702,7 +710,28 @@ somebody carved and refilled comes back as the clip's.
 
 ---
 
-#### START HERE — one cell walks a million nodes, and it is the lever
+#### ANSWERED, 2026-08-19 — the lever was pulled, and it was TWO WITHHELD BOXES (D700)
+
+**Do not re-open this. It is done and the entry to read is D700.** The eight rules were not eight
+faults: `Field::value_range` refused every transform, so `mirror { fbm }` had no range and the two
+ground zones built on it had no box — **the estate's whole `skip_slack` was infinite because of three
+nodes** — and `bounds_of` rightly refuses a box to a non-uniformly scaled shape, which a rule's
+`on=` place does not need. Under both, a straddling box made `on=` mean *"or in any box that touches
+it"*.
+
+**8 rules asked at every solid voxel → 0.** The metre under the podium: **195 paint evaluations and
+7.5 ms against 435 and 45–127 ms.** The whole estate up front: **13.9 s against 31.1.** The campanile
+loses 619 voxels of tuff, sandstone and courtyard weed, and the estate 11,443 — 8.1% of the building
+— all of it wrong before. `max` is the **intersection** and D672's sentence saying otherwise is
+refuted by `clips/max_test.clip` at a factor of twenty-seven.
+
+**The estate's PAINT therefore moves.** Its matter does not, to the voxel. Every estate content hash
+recorded before this commit is stale, every estate row in `documentation/baselines/` is incomparable
+across it, and any baked `.world` wants rebuilding.
+
+*The original note is kept below, because the measurement in it is what made the lever findable.*
+
+#### the original note — one cell walks a million nodes, and it is the lever
 
 **The single most useful measurement of the whole R12 effort, and it came out of a feature that does
 not ship.** Measured one cell at a time on the estate at 4 voxels a metre:

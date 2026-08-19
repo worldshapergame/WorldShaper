@@ -11299,3 +11299,131 @@ file's line endings.
 | D699 | **The settled picture is unchanged** | gate | Same content hash, same picture, derivation down to 4 cells a frame |
 | D699 | **D687's thirty-times verdict stands** | measurement | D691 took 2.8x of it and D690 1.19x; the rest is not found |
 | D699 | **Two agents each appended a vector to RenderParams against a block of 88** | integration | The size assert is what makes that safe; the field order had to be checked by hand |
+
+---
+
+## D700 — the eight unbounded paint rules were two withheld boxes, and `on=` now means what it says
+
+**2026-08-19.** D675 counted them and the handover called them the clearest lever anybody has had:
+8 of the estate's 628 paint rules could be bounded for neither a box nor a region, so each was asked
+at **every solid voxel** of a seven-building site. **They were not eight faults. They were two, and
+each was a box that was known and not published** — and the per-rule table names all eight as
+`site.clip`'s, at 140,924 evaluations apiece, **62% of the estate's paint**.
+
+### One: `value_range` refused every transform, and it cost the whole field its slack
+
+`Field::value_range` is asked exactly one question — how far can a displacement move a surface — and
+a refusal means *as far as you like*. A transform was not in its list, so `mirror { fbm }` answered
+"nothing can be said", even though it is the same grain asked at |x| and takes the same values.
+`site.clip` displaces its gravel court and its flagged apron by exactly that. Both zones therefore
+had **no bounding box**, six of the eight rules stand on them, and — because `skip_slack` is a sum
+over every displacement in the field — **the estate's whole slack was infinite because of three
+nodes**: `slack 1e30 m worst` on every census this project has ever taken of it.
+
+It is **5.5717 m** now. The ops that evaluate a child somewhere else and hand back what it said —
+translate, rotate, mirror, repeat, polar-repeat, twist, bend — carry the child's own range, which is
+conservative by construction; `scale` carries it times the smallest factor, read off `eval` rather
+than assumed. **`scatter` is deliberately left out**: it scales each copy by a per-cell factor this
+does not work out, and a guess there is how voxels disappear.
+
+### Two: `bounds_of` promises two things and a paint rule wants one of them
+
+A box from `build_bounds` claims the shape is inside it **and** that a point `away` outside is told a
+distance of at least `away`. The second is what the union cull needs, and it is why a **non-uniformly
+scaled shape gets no box at all**: it reports its child's distance times the smallest factor, so out
+along a stretched axis it answers less than the truth. **That refusal is right**, and it cost an
+afternoon to learn.
+
+A rule's `on=` place reads no distance from its box. It is asked one question — can this rule apply
+anywhere in this sample box — and the answer is a claim about where the shape IS.
+`Field::containing_bounds_of` is that half on its own. **Every case in it is growth-free, and that is
+a condition rather than a coincidence**: `shell`, `round`, `offset` and the smooth and chamfered
+unions all widen by a distance, and widening a box that came through an uneven scale makes it
+*smaller* than the shape it claims to hold. What is left is exact set arithmetic — min is a union,
+max is an intersection, a carve only removes, and translate, scale, rotate and mirror say where a
+shape is without saying how far it is. It is used for **places and never for tests**, because a
+test's box is grown by the band the rule accepts and that is an argument about distance.
+
+### And three: a straddling box made `on=` mean nothing much
+
+A box that straddles the edge of a rule's place cannot settle the rule for all of it, so every cell of
+that box reached the evaluation — including the cells outside the place entirely. **So `on=<shape>`
+meant "inside the shape's box, or in any box that touches it"**, which is a promise nobody can state.
+Three comparisons per open rule per cell now make it mean what the language says.
+
+### D672 item 2 is answered, and `max` was not the culprit
+
+**`clips/max_test.clip` settles the operator question by measurement, and D672's sentence is wrong.**
+Both arms, metre 32, identical to the voxel: base 1,175,552 / in_zone 85,068 / by_distance 35,904 /
+**by_amount 14,196**. The zone is 2 m of a 20 m slab and, grown by the 0.035 the rules accept, 135,660
+voxels; the three rules claim 135,168 — that box and nothing outside it. A union over the amount would
+have painted about **390,000**. A factor of twenty-seven is not a judgement. **`max { zone amount }`
+is the intersection**, `bounds_of` was already taking the tighter child box for it, and the answer is
+written into the clip's own header so the next reader does not have to re-derive it.
+
+The leak is four **hand-written** `paint … on=` rules in `site.clip` whose zones had no box, so `on=`
+confined them to nothing and their patterns painted the estate.
+
+### The campanile, thirty metres away
+
+| | control | bounded |
+|---|---|---|
+| volume / surface | 35,435 voxels / 31,452 faces | **identical** |
+| materials | 20 | **17** |
+| `tuff` | 316 | **0** |
+| `sandstone` | 298 | **0** |
+| `boxwood` — weed from the joints of the paving | 5 | **0** |
+| `limestone` under them | 547 | **1,166** |
+| sample | 112,184 ms | **18,507 ms** (6.06x) |
+
+Estate-wide at metre 2: **11,443 voxels, 8.1% of the building**, against the ~1,624 D672 attributed to
+`surface.clip`. **A tower thirty metres from the block was wearing weed off the courtyard paving.**
+
+### The cost
+
+| | bounded | `--no-rule-bounds` |
+|---|---|---|
+| one cubic metre under the podium, metre 4 | **195 paint evals, 7.5–7.8 ms** | 435, 45–127 ms |
+| (0,0,0), (0,4,0), (-40,12,-40) | unchanged | unchanged |
+| whole estate, one sample at metre 2 | 45.9 → **23.9 s** | 150.6 → 57.2 s |
+| whole estate up front, `--clip-coarse 16`, to `everything ready` | **13,876 ms** | 31,075 ms |
+| rules asked at every solid voxel | **0 of 628** | 8 |
+
+The evaluation ratio in the deep cell is a flat 2.23x and the **time** ratio is 6–17x, because the
+evaluations removed are the expensive ones — the ones that walk most of the building. The other three
+cells of D688's table are identical on both arms in evaluations and in time: **the change is aimed at
+the deep cells and touches nothing else.**
+
+### What this moves, and it has to be said loudly
+
+**The estate's PAINT changes.** The matter does not — 140,924 voxels, 165,812 faces, 6,015,997 shape
+evaluations, 235 components, identical over two runs of both arms — but 11,443 voxels come back in
+different materials, on purpose, because those materials were wrong. **So every recorded content hash
+for `clips/facility.clip` is now stale, every estate row in `documentation/baselines/` is
+incomparable across this commit, and any baked `.world` must be rebuilt.** That is the correct
+outcome of removing a stain, and it is the kind of change that is invisible unless it is written down.
+
+`clips/sampler.clip --refine-all --no-despeckle` answers **`a1f8bc6c656343b7` at 1,430,104** on both
+arms, and is a **vacuous** gate for this change — it has no `on=` rules and no displaced zones, which
+is exactly why it is worth running.
+
+### Two honesties carried from the agent's own report
+
+**The world cache key still does not name this arm.** `--no-rule-bounds` and the default share a key
+and now build genuinely different worlds, so a run without `--no-clip-cache` would read the other
+arm's world and both would hash the same — **D673 item 4 exactly, one layer along.** Every figure
+above used `--no-clip-cache`.
+
+**Half the long runs died to another agent's `taskkill`**, exit 1 with no crash record, both arms
+equally often. Nothing in it suggests a fault in the build.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D700 | **A pattern moved about is worth what it was worth** | fault | `mirror { fbm }` refused a range, so two zones had no box and the estate's `skip_slack` was infinite because of three nodes |
+| D700 | **`bounds_of` promises a distance as well as a place; a rule's place wants only the place** | decision | `containing_bounds_of`, used for places and never for tests |
+| D700 | **A containment box may never be grown by a distance** | correctness | An uneven scale under-states distance, so a grown box is smaller than the shape and paint disappears |
+| D700 | **`on=` meant "or in any box that touches it"** | fault | A straddling box cannot settle a rule, so every cell in it was evaluated |
+| D700 | **`max` is the intersection; D672's sentence is wrong** | fault | 14,196 against a union's ~390,000 — a factor of twenty-seven, not a judgement |
+| D700 | **8 rules asked at every solid voxel → 0, and the deep cell falls 6–17x** | measurement | 195 paint evaluations against 435 in the metre under the podium |
+| D700 | **The estate's paint moves by 11,443 voxels, on purpose** | honesty | Every estate content hash and baseline row is stale across this commit |
+| D700 | **The world cache key still does not name this arm** | honesty | Two arms that build different worlds share a key — D673 item 4, one layer along |

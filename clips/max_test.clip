@@ -38,6 +38,33 @@
 #   by_amount confined to the middle 2 m    -> `max` bounds, D672's sentence is wrong, and the
 #                                              weathering leak has some other cause entirely
 #   by_amount spread along the slab         -> D672 is right, and the fix is a real envelope
+#
+# ================================================================================================
+# ANSWERED. `max` BOUNDS, AND D672'S SENTENCE IS WRONG. Run 2026-08-19, both arms of one build
+# (`--no-rule-bounds` is the other), `--clip-metre 32 --no-despeckle`, identical to the voxel:
+#
+#     volume        1310720 voxels
+#     base           1175552   89.69%
+#     in_zone          85068    6.49%
+#     by_distance      35904    2.74%
+#     by_amount        14196    1.08%
+#
+# The zone is 2 m of the slab's 20, so 10% of it -- 131,072 voxels, or 135,660 grown by the 0.035
+# every rule here accepts. The three rules between them claim 135,168, which is that box and
+# nothing outside it. `by_amount` claims 14,196 of them: a tenth of the ZONE.
+#
+# And the counterfactual is not close. If `max` unioned over the amount, `by_amount` would paint
+# wherever `0.378 - noise <= 0.035` -- wherever the noise is above 0.343, which is about a third of
+# a 20 m slab, of order 390,000 voxels. It is 14,196. A factor of twenty-seven is not a judgement.
+#
+# So `max { zone amount }` is the INTERSECTION, `bounds_of` was already taking the tighter of the
+# two children's boxes for it, and `where=s_tops` in surface.clip reports `boxed` in the estate's
+# own per-rule table. The leak D672 was looking at is somewhere else, and the estate's per-rule
+# table names it: FOUR hand-written `paint ... on=` rules in `site.clip` whose zones are
+# `displace { box ... mirror { fbm } }` and `scale { ... }`, neither of which had a bounding box at
+# all -- so `on=` confined them to nothing and their patterns painted the whole estate. 619 voxels
+# of the campanile, thirty metres away, were wearing tuff, sandstone and boxwood from them.
+# ================================================================================================
 
 metre 32
 bounds -10 -1 -10   10 2 10

@@ -305,6 +305,12 @@ struct SamplePlan {
     usize rules_placed = 0;
     usize rules_per_voxel = 0;
 
+    // Whether this plan was made with the rule bounds on, which is `forge::rule_bounds_used()` at
+    // the moment it was made. Recorded on the plan rather than read again where it is used, so a
+    // sample cannot be planned under one rule and descended under another — the control arm is one
+    // flag on one build, and a setting read twice is two.
+    bool rule_bounds = true;
+
     bool ok() const { return field != nullptr; }
 };
 

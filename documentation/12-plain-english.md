@@ -3702,3 +3702,48 @@ a wall.
 more expensive when this was switched on, and the explanation offered for it turned out to be wrong
 when I read the code. It may well be that pass simply getting more work done in the time the ray
 pass gave back. That is a measurement I need a quiet machine for.
+
+## The campanile has stopped growing weeds, and the estate builds twice as fast — one change
+
+You have seen stains on buildings that have no business having them: the bell tower, thirty metres
+from the main block, wearing the same weathering as the courtyard it cannot touch. Separately, the
+estate has been slow to build, and I told you the cost was simply *how much building there is*.
+
+**Those were the same fault, and it was two missing boxes.**
+
+Every painting rule in a recipe is supposed to know roughly where it can apply, so the game can skip
+it everywhere else. Eight of the estate's 628 rules knew nothing, so they were asked at **every solid
+voxel of the entire site** — 62% of all the painting work — and they applied wherever their pattern
+happened to say yes. Including thirty metres up a tower.
+
+They were not eight separate mistakes. They were two:
+
+- A pattern that has been *moved* — mirrored, rotated, shifted — was treated as completely unknown,
+  even though it is the same pattern somewhere else. Two ground zones were built on one, so neither
+  had a boundary, and because of **three** nodes in the recipe the entire estate reported that
+  anything could be anywhere.
+- A shape that has been stretched unevenly was refused a boundary too, for a reason that is correct
+  in one context and irrelevant here. The pavilion's coping is stretched, and a rule stands on it.
+
+And a third thing under both: `on=this shape` actually meant *"inside that shape's rough box, or in
+any box that touches it"* — a promise nobody could have stated out loud.
+
+What you should see:
+
+| the campanile, 30 m from the block | before | after |
+|---|---|---|
+| tuff on it | 316 voxels | **none** |
+| sandstone on it | 298 | **none** |
+| **weed from the courtyard paving joints** | 5 | **none** |
+| the limestone that should have been showing | 547 | **1,166** |
+
+Estate-wide that is **11,443 voxels — 8.1% of the building — wearing the wrong material.** The
+building's *shape* is untouched, to the voxel: same volume, same surface, same 235 pieces. Only what
+it is made of changed, and only where it was wrong.
+
+And the speed, because it is the same change: the whole estate now builds in **13.9 seconds instead
+of 31.1**. One cubic metre deep inside the podium — the worst case there is — went from 45–127
+milliseconds to **7.5**.
+
+One consequence worth knowing: this genuinely changes what the estate looks like, so any world baked
+before today is out of date and wants rebuilding.

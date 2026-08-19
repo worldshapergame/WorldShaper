@@ -21,8 +21,17 @@ namespace {
 // about a box instead of a point, settling a paint rule for a whole region, jumping through empty
 // space — is only allowed if the answer is the same as this, voxel for voxel. So this is written
 // once, deliberately stupidly, and everything else is checked against it.
+// `plan`, when given, adds the one thing a per-voxel walk cannot work out for itself: a rule's
+// PLACE.
+//
+// `on=<shape>` reads as "and only here", and the sampler keeps that promise from a BOX rather than
+// from an evaluation — the whole point of naming a place is that it costs nothing at every voxel.
+// So the promise the descent makes is "no further out than the place's bounding box", and a
+// reference that ignored places altogether would be holding the sampler to a different rule from
+// the one it states. Left null by every caller that has no placed rules, which is most of them, and
+// then this is exactly what it always was.
 Clip brute_force(const Field& field, u32 root, const std::vector<PaintRule>& paint,
-                 const SampleSettings& settings) {
+                 const SampleSettings& settings, const SamplePlan* plan = nullptr) {
     const i32 per_metre = (settings.voxels_per_metre > 0) ? settings.voxels_per_metre
                                                           : kVoxelsPerMetre;
     const f64 voxel = 1.0 / static_cast<f64>(per_metre);
@@ -61,7 +70,25 @@ Clip brute_force(const Field& field, u32 root, const std::vector<PaintRule>& pai
                 }
 
                 VoxelTypeId type = kAir;
-                for (const PaintRule& rule : paint) {
+                for (usize which = 0; which < paint.size(); ++which) {
+                    const PaintRule& rule = paint[which];
+                    if (plan != nullptr && which < plan->rule_box.size()) {
+                        const auto outside = [&](const Field::Aabb& box) {
+                            return !box.infinite() &&
+                                   (p.x < box.low.x || p.x > box.high.x || p.y < box.low.y ||
+                                    p.y > box.high.y || p.z < box.low.z || p.z > box.high.z);
+                        };
+                        if (outside(plan->rule_box[which])) continue;
+                        const u32 from = plan->rule_piece_at[which];
+                        const u32 to = plan->rule_piece_at[which + 1];
+                        if (from != to) {
+                            bool in_a_piece = false;
+                            for (u32 piece = from; piece < to && !in_a_piece; ++piece) {
+                                in_a_piece = !outside(plan->rule_piece[piece]);
+                            }
+                            if (!in_a_piece) continue;
+                        }
+                    }
                     const f64 value = field.eval(rule.test, p);
                     if (value < rule.low || value > rule.high) continue;
                     if (rule.facing_axis < 3) {
@@ -584,4 +611,253 @@ TEST_CASE("the sampler gives the same answer with a job system and without") {
     const Clip threaded = sample(f, all, paint, settings, &jobs).clip;
     const Clip serial = sample(f, all, paint, settings, nullptr).clip;
     must_match(threaded, serial, "threading");
+}
+
+// ---- the eight unbounded paint rules, and what they turned out to be ---------------------------
+//
+// D675 counted them: 8 of the estate's 628 paint rules could be bounded for neither a box nor a
+// region, so each was asked at EVERY solid voxel of a seven-building site and between them they
+// were 62% of all its paint work. They were not eight faults. They were two, and each was a box
+// that was known and not published.
+
+TEST_CASE("a pattern moved about is still worth what it was worth") {
+    // `value_range` is asked one question — how far can a displacement move a surface — and a
+    // refusal means "as far as you like", which takes the bounding box off the displaced shape,
+    // the metric slack off everything standing over it, and the whole field's `skip_slack` too.
+    //
+    // It refused every transform. `mirror { fbm }` is a grain asked at |x| instead of at x: the
+    // same grain, the same values, and an answer of "nothing can be said". `site.clip` displaces
+    // its gravel court and its flagged apron by exactly that.
+    Field f;
+    const u32 grain = f.fbm(0.36, 3, 0.5, 2.0, 67);
+
+    f64 lo = 0.0, hi = 0.0;
+    REQUIRE(f.value_range(grain, lo, hi));
+    CHECK(lo >= -1.0);
+    CHECK(hi <= 1.0);
+
+    const u32 moved[3] = {f.mirror(grain, 0), f.translate(grain, {3.0, 0.0, -2.0}),
+                          f.repeat(grain, {2.0, 0.0, 0.0}, {4.0, 0.0, 0.0})};
+    for (const u32 node : moved) {
+        f64 mlo = 1e30, mhi = -1e30;
+        INFO("a transform over a grain must carry the grain's own range");
+        REQUIRE(f.value_range(node, mlo, mhi));
+        CHECK(mlo >= lo - 1e-12);
+        CHECK(mhi <= hi + 1e-12);
+    }
+
+    // A scale is the one that is not a pass-through: it multiplies the answer by the smallest of
+    // its factors, so the range comes back multiplied by that same number.
+    f64 slo = 0.0, shi = 0.0;
+    REQUIRE(f.value_range(f.scale(grain, {2.0, 4.0, 8.0}), slo, shi));
+    CHECK(shi == doctest::Approx(hi * 2.0));
+    CHECK(slo == doctest::Approx(lo * 2.0));
+}
+
+TEST_CASE("a zone displaced by a mirrored grain has a box, and the rule on it is bounded") {
+    Materials m;
+    const VoxelTypeId stone = m.make(120);
+    const VoxelTypeId grit = m.make(200);
+
+    // The site's own shape in miniature: a wide slab, and a small zone inside it whose edge is
+    // made ragged by a mirrored grain. The rule is keyed on a NOISE, which can never be settled
+    // for a region — so the zone's box is the only thing that can keep it off the rest of the slab.
+    Field f;
+    const u32 slab = f.box({0, 0, 0}, {3.0, 0.1, 1.0}, 0.0);
+    const u32 edge = f.mirror(f.fbm(0.36, 3, 0.5, 2.0, 67), 0);
+    const u32 zone = f.displace(f.box({0, 0, 0}, {0.5, 0.2, 1.0}, 0.0), edge, 0.045);
+    const u32 speckle = f.noise(0.108, 31, {1, 1, 1});
+
+    std::vector<PaintRule> paint;
+    paint.push_back(PaintRule{f.constant(0.0), -1e30, 1e30, stone});
+    PaintRule placed;
+    placed.test = speckle;
+    placed.low = 0.30;
+    placed.high = 1e30;
+    placed.type = grit;
+    placed.place = zone;
+    placed.has_place = true;
+    paint.push_back(placed);
+    f.build_bounds();
+
+    CHECK_FALSE(f.bounds_of(zone).infinite());
+
+    const SamplePlan plan = plan_sample(f, slab, paint);
+    CHECK(plan.rules_total == 2);
+    CHECK(plan.rules_placed == 1);
+    CHECK(plan.rules_per_voxel == 0);
+    REQUIRE(plan.rule_box.size() == 2);
+    CHECK_FALSE(plan.rule_box[1].infinite());
+    // And the box is the zone rather than the slab: about a metre of it, not six.
+    CHECK(plan.rule_box[1].high.x - plan.rule_box[1].low.x < 2.0);
+}
+
+TEST_CASE("a place that was scaled unevenly still says where it is") {
+    Materials m;
+    const VoxelTypeId stone = m.make(120);
+    const VoxelTypeId moss = m.make(60);
+
+    Field f;
+    const u32 wall = f.box({0, 0, 0}, {2.0, 1.0, 0.2}, 0.0);
+    // An uneven scale reports its child's distance times the SMALLEST factor, so it under-states
+    // the distance out along a stretched axis. `build_bounds` refuses it a box for that reason and
+    // is right to: a union cull reading one would drop a child that could have been nearest.
+    //
+    // A paint rule's place reads no distance from its box. It asks one question — can this rule
+    // apply anywhere in this sample box — and the answer is a claim about where the shape IS.
+    const u32 coping = f.scale(f.box({0, 0.9, 0}, {0.5, 0.1, 0.2}, 0.0), {1.0, 1.0, 3.0});
+    const u32 damp = f.translate(coping, {0.0, 0.0, 0.0});
+
+    std::vector<PaintRule> paint;
+    paint.push_back(PaintRule{f.constant(0.0), -1e30, 1e30, stone});
+    PaintRule weathered;
+    weathered.test = f.fbm(0.4, 2, 0.5, 2.0, 89);
+    weathered.low = 0.2;
+    weathered.high = 1e30;
+    weathered.type = moss;
+    weathered.place = damp;
+    weathered.has_place = true;
+    paint.push_back(weathered);
+    f.build_bounds();
+
+    // What the two functions promise, side by side, and it is the whole of the second half of this
+    // change.
+    CHECK(f.bounds_of(damp).infinite());
+    CHECK_FALSE(f.containing_bounds_of(damp).infinite());
+
+    const SamplePlan plan = plan_sample(f, wall, paint);
+    CHECK(plan.rules_per_voxel == 0);
+    REQUIRE(plan.rule_box.size() == 2);
+    CHECK_FALSE(plan.rule_box[1].infinite());
+
+    // And the box contains the shape it claims to. The coping is 0.2 m deep scaled by three, so it
+    // reaches z = ±0.6 — a box that stopped at ±0.2 would settle the rule to "no" over cells it
+    // would have painted, which is paint that silently disappears.
+    const Field::Aabb box = plan.rule_box[1];
+    CHECK(box.low.z <= -0.6 + 1e-9);
+    CHECK(box.high.z >= 0.6 - 1e-9);
+    CHECK(box.low.x <= -0.5 + 1e-9);
+    CHECK(box.high.x >= 0.5 - 1e-9);
+}
+
+TEST_CASE("bounding a rule changes no matter, and stops its paint leaving its place") {
+    // The gate, in the two halves it actually has.
+    //
+    // A bound may not move one voxel of MATTER — the geometry has to come out cell for cell the
+    // same, or the bound is wrong. What it does change, and is written to change, is paint: a rule
+    // that says `on=<shape>` and has no box for that shape is confined by nothing at all, so its
+    // pattern paints wherever it crosses its threshold, over the whole clip. That is D672's open
+    // fault seen from the sampler's side, and it is reproduced here rather than described.
+    Materials m;
+    const VoxelTypeId stone = m.make(120);
+    const VoxelTypeId grit = m.make(200);
+    const VoxelTypeId moss = m.make(60);
+
+    const auto build_paint = [&](Field& f, u32& solid, std::vector<PaintRule>& paint) {
+        const u32 slab = f.box({0, 0, 0}, {1.5, 0.15, 0.8}, 0.0);
+        const u32 edge = f.mirror(f.fbm(0.36, 3, 0.5, 2.0, 67), 0);
+        const u32 court = f.displace(f.box({0.6, 0, 0}, {0.5, 0.25, 0.8}, 0.0), edge, 0.045);
+        const u32 coping = f.scale(f.box({-0.7, 0, 0}, {0.3, 0.25, 0.3}, 0.0), {1.0, 1.0, 2.0});
+        solid = slab;
+
+        paint.push_back(PaintRule{f.constant(0.0), -1e30, 1e30, stone});
+        PaintRule speck;
+        speck.test = f.noise(0.108, 31, {1, 1, 1});
+        speck.low = 0.10;
+        speck.high = 1e30;
+        speck.type = grit;
+        speck.place = court;
+        speck.has_place = true;
+        paint.push_back(speck);
+        PaintRule green;
+        green.test = f.fbm(0.30, 2, 0.5, 2.0, 89);
+        green.low = 0.05;
+        green.high = 1e30;
+        green.type = moss;
+        green.place = coping;
+        green.has_place = true;
+        paint.push_back(green);
+        f.build_bounds();
+    };
+
+    SampleSettings settings;
+    settings.low = {-1.6, -0.3, -0.9};
+    settings.high = {1.6, 0.3, 0.9};
+    settings.voxels_per_metre = 32;
+
+    Field bounded;
+    u32 bounded_solid = 0;
+    std::vector<PaintRule> bounded_paint;
+    build_paint(bounded, bounded_solid, bounded_paint);
+    const SampleResult with = sample(bounded, bounded_solid, bounded_paint, settings, nullptr);
+
+    // The control arm, and it has to be built as its OWN field: the setting is read where the
+    // boxes are built, which is once per clip and long before a plan is made.
+    use_rule_bounds(false);
+    Field plain;
+    u32 plain_solid = 0;
+    std::vector<PaintRule> plain_paint;
+    build_paint(plain, plain_solid, plain_paint);
+    const SampleResult without = sample(plain, plain_solid, plain_paint, settings, nullptr);
+    const SamplePlan plain_plan = plan_sample(plain, plain_solid, plain_paint);
+    use_rule_bounds(true);
+
+    // What the control arm is: two rules of three asked at every solid voxel.
+    CHECK(plain_plan.rules_per_voxel == 2);
+    const SamplePlan bound_plan = plan_sample(bounded, bounded_solid, bounded_paint);
+    CHECK(bound_plan.rules_per_voxel == 0);
+
+    // Half one: the matter is identical, cell for cell. Nothing about a paint rule may move a
+    // surface, and this is what says so rather than assuming it.
+    REQUIRE(with.clip.cell_count() == without.clip.cell_count());
+    u64 differing_matter = 0;
+    u64 differing_paint = 0;
+    for (usize i = 0; i < with.clip.voxels.size(); ++i) {
+        const bool solid_with = with.clip.voxels[i] != kAir;
+        const bool solid_without = without.clip.voxels[i] != kAir;
+        if (solid_with != solid_without || with.clip.inside[i] != without.clip.inside[i]) {
+            ++differing_matter;
+        } else if (with.clip.voxels[i] != without.clip.voxels[i]) {
+            ++differing_paint;
+        }
+    }
+    CHECK(differing_matter == 0);
+
+    // Half two: the paint that differs is the leak, and it is all of it. The zone the moss is
+    // placed on stands at x = -0.7 and reaches 0.3 m; the grit's court stands at x = +0.6. Every
+    // cell that changed must be one the control arm painted OUTSIDE the place its rule names.
+    CHECK(differing_paint > 0);
+    const Field::Aabb grit_box = bound_plan.rule_box[1];
+    const Field::Aabb moss_box = bound_plan.rule_box[2];
+    const f64 voxel = 1.0 / 32.0;
+    u64 leaked_outside = 0;
+    for (i32 z = 0; z < with.clip.size[2]; ++z) {
+        for (i32 y = 0; y < with.clip.size[1]; ++y) {
+            for (i32 x = 0; x < with.clip.size[0]; ++x) {
+                const usize i = with.clip.index(x, y, z);
+                if (with.clip.voxels[i] == without.clip.voxels[i]) continue;
+                const Vec3 p{(static_cast<f64>(with.origin_voxel[0] + x) + 0.5) * voxel,
+                             (static_cast<f64>(with.origin_voxel[1] + y) + 0.5) * voxel,
+                             (static_cast<f64>(with.origin_voxel[2] + z) + 0.5) * voxel};
+                const Field::Aabb& box =
+                    (without.clip.voxels[i] == grit) ? grit_box : moss_box;
+                const bool inside_box = p.x >= box.low.x && p.x <= box.high.x &&
+                                        p.y >= box.low.y && p.y <= box.high.y &&
+                                        p.z >= box.low.z && p.z <= box.high.z;
+                INFO("a cell that changed inside the rule's own place is paint LOST, not a leak");
+                REQUIRE_FALSE(inside_box);
+                ++leaked_outside;
+            }
+        }
+    }
+    CHECK(leaked_outside == differing_paint);
+
+    // And against the definition, which is the same per-voxel walk with the places applied. Cell
+    // for cell, so nothing about the descent's settling is taken on trust.
+    must_match(with.clip,
+               brute_force(bounded, bounded_solid, bounded_paint, settings, &bound_plan),
+               "rule bounds against the definition");
+
+    // And it is cheaper, which is the only reason to have done it.
+    CHECK(with.paint_evaluations < without.paint_evaluations);
 }

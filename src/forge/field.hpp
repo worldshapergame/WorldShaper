@@ -66,6 +66,25 @@ f64 length(Vec3 v);
 f64 dot(Vec3 a, Vec3 b);
 Vec3 normalise(Vec3 v);
 
+// Whether `value_range` may look THROUGH the operations that move a pattern about without changing
+// what it can be worth. On; `--no-rule-bounds` is the control arm that puts it back to what it was.
+//
+// A file-scope setting rather than an argument, for the reason `accelerate_unions_from` is one: it
+// has to reach `build_bounds`, `skip_slack` and `metric_slack` through call sites that would every
+// one of them have to grow a parameter to carry it, and it is read at parse time and never again.
+// Set it before a clip is loaded; nothing re-reads it afterwards.
+//
+// What it is FOR, in one paragraph, because the switch is meaningless without it. `mirror { fbm }`
+// is a grain asked at |x| instead of at x. It is the same grain and it takes the same values, and
+// `value_range` used to refuse it — a transform was not in its list, so the answer was "nothing can
+// be said". Everything that reads a pattern's reach then had to assume the worst: a shape displaced
+// by one got NO bounding box, NO metric slack, and put the whole field's `skip_slack` to infinity.
+// `clips/facility/site.clip` displaces its gravel court and its flagged apron by `mirror { fbm }`,
+// and that one refusal is why the estate reports an infinite slack and why eight of its six hundred
+// and twenty-eight paint rules are asked at EVERY solid voxel of a seven-building site.
+void use_rule_bounds(bool on);
+bool rule_bounds_used();
+
 // What a node does. The order is not meaningful; the grouping is, and it is the grouping the
 // clip file's vocabulary follows.
 enum class Op : u8 {
@@ -660,6 +679,29 @@ public:
         bool infinite() const { return low.x <= -1e29 || high.x >= 1e29; }
     };
     Aabb bounds_of(u32 node) const;
+
+    // The box a shape is INSIDE, for a reader that wants containment and nothing else.
+    //
+    // `bounds_of` promises two things at once, and only the first of them is about where the shape
+    // is: the shape is inside the box, AND a point `away` outside the box is told a distance of at
+    // least `away`. The second promise is what the union cull needs, and it is the whole reason a
+    // non-uniform scale gets no box at all — it reports its child's distance times the SMALLEST
+    // factor, so out along a stretched axis it answers less than the truth, and a cull reading its
+    // honest box would drop a child that could have been the nearest thing. That cost an afternoon
+    // once and the refusal is right.
+    //
+    // A paint rule's `on=` place wants only the first promise. Its box is asked exactly one
+    // question — "can this rule apply anywhere in this sample box?" — and the answer is a claim
+    // about where the shape IS. No distance is ever read from it. So this is `bounds_of` with the
+    // ops that were refused for the second promise let back in: it falls straight through to
+    // `bounds_of` wherever that already has an answer, and only walks the spine of nodes that have
+    // none.
+    //
+    // **It must not be read by anything that culls on a distance**, which is why it is a separate
+    // function with its own name rather than a flag on the one above. `clips/facility/pavilion.clip`
+    // scales its coping, `weather overgrown ... on=pav_coping` stands on the result, and those two
+    // coats were asked at every solid voxel of a seven-building estate for want of this.
+    Aabb containing_bounds_of(u32 node) const;
 
     // How many unions were worth a hierarchy, and how many leaves those hierarchies cover.
     // Reported by the clip tool, because whether the accelerator engaged at all is the first

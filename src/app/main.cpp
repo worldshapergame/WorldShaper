@@ -1103,6 +1103,14 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         if (i + 1 < argc) options.sample_cost_csv = argv[++i];
     } else if (arg == "--sample-cost-replan") {
         options.sample_cost_replan = true;
+    } else if (arg == "--no-rule-bounds") {
+        // The control arm for the rule bounds: `value_range` stops looking through the transforms
+        // that move a pattern without changing what it is worth, so a displacement by
+        // `mirror { fbm }` goes back to saying nothing, its zone goes back to having no bounding
+        // box, and the eight paint rules that stand on those zones go back to being asked at every
+        // solid voxel of the estate. Set here rather than carried in `Options` because it has to
+        // reach `build_bounds` at parse time, which happens on a dozen paths and takes no options.
+        forge::use_rule_bounds(false);
     } else if (arg == "--stipple-tiled") {
         options.stipple_tiled = true;
     } else if (arg == "--stipple-level") {
