@@ -12179,3 +12179,84 @@ before anybody opens the page.
 | D708 | **The reader tests `available !== false`** | build | An index written before the field existed still lists its clips as drawable |
 | D708 | **The sweep keeps only ids with a file behind them** | correctness | An unavailable name in `keep` preserves the stale `.wsc` the viewer would be served |
 | D708 | **`pages.yml`'s empty-site gate was made dead by this and is fixed** | fault | `len(clips) == 0` is never true now; it reads `available` and defaults to the old expression |
+
+---
+
+## D709 — the website's unaligned paint was fixed on 2026-08-16, and a stale comment says otherwise
+
+**2026-08-19, reported from using the site:** *"some are unaligned be nit their paint is unaligned
+something is unaligned."*
+
+**The fault is real, it is exactly what they describe, and it was fixed three days ago.** The site is
+serving data baked before the fix.
+
+### What it was
+
+`apply_origin` translated the node bound to `solid` and every paint rule, and shifted the clip's
+bounds to match — and did **not** translate the 2,500 named bindings. `clips/facility.clip` declares
+`origin 0 -3.50 0`, so `--part <name>` swapped an **untranslated** node into `script.solid` while the
+bounds had already dropped 3.50 m, and a part was sampled in model space against a box shifted out
+from under it.
+
+**It did not fail. It answered.** From the fix's own commit: `part_dome` came back an
+11.75 x 1.00 x 11.75 m saucer wearing **one material instead of six** — the 1.05 m of a 4.15 m dome
+that still fell inside the moved box, **painted by whatever rule was 3.50 m lower** — and
+`part_pilasters` reported **eleven** materials on a part that paints two, the other nine being the
+site's and the podium's coats arriving from above.
+
+**That is "their paint is unaligned", precisely, and it explains "some" too**: only fragments of a
+clip that declares an `origin` are affected, which is the facility's and not a standalone clip's.
+
+### Why it reached the website
+
+**The clip viewer bakes every fragment of the facility through `--part`** —
+`manifest.script.part("part_" + stem, root)` in `tools/bake_web.cpp`. So the one operation this fault
+broke is the operation the site is built out of. Two agents each measured a different fragment and
+each concluded their building was broken before either found the instrument was.
+
+It also feeds D708: a part whose geometry falls outside the shifted box reports **`sampled to
+nothing`**, which is one of the reasons the index now prints — so some of what was missing from the
+site was missing for this reason rather than for a failure of its own.
+
+### Where it stands — and my first explanation of it was wrong
+
+`8fb3fa9`, **2026-08-16**: *"`origin` moves the names a file bound, and until now it moved everything
+except them."* `apply_origin` now translates `script.parts` with the rest. **The code is right and
+has been for three days.**
+
+**`web/data` is not tracked** — it is git-ignored and produced by CI — so I first concluded the
+site was simply serving pre-fix data and needed a re-bake.
+
+**That was wrong, and checking it is what found the right answer.** `pages.yml` triggers on pushes
+touching `src/forge/**`, which `8fb3fa9` is — and more decisively, the per-clip reuse key is seeded
+with `--code-hash`, which the workflow computes as
+`find src tools/bake_web.cpp tools/bake -type f | sort | xargs sha1sum | sha1sum`. **The sampler's
+own sources are in the key.** So the fix invalidated every cached `.wsc` and forced a full rebake,
+and the site has not been serving pre-fix data since the 16th.
+
+**So if the paint still reads as unaligned on the live site, it is not this fault**, and the next
+step is to read the live `index.json`'s own `commit` and `built` fields and find out what it is
+actually showing — the page polls them every few seconds and it costs nothing to look at.
+
+Recorded this way rather than quietly deleted, because *the cache is stale* is the explanation
+everybody reaches for first, and it is worth having on the record that it was reached for, checked,
+and refuted.
+
+### And the comment that made this take an afternoon to establish
+
+`clips/facility.clip` still carried the ORIGINAL paragraph, in capitals: *"AND IT SILENTLY BREAKS
+EVERY `--part` MEASUREMENT TAKEN ON THIS FILE"*, ending *"Comment this line out while probing."* It
+was true when written and false for three days, and it is the first thing anybody reads when they go
+looking for exactly this. It is corrected in place rather than deleted, because the **shape** of the
+fault — an instrument that does not fail but answers, from the wrong box — is worth keeping.
+
+*When reality disagrees with a document, the document is corrected in the same change.* This one was
+not, and it cost the time it was written to save.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D709 | **The unaligned paint is real and was fixed on 2026-08-16** | correction | `apply_origin` now translates `script.parts`; `8fb3fa9` |
+| D709 | **"the site is serving pre-fix data" was my first answer, and it is refuted** | honesty | The reuse key is seeded with a hash of `src`, so the fix forced a full rebake on the 16th |
+| D709 | **The viewer bakes every fragment through `--part`** | consequence | The one operation the fault broke is the one the site is built from |
+| D709 | **It also feeds D708's missing clips** | consequence | A part outside the shifted box reports `sampled to nothing` |
+| D709 | **A stale comment in `facility.clip` still claimed it was broken** | fault | True when written, false for three days, and the first thing a reader finds |

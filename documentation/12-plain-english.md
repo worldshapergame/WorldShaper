@@ -3915,3 +3915,38 @@ One thing fell out of it that was worth catching. There's a safety check meant t
 site being published, and it worked by asking "is the list empty?". Now that the list is never empty,
 that check would have passed on a build that produced nothing at all and cheerfully published a
 hundred rows saying "not baked yet". It now asks how many are actually **viewable**.
+
+## The unaligned paint on the website — real, and already fixed three days ago
+
+You said some buildings on the site look unaligned, and that it's the *paint* that's unaligned. That
+is exactly right, and it has a precise cause.
+
+`facility.clip` declares an **origin** — an instruction to move the whole building 3.5 metres down so
+its floor sits at zero rather than its foundations. That moved the building's shape, its painting
+rules, and the box it's cut out of. It did **not** move the 2,500 *named pieces* — the dome, the
+pilasters, the fittings.
+
+That matters because asking for one named piece on its own is exactly how the website builds every
+fragment of the building. So the site was drawing a piece in its original position while the painting
+rules had already moved 3.5 m — and the result isn't an error, it's an **answer**. The dome came back
+as a shallow saucer wearing one material instead of six, painted by whatever rule happened to be
+3.5 metres lower down. The pilasters reported eleven materials on a piece that uses two, the extra
+nine being the ground's and the podium's coats arriving from above.
+
+The building **in the game** was never affected — that's built from the moved version, and it was
+always right. It was only ever the per-piece view that was wrong, which is precisely the view the
+website is made of.
+
+**It was fixed on the 16th**, and I checked whether the site was still showing older data. It is
+not: the build server rebuilds every clip whenever the sampler's own code changes, and that fix was
+such a change. So the site should already be right.
+
+Which means if the paint still looks wrong to you, it is something else, and the next thing to do is
+read what the live site says it was built from — it prints that, and it costs nothing to check. I am
+recording that I guessed *stale data* first and was wrong, because it is the obvious answer and
+somebody else will reach for it too.
+
+One thing I've corrected along the way: the note inside `facility.clip` still said, in capitals, that
+this was broken. It was true when written and false for three days, and it's the first thing anyone
+reads when they go looking for exactly this problem — so it sent me hunting for a fault that had
+already been fixed. It now says what happened and that it's done.
