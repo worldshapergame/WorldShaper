@@ -42,6 +42,16 @@
 #ifndef WS_VARIATION_GLSL
 #define WS_VARIATION_GLSL
 
+// The defaults, so a call site needs nothing bound to try this. Must match `kVariationSeed` and
+// `variation_amount_q(kVariationColour)` in src/world/node_pool.hpp — 0.05 of full scale is
+// `20-clip-forge.md` section 7's own worked example, and 0.05 * 256 rounds to thirteen.
+//
+// They are constants rather than push-constant fields because nothing pushes them yet. `lens.w` is
+// unused and is where a runtime knob would go; that is a change to `params.glsl`, and it is worth
+// making only once somebody wants to turn the grain up while the game is running.
+const uint kVariationSeed = 0x57538B01u;
+const uint kVariationAmountQ = 13u;
+
 // Must match `node_hash_mix` in src/world/node_pool.hpp. Repeated under its own name rather than
 // depending on `node.glsl` having been included first, so that this file compiles alone and the
 // two bodies can be compared by eye.
@@ -114,6 +124,12 @@ uint variation_octant(ivec3 cell, uint step) {
 // `voxel` is the voxel the cell is inside. `cell` is the cell's coordinate at `depth` levels below
 // a voxel — so `cell >> depth == voxel`, which is the caller's own arithmetic and is asserted on
 // the CPU side rather than trusted here. `colour` in is the voxel's own rgba8; out is the cell's.
+//
+// **Only the low `depth` bits of `cell` are read.** `variation_octant` takes bit `step` of each
+// axis and `step` never reaches `depth`, so a caller holding the cell's LOCAL offset within its
+// voxel — which is what a marcher has, and what stays inside an `int` at any depth — may pass that
+// instead of an absolute coordinate and get the identical answer. The CPU's `mirror_variation`
+// takes the absolute one because it also has to find the voxel; both read the same bits.
 //
 // Must match `NodePool::mirror_variation` in src/world/node_pool.cpp, which is what the headless
 // test walks the whole facility with. That test exists because a structure the renderer walks and

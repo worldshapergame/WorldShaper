@@ -1305,6 +1305,49 @@ TEST_CASE("the grain compounds down the chain, and the control arm has none of i
     for (u32 octant = 0; octant < 8; ++octant) CHECK(nothing.colour[octant] == 0u);
 }
 
+TEST_CASE("only the low bits of a sub-voxel coordinate are read") {
+    // The claim `shaders/variation.glsl` rests on, and the reason the marcher can call it at all.
+    //
+    // A ray inside a brick holds the cell's LOCAL offset within its voxel, not an absolute
+    // sub-voxel coordinate — and an absolute one would not fit in the `int` the shader works in
+    // past about depth 7 at world scale. `variation_octant` reads bit `step` of each axis and
+    // `step` never reaches `depth`, so the two are the same walk. If that ever stopped being true
+    // the shader would drift from the CPU silently, on the deep end only, where nobody looks.
+    VariationFixture f(true);
+    f.fill_box(0, 0, 0, 7, 7, 7, f.stone);
+    f.want_box(0, 0, 0, 7, 7, 7);
+    f.serve(1);
+
+    constexpr u32 kDepth = 5;
+    constexpr i64 kSpan = static_cast<i64>(1) << kDepth;
+    const i64 vx = 5, vy = 2, vz = 6;
+    const VariationSample voxel = f.pool.mirror_variation(vx, vy, vz, 0);
+    REQUIRE(voxel.matter);
+
+    for (i64 ox = 0; ox < kSpan; ox += 7) {
+        for (i64 oy = 0; oy < kSpan; oy += 5) {
+            for (i64 oz = 0; oz < kSpan; oz += 3) {
+                // What the pool answers, from the absolute coordinate.
+                const VariationSample absolute = f.pool.mirror_variation(
+                    vx * kSpan + ox, vy * kSpan + oy, vz * kSpan + oz, kDepth);
+
+                // ...and the same walk driven by the LOCAL offset alone, which is the form the
+                // shader's `variation_descend` takes.
+                u32 hash = variation_root_hash(vx, vy, vz, f.pool.variation_seed());
+                u32 colour = voxel.colour;
+                for (u32 step = kDepth; step > 0; --step) {
+                    const u32 octant = octant_of(ox >> (step - 1), oy >> (step - 1), oz >> (step - 1));
+                    hash = variation_child_hash(hash, octant);
+                    colour = variation_child_colour(colour, hash,
+                                                    variation_amount_q(kVariationColour));
+                }
+                REQUIRE(absolute.hash == hash);
+                REQUIRE(absolute.colour == colour);
+            }
+        }
+    }
+}
+
 TEST_CASE("a hand-carved world with no clip behind it subdivides, and keeps subdividing") {
     // The case the source exists for: nobody sampled this, no field can be asked about it, and it
     // still has to have children at whatever depth somebody walks to.
