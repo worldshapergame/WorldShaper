@@ -161,7 +161,8 @@ add_library(ws_forge STATIC
     src/forge/sample.cpp
     src/forge/measure.cpp
     src/forge/world_stipple.cpp
-    src/forge/clip_script.cpp)
+    src/forge/clip_script.cpp
+    src/forge/compile.cpp)
 target_include_directories(ws_forge PUBLIC src)
 target_link_libraries(ws_forge PUBLIC ws_core ws_world ws_game)
 
@@ -228,6 +229,7 @@ set(WS_TEST_SOURCES_HEADLESS
     tests/test_node_pool.cpp
     tests/test_world_cache.cpp
     tests/test_world_cache_edits.cpp
+    tests/test_compile.cpp
     tests/test_world_stipple.cpp
     tests/test_face_store.cpp
     tests/test_field_gpu.cpp)

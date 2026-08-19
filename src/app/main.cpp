@@ -935,6 +935,15 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         // The control arm for D610. Two flags of one build: with it, every lone voxel of the
         // wrong material stays exactly where the sampler put it.
         options.despeckle = false;
+    } else if (arg == "--compile-field") {
+        // Rewrite every clip's field into an equivalent one that is cheaper to walk: 1.20x on the
+        // cost of asking the field a point, bit-exact near every surface. OFF, and this is the arm
+        // that turns it on. See `forge::compile_fields` and `src/forge/compile.hpp`.
+        //
+        // Set here rather than carried in `Options` because the parse is what reads it and the
+        // parse is reached from a dozen places in this file; a global switch taken at the flag is
+        // one line, and an option threaded through all twelve is a control arm nobody takes.
+        ws::forge::compile_fields(true);
     } else if (arg == "--no-clip-cache") {
         options.no_clip_cache = true;
     } else if (arg == "--no-paste-pool") {

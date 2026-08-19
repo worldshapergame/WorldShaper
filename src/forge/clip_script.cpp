@@ -11,6 +11,7 @@
 #include <sstream>
 
 #include "core/log.hpp"
+#include "forge/compile.hpp"
 #include "world/tags.hpp"
 
 
@@ -80,6 +81,13 @@ namespace forge {
 usize g_accelerate_from = Field::kAccelerateNever;
 
 void accelerate_unions_from(usize leaves) { g_accelerate_from = leaves; }
+
+// Whether every clip parsed after this is rewritten by `forge::compile_field`. `--compile-field`,
+// and it is OFF. A file-scope switch for exactly the reason above: it is a control arm, and a
+// control arm that has to be threaded through every call site is a control arm nobody takes.
+bool g_compile_field = false;
+
+void compile_fields(bool on) { g_compile_field = on; }
 
 
 namespace {
@@ -1795,6 +1803,96 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
     }
 }
 
+// Rewrite the whole script's field into an equivalent one that is cheaper to walk.
+//
+// **Every index the script holds goes in, and every one comes back.** That is the whole of why this
+// is here rather than one line at the sampler: a compilation renumbers the field, and a `Script`
+// names nodes in four places at once —
+//
+//     script.solid                     what the matter is
+//     script.settings.bounds           which cells belong to the clip at all
+//     script.paint[i].test             what a rule is keyed on
+//     script.paint[i].place            where that rule is allowed to apply
+//
+// — plus `script.parts` and `script.weather[].scope`, which are kept for the tools. Compiling from
+// the solid alone leaves the other three pointing at whatever now occupies their old index, which
+// is a building painted from the wrong shapes with no error anywhere.
+//
+// The four that BUILD are handed over as the root set, so they are exact by construction. The two
+// that DIAGNOSE go through `CompileReport::remap`, and a name whose node did not survive as itself
+// — flattened into its parent, folded to a number — is dropped rather than re-pointed at a guess.
+// `--part canopy` on a compiled clip then says "does not name anything", which is a refusal; the
+// alternative is an answer, and a wrong answer is the thing trap 7 exists about.
+void compile_whole_script(Script& script) {
+    if (!script.has_solid || script.field.size() == 0) return;
+
+    std::vector<u32> roots;
+    roots.push_back(script.solid);
+    const usize bounds_at = script.settings.has_bounds ? roots.size() : 0;
+    if (script.settings.has_bounds) roots.push_back(script.settings.bounds);
+    std::vector<usize> test_at(script.paint.size(), 0);
+    std::vector<usize> place_at(script.paint.size(), 0);
+    for (usize i = 0; i < script.paint.size(); ++i) {
+        test_at[i] = roots.size();
+        roots.push_back(script.paint[i].test);
+        if (script.paint[i].has_place) {
+            place_at[i] = roots.size();
+            roots.push_back(script.paint[i].place);
+        }
+    }
+
+    CompileReport rep;
+    Field built = compile_field(script.field, roots, &rep);
+    if (!rep.ok) {
+        // An op this pass was never taught. It refuses the whole clip and hands the original back,
+        // so the arm reads as "no compilation happened" rather than as a clip with a shape missing.
+        WS_LOG_WARN("clip",
+                    "--compile-field: the field holds an op the compiler cannot rebuild (op {}); "
+                    "the clip is used exactly as it parsed.",
+                    static_cast<int>(rep.unhandled));
+        return;
+    }
+
+    script.solid = rep.roots[0];
+    if (script.settings.has_bounds) script.settings.bounds = rep.roots[bounds_at];
+    for (usize i = 0; i < script.paint.size(); ++i) {
+        script.paint[i].test = rep.roots[test_at[i]];
+        if (script.paint[i].has_place) script.paint[i].place = rep.roots[place_at[i]];
+    }
+
+    // The names, best effort and loudly when it is not enough.
+    usize names_kept = 0;
+    std::vector<std::pair<std::string, u32>> parts;
+    parts.reserve(script.parts.size());
+    for (const auto& entry : script.parts) {
+        if (entry.second < rep.remap.size() && rep.remap[entry.second] != kUnmapped) {
+            parts.push_back({entry.first, rep.remap[entry.second]});
+            ++names_kept;
+        }
+    }
+    const usize names_dropped = script.parts.size() - names_kept;
+    script.parts.swap(parts);
+    for (WeatherRequest& request : script.weather) {
+        if (!request.has_scope) continue;
+        if (request.scope < rep.remap.size() && rep.remap[request.scope] != kUnmapped) {
+            request.scope = rep.remap[request.scope];
+        } else {
+            request.has_scope = false;   // consumed by `apply_weather` already; kept honest anyway
+        }
+    }
+
+    script.field = std::move(built);
+
+    // Said out loud, and D682 is why: `accelerate_from` was settable with no caller for a year and
+    // `accelerator_count()` read nought on every clip ever built, with nothing anywhere saying
+    // whether that was a decision or a result. A pass that fires has to report that it fired.
+    WS_LOG_INFO("clip",
+                "--compile-field: {} roots, {} nodes reachable of {} -> {}, deepest path {} -> {}, "
+                "{} names kept and {} dropped",
+                roots.size(), rep.nodes_before, rep.nodes_in_input, rep.nodes_after,
+                rep.depth_before, rep.depth_after, names_kept, names_dropped);
+}
+
 }  // namespace
 
 Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const TagRegistry& tags) {
@@ -1806,6 +1904,12 @@ Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const T
     // being the solid and appends its coats after the author's.
     apply_weather(script, types);
     apply_origin(script);
+
+    // And then, if anybody asked for it, the same shape rewritten cheaper. Here rather than
+    // anywhere else because this is the last point at which the script's indices are all in one
+    // place: after weathering has appended its coats and after the origin has moved everything, and
+    // before `build_bounds` reads the graph. See `forge::compile_fields`.
+    if (g_compile_field) compile_whole_script(script);
 
     // The graph is complete now, so the boxes that let a union skip its distant children can be
     // worked out. Done here rather than in the sampler because a Field can be sampled many
