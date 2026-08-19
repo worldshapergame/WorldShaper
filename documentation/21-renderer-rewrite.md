@@ -940,6 +940,24 @@ output during a measurement, and write shader files with a writer that does not 
 
 ### R4 — Directional faces · L
 
+> **SUPERSEDED IN PART, 2026-08-19 — read D707 before building anything in this stage.** The user
+> reversed the instruction this stage was written around. It was *"everything is per voxel face
+> based — even reflections and those things"*; it is now *"reflections should not be voxel face
+> based, it should be more like ior bending light, and still be super performant."*
+>
+> **The specular term becomes a continuation of the primary ray** — Fresnel over the material own
+> IOR splits it, part bends through (D652, already built) and part reflects and marches on. No lobe
+> to read, no cap, no bins. Mirror-to-mirror recursion falls out for free, and D703 stripe goes with
+> the cap that caused it.
+>
+> **What survives of this stage:** R4a material payload; R4d transmission, refraction and
+> dispersion; R4e translucency; and the face lobe itself as the ROUGH-surface answer, chosen against
+> the sharp one by a continuous comparison of lobe width to pixel solid angle rather than by any
+> threshold. **What goes:** the cap, the axis packing and the re-centring D703 added.
+>
+> Everything below is the stage as it was written and is kept because it is what the built code
+> still does until the replacement lands.
+
 **Materials here are continuous and per voxel, and nothing in this stage may branch on a material's
 identity.** A clip writes `rough=64 metal=225` as free numbers into a `VisualRecord`, `sample.cpp`
 then nudges them per voxel from a hash of where the voxel is, and there is no material enum anywhere

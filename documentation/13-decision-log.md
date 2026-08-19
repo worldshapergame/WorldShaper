@@ -12023,3 +12023,369 @@ wants rebuilding.
 | D706 | **`--clip-part` does not compose with `--clip-bounds`** | fault | The part query samples its own box; the bounds are dropped |
 | D706 | **The east bound had to move with the building** | correctness | Matter outside bounds is never sampled, so the overlap would have been "fixed" by truncation |
 | D706 | **Three probes said no overlap and the player was right** | honesty | Two instrument faults and one unsettleable scene, each plausible on its own |
+
+---
+
+## D707 — reflections stop being face-based and become bent light, and it is the user reversing themselves after playing
+
+**2026-08-19, asked for directly:** *"reflections should not be voxel face based, it should be more
+like ior bending light, and still be super performant."*
+
+**This reverses one of the three clarifications the whole rewrite was written around.** §1 of
+`22-rewrite-handover.md` records the original in their own words — *"Everything is per voxel face
+based — even reflections and those things"* — and R4 is the stage built to satisfy it: a face stores
+a distribution over direction, and the composite reads one direction out of it. **The reversal is
+theirs to make and it was made after playing the build**, which is the only place this project's
+decisions are supposed to come from.
+
+### What it means, and why it is smaller than it sounds
+
+A specular reflection becomes **a continuation of the primary ray** rather than a lookup into a
+stored distribution. Almost all of the mechanism is already in the tree, built for the transmitted
+half:
+
+- **`kThroughExit`** in `shaders/node.glsl` already stops a ray where it LEAVES a medium *"for the
+  caller to bend"* — D652, and it is exactly the continuation hook;
+- the **index of refraction is already a byte on every material** — `1.0 + ior/128`, off the record;
+- **Schlick's Fresnel is already written**, `face_fresnel` in `shaders/face_terms.glsl`.
+
+So Fresnel over the material's own IOR splits the ray at a surface: part goes through and bends,
+which is D652 and works, and part reflects and marches on, which is the new half. **No lobe, no cap,
+no bins, no re-centring.**
+
+### Two of the user's other complaints dissolve into it, which is the strongest argument for it
+
+- *"make reflections support infinite reflections between them"* — **free.** Each reflection is
+  another continuation of the same march, so two facing mirrors recurse until a **contribution
+  budget** stops them. Depth becomes a budget rather than a stored structure, and a mirror corridor
+  is no longer a special case.
+- *"when im moving reflective surfaces like mirrors get stripes of non reflective zones"* — **gone
+  with the mechanism.** That stripe is D703's cap re-centring, reported within an hour of D703
+  landing: a face the eye walks out of re-centres and reads the hemispherical mean while it does, and
+  because the cap boundary is smooth across a flat mirror every face crossing it does so together, so
+  the "fade" D703 predicted is a **band** on a moving camera. With no cap there is nothing to walk
+  out of. **A still-camera gate cannot see that fault, which is exactly why D703 shipped with it.**
+
+### "Still be super performant", which is the hard half
+
+Putting a ray back on the pixel is what this rewrite exists to avoid, so it is paid for explicitly:
+
+1. **A continuation, not a gather.** One ray carries on; it does not sample a hemisphere. Refraction
+   already does this and D652 measured what it costs.
+2. **R7's beam pre-pass landed today** — 4K outdoors 16.81 → 1.18 ms — so marching is far cheaper
+   than it was when R4 was designed.
+3. **Fresnel is the budget.** Most dielectrics reflect about 4% head-on, so terminating on
+   CONTRIBUTION rather than on a depth count makes a dim third bounce free and lets a mirror corridor
+   keep going.
+4. **And the rough/sharp split stays CONTINUOUS**, which is R4's standing rule and the thing most
+   likely to be quietly broken:
+
+   > The reflected ray is cast per pixel always. How much of the answer comes from **this ray**
+   > against the face's **already-accumulated average** is a continuous function of the lobe's
+   > angular width versus the pixel's own solid angle.
+
+   A mirror's lobe is narrower than a pixel, so the pixel's own ray dominates — sharp, correct,
+   recursive. A rough surface's lobe is far wider, so the face's converged average dominates — cheap,
+   already measured, no noise. **Nothing branches on roughness.** It is the same comparison between
+   detail and pixels the engine already makes everywhere, applied to direction instead of to size —
+   which is §1's own rule, and is why the face store keeps its job rather than being deleted.
+
+### What this costs of today's work, said plainly
+
+**D694 and D703 both landed today and both are partly superseded by this.** D703 is what finally made
+a mirror carry a picture — the cap, and the finding that the composite reads exactly ONE direction
+out of a face so a hemisphere of bins is wasted. That finding survives; the cap does not. D694's
+coverage rule keeps its job for rough surfaces under the continuous rule above.
+
+**That is not waste and it should not be recorded as waste.** D703 is the change that established the
+image was reachable at all, and the stripe it produced is what told the user the face-based approach
+had a shape they did not want. A design that had never been built could not have been rejected on
+what it looked like.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D707 | **Specular becomes a continuation of the primary ray, not a stored lobe** | decision | The user, after playing: reflections should be IOR bending light rather than face-based |
+| D707 | **Almost all of it exists**: `kThroughExit`, the IOR byte, Schlick's Fresnel | build | The transmitted half already does this; the reflected half is the addition |
+| D707 | **Infinite mirror-to-mirror recursion falls out** | consequence | Each reflection is another continuation; depth is a contribution budget, not a structure |
+| D707 | **D703's stripe dissolves with the cap** | consequence | Nothing to walk out of, so nothing to re-centre |
+| D707 | **Terminate on CONTRIBUTION, not on a depth count** | design | 4% head-on for a dielectric makes a dim bounce free and a mirror corridor affordable |
+| D707 | **The rough/sharp split is lobe width against pixel solid angle, continuously** | design | R4's no-threshold rule, and it is why the face store keeps its job |
+| D707 | **D703 is superseded and was not wasted** | honesty | It made the image reachable and made the shape rejectable by looking at it |
+
+---
+
+## D708 — `index.json` names every clip the baker ENUMERATED, not the ones that baked
+
+**2026-08-19, reported from using the site:** *"the website doesnt list all the clips or buildings."*
+
+`tools/bake_web.cpp` wrote the index from `done` — the clips that succeeded **in that run**. A clip
+that failed was printed once on a runner's log and then simply was not there. Same for one that timed
+out, one whose `.wsc` no longer matched its source, and every clip `--index-only` could find no valid
+file for.
+
+**So the site could not tell "there is no such building" from "there is one and it could not be
+baked".** That is trap 15 wearing a website as a disguise — *a clean measurement and a measurement
+that never ran look identical.* Concretely: one run baked **82 of 101** and the page listed 82, which
+is indistinguishable from a repository that contains 82 clips.
+
+**101 is the real number**, verified independently at integration: 105 `.clip` files under `clips/`,
+four of them `_`-prefixed and excluded by the baker's own convention (the contract, the order, the
+template — they are *included by* clips and are not clips).
+
+### The fix is the idiom this repository already uses for a measurement that did not run
+
+**Make the absence visible.** `Baked` carries `available`, `reused` and `reason`, and every failure
+path names itself rather than falling through to silence: `failed to parse: line N: ...` — the first
+error only, because a parse gives up in cascades and the fifteenth message is about the wreckage —
+`no solid, and the manifest has no part_<name>`, `empty bounds`, `sampled to nothing`,
+`N x N x N is past what a 16-bit quad can address`, `cannot write <file>`, `not baked yet`.
+
+The page lists the unavailable ones greyed with their reason, **as `div`s rather than disabled
+buttons**, because a disabled button gets pressed anyway. The first clip on screen, a pasted
+`#fragment` and the five-second poll each check before loading and say the reason instead of failing
+to fetch a file that is not there. The reader tests `available !== false` rather than `=== true`, so
+**an index written before the field existed still lists everything in it as drawable**.
+
+Measured both ways: `--index-only` against an empty `web/data` names **101, 0 available**; a real
+bake names **101, 100 available**; the same command again reports **100 reused**. The one unavailable
+is real — `facility/requests/floors-probe.clip`, whose box is smaller than a voxel at 2/m, so it
+reports `sampled to nothing`.
+
+### Three things had to survive it, and one did not
+
+**The orphan sweep keeps only ids with a FILE behind them** — an unavailable name in `keep` would
+preserve whatever stale `.wsc` an earlier run left under it, and that stale file is exactly what the
+viewer would then be served. Its `shards > 1` refusal is untouched. The index hash covers the
+reasons, so a clip going from `failed to parse` to baked moves the number the page polls. And a clip
+that cannot be built still does not fail the bake.
+
+**What did not survive is `pages.yml`'s early-deploy gate**, and the agent could not reach it because
+the workflow was not its file. It refused to publish when `len(clips) == 0` — **which is now never
+true**, so the gate that exists to stop a site with nothing in it going live would have passed on a
+run that baked nothing and published a hundred rows saying `not baked yet`. Fixed at integration to
+read the header's `available`, with `len(clips)` as the `.get` default so a legacy index still
+answers. Its two guards that protect a *live* site — the site moved under this run, a newer run has
+published — are untouched.
+
+**And the last line of a bake now says it**: `101 enumerated: 0 baked, 100 reused, 1 unavailable`,
+with every unavailable clip named underneath. A bake that silently produces half a site should say so
+before anybody opens the page.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D708 | **The index names every clip enumerated, not every clip baked** | fault | One run baked 82 of 101 and the page was indistinguishable from a 82-clip repository |
+| D708 | **Every failure path names itself** | build | "Absent" and "never existed" must not look alike — trap 15 |
+| D708 | **Unavailable rows are `div`s, not disabled buttons** | build | A disabled button gets pressed anyway |
+| D708 | **The reader tests `available !== false`** | build | An index written before the field existed still lists its clips as drawable |
+| D708 | **The sweep keeps only ids with a file behind them** | correctness | An unavailable name in `keep` preserves the stale `.wsc` the viewer would be served |
+| D708 | **`pages.yml`'s empty-site gate was made dead by this and is fixed** | fault | `len(clips) == 0` is never true now; it reads `available` and defaults to the old expression |
+
+---
+
+## D709 — the website's unaligned paint was fixed on 2026-08-16, and a stale comment says otherwise
+
+**2026-08-19, reported from using the site:** *"some are unaligned be nit their paint is unaligned
+something is unaligned."*
+
+**The fault is real, it is exactly what they describe, and it was fixed three days ago.** The site is
+serving data baked before the fix.
+
+### What it was
+
+`apply_origin` translated the node bound to `solid` and every paint rule, and shifted the clip's
+bounds to match — and did **not** translate the 2,500 named bindings. `clips/facility.clip` declares
+`origin 0 -3.50 0`, so `--part <name>` swapped an **untranslated** node into `script.solid` while the
+bounds had already dropped 3.50 m, and a part was sampled in model space against a box shifted out
+from under it.
+
+**It did not fail. It answered.** From the fix's own commit: `part_dome` came back an
+11.75 x 1.00 x 11.75 m saucer wearing **one material instead of six** — the 1.05 m of a 4.15 m dome
+that still fell inside the moved box, **painted by whatever rule was 3.50 m lower** — and
+`part_pilasters` reported **eleven** materials on a part that paints two, the other nine being the
+site's and the podium's coats arriving from above.
+
+**That is "their paint is unaligned", precisely, and it explains "some" too**: only fragments of a
+clip that declares an `origin` are affected, which is the facility's and not a standalone clip's.
+
+### Why it reached the website
+
+**The clip viewer bakes every fragment of the facility through `--part`** —
+`manifest.script.part("part_" + stem, root)` in `tools/bake_web.cpp`. So the one operation this fault
+broke is the operation the site is built out of. Two agents each measured a different fragment and
+each concluded their building was broken before either found the instrument was.
+
+It also feeds D708: a part whose geometry falls outside the shifted box reports **`sampled to
+nothing`**, which is one of the reasons the index now prints — so some of what was missing from the
+site was missing for this reason rather than for a failure of its own.
+
+### Where it stands — and my first explanation of it was wrong
+
+`8fb3fa9`, **2026-08-16**: *"`origin` moves the names a file bound, and until now it moved everything
+except them."* `apply_origin` now translates `script.parts` with the rest. **The code is right and
+has been for three days.**
+
+**`web/data` is not tracked** — it is git-ignored and produced by CI — so I first concluded the
+site was simply serving pre-fix data and needed a re-bake.
+
+**That was wrong, and checking it is what found the right answer.** `pages.yml` triggers on pushes
+touching `src/forge/**`, which `8fb3fa9` is — and more decisively, the per-clip reuse key is seeded
+with `--code-hash`, which the workflow computes as
+`find src tools/bake_web.cpp tools/bake -type f | sort | xargs sha1sum | sha1sum`. **The sampler's
+own sources are in the key.** So the fix invalidated every cached `.wsc` and forced a full rebake,
+and the site has not been serving pre-fix data since the 16th.
+
+**So if the paint still reads as unaligned on the live site, it is not this fault**, and the next
+step is to read the live `index.json`'s own `commit` and `built` fields and find out what it is
+actually showing — the page polls them every few seconds and it costs nothing to look at.
+
+Recorded this way rather than quietly deleted, because *the cache is stale* is the explanation
+everybody reaches for first, and it is worth having on the record that it was reached for, checked,
+and refuted.
+
+### And the comment that made this take an afternoon to establish
+
+`clips/facility.clip` still carried the ORIGINAL paragraph, in capitals: *"AND IT SILENTLY BREAKS
+EVERY `--part` MEASUREMENT TAKEN ON THIS FILE"*, ending *"Comment this line out while probing."* It
+was true when written and false for three days, and it is the first thing anybody reads when they go
+looking for exactly this. It is corrected in place rather than deleted, because the **shape** of the
+fault — an instrument that does not fail but answers, from the wrong box — is worth keeping.
+
+*When reality disagrees with a document, the document is corrected in the same change.* This one was
+not, and it cost the time it was written to save.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D709 | **The unaligned paint is real and was fixed on 2026-08-16** | correction | `apply_origin` now translates `script.parts`; `8fb3fa9` |
+| D709 | **"the site is serving pre-fix data" was my first answer, and it is refuted** | honesty | The reuse key is seeded with a hash of `src`, so the fix forced a full rebake on the 16th |
+| D709 | **The viewer bakes every fragment through `--part`** | consequence | The one operation the fault broke is the one the site is built from |
+| D709 | **It also feeds D708's missing clips** | consequence | A part outside the shifted box reports `sampled to nothing` |
+| D709 | **A stale comment in `facility.clip` still claimed it was broken** | fault | True when written, false for three days, and the first thing a reader finds |
+
+---
+
+## D710 — R5c's and R5d's second halves: the number was already in the buffer, and the third layer costs nine bits
+
+**2026-08-19.** Both stages landed a first half and stopped in the same place, and it was the same
+place: **the composite reads a wire it did not write.** D664 could not give a level-0 pixel a blended
+colour because the payload field means a *type id* there. D663 could not composite the plan's *up to
+three partial hits* because `out_behind` carries one surface a pixel. **Neither needed what it looked
+like it needed.**
+
+### R5c's second half costs no wire at all, and that is the finding
+
+At a level-0 hit `node_march` sets `result.colour` to the **leaf's average** — put there for the
+gathering rays, which need an albedo and cannot reach the interned tables — and `visibility.comp`
+packs `packed.z = hit.colour` at every level without asking what the level is. **The pool holds a
+voxel and it holds a brick and nothing between**, so `colour(1)`, `colour(2)` and `colour(3)` are that
+same brick average (D664's own third finding). **`packed.z` at level 0 is therefore exactly
+`colour(1)`, the coarse end of the pair the pixel sits in, and it has been sitting unread in the
+buffer since the marcher existed.** The composite mixes towards it by
+`clamp(log2(max(t · pixel_angle · lens.z, 1)), 0, 1)` — the marcher's own `detail`, recomputed from
+numbers the parameter block and `packed.w` already hold. No descent, no fetch.
+
+**The emission goes with it, and that is not tidiness.** The level-1 arm of the pair is a folded colour
+with no material behind it and therefore no emission at all. A lamp voxel that blended its albedo and
+kept its glow would leave the two arms of the pair *further* apart in the term the eye is most
+sensitive to — a fitting glowing at full strength on the pixels that took level 0 and not at all on
+the ones that took level 1, **in a fixed 4x4 tile**, which is the artefact this stage exists to remove
+arriving through the term nobody thought to blend.
+
+**The one inexactness is a brick's diagonal and it is pinned rather than assumed.** The marcher chooses
+the level where the ray enters a BRICK; the inner walk then steps single voxels and the buffer records
+the `t` it stopped at, up to 13.86 voxels further on. Across the whole band that is a weight at most
+**0.0491** from the one the marcher used — under `kNodeBlendDeadband`'s sixteenth, and twenty times
+smaller than the step it removes. A `clamp` and **not** a `fract`, because a `fract` wraps a weight
+that has crept over one back to nought and puts a seam across the middle of the blend.
+
+### R5d's second half costs nine bits, because the third layer needs no surface
+
+`out_behind` is one surface a pixel, and a third is colour, level, direction, face slot and distance —
+about **88 bits against the 13** `behind.z` had spare. **But whenever the third layer is the SKY the
+composite already has the direction**, so the sky needs no slot, no face and no distance: only the
+share. So `visibility.comp` packs the far node's coverage byte at bits 19–26 and, at bit 27, whether a
+third march from past that node reached sky; the composite draws near, far and sky in proportion.
+Where the third march lands on something, the far layer stays opaque exactly as it was — **erring
+towards the picture this replaces**, which is D663's own direction.
+
+**The third march reports nothing**: no face claimed, no node named to residency. The store measures
+**1,287 live slots with both halves against 1,328 with the second half off**, where D663's *second*
+march costs 603 → ~1,300.
+
+### `hash_u32` is out of the composite, and the clause it held up rested on a stale reading
+
+The handover has named it the last holdout of §1's *no per-pixel random numbers* since R3d. **There is
+no ordered dither in that pass and there never was one** — the dither is `node_bayer` in `node.glsl`, a
+fixed sixteen-entry table kept deliberately by D664 because it decides the shape. What `hash_u32`
+served was `pt_sky.glsl`'s cloud lattice and star field, **both keyed on a world cell** — a function of
+the direction the ray went, not of the pixel, so two frames from one camera get identical answers,
+which is exactly what the clause asks for. Renamed `sky_cell_mix`, and **a test pins that no call to
+either name survives in the composite**, so the clause is testable instead of remembered.
+
+### Measured on a machine with a card, which D663 and D664 were both owed
+
+`clips/edge_aa_test.clip`, content `ca5c6803c7faebfd`, settled, quality and exposure pinned, frame 600.
+
+**Three independent runs of the default arm are identical to the byte** over the 31,360 pixels below
+the cloud deck — SHA-256 `a637143a…` all three — and **the `--no-edge-aa` arm's two runs are not
+identical to each other**. The whole frame cannot be, and that is D663's finding rather than this
+one's: `params.sky_cloud[1]` is real seconds, so two runs photograph different weather. **The arm this
+change replaces is the less reproducible one.**
+
+Over the structure rows the second half moves **403 and 447 pixels at mean 25.06 and 22.84 of 255,
+against a same-arm floor of 316–348 pixels at 4.64–6.25** — **3.7 to 5.4x the floor on two independent
+pairs**. And it costs nothing: `resolve` reads 0.623/0.627/0.628 against 0.627/0.634/0.629 at
+1280x800, inside a within-arm spread of 0.005.
+
+**In words:** with edge AA off, the far railing is a hard checkerboard of white and dark blocks with no
+tone between them. With D663's half only, the *near* railing softens and the far one is still a
+checkerboard. With both halves, **the far railing reads as a grey lattice with sky visible through it**,
+and the far structure seen through the near railing has picked up the sky's blue.
+
+### The first cost measurement was wrong, and how is the part worth keeping
+
+Run **blocked** — three of one arm, then three of the next — it read **0.630 against 1.404 ms**, a 2.2x
+regression on the control arm, **entirely because another worktree's build arrived partway through the
+batch**. Interleaving the arms round-robin collapsed the difference to 0.005. Trap 29 with a name on
+it: **on a shared box, block the arms and you measure the neighbours.**
+
+### Two things could not be measured, and both are honest
+
+**R5c's second half does not resolve in the shaded picture on any clip in the tree** — the same wall
+D664 hit for its own first half. It reaches most of the hit population (11,406 of 18,702 hit pixels are
+level 0) and reads 1.300 against a same-arm floor of 1.073, with the phase-locked 4x4 component not
+moving at all. **What holds it instead is arithmetic pinned in a test**, not a picture.
+
+**R5's 4x speckle gate is not this change's gate.** Whole-frame speckle sits inside its own
+run-to-run spread in every arm at every resolution, and at 1440p the *pre-R5* arm scores slightly
+lower — because speckle is deviation from the median of eight neighbours, and **anti-aliasing a
+one-pixel post against sky raises that by construction**. The 4x is written against the facility's
+enclosed room, where speckle is the *light's* and belongs to R5a and R5b.
+
+And `clips/facility.clip` could not be gated here either: **four consecutive runs, four content hashes,
+speckle 27.6 → 58.4.**
+
+### The file outside its list, flagged rather than hidden
+
+The agent edited `shaders/visibility.comp`, which was in neither list. Both owed halves are impossible
+without the nine bits it packs, and it said so plainly and gave the one-command revert. **That is the
+right way to cross a boundary**, and it is worth more than a diff that quietly stayed inside one.
+
+**And the collision underneath it is the integrator's fault, not an agent's:** `shaders/resolve.comp`
+was given to this agent *and* to the one rebuilding specular as bent light (D707). Two agents in one
+shader is exactly what the file-ownership rule exists to prevent, and I wrote both briefs. This one
+landed first; the other was told the file had moved and to merge from `main` rather than hand back a
+diff cut from the older base.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D710 | **The level-0 blend needs no wire change** | decision | `packed.z` at level 0 is the leaf's average, which IS `colour(1)` |
+| D710 | **The weight is recomputed, not carried** | decision | Every term is already in the parameter block or `packed.w` |
+| D710 | **A clamp and not a `fract`** | correctness | A `fract` wraps a weight over one back to nought and seams the blend |
+| D710 | **Emission scales by the same weight** | correctness | The coarse arm has no material and no glow; blending albedo alone leaves a lamp brightest where the eye catches it |
+| D710 | **The third layer is the SKY, not a third surface** | decision | 88 bits against 13 spare — but the sky needs only a share, the direction being known |
+| D710 | **The third march reports nothing** | build | 1,287 live slots against 1,328; D663's second march cost ~700 |
+| D710 | **`hash_u32` in the composite was never a dither** | correction | Two callers, both keyed on a world cell. A stale sentence held the clause up; a test holds it down now |
+| D710 | **Blocked arms measure the neighbours** | trap 29 | 0.630 against 1.404 blocked; 0.005 apart interleaved |
+| D710 | **R5c's second half does not resolve in the picture** | honesty | 1.300 against a 1.073 floor; held by arithmetic in a test instead |
+| D710 | **The 4x speckle gate is not this change's gate** | honesty | Anti-aliasing a one-pixel post against sky raises deviation-from-median by construction |
+| D710 | **Two agents were given one shader, and that was mine** | honesty | The rule exists for this; the second was redirected rather than the first reverted |

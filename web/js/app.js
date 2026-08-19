@@ -237,18 +237,45 @@ async function readIndex() {
     return response.json();
 }
 
+// IS THERE A FILE BEHIND THIS ROW.
+//
+// The index names every clip the baker enumerated, not only the ones that baked, so an entry is a
+// name plus either its data or the reason there is none. `available !== false` rather than
+// `=== true` on purpose: an index written before this field existed has neither, and every clip in
+// one of those is drawable by definition.
+function drawable(entry) {
+    return !!entry && entry.available !== false;
+}
+
 function buildList() {
     const list = $('listBody');
     const filter = $('filter').value.trim().toLowerCase();
     list.innerHTML = '';
     const groups = new Map();
+    let shown = 0;
+    let missing = 0;
     for (const entry of state.index.clips) {
         if (filter && !entry.id.includes(filter) && !entry.source.toLowerCase().includes(filter)) {
             continue;
         }
+        ++shown;
+        if (!drawable(entry)) ++missing;
         if (!groups.has(entry.group)) groups.set(entry.group, []);
         groups.get(entry.group).push(entry);
     }
+
+    // THE COUNT, AT THE TOP, and it is the whole point of the change. The site used to list the
+    // clips that baked, so a building that failed was indistinguishable from a building that does
+    // not exist. Now the list is every clip in the repository and this line says how many of them
+    // are actually drawable today.
+    const summary = document.createElement('div');
+    summary.className = 'listNote';
+    const clips = shown + (shown === 1 ? ' clip' : ' clips');
+    summary.textContent = missing
+        ? clips + ' · ' + (shown - missing) + ' to look at, ' + missing + ' not baked'
+        : clips + ', all baked';
+    list.appendChild(summary);
+
     // The building first, then its parts, then everything else — which is the order somebody
     // looking for a fragment expects, rather than alphabetical across forty files.
     const order = [...groups.keys()].sort((a, b) => {
@@ -263,18 +290,29 @@ function buildList() {
         heading.textContent = group === 'clips' ? 'other clips' : group;
         list.appendChild(heading);
         for (const entry of groups.get(group)) {
-            const row = document.createElement('button');
-            row.className = 'row' + (state.current && entry.id === state.current.id ? ' on' : '');
+            const here = drawable(entry);
+            // A `div` and not a `button` for the ones with no file: there is nothing to press, and
+            // a disabled button is a thing people press anyway.
+            const row = document.createElement(here ? 'button' : 'div');
+            row.className = 'row' + (here ? '' : ' off') +
+                            (state.current && entry.id === state.current.id ? ' on' : '');
             const name = entry.source.replace(/\.clip$/, '').split('/').pop();
             row.innerHTML = '<span class="name"></span><span class="meta"></span>';
             row.querySelector('.name').textContent = name;
-            row.querySelector('.meta').textContent =
-                entry.quads.toLocaleString() + ' quads · ' + entry.metre + '/m · ' +
-                (entry.bytes / (1024 * 1024)).toFixed(1) + ' MB';
-            row.onclick = () => {
-                $('list').classList.add('hidden');
-                load(entry, false);
-            };
+            // Written as textContent and never as markup: a clip's own file name and a parser's
+            // own error message both reach this line, and neither is HTML.
+            row.querySelector('.meta').textContent = here
+                ? entry.quads.toLocaleString() + ' quads · ' + entry.metre + '/m · ' +
+                  (entry.bytes / (1024 * 1024)).toFixed(1) + ' MB'
+                : (entry.reason || 'not baked');
+            if (here) {
+                row.onclick = () => {
+                    $('list').classList.add('hidden');
+                    load(entry, false);
+                };
+            } else {
+                row.title = entry.source + ' — ' + (entry.reason || 'not baked');
+            }
             list.appendChild(row);
         }
     }
@@ -329,7 +367,13 @@ async function poll() {
             }
             if (state.current) {
                 const fresh = next.clips.find((c) => c.id === state.current.id);
-                if (fresh && fresh.hash !== state.current.hash) {
+                if (fresh && !drawable(fresh)) {
+                    // Still in the index, still named, and no longer drawable. Saying WHY is the
+                    // point: a clip that has just stopped baking is somebody's edit two minutes
+                    // ago, and the reason is the message they need.
+                    toast(state.current.id + ' can no longer be baked: ' +
+                          (fresh.reason || 'unknown'), true);
+                } else if (fresh && fresh.hash !== state.current.hash) {
                     toast(state.current.id + ' changed — reloading');
                     await load(fresh, true);
                 } else if (!fresh) {
@@ -757,14 +801,25 @@ async function main() {
         const asked = location.hash.replace('#', '');
         if (!asked || !state.index || (state.current && state.current.id === asked)) return;
         const found = state.index.clips.find((c) => c.id === asked);
-        if (found) load(found, false);
+        if (drawable(found)) load(found, false);
+        else if (found) toast(asked + ' is not baked: ' + (found.reason || 'unknown'), true);
     });
 
+    // The first clip on screen must be one there is a FILE for. The index now names the clips
+    // that could not be baked as well, so falling to `clips[0]` without this check opens the page
+    // on a row that has nothing behind it and toasts a fetch error at somebody who asked for
+    // nothing.
     const wanted = location.hash.replace('#', '');
-    const entry = state.index.clips.find((c) => c.id === wanted) ||
-                  state.index.clips.find((c) => c.id === 'facility') ||
-                  state.index.clips[0];
+    const here = state.index.clips.filter(drawable);
+    const asked = state.index.clips.find((c) => c.id === wanted);
+    if (wanted && asked && !drawable(asked)) {
+        toast(wanted + ' is not baked: ' + (asked.reason || 'unknown'), true);
+    }
+    const entry = here.find((c) => c.id === wanted) ||
+                  here.find((c) => c.id === 'facility') ||
+                  here[0];
     if (entry) await load(entry, false);
+    else toast('every clip in the index is unavailable', true);
     updateSliceLabel();
 
     setInterval(poll, 5000);
@@ -773,6 +828,11 @@ async function main() {
 
 // Handy from a console, and it is what the browser tests drive.
 window.__state = state;
+// The clip list, drivable on its own. It is the one part of this file with no WebGL in it, and a
+// machine with no WebGL 2 -- which is every headless one this has ever been checked on -- never
+// reaches `main()` past its first line. Setting `__state.index` and calling this is how the list
+// is checked against a real index.json without a graphics stack.
+window.__list = buildList;
 // >>> post: and what the frame-cost harness drives. Both are read from a rAF callback registered
 // after this one, so what they report is the frame that has just been drawn.
 window.__budget = () => state.budget;

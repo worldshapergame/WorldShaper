@@ -646,6 +646,18 @@ struct Options {
     // moving that costs (43% of pixels different from the marcher it replaced). So the two arms
     // differ by colour and by nothing else, which is what makes an image diff between them readable.
     bool level_blend = true;
+    // R5c's SECOND half: a level-0 hit blends towards the brick average the visibility buffer is
+    // already carrying beside its type id, so the finest pair of levels aims at one number the way
+    // every coarser pair has since D664. `--no-voxel-blend` is the control arm and is D664 exactly:
+    // the level-1 arm blends towards the voxel and the level-0 arm does not blend at all, which
+    // leaves that one pair the whole step apart instead of none of it.
+    bool voxel_blend = true;
+    // R5d's SECOND half: the far surface of an edge pixel can be a part-covered coarse node too, and
+    // where what lies beyond IT is sky the composite draws three layers instead of two.
+    // `--no-edge-layers` is the control arm and is D663 exactly -- the far surface drawn opaque
+    // whatever its own coverage says, which is a railing at fifty metres behind a railing at thirty
+    // getting no blending at all.
+    bool edge_layers = true;
     // R4a: a face works out what the surface under it is MADE of and keeps the answer.
     // `--no-face-materials` is the control arm and no face ever asks, which is the renderer exactly
     // as it was before R4. It has to exist because the picture is identical in both arms by
@@ -1368,6 +1380,19 @@ bool parse_options_c(const std::string& arg, int& i, int argc, char** argv, Opti
         // R5a's control arm. Nothing in this renderer filtered across faces before it, so this
         // is the state every figure taken before R5 was measured in.
         options.face_denoise = false;
+    } else if (arg == "--no-voxel-blend") {
+        // R5c's SECOND half, off: a level-0 hit draws the voxel's own colour and its own emission
+        // outright, so the (0, 1) pair is the whole step apart. D664 exactly, and it is a separate
+        // lever from `--no-level-blend` because that one also turns off the marcher's half and the
+        // two want pricing apart -- one is a descent per hit in the marcher and this one is a mix of
+        // a word the composite had already loaded.
+        options.voxel_blend = false;
+    } else if (arg == "--no-edge-layers") {
+        // R5d's SECOND half, off: visibility.comp leaves the far node's coverage byte and its "sky
+        // beyond" bit at nought and casts no third march, so the composite draws the far surface of
+        // an edge opaque. D663 exactly, and separate from `--no-edge-aa` for the same reason: that
+        // one takes the second march out as well and prices the whole stage.
+        options.edge_layers = false;
     } else if (arg == "--no-level-blend") {
         // R5c's control arm. A hit draws the colour of the cell it stopped on outright, so the
         // two levels a footprint sits between are two flat tones in a fixed 4x4 pattern -- which
@@ -1606,6 +1631,12 @@ void print_help() {
         "  --no-level-blend      a hit draws the colour of the cell it stopped on outright, so a\n"
         "                        surface between two levels of detail comes out as two tones in a\n"
         "                        4x4 pattern. R5c's control arm; the geometry is the same in both\n"
+        "  --no-voxel-blend      a level-0 hit draws the voxel's own colour and glow outright, so\n"
+        "                        the finest pair of levels is the whole step apart. R5c's second\n"
+        "                        half off, with its first half left on\n"
+        "  --no-edge-layers      the far surface of an edge pixel is drawn opaque whatever its own\n"
+        "                        coverage says, so a railing behind a railing gets no blending.\n"
+        "                        R5d's second half off, with its first half left on\n"
         "  --no-beam             every primary ray starts at the eye again, with no coarse ray\n"
         "                        ahead of it saying which metres are empty. R7a's control arm\n"
         "  --no-temporal-start   the beam's bound stands on its own, with the previous frame's\n"
@@ -8469,6 +8500,17 @@ void Application::record_frame(f32 time_seconds) {
         // R4c/R4d's two control arms. Here rather than in the light probe's dial word because the
         // bits of that word are declared in shaders/node.glsl -- see the `r4` field's own note in
         // src/gpu/render_params.hpp.
+        // R5c/R5d's two SECOND halves, and these could not be probe bits for one reason more than
+        // `r4`'s: shaders/resolve.comp has no binding for the light probe buffer at all, so a dial
+        // the COMPOSITE reads has nowhere else to live. Each is cleared by its own master switch as
+        // well as by its own flag, because a second half with its first half turned off is a state
+        // nobody would be able to quote a figure against: `--no-level-blend` leaves the marcher
+        // drawing each cell's own colour and `--no-edge-aa` casts no second march, so in both of
+        // those arms the number these two would act on does not exist.
+        params.r5[0] = (options_.level_blend && options_.voxel_blend) ? 1.0f : 0.0f;
+        params.r5[1] = (options_.edge_aa && options_.edge_layers) ? 1.0f : 0.0f;
+        params.r5[2] = 0.0f;
+        params.r5[3] = 0.0f;
         params.r4[0] = options_.reflected_image ? 1.0f : 0.0f;
         params.r4[1] = options_.dispersion ? 1.0f : 0.0f;
         // R4f, and the flag and the dial are ONE number on purpose: the budget IS the feature, so

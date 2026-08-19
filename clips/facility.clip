@@ -360,16 +360,22 @@ solid all
 # rule at the height it was drawn for, which put the plinth course and the ground line partway up
 # the walls — geometry right, colour wrong. This moves both.
 #
-# AND IT SILENTLY BREAKS EVERY `--part` MEASUREMENT TAKEN ON THIS FILE, which cost most of a session
-# to notice. `apply_origin` translates the node bound to `solid` and every paint rule, and shifts the
-# clip's bounds to match — it does NOT translate the other 2,500 named bindings, because nothing
-# reaches them. `clipcheck --part <name>` then swaps an UNTRANSLATED node into `script.solid` while
-# the bounds have already moved 3.50 m down, so a part is sampled in model space against a box that
-# has been shifted out from under it. Everything above model y 16.50 falls outside the box and is
-# reported as if it were not there: `--part dome_lan_ball` on the gilt ball at 19.51 says EMPTY, and
-# `--part part_fittings` reports the corona's hanging rods stopping dead at 16.500.
+# IT USED TO SILENTLY BREAK EVERY `--part` MEASUREMENT TAKEN ON THIS FILE. **FIXED 2026-08-16, and
+# this paragraph is kept because the SHAPE of the fault is worth knowing — see `apply_origin` in
+# src/forge/clip_script.cpp, which now translates `script.parts` along with everything else.**
 #
-# THE WHOLE BUILDING IS FINE — `all` is the translated node, so the shipped sample is right, and this
-# is a measuring fault and not a building one. But any `--part` figure taken from a clip with an
-# `origin` is only trustworthy below `bounds.high.y + shift`. Comment this line out while probing.
+# What it was: `apply_origin` translated the node bound to `solid` and every paint rule, and shifted
+# the clip's bounds to match — and did NOT translate the 2,500 named bindings. So `--part <name>`
+# swapped an UNTRANSLATED node into `script.solid` while the bounds had already moved 3.50 m down,
+# and a part was sampled in model space against a box shifted out from under it. It did not fail, it
+# ANSWERED: `part_dome` came back an 11.75 x 1.00 x 11.75 m saucer wearing one material instead of
+# six — the 1.05 m of a 4.15 m dome that still fell inside the moved box, **painted by whatever rule
+# was 3.50 m lower** — and `part_pilasters` reported eleven materials on a part that paints two, the
+# other nine being the site's and the podium's coats arriving from above.
+#
+# THE WHOLE BUILDING WAS ALWAYS FINE — `all` is the translated node, so the shipped sample was right
+# and this was a measuring fault rather than a building one. **But the clip viewer bakes every
+# fragment of this file THROUGH `--part`**, so the site showed those parts with their paint 3.50 m
+# out until the fix, and any `web/data` baked before 2026-08-16 still does. That is a re-bake, not
+# a code change (D709).
 origin 0 -3.50 0

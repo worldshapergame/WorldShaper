@@ -328,6 +328,20 @@ struct Baked {
     u64 key = 0;        // what it was baked FROM; a match means the file is still right
     usize bytes = 0;
     std::vector<std::string> materials;   // names, for the viewer's material list
+
+    // WHAT BECAME OF THIS CLIP IN THIS RUN, and why -- carried even when nothing was built.
+    //
+    // The index used to be written from the clips that baked, so a clip that failed, timed out, or
+    // whose source moved on without a successful re-bake simply VANISHED from the site, with
+    // nothing anywhere saying it should have been there. That is trap 15 in this repository's own
+    // words: a clean measurement and a measurement that never ran look identical. The site could
+    // not tell "there is no such building" from "there is one and it could not be baked".
+    //
+    // So every enumerated clip now reaches index.json. The ones that baked carry their data; the
+    // ones that did not carry `reason` and no file, and the page lists them as unavailable.
+    bool available = false;   // is there a .wsc under this id that the viewer can fetch?
+    bool reused = false;      // ...and did THIS run make it, or find last run's still valid
+    std::string reason;       // why there is not, when there is not. Empty when available.
 };
 
 // The six faces, in the order the file stores them.
@@ -1654,6 +1668,7 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                          settings.high.z - settings.low.z};
     if (span[0] <= 0.0 || span[1] <= 0.0 || span[2] <= 0.0) {
         std::printf("  - empty bounds\n");
+        baked.reason = "empty bounds";
         return false;
     }
 
@@ -1694,11 +1709,16 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     const ws::Clip& clip = built.clip;
     if (clip.size[0] <= 0 || clip.size[1] <= 0 || clip.size[2] <= 0) {
         std::printf("  - sampled to nothing\n");
+        baked.reason = "sampled to nothing";
         return false;
     }
     if (clip.size[0] > 65535 || clip.size[1] > 65535 || clip.size[2] > 65535) {
         std::printf("  - %d x %d x %d is past what a 16-bit quad can address\n", clip.size[0],
                     clip.size[1], clip.size[2]);
+        char why[96];
+        std::snprintf(why, sizeof(why), "%d x %d x %d is past what a 16-bit quad can address",
+                      clip.size[0], clip.size[1], clip.size[2]);
+        baked.reason = why;
         return false;
     }
 
@@ -2093,6 +2113,7 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
             std::printf("  ! shape record is %zu bytes, not %zu\n",
                         walk.shapes.size() ? (out.size() - shapes_at) / walk.shapes.size() : 0,
                         kShapeBytes);
+            baked.reason = "the shape record came out the wrong size";
             return false;
         }
         put_u32(out, 196, static_cast<u32>(out.size()));
@@ -2182,6 +2203,7 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     std::ofstream stream(target, std::ios::binary | std::ios::trunc);
     if (!stream) {
         std::printf("  ! cannot write %s\n", target.string().c_str());
+        baked.reason = "cannot write " + target.filename().string();
         return false;
     }
     stream.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
@@ -2606,8 +2628,14 @@ int main(int argc, char** argv) {
     // simulation thread, which is right in the game and is two idle cores in a job that does
     // nothing else. On the four-core runner it is the difference between two workers and four.
     ws::JobSystem jobs(std::max(1u, std::thread::hardware_concurrency()));
-    std::vector<Baked> done;
-    i32 failed = 0;
+
+    // EVERY clip the enumeration above found, in the order it found them, whether or not it baked.
+    //
+    // This vector is what index.json is written from, and that is the whole of the change: the
+    // site can now tell "there is no such clip" from "there is one, and here is why it cannot be
+    // drawn". It used to be the clips that succeeded, so half a bake published half a site with
+    // nothing to say the other half existed.
+    std::vector<Baked> all;
     const u64 began = ws::now_ns();
 
     // The manifest, parsed once and kept.
@@ -2662,6 +2690,15 @@ int main(int argc, char** argv) {
 
         const std::string stem = file.stem().string();
         Baked baked;
+        // Named BEFORE anything is attempted. `bake_root` and `reuse` both fill these in at the
+        // end of a success, and a failure never reaches either -- so a clip that cannot be built
+        // would have nothing to be listed under. This is what gives it a name and a group.
+        baked.id = id;
+        baked.source = relative.generic_string();
+        {
+            const fs::path parent = relative.parent_path();
+            baked.group = parent.empty() ? std::string("clips") : parent.generic_string();
+        }
         bool built = false;
 
         u32 root = 0;
@@ -2685,11 +2722,19 @@ int main(int argc, char** argv) {
             key = fnv1a(reinterpret_cast<const u8*>(&source), sizeof(source), key);
         }
         if (key != 0 && reuse(options, relative, key, baked)) {
-            done.push_back(baked);
+            baked.available = true;
+            baked.reused = true;
+            all.push_back(baked);
             continue;
         }
         if (options.index_only) {
+            // The site before the clips are ready. What is missing is now NAMED as missing rather
+            // than left out, which is the difference between a building that does not exist and a
+            // building whose bake has not landed yet -- and the second is what `--index-only`
+            // produces by design, forty times over, on every early deploy.
             std::printf("  not baked yet\n");
+            baked.reason = "not baked yet";
+            all.push_back(baked);
             continue;
         }
         baked.key = key;
@@ -2710,6 +2755,27 @@ int main(int argc, char** argv) {
                     continue;
                 }
                 std::printf("  ! line %u: %s\n", error.line, error.message.c_str());
+                // The FIRST error, carried to the index. A parse gives up in cascades and the
+                // fifteenth message is about the wreckage rather than the fault, so the row on the
+                // page says the one thing somebody could act on.
+                //
+                // The parser names the file it was reading IN FULL, which on a runner is ninety
+                // characters of checkout directory before the sentence starts. The directory is
+                // trimmed and the file name kept, because the name is not always this clip's --
+                // an error can come out of a file it includes, and which one is half the answer.
+                if (!fatal) {
+                    std::string detail = error.message;
+                    const usize named = detail.rfind(".clip: ");
+                    if (named != std::string::npos) {
+                        const usize slash = detail.find_last_of("/\\", named);
+                        if (slash != std::string::npos) detail = detail.substr(slash + 1);
+                    }
+                    if (detail.size() > 180) detail.resize(180);
+                    char why[240];
+                    std::snprintf(why, sizeof(why), "failed to parse: line %u: %s", error.line,
+                                  detail.c_str());
+                    baked.reason = why;
+                }
                 fatal = true;
             }
             if (!fatal) {
@@ -2721,6 +2787,7 @@ int main(int argc, char** argv) {
                     } else {
                         std::printf("  - no `solid` and no `part_%s`; nothing to build\n",
                                     stem.c_str());
+                        baked.reason = "no solid, and the manifest has no part_" + stem;
                     }
                 }
                 if (own.script.has_solid || is_part) {
@@ -2729,18 +2796,31 @@ int main(int argc, char** argv) {
             }
         }
 
+        baked.available = built;
         if (built) {
-            done.push_back(baked);
-        } else {
-            ++failed;
+            baked.reason.clear();
+        } else if (baked.reason.empty()) {
+            // Every failure path above names itself. This is the guard against a new one that
+            // forgets to: an unavailable clip with no reason is worse than useless on the page.
+            baked.reason = "could not be baked";
         }
+        all.push_back(baked);
     }
+
+    // The four numbers a bake is judged by, counted once and used by everything below.
+    usize baked_now = 0, reused_now = 0, unavailable = 0;
+    for (const Baked& entry : all) {
+        if (!entry.available) ++unavailable;
+        else if (entry.reused) ++reused_now;
+        else ++baked_now;
+    }
+    const usize available = baked_now + reused_now;
 
     // `--only` deliberately leaves the index alone. It is for working on one clip, and an index
     // rewritten from a run that built one of forty is an index that has just deleted the site.
     if (!options.only.empty()) {
-        std::printf("\n%zu clip baked; index.json left as it was (--only)\n", done.size());
-        return done.empty() ? 1 : 0;
+        std::printf("\n%zu clip baked; index.json left as it was (--only)\n", available);
+        return available == 0 ? 1 : 0;
     }
 
     // Anything in the output that is no longer a clip. The cache carries files between runs, so a
@@ -2751,7 +2831,13 @@ int main(int argc, char** argv) {
     // and a sweep there would delete the other eleven twelfths as soon as they were merged.
     if (options.shards == 1 && !options.index_only) {
         std::vector<std::string> keep;
-        for (const Baked& baked : done) keep.push_back(baked.id);
+        // ONLY the ids with a file behind them, which is deliberately NOT every id in the index.
+        // An unavailable clip is named in index.json and has no `.wsc`; keeping its name here
+        // would preserve whatever stale bytes an earlier run left under it, and that stale file is
+        // exactly what the viewer would then be served for a clip the index says is unavailable.
+        for (const Baked& entry : all) {
+            if (entry.available) keep.push_back(entry.id);
+        }
         std::error_code walk;
         for (const fs::directory_entry& entry : fs::directory_iterator(options.out, walk)) {
             const std::string name = entry.path().filename().string();
@@ -2773,8 +2859,13 @@ int main(int argc, char** argv) {
     // to find out whether anything has changed — which is what makes the site follow the work
     // going on in the clips rather than showing whatever it was built with.
     u64 combined = 0xcbf29ce484222325ull;
-    for (const Baked& baked : done) {
-        const std::string key = baked.id + hex64(baked.hash);
+    // Over EVERY entry, and over its state and reason as well as its bytes. A clip that goes from
+    // `failed to parse` to baked, or from baked to `not baked yet`, has to move this number: it is
+    // the only thing the page polls, and a list that does not rebuild is a list still showing the
+    // fault that has just been fixed.
+    for (const Baked& entry : all) {
+        const std::string key =
+            entry.id + hex64(entry.hash) + (entry.available ? "+" : "-") + entry.reason;
         combined = fnv1a(reinterpret_cast<const u8*>(key.data()), key.size(), combined);
     }
 
@@ -2795,12 +2886,35 @@ int main(int argc, char** argv) {
     json += "  \"hash\": \"" + hex64(combined) + "\",\n";
     json += "  \"branch\": \"" + json_escape(options.branch) + "\",\n";
     json += "  \"commit\": \"" + json_escape(options.commit) + "\",\n";
+    // THE TWO COUNTS, IN THE HEADER, because `clips` is no longer an answer to "how much of the
+    // site is there". It used to be, and `.github/workflows/pages.yml` still asks it that way: the
+    // early deploy refuses to publish when `len(clips)` is zero, and with every enumerated clip
+    // now named that length is never zero again. `available` is the number that gate wants.
+    {
+        char counts[96];
+        std::snprintf(counts, sizeof(counts), "  \"enumerated\": %zu,\n  \"available\": %zu,\n",
+                      all.size(), available);
+        json += counts;
+    }
     json += "  \"clips\": [\n";
-    for (usize i = 0; i < done.size(); ++i) {
-        const Baked& baked = done[i];
+    for (usize i = 0; i < all.size(); ++i) {
+        const Baked& baked = all[i];
+        const char* tail = (i + 1 < all.size()) ? "," : "";
+        if (!baked.available) {
+            // No file, so there is no geometry to describe and every numeric field would be a
+            // lie. The row carries what the baker does know -- where the clip is, which group it
+            // belongs in, and why it cannot be drawn -- and the page lists it greyed with the
+            // reason under its name.
+            json += "    {\"id\": \"" + json_escape(baked.id) + "\", \"source\": \"" +
+                    json_escape(baked.source) + "\", \"group\": \"" + json_escape(baked.group) +
+                    "\", \"available\": false, \"reason\": \"" + json_escape(baked.reason) +
+                    "\"}" + tail + "\n";
+            continue;
+        }
         char row[1024];
         std::snprintf(row, sizeof(row),
                       "    {\"id\": \"%s\", \"source\": \"%s\", \"group\": \"%s\", "
+                      "\"available\": true, "
                       "\"hash\": \"%s\", \"bytes\": %zu, \"quads\": %u, \"solid\": %llu, "
                       "\"metre\": %d, \"authored\": %d, \"dims\": [%d, %d, %d], "
                       "\"low\": [%.4f, %.4f, %.4f], \"high\": [%.4f, %.4f, %.4f]}%s\n",
@@ -2810,7 +2924,7 @@ int main(int argc, char** argv) {
                       baked.authored_metre, baked.dims[0], baked.dims[1], baked.dims[2],
                       baked.matter_low[0], baked.matter_low[1], baked.matter_low[2],
                       baked.matter_high[0], baked.matter_high[1], baked.matter_high[2],
-                      (i + 1 < done.size()) ? "," : "");
+                      tail);
         json += row;
     }
     json += "  ]\n}\n";
@@ -2825,11 +2939,27 @@ int main(int argc, char** argv) {
     stream.close();
 
     const f64 seconds = static_cast<f64>(ws::now_ns() - began) / 1e9;
-    std::printf("\n%zu clips baked, %d could not be, in %.1f s -> %s\n", done.size(), failed,
-                seconds, options.out.string().c_str());
+
+    // ONE LINE THAT SAYS WHETHER THE SITE IS WHOLE. A bake that silently produces half a site is
+    // the fault this whole change is about, and these four numbers are what make it audible: when
+    // `enumerated` is larger than `baked + reused`, the site is short by exactly that many
+    // buildings, and the list under it names every one of them.
+    std::printf("\n%zu enumerated: %zu baked, %zu reused, %zu unavailable, in %.1f s -> %s\n",
+                all.size(), baked_now, reused_now, unavailable, seconds,
+                options.out.string().c_str());
+    if (unavailable > 0) {
+        std::printf("%zu clip(s) are in the index by name, with a reason and no file:\n",
+                    unavailable);
+        for (const Baked& entry : all) {
+            if (!entry.available) {
+                std::printf("  %-34s %s\n", entry.id.c_str(), entry.reason.c_str());
+            }
+        }
+    }
 
     // A clip that cannot be built is reported and does not fail the bake. The site exists to show
     // work in progress, and a fragment somebody is halfway through editing is exactly the case it
     // has to survive — failing here would take the other twenty clips off the site with it.
-    return (done.empty() && !options.index_only) ? 1 : 0;
+    // What it no longer does is take the clip's NAME off the site with it.
+    return (available == 0 && !options.index_only) ? 1 : 0;
 }
