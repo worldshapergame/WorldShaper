@@ -292,6 +292,29 @@ no warning — a rule that never fires produces no output at all.
 Not fixed here: `src/forge` belongs to a second line of work. It is one shift in `plan_sample`, and
 `--place-check` in `tools/paintcheck.cpp` is the regression test for it.
 
+## 8a. A clip that fails to bake used to vanish, and the list was the symptom
+
+*Added 2026-08-19, from "the website doesnt list all the clips or buildings".*
+
+Everything above is about features that are correct in the shader and starved of baked data. This
+one is the other shape of gap and it is worth naming beside them: a piece of the pipeline whose
+**failure had no output at all**. `index.json` was written from the run's successes, so a clip
+that failed, timed out, or whose `.wsc` did not match its source was dropped from the site with
+nothing left to say it had ever been enumerated. Sixty-three clips baked and the page listed
+sixty-three; a hundred and one clips baked with nineteen failing and the page listed eighty-two,
+and the two pages are indistinguishable to anybody looking at one of them.
+
+**The fix is the idiom this repository already uses for a measurement that did not run: make the
+absence visible.** The baker keeps every enumerated clip, available or not, and each unavailable
+one carries the reason it gave up. The page lists them greyed with the reason. The bake prints
+`enumerated / baked / reused / unavailable` as its last line. §4's "the findings that outlive the
+features" applies directly — a rule that never fires produces no output at all, and neither did
+a clip that never baked.
+
+The two constraints that had to survive it: the orphan sweep keeps only ids with a file behind
+them (an unavailable name in `keep` preserves stale bytes under that name), and its refusal to run
+while `shards > 1` is unchanged.
+
 ## 9. The paint stack cannot be evaluated per pixel, and the number is not close
 
 `facility/part_terrace`, 348 rules: **2,018,075 node evaluations per stack walk.** After the

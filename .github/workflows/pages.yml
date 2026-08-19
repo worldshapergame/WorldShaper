@@ -327,7 +327,15 @@ jobs:
         run: |
           set -uo pipefail
           echo "${{ github.run_number }} early" > web/data/run.txt
-          n=$(python3 -c 'import json;print(len(json.load(open("web/data/index.json"))["clips"]))' 2>/dev/null || echo 0)
+          # AVAILABLE, not len(clips). Since the index started naming every clip the baker
+          # ENUMERATED rather than only the ones that baked, `len(clips)` is never zero -- so this
+          # gate, which exists to refuse publishing a site with nothing to look at, would have
+          # passed on a run that baked nothing at all and published a hundred rows saying
+          # "not baked yet". The baker puts `available` in the index header for exactly this.
+          #
+          # `.get` with the old expression as its default, so an index written before that field
+          # existed still answers the question this gate is asking.
+          n=$(python3 -c 'import json;d=json.load(open("web/data/index.json"));print(d.get("available",len(d["clips"])))' 2>/dev/null || echo 0)
           now="$(curl -fsS --max-time 20 \
             "https://worldshapergame.github.io/WorldShaper/data/index.json?ci=$GITHUB_RUN_ID-b" \
             | python3 -c 'import json,sys;print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)"

@@ -3892,3 +3892,26 @@ makes it visible: the estate went from **140,924 voxels to 142,147**. That rise 
 precisely the volume that had been inside both buildings at once.
 
 One consequence: the estate's fingerprint changes, so any world baked before today wants rebuilding.
+
+## The website lists every clip now, including the ones it could not build
+
+You said the site doesn't show all the clips or buildings. It was showing every clip that **baked
+successfully on that particular run** — and a clip that failed, or timed out, or whose recipe had
+moved on since it was last built, simply wasn't in the list. Nothing anywhere said it should have
+been.
+
+So the site couldn't tell the difference between *there is no such building* and *there is one and I
+couldn't draw it*. One run built 82 of them and the page listed 82, which looks exactly like a
+project containing 82 clips.
+
+**There are 101.**
+
+Now all 101 are listed. The ones it couldn't build appear greyed out **with the reason** — "sampled
+to nothing", "failed to parse: line 12 ...", "not baked yet". And the end of every build says the
+tally out loud — *101 enumerated: 0 baked, 100 reused, 1 unavailable* — naming the missing ones, so a
+build that quietly produces half a website says so before anybody opens it.
+
+One thing fell out of it that was worth catching. There's a safety check meant to stop an **empty**
+site being published, and it worked by asking "is the list empty?". Now that the list is never empty,
+that check would have passed on a build that produced nothing at all and cheerfully published a
+hundred rows saying "not baked yet". It now asks how many are actually **viewable**.

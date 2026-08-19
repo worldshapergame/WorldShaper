@@ -271,6 +271,20 @@ body.walking #verticals { display: flex; }
 .row.on { background: rgba(255, 255, 255, 0.16); }
 .row .meta { font-size: 11px; color: var(--ink-dim); white-space: nowrap; }
 
+/* A clip the baker knows about and could not bake. It is listed, dimmed, with the reason where
+   the quad count would be -- so the site says "there is a building here and this is why you
+   cannot see it" rather than saying nothing at all. The reason may be a whole parser message, so
+   this row is the one that wraps. */
+.row.off { cursor: default; opacity: 0.45; align-items: flex-start; }
+.row.off .name { text-decoration: line-through; text-decoration-thickness: 1px; }
+.row.off .meta { white-space: normal; text-align: right; overflow-wrap: anywhere; }
+
+.listNote {
+    font-size: 11px;
+    color: var(--ink-dim);
+    margin: 2px 4px 0;
+}
+
 #panelBody {
     display: grid;
     grid-template-columns: auto 1fr;

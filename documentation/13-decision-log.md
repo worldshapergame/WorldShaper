@@ -12111,3 +12111,71 @@ what it looked like.
 | D707 | **Terminate on CONTRIBUTION, not on a depth count** | design | 4% head-on for a dielectric makes a dim bounce free and a mirror corridor affordable |
 | D707 | **The rough/sharp split is lobe width against pixel solid angle, continuously** | design | R4's no-threshold rule, and it is why the face store keeps its job |
 | D707 | **D703 is superseded and was not wasted** | honesty | It made the image reachable and made the shape rejectable by looking at it |
+
+---
+
+## D708 — `index.json` names every clip the baker ENUMERATED, not the ones that baked
+
+**2026-08-19, reported from using the site:** *"the website doesnt list all the clips or buildings."*
+
+`tools/bake_web.cpp` wrote the index from `done` — the clips that succeeded **in that run**. A clip
+that failed was printed once on a runner's log and then simply was not there. Same for one that timed
+out, one whose `.wsc` no longer matched its source, and every clip `--index-only` could find no valid
+file for.
+
+**So the site could not tell "there is no such building" from "there is one and it could not be
+baked".** That is trap 15 wearing a website as a disguise — *a clean measurement and a measurement
+that never ran look identical.* Concretely: one run baked **82 of 101** and the page listed 82, which
+is indistinguishable from a repository that contains 82 clips.
+
+**101 is the real number**, verified independently at integration: 105 `.clip` files under `clips/`,
+four of them `_`-prefixed and excluded by the baker's own convention (the contract, the order, the
+template — they are *included by* clips and are not clips).
+
+### The fix is the idiom this repository already uses for a measurement that did not run
+
+**Make the absence visible.** `Baked` carries `available`, `reused` and `reason`, and every failure
+path names itself rather than falling through to silence: `failed to parse: line N: ...` — the first
+error only, because a parse gives up in cascades and the fifteenth message is about the wreckage —
+`no solid, and the manifest has no part_<name>`, `empty bounds`, `sampled to nothing`,
+`N x N x N is past what a 16-bit quad can address`, `cannot write <file>`, `not baked yet`.
+
+The page lists the unavailable ones greyed with their reason, **as `div`s rather than disabled
+buttons**, because a disabled button gets pressed anyway. The first clip on screen, a pasted
+`#fragment` and the five-second poll each check before loading and say the reason instead of failing
+to fetch a file that is not there. The reader tests `available !== false` rather than `=== true`, so
+**an index written before the field existed still lists everything in it as drawable**.
+
+Measured both ways: `--index-only` against an empty `web/data` names **101, 0 available**; a real
+bake names **101, 100 available**; the same command again reports **100 reused**. The one unavailable
+is real — `facility/requests/floors-probe.clip`, whose box is smaller than a voxel at 2/m, so it
+reports `sampled to nothing`.
+
+### Three things had to survive it, and one did not
+
+**The orphan sweep keeps only ids with a FILE behind them** — an unavailable name in `keep` would
+preserve whatever stale `.wsc` an earlier run left under it, and that stale file is exactly what the
+viewer would then be served. Its `shards > 1` refusal is untouched. The index hash covers the
+reasons, so a clip going from `failed to parse` to baked moves the number the page polls. And a clip
+that cannot be built still does not fail the bake.
+
+**What did not survive is `pages.yml`'s early-deploy gate**, and the agent could not reach it because
+the workflow was not its file. It refused to publish when `len(clips) == 0` — **which is now never
+true**, so the gate that exists to stop a site with nothing in it going live would have passed on a
+run that baked nothing and published a hundred rows saying `not baked yet`. Fixed at integration to
+read the header's `available`, with `len(clips)` as the `.get` default so a legacy index still
+answers. Its two guards that protect a *live* site — the site moved under this run, a newer run has
+published — are untouched.
+
+**And the last line of a bake now says it**: `101 enumerated: 0 baked, 100 reused, 1 unavailable`,
+with every unavailable clip named underneath. A bake that silently produces half a site should say so
+before anybody opens the page.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D708 | **The index names every clip enumerated, not every clip baked** | fault | One run baked 82 of 101 and the page was indistinguishable from a 82-clip repository |
+| D708 | **Every failure path names itself** | build | "Absent" and "never existed" must not look alike — trap 15 |
+| D708 | **Unavailable rows are `div`s, not disabled buttons** | build | A disabled button gets pressed anyway |
+| D708 | **The reader tests `available !== false`** | build | An index written before the field existed still lists its clips as drawable |
+| D708 | **The sweep keeps only ids with a file behind them** | correctness | An unavailable name in `keep` preserves the stale `.wsc` the viewer would be served |
+| D708 | **`pages.yml`'s empty-site gate was made dead by this and is fixed** | fault | `len(clips) == 0` is never true now; it reads `available` and defaults to the old expression |

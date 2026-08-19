@@ -734,6 +734,73 @@ is now the fine lever inside a rung of a ladder — see §4c.
 of its own baked bytes. When the hash of the clip on screen changes it is refetched and swapped in
 **with the camera exactly where it was**, which is the only way to see what actually changed.
 
+### The index names every clip, including the ones that could not be baked
+
+`index.json` used to be written from the clips that **succeeded in that run**, and a clip that
+failed was printed once on a runner's log and then simply was not there. A clip that timed out,
+whose source had moved on without a successful re-bake, or that `--index-only` found no valid
+`.wsc` for, went the same way. So the site could not tell **"there is no such building" from
+"there is one and it could not be baked"** — which is trap 15 in this repository's own words: a
+clean measurement and a measurement that never ran look identical. The reported symptom was that
+"the website doesn't list all the clips or buildings", and it was exactly right.
+
+**Every `.clip` the baker enumerates now reaches the index.** A row is a name plus either its data
+or the reason there is none:
+
+```json
+{"id": "facility-crypt", "source": "facility/crypt.clip", "group": "facility",
+ "available": false, "reason": "failed to parse: line 12: crypt.clip: unknown statement '{'"}
+```
+
+The reasons are whatever the baker actually knows at the point it gave up — `failed to parse:
+line N: ...` (the FIRST error, because a parse gives up in cascades and the fifteenth message is
+about the wreckage), `no solid, and the manifest has no part_<name>`, `empty bounds`, `sampled to
+nothing`, `N x N x N is past what a 16-bit quad can address`, `cannot write <file>`, and `not baked
+yet` from `--index-only`. `available` is a **new** field, and the page reads it as
+`available !== false` rather than `=== true`, so an index written before it existed still lists
+every clip in it as drawable.
+
+The page lists the unavailable ones **greyed, with the reason where the quad count goes**, and a
+line at the top of the list saying `101 clips · 100 to look at, 1 not baked`. They are `div`s
+rather than disabled buttons, because a disabled button is a thing people press anyway. Nothing
+loads one: the first clip on screen, a pasted `#fragment` and the five-second poll all check
+first, and each says the reason rather than failing to fetch a file that is not there.
+
+**The header carries `enumerated` and `available`**, because `clips` is no longer an answer to
+"how much of the site is there". It used to be, and one thing still asks it that way: the early
+deploy's gate in `.github/workflows/pages.yml` refuses to publish when `len(clips)` is zero, and
+with every enumerated clip now named that length is never zero again. The numbers that gate wants
+are in the header for it — `.get("available", len(...["clips"]))` is the whole of the change, and
+until it is made the guard against publishing an empty index is dead. Its two real guards, the
+ones that protect a LIVE site (the site moved under this run, a newer run has published), are
+untouched, and the state the dead one covered — nothing published and no cache — now publishes a
+list of names saying `not baked yet` instead of nothing at all.
+
+Three things it deliberately does **not** do:
+
+- **The orphan sweep still keeps only the ids with a file behind them.** An unavailable clip is in
+  the index by name and has no `.wsc`; putting its name in `keep` would preserve whatever stale
+  bytes an earlier run left under it, and that stale file is exactly what the viewer would be
+  served for a clip the index says cannot be baked. The sweep's `shards == 1` guard is untouched
+  — a shard's output holds one twelfth of the clips by design.
+- **The index hash covers the reasons too.** It is the only thing the page polls, so a clip going
+  from `failed to parse` to baked has to move it or the list keeps showing the fault that has just
+  been fixed.
+- **A clip that cannot be built still does not fail the bake.** The exit code is 1 only when
+  *nothing* is available, exactly as before.
+
+**And the bake ends on one line that says whether the site is whole:**
+
+```
+101 enumerated: 100 baked, 0 reused, 1 unavailable, in 239.5 s -> web/data
+1 clip(s) are in the index by name, with a reason and no file:
+  facility-requests-floors-probe     sampled to nothing
+```
+
+When `enumerated` is larger than `baked + reused` the site is short by exactly that many
+buildings, and the list under it names every one. A bake that silently produces half a site now
+says so before anybody opens the page.
+
 <!-- >>> ssr -->
 ### Reflections, and the offscreen target they needed
 
