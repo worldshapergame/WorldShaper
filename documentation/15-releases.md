@@ -86,7 +86,8 @@ after it, and the shipped `.world` is deleted before the first pass. There is no
 | where it ends up | `build\bin\clips`, which is the folder `Copy-Item build\bin\clips` puts in the zip |
 | how the game finds it | a shelf world looks beside itself **and** in the shipped `clips/`, paired by stem, and the key is hashed from the clip's source text so a wrong file is refused rather than believed (D685) |
 | what the download costs | see the measured table below. The workflow refuses to go over **128 MB** without somebody raising the budget on purpose |
-| what a warm bake costs | the gate alone. The cache is keyed on `clips/**` and `src/**`, so a run with nothing changed re-proves the world and bakes nothing |
+| what a warm bake costs | the gate alone. The cache is keyed on `clips/**`, `src/**`, **`tools/bake_world.ps1` and the pass numbers**, so a run with nothing changed re-proves the world and bakes nothing — and a change to how it is baked misses, which is what stops a camera-shaped world from being handed back to a release that asked for the whole thing |
+| how long it may take | `passes × seconds` per world, with a wall clock (`total_minutes`) over the lot of it, because `passes × seconds` leaves out how long a run takes to START and that is a minute a pass on a software Vulkan |
 
 ### Why it is a `needs:` job and not a step somebody remembers
 

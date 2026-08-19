@@ -142,6 +142,15 @@ param(
     # world is the exact defect this feature exists to remove and shipping one quietly is how it
     # got shipped the first three times. It has nothing to say about a `-RefineAll:$false` bake,
     # which is partial on purpose, so it refuses that combination rather than failing it.
+    # THE WALL CLOCK THE WHOLE RUN GETS, in minutes, 0 for none. `-Passes` times `-Seconds` is a
+    # worst case that leaves out how long a run takes to START, and on a machine with a software
+    # Vulkan that is a minute a pass rather than five seconds -- so the arithmetic that fits inside
+    # a build server's job timeout is wrong exactly where it matters. This is the same limit stated
+    # in the units the job timeout is stated in. Reaching it stops the loop with what it has, which
+    # `-RequireWhole` then fails on, saying which world and how far it got; being killed by the job
+    # timeout instead says nothing and leaves no report behind.
+    [int]$TotalMinutes = 0,
+
     [switch]$RequireWhole,
 
     # WHERE ELSE THE GATE STANDS. `x,y,z,yaw,pitch` each, and an empty string is the world's own
@@ -373,7 +382,7 @@ function Test-BakedWorldIsRead {
     $run = Invoke-Game -What "gate-$Stem" -Root $root -GameArgs @(
         '--world', $shelf, '--no-title', '--screenshot', $shot, '--screenshot-frame', '3',
         '--no-update-check', '--no-vsync', '--width', '640', '--height', '360',
-        '--max-seconds', '180')
+        '--max-seconds', '600')
 
     Write-Host $run.log
 
@@ -447,9 +456,13 @@ function Test-BakedWorldIsRead {
         $vroot = New-DataRoot
         $vshelf = Join-Path $vroot "WorldShaper\worlds\$Stem.wsworld"
         $vshot = Join-Path $vroot 'view.png'
+        # 600 s and not 180, and the reason is measured rather than cautious: sixty frames of the
+        # estate is seconds on a card and can be minutes on a software Vulkan, and a gate run on
+        # this machine drew NO frame in 180 s while a bake was holding the GPU. `--max-seconds`
+        # still ends the run either way -- it just stops the deadline being the thing that fails.
         $vargs = @('--world', $vshelf, '--no-title', '--screenshot', $vshot,
                    '--screenshot-frame', '60', '--no-update-check', '--no-vsync',
-                   '--width', '960', '--height', '540', '--max-seconds', '180')
+                   '--width', '960', '--height', '540', '--max-seconds', '600')
         if ($cam) { $vargs += @('--cam', $cam) }
         $vrun = Invoke-Game -What "view-$Stem" -Root $vroot -GameArgs $vargs
 
@@ -497,6 +510,7 @@ function Test-BakedWorldIsRead {
 $key = Get-BakeKey
 $stamps = Read-Stamps
 $rows = @()
+$clock = [Diagnostics.Stopwatch]::StartNew()
 
 foreach ($stem in $mine) {
     $world = Join-Path $clipdir "$stem.world"
@@ -634,6 +648,15 @@ foreach ($stem in $mine) {
                 break
             }
             $before = $done
+            # The wall clock, checked between passes and not inside one: a pass already has its
+            # own deadline, and cutting one off half way through would throw away the sharpening
+            # it has done since the last write.
+            if ($TotalMinutes -gt 0 -and $clock.Elapsed.TotalMinutes -ge $TotalMinutes) {
+                Write-Host ("bake  $stem stopped at $nodes nodes: the run has used its " +
+                            "$TotalMinutes minutes. That is a budget being reached, not a fault " +
+                            "-- raise -TotalMinutes, or bake somewhere faster.")
+                break
+            }
             if ($run.log -match 'gave up waiting for the world to settle') {
                 Write-Host ("bake  $stem pass $pass ran out its frame budget at $nodes nodes; " +
                             "the next pass resumes from here.")

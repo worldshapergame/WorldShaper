@@ -50,6 +50,16 @@ on:
         required: false
         type: number
         default: 45
+      # AND A WALL CLOCK IN THE UNITS THE JOB TIMEOUT IS IN, because `seconds x passes` leaves out
+      # how long a run takes to START -- five seconds on a card and a minute on lavapipe, which is
+      # forty-five minutes of arithmetic that is simply missing. Reaching this stops the loop with
+      # what it has and `require_whole` then fails on it, naming the world and how far it got;
+      # being killed by `timeout-minutes` instead says nothing and leaves no report behind.
+      total_minutes:
+        description: 'Wall clock for the whole bake, in minutes; 0 for none'
+        required: false
+        type: number
+        default: 200
       # A PARTIAL WORLD IS THE DEFECT, NOT A DEGRADED SUCCESS. `--refine-all` exists because
       # `--bake-world` on its own ships what one camera reached, and a release that ships that is
       # the floor with no walls the user photographed. So the release asks for the whole thing and
@@ -101,6 +111,10 @@ on:
         description: 'The most passes one world gets before the bake gives up on finishing it'
         required: false
         default: '45'
+      total_minutes:
+        description: 'Wall clock for the whole bake, in minutes; 0 for none'
+        required: false
+        default: '200'
       require_whole:
         description: 'Fail unless every node of every world asked for was baked'
         required: false
@@ -139,6 +153,7 @@ jobs:
       clips: ${{ steps.pick.outputs.clips }}
       seconds: ${{ steps.pick.outputs.seconds }}
       passes: ${{ steps.pick.outputs.passes }}
+      minutes: ${{ steps.pick.outputs.minutes }}
       whole: ${{ steps.pick.outputs.whole }}
       budget: ${{ steps.pick.outputs.budget }}
     steps:
@@ -160,6 +175,7 @@ jobs:
           echo "matrix=$(printf '%s\n' "$stems" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
           echo "seconds=${{ inputs.seconds || github.event.inputs.seconds || 240 }}" >> "$GITHUB_OUTPUT"
           echo "passes=${{ inputs.passes || github.event.inputs.passes || 45 }}" >> "$GITHUB_OUTPUT"
+          echo "minutes=${{ inputs.total_minutes || github.event.inputs.total_minutes || 200 }}" >> "$GITHUB_OUTPUT"
           echo "budget=${{ inputs.budget_mb || github.event.inputs.budget_mb || 128 }}" >> "$GITHUB_OUTPUT"
           # Anything but the literal `false` asks for the whole world, and the push trigger --
           # which passes nothing at all -- gets the whole world too, because a warm cache holding
@@ -304,12 +320,20 @@ jobs:
       # means the same bytes would come out again, so the job does only the gate and takes seconds;
       # a miss is a cold bake, and it is a cold bake exactly when something changed that should
       # cause one. "Re-bake on every release" enforced rather than written down.
+      #
+      # AND THE KEY NAMES THE BAKE'S OWN SHAPE, not only the source it was baked from. A world
+      # baked before `--refine-all` is a different world from the same clips and the same commit,
+      # and a warm runner does only the gate -- which is exempt from `-RequireWhole`, because it
+      # baked nothing and has nothing to say about how what it is proving was made. Without the
+      # script's hash and the numbers in this key, a release could take an old camera-shaped world
+      # straight out of the cache and gate it happily. `tools/bake_world.ps1` is where
+      # `--refine-all` lives, so hashing the file covers the flag and everything around it.
       - name: The world this runner baked last time
         id: warm
         uses: actions/cache@v4
         with:
           path: worlds
-          key: world-${{ matrix.clip }}-${{ hashFiles('clips/**', 'src/**', 'CMakeLists.txt') }}
+          key: world-${{ matrix.clip }}-${{ hashFiles('clips/**', 'src/**', 'CMakeLists.txt', 'tools/bake_world.ps1') }}-p${{ needs.plan.outputs.passes }}s${{ needs.plan.outputs.seconds }}m${{ needs.plan.outputs.minutes }}w${{ needs.plan.outputs.whole }}
 
       - name: Put a cached world back where it ships
         if: steps.warm.outputs.cache-hit == 'true'
@@ -326,6 +350,7 @@ jobs:
             Clips    = '${{ matrix.clip }}'
             Seconds  = ${{ needs.plan.outputs.seconds }}
             Passes   = ${{ needs.plan.outputs.passes }}
+            TotalMinutes = ${{ needs.plan.outputs.minutes }}
             BudgetMB = ${{ needs.plan.outputs.budget }}
             Report   = 'report-${{ matrix.clip }}.json'
           }

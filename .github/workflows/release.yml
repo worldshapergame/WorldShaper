@@ -48,6 +48,7 @@ jobs:
       clips: facility
       seconds: 240
       passes: 45
+      total_minutes: 200
       require_whole: 'true'
       budget_mb: 128
 
