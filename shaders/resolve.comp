@@ -979,9 +979,41 @@ vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_pa
                 // the controlled test could tell the two apart — `face_lobe_frame`'s comment
                 // says a fault of this shape "looks very nearly right", and it looked BETTER
                 // than right, which is worse. D598.
+                //
+                // ---- and under R4c's image the square is a CAP, not the hemisphere -------
+                //
+                // The bins cover a few degrees about the direction this face was last looked
+                // at from, which is what puts a picture in them rather than an average -- see
+                // `face_lobe_cap_of` in face_terms.glsl. The axis comes out of the block's own
+                // header, because the direction the samples were taken about is a property of
+                // the measurement and not of this frame's camera.
+                //
+                // A view outside the cap reads NOTHING rather than the nearest rim bin. The
+                // block has measured nothing about that direction, and the rim would draw
+                // whatever the face reflects six degrees away as though it were what the eye
+                // is looking at -- so the fallback is the hemispherical mean, which is what a
+                // face with no block reads and is honest about not knowing.
                 const uint state = face_lobe.words[face_lobe_state_at(block)];
-                if (lobe_radiance(block, face_lobe_bins_of(state), face_lobe_side_of(state),
-                                  face_lobe_at(view, normal, side, other), found)) {
+                const uint bins = face_lobe_bins_of(state);
+                const uint bin_side = face_lobe_side_of(state);
+                bool readable = true;
+                vec2 lobe_square = vec2(0.5);
+                if (push.r4.x > 0.0) {
+                    readable = (state & kLobeAxis) != 0u;
+                    if (readable) {
+                        const vec3 axis =
+                            face_lobe_axis_unpack(face_lobe_axis_of(state), normal, side, other);
+                        vec3 cap_u;
+                        vec3 cap_v;
+                        face_lobe_cap_frame(axis, side, other, cap_u, cap_v);
+                        lobe_square = face_lobe_cap_at(view, axis, cap_u, cap_v,
+                                                       sin(face_lobe_cap_of(rough, bin_side)),
+                                                       readable);
+                    }
+                } else {
+                    lobe_square = face_lobe_at(view, normal, side, other);
+                }
+                if (readable && lobe_radiance(block, bins, bin_side, lobe_square, found)) {
                     reflected = found;
                 }
             }
@@ -1500,10 +1532,31 @@ void main() {
                         // The direction the eye is in, exactly as the shaded path reads it -- see
                         // the note there and D598 for the test that settled which of the two.
                         const uint state = face_lobe.words[face_lobe_state_at(block)];
+                        const uint view_bins = face_lobe_bins_of(state);
+                        const uint view_side = face_lobe_side_of(state);
+                        // ...through whichever square is in force, so this view says what the
+                        // shaded path says and not what it used to say. A face whose cap the eye
+                        // has walked out of reads as unmeasured here too, which is the truth about
+                        // it and is the one thing this view exists to show.
+                        bool view_ok = true;
+                        vec2 view_at = vec2(0.5);
+                        if (push.r4.x > 0.0) {
+                            view_ok = (state & kLobeAxis) != 0u;
+                            if (view_ok) {
+                                const vec3 axis = face_lobe_axis_unpack(face_lobe_axis_of(state),
+                                                                        face_normal, side, other);
+                                vec3 cap_u;
+                                vec3 cap_v;
+                                face_lobe_cap_frame(axis, side, other, cap_u, cap_v);
+                                view_at = face_lobe_cap_at(
+                                    -dir, axis, cap_u, cap_v,
+                                    sin(face_lobe_cap_of(word & 0xFFu, view_side)), view_ok);
+                            }
+                        } else {
+                            view_at = face_lobe_at(-dir, face_normal, side, other);
+                        }
                         const bool measured =
-                            lobe_radiance(block, face_lobe_bins_of(state),
-                                          face_lobe_side_of(state),
-                                          face_lobe_at(-dir, face_normal, side, other), found);
+                            view_ok && lobe_radiance(block, view_bins, view_side, view_at, found);
                         // CYAN-GREEN for a face holding the expensive four-block class, so the two
                         // sizes can be told apart in the one view that says who holds what. A green
                         // screen with no blue in it anywhere is R4b's coverage rule reaching nobody,

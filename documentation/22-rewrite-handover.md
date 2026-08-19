@@ -678,6 +678,31 @@ this wave ran on `sampler.clip` alone** — three agents wanted a facility gate 
 one. It is pre-existing, it is not fixed yet because the fix is in `main.cpp` and six agents are
 holding that file, and **it is the first thing to do when the wave is in.**
 
+**THE ONE THING THAT BLOCKED MORE OF THIS WAVE THAN ANYTHING ELSE, said once rather than in five
+separate reports: THE ESTATE CANNOT BE GATED.** Three agents needed a facility or estate figure and
+not one could take one, each finding it independently:
+
+- **its `scene:` content hash changes on EVERY run** — one agent logged 17, 30, 38, 68, 87 and 95
+  chunks over six consecutive runs — because the ladder sharpens more of the world into the cache
+  between them, so **no two runs are the same scene** and nothing is comparable to anything;
+- **`--settle` never reaches a fixed point on it** — 17,000+ frames and 540 s, still sharpening —
+  so a scripted run hits its deadline and photographs whatever it had, and the engine says so in its
+  own log;
+- **`--refine-all` on it does not terminate in an hour**;
+- and **`run_clip_tool` exits 1 silently on it** (D693), so the deterministic route is gone too.
+
+**So every gate this wave ran on `clips/sampler.clip` and on small purpose-built clips**, and the
+agents that needed the estate said plainly that they could not. That is the right answer and it is
+also a hole: **the scene the engine is judged against is the one scene that cannot currently be
+measured twice.** Two agents worked around it well enough to be worth copying — one kept two whole
+`buildin` trees side by side and INTERLEAVED the arms, and one froze the world entirely by
+restoring a pristine `%LOCALAPPDATA%` before every launch and passing `--refine-batch 1`. Both are
+better than nothing and neither is a fixed point.
+
+**This is R11g's promise not holding for the estate.** D633 satisfied it for the facility as it was
+then; the estate is seven buildings and it does not. Fixing it is the thing that unblocks measuring
+anything about the scene that matters.
+
 **A DECISION THE NEXT RELEASE RESTS ON, and it is the integrator's rather than the agent's.**
 `release.yml` now passes `require_whole: 'true'`, and since D672 `clips/facility.clip` **is** the
 estate — so the release bakes a world that took 75 minutes to reach 210,944 of 278,362 nodes on a

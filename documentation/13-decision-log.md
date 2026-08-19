@@ -11672,3 +11672,118 @@ for that clip is inside the central column.
 | D702 | **The tap count must not be the streak's length in pixels** | fault | It made the shutter grow with resolution twice over: 2.5 ms turning at 4K |
 | D702 | **Five harnesses were passing `--pathtrace` and one did it unconditionally** | fault | An unknown argument is warned about and ignored, so those runs measured the real-time path and said tracer |
 | D702 | **`many_lamps.clip` is the only one of the three exposure clips a scripted run can measure** | measurement | An arm-to-arm difference smaller than a one-arm repeat is not a difference, and two of the three are entirely inside that |
+
+---
+
+## D703 — R4c's image: the bins were pointed at a hemisphere nobody reads, and dispersion is a millimetre
+
+**2026-08-19.** D592 said there is no reflection you can recognise, D594 put the ray in, and there
+still was not one. Thirty-six bins over a hemisphere is 13.5° each and a hundred and forty-four is
+6.8°; **no picture survives either.** Every attempt to fix it raised the bin count, and every one of
+them measured the same wall — D592 at 256 bins, D599 at 144 on a roughness gate, D694 at 144 on a
+coverage gate — because a bin is a cone and more cones need more rays.
+
+### The thing nobody had used is that the composite reads exactly ONE direction out of a face
+
+D597 made that a rule: the lobe is evaluated from the face's own centre to the eye, **once**, because
+a voxel face has to be one colour. And a face is one voxel — so every pixel looking at it looks from
+within **0.86°** of every other, which is D186's own measurement arriving from the other end. **A
+hemisphere of bins spends nearly all its resolution on directions nothing will ever read.**
+
+So the bins cover a **cap** about the direction the eye is in. `cap = alpha · side / 2`, clamped
+between 6° and 57°: not a tuning but the statement *a bin should be about as wide as the material's
+own lobe* written as an equation, continuous in roughness, **with no threshold anywhere** — which is
+the rule R4 is written under. Bronze at `rough=110` comes out with 10.7° bins over a 32° cap and does
+not move. **Chrome hits the floor and gets 2.0° bins instead of 13.5°** — for the same thirty-six
+bins, the same pool and the same 864 rays.
+
+The kernel each sample is drawn from then follows the **material** rather than the bin: D591 widened
+it to the bin because the bin was the coarser of the two, and under a cap it usually is not. Floored
+at half the bin spacing, so the bilinear read still has something continuous.
+
+**The floor of six degrees is about camera motion, not sharpness.** At three metres, one centimetre
+sideways turns the direction to a face by 0.19°; a cap that tracked the material all the way down
+would be re-measured every time a player breathed. A cap the eye walks out of re-centres, throwing
+the measurement away and reading the hemispherical mean for the second the burst takes — which is
+what a face with no block reads anyway, **so it fades rather than flashing**.
+
+**The axis lives in the block's own header**, twelve bits a component, and is read back quantised:
+writer and reader must agree to the bit, because a frame that disagrees by a swap or a sign is a
+reflection that is mirrored and **looks very nearly right** — which is D598, and cost a revert.
+
+### And the gate is met
+
+`clips/mirror_test.clip`, chrome sphere at 3.4 m, content `66727a9bdf6182de` identical between arms,
+`--no-reflected-image` as the control:
+
+- **off:** a uniform pale-grey ball with faint concentric ring mottle. Chalk. No horizon, nothing
+  you could name.
+- **on:** the sphere carries **a picture** — the sky's tonal gradient across the top, a hard dark
+  band where the far edge of the floor slab meets the distant ground, and the white floor reflected
+  below it. The brushed sphere at `rough=110` is unchanged, correctly.
+- **3.838 of 255 over 65,753 pixels of 1,024,000**, worst 148, against a run-to-run floor of **1.136**
+  (on twice) and **1.399** (off twice) at the same camera.
+
+Grazing along the polished floor, the red post throws a soft red reflection down the floor beneath
+it; with the image off there is only its shadow.
+
+**It costs +0.4%** on total GPU and +1.3% on the faces pass — minima over three interleaved pairs, in
+a clip where **every** surface is reflective. On `clips/translucency_test.clip`, which holds no
+reflective material, both arms report **0 faces holding a block and 0 lobe rays cast**: 2.812 ms
+against 2.811. The work is identical by construction rather than by measurement.
+
+### The burst follows the bin count, which is what four measurements had been asking for
+
+`kLobeBurst` was eight rays a visit whatever a face held, so the sharp class took **36 s to converge
+against 9**. It is `8 × bins / 36` now, so both classes converge in the same ~108 visits and the
+extra rays land exactly where D694's rule says they are earned — a face with many bins is a face
+covering many pixels, so they are few and near. A scene that never asks for the sharp class pays
+nothing: the multiplier is one.
+
+### R4d's dispersion is built, is correct, and is a millimetre
+
+`lobe_cast` draws one wavelength per sample, crosses the medium at `n(λ)` through D652's three
+segments, applies Beer-Lambert over the true path, and weights the return by that wavelength's share
+of the sensor. **The weights are normalised per channel** — the band is finite, so the two end lobes
+carry a fifth less area than the middle one, and one divisor for all three brought red and blue back
+at **0.825** of what went in: a pane of ordinary glass tinting the room green. The new test named it
+before any picture did.
+
+What it draws is **nothing above the noise floor**: **2.010 of 255 over 72,939 pixels** against a
+same-arm floor of **1.894 over 66,740**. That is not a fault in the estimator, it is the physics of a
+pane. **A flat pane does not deviate a ray, it displaces it**, and at a dense flint's Abbe number —
+the most dispersive glass anybody makes — 12 cm at 45° separates red from blue by **1.1 mm, a
+thirtieth of a voxel**. The one case that is larger is a single interface with a long path behind it:
+22 cm of water at 70° gives **4.4 mm**, an eighth of a degree at two metres. Both are pinned in
+`tests/test_refraction.cpp` so nobody has to guess at them again.
+
+**`VisualRecord` needs an `abbe` byte.** Until it has one, every medium disperses like the same glass
+because `ior` is all there is to derive it from, and no scene in this repository is thick enough to
+show it anyway. The agent used what exists and said so rather than inventing a field.
+
+### And D652's owed picture is finally taken
+
+`clips/glass_test.clip`, `--no-refraction` against on: **off**, the two panes are a pair of faint
+vertical lines and the wall and brass posts are drawn exactly where they are; **on**, each pane is
+outlined and carries a displaced copy of what is behind it, the wall's blue and red running out past
+its own silhouette as bars above and below. **25.86 of 255 over 909,186 pixels of 1,024,000** on
+`refraction_small.clip`.
+
+### What could not be measured, and it is the third agent to hit it
+
+**The facility's content hash changes on every run** — 17, 30, 38, 68, 87, 95 chunks over six
+consecutive runs — because the ladder sharpens more of the world into the cache between them, and
+`--refine-all` on it does not terminate in an hour. **No two facility runs are the same scene**, so
+no two figures are comparable. The gate was taken on four clips whose hash *is* stable instead.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D703 | **The bins cover a cap about the eye, not the hemisphere** | measurement | The composite reads one direction and a face is one voxel; 2.0° bins instead of 13.5° for the same pool and the same rays |
+| D703 | **The cap's width is `alpha · side / 2`, clamped** | design | Continuous in roughness, no threshold; the floor is about camera motion, not sharpness |
+| D703 | **The kernel follows the material once the bin is finer than it** | correctness | D591 widened it to the bin because the bin was coarser; under a cap it is not |
+| D703 | **The axis is stored and read back quantised** | trap 7 | A writer and reader that disagree give a mirrored reflection that looks very nearly right — D598 |
+| D703 | **A view outside the cap reads nothing, not the rim bin** | trap 7 | "Not measured" and "the nearest thing six degrees away" are different answers |
+| D703 | **The burst follows the bin count** | measurement | Four independent measurements named the sample budget and none of them was the rule |
+| D703 | **The hero weights are normalised per channel** | correctness | One divisor for all three is clear glass tinting a room green, at 0.825 of red and blue |
+| D703 | **Dispersion is built and is a millimetre** | honesty | 1.1 mm through 12 cm of dense flint; `VisualRecord` needs an `abbe` byte |
+| D703 | **The facility could not be measured, for the third time this wave** | process | Its content hash changes on every run as the ladder fills the cache |

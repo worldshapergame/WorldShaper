@@ -797,6 +797,17 @@ ivec3 g_sky_normal;
 float g_sky_size;
 float g_sky_pixel_angle;
 vec4 g_sky_rotation;
+// R4c's image: the cap this face's bins cover, in the same registers and for the same reason. The
+// axis is the direction to the EYE the bins were centred on -- read back out of the block's own
+// header rather than recomputed, so the pass that fills a bin and the pass that reads one agree
+// about which direction it holds. `g_lobe_image` is off in the `--no-reflected-image` arm and every
+// user of these falls back to the hemi-octahedral map over the whole hemisphere.
+bool g_lobe_image;
+vec3 g_lobe_axis;
+vec3 g_lobe_u;
+vec3 g_lobe_v;
+float g_lobe_sin_cap;
+float g_lobe_kernel;
 // R9a: this ray is allowed to name the face it lands on, so the store learns about a surface no
 // pixel is looking at. Set for the one unbounded ray and only on the frames this face is due, which
 // is what keeps it off the feedback buffer's neck -- see node_face_request.
@@ -1194,10 +1205,41 @@ void face_lobe_add(uint block, uint bin, uint bins, float w, vec3 radiance) {
     face_lobe.words[weight_at] = floatBitsToUint(now);
 }
 
+// Where bin `bin` of this face points, under whichever parameterisation is in force.
+//
+// One function, and it is the reason there is one at all: the pass that fills a bin, the ray that is
+// aimed into it and R5's blend all have to agree, and under `--no-reflected-image` they all have to
+// go back to agreeing about the old one. See `face_lobe_cap_of` in face_terms.glsl.
+vec3 lobe_bin_direction(uint bin, uint side) {
+    const vec2 at = face_lobe_centre_of(bin, side);
+    if (g_lobe_image) {
+        return face_lobe_cap_direction(at, g_lobe_axis, g_lobe_u, g_lobe_v, g_lobe_sin_cap);
+    }
+    return face_lobe_direction(at, vec3(g_sky_normal), g_sky_side, g_sky_other);
+}
+
+// ...and how wide the kernel around it is. The material's own lobe under a cap, floored at half the
+// spacing between bin centres; the bin's own solid angle without one, which is D591's widening.
+float lobe_kernel_alpha(uint bins) {
+    return g_lobe_image ? max(g_lobe_kernel, kFaceAlphaMin)
+                        : max(face_lobe_alpha_of(bins), kFaceAlphaMin);
+}
+
 void face_lobe_accumulate(uint block, uint bins, uint side, vec3 dir, vec3 radiance) {
     // The face's own frame, which is the one `face_lobe_at` and the composite both work in.
     const vec3 normal = vec3(g_sky_normal);
-    const float alpha = max(face_lobe_alpha_of(bins), kFaceAlphaMin);
+    const float alpha = lobe_kernel_alpha(bins);
+    // Under a cap the bins cover a few degrees rather than the hemisphere, so nearly every
+    // cosine-weighted sample lands outside them altogether -- and the normalisation below would
+    // then take a sample from behind the face and share it out among the bins as though it were
+    // what they are looking at. Dropped instead, which is what "this sample says nothing about this
+    // cone" means. (This path is the `--no-lobe-ray` arm; with the ray in, every sample is drawn
+    // into a bin by construction.)
+    if (g_lobe_image) {
+        bool inside_cap = false;
+        face_lobe_cap_at(dir, g_lobe_axis, g_lobe_u, g_lobe_v, g_lobe_sin_cap, inside_cap);
+        if (!inside_cap) return;
+    }
 
     // **Normalised across the bins, so one sample is worth one sample.**
     //
@@ -1214,15 +1256,13 @@ void face_lobe_accumulate(uint block, uint bins, uint side, vec3 dir, vec3 radia
     // `g_sky_corner`, which is this trade measured from the other side.
     float total = 0.0;
     for (uint bin = 0u; bin < bins; ++bin) {
-        const vec3 towards = face_lobe_direction(face_lobe_centre_of(bin, side), normal, g_sky_side,
-                                                 g_sky_other);
+        const vec3 towards = lobe_bin_direction(bin, side);
         total += face_ggx_d(max(dot(normal, normalize(towards + dir)), 0.0), alpha);
     }
     if (!(total > 0.0)) return;
     const float inv = 1.0 / total;
     for (uint bin = 0u; bin < bins; ++bin) {
-        const vec3 towards = face_lobe_direction(face_lobe_centre_of(bin, side), normal, g_sky_side,
-                                                 g_sky_other);
+        const vec3 towards = lobe_bin_direction(bin, side);
         face_lobe_add(block, bin, bins,
                       face_ggx_d(max(dot(normal, normalize(towards + dir)), 0.0), alpha) * inv,
                       radiance);
@@ -1262,14 +1302,12 @@ void face_lobe_accumulate(uint block, uint bins, uint side, vec3 dir, vec3 radia
 void lobe_cast(uint block, uint bin, uint bins, uint side, uint index, float pixel_angle,
                vec3 corner, vec3 across, vec3 down, float size, vec3 chunk_origin) {
     const vec3 normal = vec3(g_sky_normal);
-    const vec3 towards = face_lobe_direction(face_lobe_centre_of(bin, side), normal, g_sky_side,
-                                             g_sky_other);
+    const vec3 towards = lobe_bin_direction(bin, side);
     const vec4 r = node_r4(index, g_sky_rotation);
     // In the face's own frame, because the visible-normal sample is defined there.
     const vec3 local = vec3(dot(towards, g_sky_side), dot(towards, g_sky_other),
                             max(dot(towards, normal), 1e-4));
-    const vec3 half_local =
-        face_lobe_visible_normal(local, max(face_lobe_alpha_of(bins), kFaceAlphaMin), r.zw);
+    const vec3 half_local = face_lobe_visible_normal(local, lobe_kernel_alpha(bins), r.zw);
     const vec3 half_vector =
         g_sky_side * half_local.x + g_sky_other * half_local.y + normal * half_local.z;
     const vec3 dir = normalize(2.0 * dot(towards, half_vector) * half_vector - towards);
@@ -1283,16 +1321,92 @@ void lobe_cast(uint block, uint bin, uint bins, uint side, uint index, float pix
     const vec2 at = r.xy * 2.0 - 1.0;
     const vec3 origin =
         face_point(corner, across, down, g_sky_normal, size, at) - chunk_origin;
-    const NodeHit hit =
+
+    // ---- R4d: this sample's own wavelength, and where it bends because of it -------------------
+    //
+    // **This is the whole of dispersion and it costs no march per wavelength.** The plan puts it on
+    // a hero wavelength per FACE sample rather than on the primary ray for the reason a face exists:
+    // a pixel gets one sample and would only fizz, and a face gets 864 and converges. So this ray
+    // draws one wavelength out of the band, crosses the medium at the index the medium has AT that
+    // wavelength, and hands back what it found weighted by that wavelength's share of the sensor.
+    // Over the burst the bin holds the spectral integral, which is a dispersed answer.
+    //
+    // The bend is D652's three segments, which is the arithmetic `tests/test_refraction.cpp` pins:
+    // into the medium at the face the ray landed on, through it to the face where it comes out,
+    // and on from there. A pane DISPLACES rather than deviates, so a reflection of something behind
+    // glass is where the glass puts it -- and the displacement is a function of the index, which is
+    // a function of the wavelength, which is what makes the two halves of this one change.
+    //
+    // The initial march is `kThroughStop` here rather than `kThroughPass`, and the two AGREE except
+    // when the first surface is transmissive: passing straight through is exactly what has to stop
+    // happening for the ray to be able to enter the medium at all. A bend that cannot be made --
+    // no way out of the glass, or a body of it with a wall for its far side -- falls back to the
+    // straight ray with one march, never with both (D652).
+    const bool disperse = push.r4.y > 0.0 && probe_refract() && probe_see_through();
+    const float hero = face_hero_at(index);
+    vec3 sample_weight = vec3(1.0);
+    vec3 through = vec3(1.0);
+    vec3 away = dir;
+    NodeHit hit =
         node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true,
-                   probe_see_through() ? kThroughPass : kThroughStop, kNodeUnbounded, 0.0);
+                   disperse ? kThroughStop
+                            : (probe_see_through() ? kThroughPass : kThroughStop),
+                   kNodeUnbounded, 0.0);
+    if (disperse && hit.hit && hit.level == 0) {
+        const vec3 medium = node_medium_through(hit.type_id);
+        if (medium.r + medium.g + medium.b > 0.0) {
+            bool bent = false;
+            // Read off the PANE before `hit` becomes the surface beyond it. `hit` is reassigned by
+            // the last segment, and a material read after that is the material of whatever the ray
+            // ended on -- which is the shape of fault that draws a wall's absorption on the glass.
+            const uint pane_type = hit.type_id;
+            const float ior = face_medium_index(node_medium_ior(pane_type), hero);
+            const vec3 entry_normal = normalize(vec3(hit.normal));
+            const vec3 into = refract(dir, entry_normal, 1.0 / max(ior, 1.0));
+            if (dot(into, into) > 0.0) {
+                const vec3 entry = origin + dir * hit.t + into * 1e-3;
+                const NodeHit inside =
+                    node_march(entry, into, pixel_angle, 0.0, false, false, false, false, true,
+                               kThroughExit, kNodeUnbounded, 0.0);
+                if (inside.left_medium) {
+                    const vec3 exit_normal = normalize(vec3(inside.exit_normal));
+                    vec3 out_dir = refract(into, exit_normal, ior);
+                    // Past the critical angle there is no way out and the surface is a mirror from
+                    // the inside, which is a real answer. A zero direction handed to a marcher is
+                    // not.
+                    if (dot(out_dir, out_dir) <= 0.0) out_dir = reflect(into, exit_normal);
+                    const vec3 leaving = entry + into * inside.exit_t + out_dir * 1e-3;
+                    hit = node_march(leaving, out_dir, pixel_angle, 0.0, false, false, false, false,
+                                     true, kThroughPass, kNodeUnbounded, 0.0);
+                    // Beer-Lambert over the TRUE path, which only a ray that knows where it entered
+                    // and where it left can take. Materials that never wrote `absorb` come back at
+                    // exactly one.
+                    const float path_m = inside.exit_t * (1.0 / kVoxelsPerMetreF);
+                    through =
+                        hit.through * inside.through * exp(-node_medium_absorb(pane_type) * path_m);
+                    away = out_dir;
+                    bent = true;
+                    // The sensor's share of this wavelength, and ONLY on the samples that actually
+                    // crossed the medium. A sample that met nothing wavelength-dependent carries
+                    // the whole spectrum and is worth (1, 1, 1); weighting it anyway would put
+                    // colour noise into every bin in the building to no purpose, which is a cost
+                    // with no term behind it.
+                    sample_weight = face_hero_weight(hero);
+                }
+            }
+            if (!bent) {
+                hit = node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true,
+                                 kThroughPass, kNodeUnbounded, 0.0);
+            }
+        }
+    }
 
     probe_add(1u);
     probe_add(kProbeLobeRays);
     vec3 radiance = vec3(0.0);
     if (!hit.hit) {
         probe_add(2u);
-        radiance = sky_radiance(dir);
+        radiance = sky_radiance(away);
     } else if (hit.unknown) {
         // Stopped by a cell the world claims and the pool has not built. It is a measurement of the
         // tree rather than of the light, and counting it as black would put a dark patch in a
@@ -1303,7 +1417,10 @@ void lobe_cast(uint block, uint bin, uint bins, uint side, uint index, float pix
     } else {
         radiance = bounce_radiance(hit);
     }
-    face_lobe_add(block, bin, bins, cosine, radiance);
+    // What the medium took out of it, and what this wavelength is worth to each channel. Both are
+    // exactly one on every sample that crossed nothing, which is every sample in a building with no
+    // glass in it -- so this line is the whole of dispersion's cost where there is none to draw.
+    face_lobe_add(block, bin, bins, cosine, radiance * through * sample_weight);
 }
 
 // ---- R5: a lobe blended with the lobes of the faces around it ----------------------------------
@@ -1369,7 +1486,20 @@ void face_lobe_denoise(uint block, uint bins, ivec3 node, uint level, uint dir) 
         // surface's answer for a cone the other never measured. A polished face beside a rough one
         // simply keeps its own, which is the honest thing and is rare -- a size class follows the
         // material, and neighbouring faces are nearly always the same material.
-        if (face_lobe_bins_of(face_lobe.words[face_lobe_state_at(block_at)]) != bins) continue;
+        const uint state_at = face_lobe.words[face_lobe_state_at(block_at)];
+        if (face_lobe_bins_of(state_at) != bins) continue;
+        // ...and, under a cap, only a neighbour whose bins point WHERE MINE DO. Bin j of two
+        // coplanar faces is the same cone seen from two points a voxel apart only while the two
+        // caps are centred on the same direction, and a neighbour that re-centred a moment before
+        // this face did holds bin j about a different axis altogether. The two are 0.86 degrees
+        // apart in the ordinary case -- far inside one bin -- so this turns nobody away except
+        // exactly the faces it must.
+        if (g_lobe_image) {
+            if ((state_at & kLobeAxis) == 0u) continue;
+            const vec3 axis_at = face_lobe_axis_unpack(face_lobe_axis_of(state_at),
+                                                       vec3(g_sky_normal), g_sky_side, g_sky_other);
+            if (dot(axis_at, g_lobe_axis) < cos(g_lobe_kernel)) continue;
+        }
         // Weighted by how far along the neighbour's own burst is, capped at converged. A face two
         // visits into its measurement is noise, and noise averaged nine ways is noise one scale
         // coarser -- which is D387's measurement and the same reason `face_light_seed` refuses a
@@ -2267,6 +2397,71 @@ void main() {
     const uint lobe_target =
         lobe_bins * ((lobe_state & kLobeBig) != 0u ? kLobeBigSamples : kLobeSamples);
 
+    // ---- R4c's image: where this face's bins are POINTED, and when they are re-pointed ---------
+    //
+    // **This is what D592 said was owed and D594 did not finish.** The bins covered the whole
+    // hemisphere, which is 13.5 degrees each at thirty-six, and no image survives that. They now
+    // cover a cap about the direction the eye is in -- see `face_lobe_cap_of` in face_terms.glsl
+    // for why a face only ever needs the handful of degrees it is looked at from, and why that is
+    // a fact about a voxel renderer rather than a saving.
+    //
+    // The axis is written into the block's own header, above the class bits, so the pass that reads
+    // a bin uses the direction the samples were actually taken about rather than recomputing one
+    // from this frame's camera -- which at a two degree bin would be a whole bin of camera motion
+    // out. It is read BACK out after it is written, quantised, for the same reason: the writer and
+    // the reader have to agree to the bit, and a direction that has been through twelve bits a
+    // component is not the direction that went in.
+    //
+    // A cap that the eye has walked out of is re-centred, and re-centring throws the measurement
+    // away -- the bins held what a different viewpoint saw. What that draws is the hemispherical
+    // mean for the second or two the burst takes, which is exactly what a face with no block reads
+    // and is the picture as it was before this stage: it fades rather than flashing. `kLobeCapRecentre`
+    // is what makes it happen before the read reaches the empty rim rather than after.
+    g_lobe_image = false;
+    g_lobe_axis = vec3(g_sky_normal);
+    g_lobe_u = g_sky_side;
+    g_lobe_v = g_sky_other;
+    g_lobe_sin_cap = 1.0;
+    g_lobe_kernel = kFaceAlphaMin;
+    if (lobe != kNoLobe && push.r4.x > 0.0) {
+        const vec3 face_centre = corner + vec3(size * 0.5) - chunk_origin;
+        // The same direction the composite takes, from the face's own centre and never from where
+        // in the face a pixel happens to be (D597).
+        const vec3 view = normalize(push.origin.xyz - face_centre);
+        const uint rough = face_material_rough(material);
+        const float cap = face_lobe_cap_of(rough, lobe_side);
+        uint state = face_lobe.words[face_lobe_state_at(lobe)];
+        bool centred = (state & kLobeAxis) != 0u;
+        if (centred) {
+            const vec3 had = face_lobe_axis_unpack(face_lobe_axis_of(state), vec3(g_sky_normal),
+                                                   g_sky_side, g_sky_other);
+            if (dot(view, had) < cos(kLobeCapRecentre * cap)) centred = false;
+        }
+        if (!centred) {
+            for (uint bin = 0u; bin < lobe_bins; ++bin) {
+                const uint at = face_lobe_bin_at(lobe, bin);
+                if (at >= face_lobe.words.length()) break;
+                face_lobe.words[at] = 0u;
+                face_lobe.words[face_lobe_weight_at(lobe, bin, lobe_bins)] = 0u;
+            }
+            face_lobe.words[face_lobe_count_at(lobe)] = 0u;
+            // The low eight bits are the CLASS, written by `node_face_lobe`, and this must not
+            // touch them -- a lost kLobeBig is a reader indexing thirty-six bins as a hundred and
+            // forty-four. The filtered bit is cleared because the blend is about a measurement that
+            // has just been thrown away.
+            state = (state & 0xFFu & ~kLobeFiltered) | kLobeAxis |
+                    (face_lobe_axis_pack(view, vec3(g_sky_normal), g_sky_side, g_sky_other)
+                     << kLobeAxisShift);
+            face_lobe.words[face_lobe_state_at(lobe)] = state;
+        }
+        g_lobe_image = true;
+        g_lobe_axis = face_lobe_axis_unpack(face_lobe_axis_of(state), vec3(g_sky_normal),
+                                            g_sky_side, g_sky_other);
+        face_lobe_cap_frame(g_lobe_axis, g_sky_side, g_sky_other, g_lobe_u, g_lobe_v);
+        g_lobe_sin_cap = sin(cap);
+        g_lobe_kernel = face_lobe_cap_kernel(rough, cap, lobe_side);
+    }
+
     // ---- R4b: the rays that lobe casts for itself ---------------------------------------------
     //
     // The one thing D592 measured as missing. Everything above fills the bins out of the far ray,
@@ -2295,12 +2490,19 @@ void main() {
             // Round-robin over the bins by sample index, so all sixty-four are served evenly. A
             // random bin per ray leaves gaps that last hundreds of frames and shows as a reflection
             // with holes in it that fill in one patch at a time.
-            for (uint i = 0u; i < kLobeBurst; ++i) {
+            // The burst follows the BIN COUNT, so a face that holds four times the bins converges
+            // in the same number of visits rather than in four times as many. See
+            // `face_lobe_burst_of` in face_terms.glsl for the four measurements that name the
+            // sample budget -- and not the bin rule -- as what stands between the sharp class and
+            // a picture. It is exactly `kLobeBurst` for every face of the cheap class, so a scene
+            // whose materials never ask for the sharp one is unchanged.
+            const uint burst = face_lobe_burst_of(lobe_bins);
+            for (uint i = 0u; i < burst; ++i) {
                 const uint index = taken + i;
                 lobe_cast(lobe, index % lobe_bins, lobe_bins, lobe_side, index / lobe_bins,
                           pixel_angle, corner, across, down, size, chunk_origin);
             }
-            face_lobe.words[count_at] = taken + kLobeBurst;
+            face_lobe.words[count_at] = taken + burst;
         } else if (probe_denoise() &&
                    (face_lobe.words[face_lobe_state_at(lobe)] & kLobeFiltered) == 0u) {
             // ---- R5: and on the one visit after it finishes, it compares notes ----------------

@@ -203,6 +203,25 @@ struct RenderParams {
     // A runtime value rather than a preprocessor define because shaders/node.glsl is included by
     // three passes and a define would rebuild all of them into a different renderer.
     u32 derive[4];
+    // R4c/R4d ---------------------------------------------------------------------------------
+    //
+    // Two control arms that could not be spelled where every other one here is spelled. The dials
+    // live in word 0 of the light probe buffer, and the bits that name them are declared in
+    // `shaders/node.glsl` — so a stage that may not touch that file has nowhere to put a bit. A
+    // vec4 of this block costs sixteen bytes once, is read straight into a register by both passes
+    // that want it, and needs no second buffer and no second binding.
+    //
+    //   x  R4c's reflected IMAGE. 0 puts the bins back over the whole hemisphere with the kernel
+    //      widened to the bin, which is D591 and D594 exactly and is what every figure before this
+    //      was measured in. `--no-reflected-image`.
+    //   y  R4d's DISPERSION. 0 gives every medium one index of refraction for all three channels,
+    //      which is D652 exactly. `--no-dispersion`.
+    //   zw spare.
+    //
+    // Appended rather than folded into `tone`, whose y and z are already `--denoise-edge` and
+    // `--lobe-floor`: D553 is the standing measurement of what changing a word's meaning costs, and
+    // a spare field costs sixteen bytes once.
+    f32 r4[4];
 };
 // Written out rather than accumulated as a sum of historical deltas, which is what this was and
 // which nobody could check: 41 vectors of 16 bytes, in the order shaders/params.glsl declares
@@ -212,10 +231,16 @@ struct RenderParams {
 // The count: origin, forward, right, up, camera_chunk, bounds_min, bounds_max, resolution, lens,
 // tint_visible, tint_occluded, tool_colour (12), box_min and box_max at 16 each (32), marks_min,
 // marks_max (2), clip_slot and clip_coarse at 16 each (32), edit_min, edit_max (2), prev_origin,
-// prev_forward, prev_right, prev_up, motion, sky_cloud, sky_wind, tone (8) -- 88, R7's `beam`
-// makes 89 and R12c's `derive` makes 90. Both landed in the same wave and each was written
-// against 88, so the count is reconciled here rather than by either of them.
-static_assert(sizeof(RenderParams) == 90 * 16, "RenderParams must match the GLSL block");
+// prev_forward, prev_right, prev_up, motion, sky_cloud, sky_wind, tone (8) -- 88, and then THREE
+// appended in one afternoon: R7's `beam` makes 89, R12c's `derive` 90 and R4c/R4d's `r4` 91.
+//
+// Every one of the three was written against a block of 88, because each was built in its own
+// worktree from the same base, and not one of them could have known about the other two. That is
+// what this assert is for and it is the third time today it has been the thing that caught it: a
+// count left at 89 is the host writing one structure while every shader reads another, at every
+// offset past the gap, silently. The field ORDER has to be checked by eye as well -- the assert
+// counts and does not compare -- and it was: beam, derive, r4, in that order in both files.
+static_assert(sizeof(RenderParams) == 91 * 16, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.

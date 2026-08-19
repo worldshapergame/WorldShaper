@@ -76,3 +76,8 @@
     // owns. w: the WORK budget -- field nodes one dispatch may walk deriving, in units of 1024, 0
     // for none. Mirrors the block at the end of RenderParams.
     uvec4 derive;
+    // R4c/R4d's two control arms. x: 0 puts R4c's bins back over the whole hemisphere with the
+    // kernel widened to the bin, which is what `--no-reflected-image` restores. y: 0 gives every
+    // medium one index of refraction for all three channels, which is `--no-dispersion`. zw spare.
+    // See RenderParams in src/gpu/render_params.hpp for why these are here and not in the probe.
+    vec4 r4;

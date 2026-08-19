@@ -678,6 +678,17 @@ struct Options {
     // where it leaves, and what it crossed absorbs over the true distance rather than per voxel.
     // `--no-refraction` is the control arm and restores D604's straight ray exactly.
     bool refraction = true;
+    // R4c's image: a face's outgoing bins cover a CAP about the direction the eye is in rather than
+    // the whole hemisphere, so thirty-six bins are two degrees apart instead of thirteen and a half
+    // and a reflection has a picture in it. `--no-reflected-image` is the control arm and puts them
+    // back over the hemisphere with the kernel widened to the bin, which is D591 and D594 exactly.
+    bool reflected_image = true;
+    // R4d's last piece: a face's transmitted sample picks one wavelength of the visible band, bends
+    // by the index the medium has AT that wavelength, and is weighted by that wavelength's share of
+    // the sensor -- so the face converges to a dispersed answer with no march per wavelength.
+    // `--no-dispersion` is the control arm and every medium has one index for all three channels,
+    // which is D652 exactly.
+    bool dispersion = true;
     // R4e: a translucent material -- marble, alabaster -- lit from behind lets the sun through in
     // proportion to how much of it the light had to cross. `--no-translucency` is the control arm
     // and every such surface goes back to being as dark as granite when the sun is on the far side.
@@ -1350,6 +1361,15 @@ bool parse_options_c(const std::string& arg, int& i, int argc, char** argv, Opti
         // R4d's other control arm: the ray behind the glass carries straight on, which is
         // what D604 built and what every figure before this was taken in.
         options.refraction = false;
+    } else if (arg == "--no-reflected-image") {
+        // R4c's image, off: the bins go back to covering the whole hemisphere through the
+        // hemi-octahedral map with the kernel widened to the bin, which is thirteen and a half
+        // degrees a bin at thirty-six and is the state every figure before this was taken in.
+        options.reflected_image = false;
+    } else if (arg == "--no-dispersion") {
+        // R4d's last piece, off: one index of refraction for all three channels, which is what
+        // D652 shipped and what every figure before this was taken in.
+        options.dispersion = false;
     } else if (arg == "--no-edge-aa") {
         // R5d's control arm: a coarse node is fully opaque whatever its coverage says, so
         // nothing casts a second march and every silhouette is a hard stair-step again.
@@ -8319,6 +8339,13 @@ void Application::record_frame(f32 time_seconds) {
         params.beam[1] = (options_.beam && options_.temporal_start && depth_ready_) ? 1.0f : 0.0f;
         params.beam[2] = 0.0f;
         params.beam[3] = 0.0f;
+        // R4c/R4d's two control arms. Here rather than in the light probe's dial word because the
+        // bits of that word are declared in shaders/node.glsl -- see the `r4` field's own note in
+        // src/gpu/render_params.hpp.
+        params.r4[0] = options_.reflected_image ? 1.0f : 0.0f;
+        params.r4[1] = options_.dispersion ? 1.0f : 0.0f;
+        params.r4[2] = 0.0f;
+        params.r4[3] = 0.0f;
 
         // And remember this frame's camera for the next one. After the fill, so a frame always
         // blurs against the frame before it rather than against itself.

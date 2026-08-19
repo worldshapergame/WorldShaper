@@ -398,6 +398,23 @@ const uint kLobeBurst = 8u;                // a visit, so 108 visits — about n
                                            // converge at the sun's stride
 const uint kLobeConverged = kLobeBins * kLobeSamples;
 
+// ...and how many a face with MORE bins takes, which is the same burst per bin rather than the same
+// burst per face.
+//
+// **This is the fourth measurement of one constraint and the first change to the thing it names.**
+// D592 raised the bin count to 256 and got two samples a bin; D594 went back to thirty-six and put a
+// proper ray in; D599 built the sharp class on a roughness gate and reverted it because twenty-four
+// samples of a radiance is twenty-four samples however many bins there are; R4b's coverage rule
+// reached the same wall from the third side -- the sky's own colour landed in individual bins of the
+// chrome and the picture was noise. Every one of those is the SAMPLE budget and not the rule.
+//
+// A face that holds four times the bins is asked for four times the rays a visit, so it converges in
+// the same hundred-odd visits the cheap class does instead of in four times as long. What that costs
+// is charged exactly where R4b says it is earned: the faces with many bins are the faces covering
+// many pixels, so they are few, they are near, and they are the ones being looked at. A scene whose
+// materials never ask for the sharp class pays nothing at all, because the multiplier is one.
+uint face_lobe_burst_of(uint bins) { return max((kLobeBurst * bins) / kLobeBins, kLobeBurst); }
+
 // A direction in the face's own frame (z along the normal, z >= 0) to a point on the unit square.
 vec2 face_lobe_encode(vec3 d) {
     d /= max(abs(d.x) + abs(d.y) + abs(d.z), 1e-6);
@@ -620,6 +637,16 @@ const uint kLobeFiltered = 1u;
 // rather than reading three quarters of a lobe as a whole one.
 const uint kLobeBig = 2u;
 const uint kLobeFollower = 4u;
+// ...and R4c's image: whether this block's bins have been CENTRED on a direction yet, and which
+// direction that is. See `face_lobe_cap_of` for what the cap is and why the bins stopped covering
+// the whole hemisphere. Bit 3, and the packed axis in the twenty-four bits above bit 8 — so the
+// three class bits below it, which `node_face_lobe` writes and this file must never clobber, keep
+// the values they always had and a block claimed by that function reads back as "not centred".
+const uint kLobeAxis = 8u;
+const uint kLobeAxisShift = 8u;
+const uint kLobeAxisBits = 12u;   // per component of the packed direction, so 24 in all
+const uint kLobeAxisMask = (1u << kLobeAxisBits) - 1u;
+uint face_lobe_axis_of(uint state) { return (state >> kLobeAxisShift) & 0xFFFFFFu; }
 uint face_lobe_holder(uint slot, float worth) {
     return ((slot + 1u) & kLobeSlotMask) |
            (uint(clamp(worth, 0.0, 1.0) * 255.0 + 0.5) << kLobeSlotBits);
@@ -668,6 +695,204 @@ float face_lobe_alpha_of(uint bins) {
 float face_lobe_bins_wanted(uint rough_byte) {
     const float alpha = face_alpha_of(rough_byte);
     return 2.0 / max(alpha * alpha, 1e-6);
+}
+
+// ---- R4c's image: the bins cover a CAP about the eye, not the whole hemisphere -----------------
+//
+// **This is what was owed. D591 put the storage in, D592 said plainly that there was no reflection
+// anybody could recognise, and D594 put the RAY in — and the picture still has no image in it,
+// because thirty-six bins over a hemisphere is 13.5 degrees a bin and a hundred and forty-four is
+// 6.8. Nothing recognisable survives either. The bins hold light; they did not hold a picture.**
+//
+// The obvious answer is more bins, and it is the answer D592 already priced and rejected twice: 256
+// bins are two samples apiece out of a face's whole ray budget, and an image at a degree and a half
+// over a hemisphere is about fourteen thousand bins, which is 28,800 words a face. The pool is
+// 38.9 MB for seventy-two.
+//
+// # What makes it affordable, and it is a fact about a VOXEL renderer
+//
+// **The composite reads exactly ONE direction out of a face.** D597 made that a rule rather than an
+// accident: the lobe is evaluated from the face's own CENTRE to the eye, once, because a voxel face
+// has to be one colour and a per-pixel direction drew a gradient across every 3 cm face. And a face
+// is one voxel — every pixel looking at it looks from within 0.86 degrees of every other, which is
+// D186's own measurement from the other end.
+//
+// So a hemisphere of bins spends almost all of its resolution on directions nothing will ever read.
+// A face does not need to know what it reflects in every direction at once; it needs to know what it
+// reflects along the handful of degrees the eye is actually in. Point the same thirty-six bins at a
+// cap of six degrees and they are 2.0 degrees apart instead of 13.5 — which is where an image
+// starts — for the same thirty-six bins, the same 38.9 MB, the same 864 rays and the same pass.
+//
+// # How wide the cap is, and it is roughness and nothing else
+//
+// `cap = alpha * side / 2`, clamped. That is not a tuning: it is the statement that a bin should be
+// about as wide as the material's own lobe, said as an equation. Bronze at `rough=110` is a 10.7
+// degree lobe and comes out with 10.7 degree bins over a 32 degree cap — the hemisphere is not worth
+// covering for it either, and nothing about it changes. Chrome at `rough=8` asks for 0.2 degree bins
+// and is stopped by the floor, which is the only constant here.
+//
+// **The floor is about camera motion and not about sharpness.** A cap is a claim about where the eye
+// is, and the eye moves: at three metres, walking one centimetre sideways turns the direction to a
+// face by 0.19 degrees. Six degrees is about a third of a metre of standing still, and a cap that
+// tracked the material all the way down would be re-centred — and so re-measured — on every frame a
+// player breathed. The ceiling is the other end of the same statement: past about a radian the
+// orthographic map that puts a cap on a square is distorting more than the extra reach is worth, and
+// a material that rough has a lobe wider than its whole cap anyway.
+const float kLobeCapMin = 0.105;      // six degrees
+const float kLobeCapMax = 1.000;      // fifty-seven
+// How far out of its cap the eye may walk before the face re-centres it. A fraction rather than an
+// angle, so it scales with the cap: at 0.6 the read is still well inside the bins that have samples
+// in them when the move happens, which is what makes a re-centre a fade rather than a hole.
+const float kLobeCapRecentre = 0.6;
+
+float face_lobe_cap_of(uint rough_byte, uint side) {
+    return clamp(0.5 * face_alpha_of(rough_byte) * float(side), kLobeCapMin, kLobeCapMax);
+}
+
+// The kernel a cap's samples are drawn from and splatted through.
+//
+// **This is the second half of the change and without it the first half buys nothing.** R4c widens
+// the kernel to the BIN on purpose (see `face_lobe_bin_alpha`): a lobe narrower than a bin makes
+// every sample land in a tail, which is noise rather than blur. That argument is about the bin being
+// the coarser of the two, and under a cap it usually is not — so the kernel follows the MATERIAL,
+// floored at half the spacing between bin centres so that neighbouring bins' kernels still overlap
+// and the bilinear read has something continuous to interpolate.
+//
+// A mirror therefore stores a near-point sample of the world in each bin, blurred to one degree
+// rather than to thirteen, and that is the difference between an average and a picture.
+float face_lobe_cap_kernel(uint rough_byte, float cap, uint side) {
+    return max(face_alpha_of(rough_byte), cap / float(side));
+}
+
+// The cap's two axes across, from the face's own frame rather than from the axis alone.
+//
+// It has to be a function of things BOTH passes have and of nothing else, for exactly the reason
+// `face_lobe_frame` above exists: the pass that writes a bin and the pass that reads one derive this
+// independently, and a frame that disagrees by a swap or a sign is a reflection that is mirrored and
+// looks very nearly right. Deriving it from the face's fixed frame also makes it CONTINUOUS in the
+// axis, which `face_lobe_frame(axis, ...)` would not be — its own branch at |y| = 0.9 would rotate
+// two neighbouring faces' bins against each other and R5's cross-face blend would then average bin j
+// of one against a completely different direction of the other.
+void face_lobe_cap_frame(vec3 axis, vec3 side, vec3 other, out vec3 u, out vec3 v) {
+    vec3 t = side - axis * dot(side, axis);
+    // Only when the eye is very nearly along `side`, which is a grazing view of the face.
+    if (dot(t, t) < 1e-4) t = other - axis * dot(other, axis);
+    u = normalize(t);
+    v = cross(axis, u);
+}
+
+// A direction to a point on the cap's square, and back. Orthographic — the direction is projected
+// onto the plane the axis is normal to and divided by the cap's sine — which is exact, invertible
+// and has no pole, and whose only cost is that it compresses towards the rim.
+//
+// `inside` is a separate answer rather than a clamp for trap 7's reason: a direction outside the cap
+// is one this block has measured NOTHING about, and reading the rim bin for it would draw the
+// nearest thing the face happens to reflect as though it were what the eye is looking at. The
+// composite falls back to the hemispherical mean instead, which is what a face with no block reads
+// and is the picture as it was before this stage.
+vec2 face_lobe_cap_at(vec3 dir, vec3 axis, vec3 u, vec3 v, float sin_cap, out bool inside) {
+    const vec2 p = vec2(dot(dir, u), dot(dir, v)) / max(sin_cap, 1e-4);
+    inside = dot(dir, axis) > 0.0 && max(abs(p.x), abs(p.y)) <= 1.0;
+    return p * 0.5 + 0.5;
+}
+
+vec3 face_lobe_cap_direction(vec2 at, vec3 axis, vec3 u, vec3 v, float sin_cap) {
+    vec2 p = (at * 2.0 - 1.0) * sin_cap;
+    // The square's corners are further out than the cap's rim, and past a unit vector's length there
+    // is no direction to be had at all. Pulled back to the rim rather than dropped, so the corner
+    // bins hold the grazing edge of the cap instead of holding nothing.
+    const float r2 = dot(p, p);
+    if (r2 > 0.9801) p *= sqrt(0.9801 / r2);
+    return normalize(u * p.x + v * p.y + axis * sqrt(max(1.0 - dot(p, p), 0.0)));
+}
+
+// The axis itself, packed into the twenty-four bits of the state word above the class bits.
+//
+// Through the same hemi-octahedral square the bins used to be indexed on, at twelve bits a
+// component — about a thirtieth of a degree, which is two orders finer than the narrowest cap. It
+// is stored rather than recomputed because the READER must use the axis the samples were actually
+// taken about: recomputing it from this frame's camera would put the bins one frame of camera
+// motion away from where they were filled, which at a two degree bin is visible.
+uint face_lobe_axis_pack(vec3 dir, vec3 normal, vec3 side, vec3 other) {
+    const vec2 at = clamp(face_lobe_at(dir, normal, side, other), vec2(0.0), vec2(1.0));
+    const uvec2 q = uvec2(at * float(kLobeAxisMask) + 0.5);
+    return (q.x & kLobeAxisMask) | ((q.y & kLobeAxisMask) << kLobeAxisBits);
+}
+
+vec3 face_lobe_axis_unpack(uint bits, vec3 normal, vec3 side, vec3 other) {
+    const vec2 at = vec2(float(bits & kLobeAxisMask), float((bits >> kLobeAxisBits) & kLobeAxisMask)) *
+                    (1.0 / float(kLobeAxisMask));
+    return face_lobe_direction(at, normal, side, other);
+}
+
+// ---- R4d: the hero wavelength, which is how dispersion is paid for -----------------------------
+//
+// **A march per wavelength is the cost nobody here has paid, and the plan's own note says so: it is
+// a hero wavelength per face SAMPLE.** A face takes hundreds of samples where a pixel takes one, so
+// a face can carry a spectral estimator that a pixel cannot — draw one wavelength per sample, bend
+// that sample by the index the medium has AT that wavelength, and weight what comes back by the
+// wavelength's share of the sensor. The mean over samples is the dispersed answer, and it costs
+// exactly the marches the sample was already going to make.
+//
+// This lives in the file with no bindings in it because both passes that could ever want it are the
+// two that include this file, and the alternative — pt_media.glsl — reads the tracer's own push
+// block and cannot be included by the face pass at all.
+
+// Where in the visible band this sample looks, in [0, 1] from the red end to the blue.
+//
+// STRATIFIED by the sample index rather than drawn at random, for the same reason the bins are
+// served round-robin: a random wavelength per sample leaves whole stretches of the band unvisited
+// for hundreds of frames, and a bin whose samples happened to be mostly red is a bin with a colour
+// cast that never goes away. The golden ratio is what turns a running index into a sequence that is
+// even at every prefix rather than only at the end.
+float face_hero_at(uint index) {
+    return fract(float(index) * 0.61803398875 + 0.5);
+}
+
+// ...and what that wavelength is worth to each channel, normalised so that the MEAN over the band is
+// one in every channel. That normalisation is the whole of what makes this unbiased: a material with
+// no dispersion at all must come back bit for bit what it was, and it does, because every sample is
+// then the same radiance weighted by three numbers whose mean is (1, 1, 1).
+//
+// The three lobes are the sensor this renderer already is — it works in linear RGB and has no
+// spectral basis — so they are the plainest thing that is true of any RGB sensor: three bands, the
+// red one at the long end, the blue at the short, the green between, overlapping at the edges. What
+// they are NOT is a CIE fit, and pretending otherwise would be inventing a colour space this
+// renderer does not have.
+vec3 face_hero_weight(float hero) {
+    // Centres at five sixths, a half and a sixth of the band, and a width that makes the three sum
+    // to very nearly a constant across it.
+    const vec3 centre = vec3(0.8333, 0.5, 0.1667);
+    const vec3 d = (vec3(hero) - centre) * (1.0 / 0.30);
+    const vec3 lobe = exp(-d * d);
+    // Divided by ITS OWN mean over the band, one number a channel, and the three are not the same
+    // number. The band is finite, so the two end lobes are cut off on one side and carry a fifth
+    // less area than the middle one: the integral of exp(-((x-c)/0.3)^2) over [0, 1] is 0.5219 at
+    // c = 0.5 and 0.4168 at c = 1/6. One divisor for all three made the red and the blue come back
+    // at 0.825 of what went in, which is a pane of ordinary glass tinting what is behind it green,
+    // and it is the test at the bottom of `tests/test_refraction.cpp` that named it.
+    return lobe * vec3(2.3992, 1.9160, 2.3992);
+}
+
+// The index of refraction at that wavelength.
+//
+// Cauchy, written as the Abbe number it is usually published as: n(F) - n(C) = (n - 1) / V, and the
+// band is walked linearly between them because the curvature of Cauchy's own term across the visible
+// is far below the byte `ior` is quantised into.
+//
+// **`V` is a constant here and it should be a byte on the material, which is said plainly because it
+// is the one thing this cannot get right.** `VisualRecord` carries `ior` and nothing about
+// dispersion, so every medium in this renderer disperses like the same glass. Twenty-five is dense
+// flint — the most dispersive glass anybody puts in a window — which is the top of the honest range
+// and therefore the setting that gives this the best chance of being seen; a crown at sixty-four
+// would be under half of it. What the field would be called is `abbe`, one byte, 0 meaning "the
+// default below".
+const float kMediumAbbe = 25.0;
+
+float face_medium_index(float ior, float hero) {
+    // hero 0 is the red end and 1 the blue, and blue bends more, so the spread is centred on the
+    // authored figure: a material read at the middle of the band is exactly what the clip wrote.
+    return ior + (ior - 1.0) * (hero - 0.5) * (1.0 / kMediumAbbe);
 }
 
 // ---- R4b: a ray aimed into the cone one bin gathers from ---------------------------------------
