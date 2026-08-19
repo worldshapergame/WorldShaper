@@ -176,6 +176,26 @@ target_link_libraries(ws_forge PUBLIC ws_core ws_world ws_game)
 add_executable(ws_bake_web tools/bake_web.cpp)
 target_link_libraries(ws_bake_web PRIVATE ws_core ws_world ws_game ws_forge)
 
+# ws_clipcheck - the clip measuring tool, and it was IN THE REPOSITORY AND NOT IN THE BUILD.
+#
+# `tools/clipcheck.cpp` is 1,700 lines and nothing built it. Every `--gap` figure in
+# `clips/facility/library.clip`'s own audit was taken with it -- *"the doorway, across
+# --gap x@6.80,-3.42  0.594 -> 1.062"*, *"the aisle at the sconces 1.250 <- the room's worst"* --
+# and so were the crypt's and the ballroom's. **Those numbers could not be re-taken by anybody**,
+# which is how a room comes to be measured once, written down, and then quietly change.
+#
+# Found because a player reported a bookshelf across the library's doorway and the obvious way to
+# check it -- the instrument the file itself cites, by name, on the line above the fault -- did
+# not exist. A tool that is not built is a tool that is not there, and a comment quoting it reads
+# exactly like a tool that is.
+#
+# It links what the baker links and nothing more: the field, the sampler, the type table and the
+# job pool. No window, no device, no shader compiler -- so it builds in the headless
+# configuration, which is where a measurement wants to be anyway.
+add_executable(ws_clipcheck tools/clipcheck.cpp)
+target_link_libraries(ws_clipcheck PRIVATE ws_core ws_world ws_game ws_forge)
+target_include_directories(ws_clipcheck PRIVATE src)
+
 # Everything past here needs a window, a device or a shader compiler, and the headless
 # configuration has none of the three.
 # The unit suite, split by what it needs to LINK against rather than by subject.

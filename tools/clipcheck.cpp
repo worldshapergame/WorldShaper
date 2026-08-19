@@ -1656,9 +1656,11 @@ void run_cut_audit(const forge::Script& script, const forge::SampleResult& built
                     }
                 }
             }
-            u64 best = 0;
+            // `busiest` and not `best`: there is another `best` alive in this function and it
+            // holds a different thing. /W4 caught the shadow and it was right to.
+            u64 busiest = 0;
             for (usize i = 0; i < per_plane.size(); ++i) {
-                if (per_plane[i] > best) { best = per_plane[i]; at = static_cast<i32>(i); }
+                if (per_plane[i] > busiest) { busiest = per_plane[i]; at = static_cast<i32>(i); }
             }
         }
         u32 da = 0, db = 0;
@@ -1924,8 +1926,11 @@ int main(int argc, char** argv) {
     if (span.given) {
         u32 pa = 0, pb = 0;
         query_axes(span.axis, pa, pb);
-        const i32 a = static_cast<i32>(span.a * per) - built.origin_voxel[pa];
-        const i32 b = static_cast<i32>(span.b * per) - built.origin_voxel[pb];
+        // The cast goes round the WHOLE expression: `origin_voxel` is i64, so the subtraction
+        // promotes and it is the assignment that narrows. Casting only the left operand moves
+        // the warning rather than the truncation.
+        const i32 a = static_cast<i32>(static_cast<i64>(span.a * per) - built.origin_voxel[pa]);
+        const i32 b = static_cast<i32>(static_cast<i64>(span.b * per) - built.origin_voxel[pb]);
         const forge::Span s = forge::span_along(clip, span.axis, a, b);
         std::printf("span          %.3f m of matter along %c (%s)\n",
                     static_cast<f64>(s.length()) / per, "xyz"[span.axis],
@@ -1934,8 +1939,8 @@ int main(int argc, char** argv) {
     if (gap.given) {
         u32 pa = 0, pb = 0;
         query_axes(gap.axis, pa, pb);
-        const i32 a = static_cast<i32>(gap.a * per) - built.origin_voxel[pa];
-        const i32 b = static_cast<i32>(gap.b * per) - built.origin_voxel[pb];
+        const i32 a = static_cast<i32>(static_cast<i64>(gap.a * per) - built.origin_voxel[pa]);
+        const i32 b = static_cast<i32>(static_cast<i64>(gap.b * per) - built.origin_voxel[pb]);
         const forge::Span s = forge::gap_along(clip, gap.axis, a, b);
         std::printf("gap           %.3f m of air along %c (%s)\n",
                     static_cast<f64>(s.length()) / per, "xyz"[gap.axis],
@@ -1956,7 +1961,8 @@ int main(int argc, char** argv) {
     if (cuts) run_cut_audit(script, built, built.clip, jobs, cut, skeleton);
 
     if (slice.given) {
-        const i32 at = static_cast<i32>(slice.a * per) - built.origin_voxel[slice.axis];
+        const i32 at =
+            static_cast<i32>(static_cast<i64>(slice.a * per) - built.origin_voxel[slice.axis]);
         // The step comes from the axes the picture is DRAWN on, not from the one held fixed.
         //
         // Taking it from `slice.axis` was the second bug of the same family: on a 57 m orangery,
