@@ -28,12 +28,89 @@
 // see. The build's own hot loops touch this once per region, never per voxel.
 
 #include <atomic>
+#include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/types.hpp"
 
 namespace ws {
+
+// ---- where the way in is ------------------------------------------------------------------
+//
+// The loading screen's `play now` button, in WINDOW pixels. It is here, in a header that includes
+// nothing but the type names, for two reasons.
+//
+// The first is that three pieces of code need this rectangle and they must never disagree: the
+// shader draws it, `Application::draw_loading` asks whether the pointer is inside it, and a test
+// checks it is somewhere a person can reach. A button that lights up a few pixels from where it
+// can be clicked is a fault nobody reports clearly and everybody notices.
+//
+// The second is that a rectangle needs no device. Put in `gpu/loading_screen.hpp` it would drag
+// Vulkan into any test that wanted to look at it, which in practice means no test would.
+//
+// `shaders/loading.comp` carries the same three constants and says so; they are the layout, in
+// interface pixels from the centre of the column, and the bar's own width is written there the
+// same way.
+constexpr f32 kLoadingButtonHalfWidth = 46.0f;
+constexpr f32 kLoadingButtonTop = 54.0f;      // clear of the bar at 0 and the last text row at 32
+constexpr f32 kLoadingButtonBottom = 76.0f;
+
+struct LoadingButtonRect {
+    f32 x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+    bool contains(f32 x, f32 y) const { return x >= x0 && x < x1 && y >= y0 && y < y1; }
+    f32 width() const { return x1 - x0; }
+    f32 height() const { return y1 - y0; }
+};
+
+// Interface pixels are sized from the window's SHORT side, so the column keeps its proportions on
+// a wide monitor instead of growing until it runs off the sides.
+inline f32 loading_ui_scale(u32 width, u32 height) {
+    const f32 across = static_cast<f32>((width < height) ? width : height);
+    const f32 steps = (across < 420.0f) ? 1.0f : static_cast<f32>(static_cast<u32>(across / 420.0f));
+    return (steps < 1.0f) ? 1.0f : steps;
+}
+
+inline LoadingButtonRect loading_button_rect(u32 width, u32 height) {
+    const f32 scale = loading_ui_scale(width, height);
+    const f32 cx = static_cast<f32>(width) * 0.5f;
+    const f32 cy = static_cast<f32>(height) * 0.5f;
+    LoadingButtonRect out;
+    out.x0 = cx - kLoadingButtonHalfWidth * scale;
+    out.x1 = cx + kLoadingButtonHalfWidth * scale;
+    out.y0 = cy + kLoadingButtonTop * scale;
+    out.y1 = cy + kLoadingButtonBottom * scale;
+    return out;
+}
+
+// A finer record than the seven stages below, and the reason it exists is a sixteen-second hole.
+//
+// `load stages:` reports the seven, and six of them are honest because each is one thing. The
+// seventh, `settling`, is everything between the world being built and the first frame being
+// drawable: the pool, nine device buffers, two descriptor layouts, seven compute pipelines, the
+// render target and the HUD. On a cold driver cache that bucket has been measured at **16,395 ms
+// of a 16,545 ms load** while the four timings printed beside it added to under one second — so
+// the line named the stage that was slow and said nothing whatever about what in it was slow.
+//
+// So every step of the load says what it cost, by name, in the order it happened. It is a
+// measurement instrument that ships: a player's "it takes ages to load" arrives with the log, and
+// the log has to be able to answer it without a special build.
+//
+// Written from the build thread and the drawing thread both, so it takes a lock. It is entered a
+// couple of dozen times in a whole load, which is a cost nothing can measure.
+class LoadSteps {
+public:
+    void begin();
+    void add(const char* name, f64 seconds);
+    // One line, longest first would hide the order, so: the order they happened in.
+    std::string line() const;
+    f64 total() const;
+
+private:
+    mutable std::mutex mutex_;
+    std::vector<std::pair<const char*, f64>> steps_;
+};
 
 // The stages, in the order they happen. The order is the bar's order, so adding one here adds it
 // to the bar and to the estimate without anything else changing.
@@ -109,6 +186,32 @@ public:
 
     void finish();
 
+    // --- leaving the loading screen before it has finished ---------------------------------
+    //
+    // Asked for directly: *"you can click a button to enter the world now which will keep what is
+    // already loaded but will put you on the world"*. Two atomics and no lock, for the same reason
+    // everything else here is: one thread writes each one and the other reads it, and a reader a
+    // frame stale is a button that appears a frame late.
+    //
+    // `offer` is the build saying there is now a way out that costs the player nothing they cannot
+    // get back — the ladder rebuilds whatever is not there, so the only thing an early entry can
+    // lose is time. It is deliberately NOT offered over work whose result cannot be rebuilt: a
+    // world coming back off the disk carries somebody's carvings, and half of it is not a
+    // half-loaded world, it is a lost one.
+    //
+    // `ask` is the button. The build polls it at its own boundaries and stops at the next one,
+    // keeping every voxel it has already put in the world — nothing is dropped and nothing is
+    // re-derived, which is the whole promise of the button.
+    void offer_early_entry();
+    bool offered_early_entry() const { return offer_.load(std::memory_order_acquire); }
+    void ask_to_enter();
+    bool asked_to_enter() const { return asked_.load(std::memory_order_acquire); }
+
+    // Every stage after this one is skipped, and the bar says so rather than pretending the
+    // remaining weight was completed. Called by whoever stops.
+    void note_entered_early() { entered_.store(true, std::memory_order_release); }
+    bool entered_early() const { return entered_.load(std::memory_order_acquire); }
+
     // --- what the drawing reads -----------------------------------------------------------
     struct Snapshot {
         LoadStage stage = LoadStage::Reading;
@@ -117,6 +220,9 @@ public:
         u64 done = 0;
         u64 expected = 0;
         bool complete = false;
+        // Whether the screen should be offering a way in, and whether somebody has taken it.
+        bool may_enter = false;
+        bool entering = false;
     };
     Snapshot look() const;
 
@@ -145,6 +251,9 @@ private:
     std::atomic<u64> done_{0};
     std::atomic<u64> expected_{0};
     std::atomic<bool> complete_{false};
+    std::atomic<bool> offer_{false};
+    std::atomic<bool> asked_{false};
+    std::atomic<bool> entered_{false};
 
     // How fast the load has been going LATELY, kept as a trailing pair of readings.
     //

@@ -53,13 +53,14 @@ layout(push_constant) uniform Push {
 
     float scale;            // device pixels per interface pixel
     uint stage;             // which animated mark to draw
-    uint pad0;
-    uint pad1;
+    uint button;            // 0 no way in yet, 1 offered, 2 under the pointer, 3 taken
+    uint button_chars;      // how long the label is; the eight bytes carry no terminator
 
     vec3 accent;            // the player's colour, used only where inversion is blind
     float pad2;
 
     uint text[18];
+    uint button_text[2];    // eight characters, four to a uint -- see src/gpu/loading_screen.cpp
 } push;
 
 // --- the strings ------------------------------------------------------------------------------
@@ -143,6 +144,47 @@ float percent_ink(vec2 at, vec2 centre_top, float fraction) {
     }
     return 0.0;
 }
+
+// --- the way in -------------------------------------------------------------------------------
+//
+// The label is its own tiny slot rather than a fourth line of `text`, because the push block is
+// exactly 128 bytes and a fourth line is 24. Eight characters, no terminator, with the length in
+// `button_chars`.
+uint button_char(uint index) {
+    return (push.button_text[index >> 2u] >> ((index & 3u) * 8u)) & 0xFFu;
+}
+
+float button_label_ink(vec2 local) {
+    if (local.y < 0.0 || local.y >= float(kUiRows + 1)) return 0.0;
+    float pen = 0.0;
+    for (uint i = 0u; i < push.button_chars && i < 8u; ++i) {
+        uvec2 glyph = ui_glyph(button_char(i));
+        float step = ui_step(glyph, kUiPlain);
+        if (local.x >= pen && local.x < pen + step) {
+            return ui_ink_at(glyph, vec2(local.x - pen, local.y), kUiPlain,
+                             max(kUiBoldReach, 1.0 / kTextPixels));
+        }
+        pen += step;
+    }
+    return 0.0;
+}
+
+float button_label_width() {
+    float pen = 0.0;
+    for (uint i = 0u; i < push.button_chars && i < 8u; ++i) {
+        pen += ui_step(ui_glyph(button_char(i)), kUiPlain);
+    }
+    return max(pen - 1.0, 0.0);
+}
+
+// The same rectangle `loading_button_rect` in src/app/loading.hpp hands the hit test, in the same
+// units: interface pixels from the centre of the column. Written twice and only twice, and the
+// bar's own kBarWidth below is written the same way for the same reason -- a shader cannot include
+// a C++ header, and a push constant for three constants that never change is a worse trade.
+// **If one of these three moves, move the three in src/app/loading.hpp with it.**
+const float kButtonHalfWidth = 46.0;
+const float kButtonTop = 54.0;
+const float kButtonBottom = 76.0;
 
 // --- the animated marks -----------------------------------------------------------------------
 //
@@ -303,6 +345,39 @@ void main() {
     coverage = max(coverage, centred_text(kSlotLeft, at, vec2(0.0, 32.0)));
 
     if (coverage > 0.0) colour = mix(colour, ui_ink(colour, push.accent), coverage);
+
+    // --- the way in ---------------------------------------------------------------------
+    //
+    // Drawn last and over its own backdrop, for the same reason the percentage is drawn over the
+    // bar: a filled button is a backdrop, and the label on it has to be ink against THAT rather
+    // than against the drift behind it. So the fill goes down first and `ui_ink` is asked a second
+    // time with the new colour under it — which is how the label stays legible whether the button
+    // is a hairline outline or a solid block, with no second colour anywhere.
+    if (push.button != 0u) {
+        bool inside = abs(at.x) <= kButtonHalfWidth && at.y >= kButtonTop && at.y <= kButtonBottom;
+        float edge_x = abs(abs(at.x) - kButtonHalfWidth);
+        float edge_y = min(abs(at.y - kButtonTop), abs(at.y - kButtonBottom));
+        bool on_edge = inside && (edge_x < 1.0 || edge_y < 1.0);
+
+        if (inside) {
+            vec3 ink = ui_ink(colour, push.accent);
+            // Offered: a whisper, so it reads as available without competing with the bar.
+            // Under the pointer: brighter. Taken: solid, and it stays solid for the frame or two
+            // between the press and the world appearing, which is the only acknowledgement there
+            // is room for.
+            float fill = (push.button >= 3u) ? 1.0 : ((push.button == 2u) ? 0.30 : 0.10);
+            colour = mix(colour, ink, fill);
+            if (on_edge) colour = mix(colour, ink, 0.55);
+        }
+
+        float centre = (kButtonTop + kButtonBottom) * 0.5;
+        // Capitals are kUiRows glyph pixels tall at kTextPixels interface pixels each.
+        float half_text = float(kUiRows) * kTextPixels * 0.5;
+        vec2 local = (at - vec2(0.0, centre - half_text)) / kTextPixels
+                     + vec2(button_label_width() * 0.5, 0.0);
+        float label = button_label_ink(local);
+        if (label > 0.0) colour = mix(colour, ui_ink(colour, push.accent), label);
+    }
 
     imageStore(out_image, pixel, vec4(colour, 1.0));
 }

@@ -234,7 +234,11 @@ set(WS_TEST_SOURCES_HEADLESS
     tests/test_compile.cpp
     tests/test_world_stipple.cpp
     tests/test_face_store.cpp
-    tests/test_field_gpu.cpp)
+    tests/test_field_gpu.cpp
+    # The loading screen's state, which needs no device: the way in, the step ledger and where the
+    # button is. `src/app/loading.cpp` comes with it below -- it is the app's only file that
+    # depends on nothing but core, which is what makes it testable here.
+    tests/test_loading.cpp)
 
 set(WS_TEST_SOURCES_UI
     tests/test_font.cpp
@@ -247,7 +251,10 @@ set(WS_TEST_SOURCES_UI
     tests/test_sound.cpp)
 
 enable_testing()
-add_executable(ws_tests_headless ${WS_TEST_SOURCES_HEADLESS})
+# `src/app/loading.cpp` is compiled into both test binaries as well as into the game. It is the
+# only file under src/app that depends on nothing but core, and tests/test_loading.cpp is what
+# makes the way in a thing with a test rather than a thing somebody clicks.
+add_executable(ws_tests_headless ${WS_TEST_SOURCES_HEADLESS} src/app/loading.cpp)
 target_link_libraries(ws_tests_headless PRIVATE ws_core ws_world ws_game ws_forge ws_doctest)
 target_compile_definitions(ws_tests_headless PRIVATE
     WS_ASSET_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
@@ -428,7 +435,7 @@ target_compile_definitions(ws_gpu PUBLIC WS_GLSLC_PATH="${Vulkan_GLSLC_EXECUTABL
 # Tests - these are the safety net, not an afterthought.
 # --------------------------------------------------------------------------------------
 enable_testing()
-add_executable(ws_tests ${WS_TEST_SOURCES_HEADLESS} ${WS_TEST_SOURCES_UI})
+add_executable(ws_tests ${WS_TEST_SOURCES_HEADLESS} ${WS_TEST_SOURCES_UI} src/app/loading.cpp)
 target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_forge ws_ui ws_doctest)
 # Where the assets a test reads actually live. A test that walks up from the working directory
 # passes when it is run from the build folder and fails from anywhere else, which makes it a test
