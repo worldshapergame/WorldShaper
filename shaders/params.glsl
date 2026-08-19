@@ -76,9 +76,11 @@
     // owns. w: the WORK budget -- field nodes one dispatch may walk deriving, in units of 1024, 0
     // for none. Mirrors the block at the end of RenderParams.
     uvec4 derive;
-    // R4c/R4d's two control arms. x: 0 puts R4c's bins back over the whole hemisphere with the
+    // R4c/R4d/R4f's control arms. x: 0 puts R4c's bins back over the whole hemisphere with the
     // kernel widened to the bin, which is what `--no-reflected-image` restores. y: 0 gives every
-    // medium one index of refraction for all three channels, which is `--no-dispersion`. zw spare.
+    // medium one index of refraction for all three channels, which is `--no-dispersion`. z: R4f's
+    // CONTRIBUTION BUDGET, as a share of the pixel -- a reflected segment worth less than this is
+    // not cast, and NOUGHT is `--no-ior-reflection` because nothing is then worth casting. w spare.
     // See RenderParams in src/gpu/render_params.hpp for why these are here and not in the probe.
     vec4 r4;
     // R5c/R5d's two SECOND halves, and they are here for the reason `r4` is plus one more: the

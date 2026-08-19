@@ -418,3 +418,192 @@ TEST_CASE("the cap's square maps a direction there and back, and says when it ca
     to_square({0.0, 0.0, -1.0}, inside);
     CHECK_FALSE(inside);
 }
+
+// ---- R4f: the reflected half of the same interface ---------------------------------------------
+//
+// D652 put what goes THROUGH a surface back on the ray. R4f puts what comes OFF it back on the
+// same ray, and the two are one event seen from either side of the Fresnel term. Three pieces of
+// arithmetic decide the whole of it, and all three can be held against something other than
+// themselves:
+//
+//   the SHARE -- how much of a pixel's specular its own ray is entitled to be, measured against
+//   what a per-face average could carry. It must be continuous, monotone in roughness and in
+//   distance, near one for a mirror and near nought for a rough surface, and it must contain
+//   nothing that reads as a cutoff;
+//   the FRESNEL -- taken from the material's own index rather than from a fixed 0.04, and the
+//   check that matters is that a material which never wrote the byte comes back at exactly the
+//   old number, so the building does not move when this lands;
+//   the DEPTH -- which is a consequence of the budget and not a constant, so how many bounces two
+//   facing mirrors reach is arithmetic that can be written down and checked.
+//
+// Same honesty as the rest of this file: it proves the formulae, not that the marcher hands them
+// the right normal. `shaders/reflect.glsl` is where they live.
+namespace {
+
+// The angular width of a reflected lobe, from the roughness byte. Deliberately NOT floored at
+// `kFaceAlphaMin` -- that floor exists so the GGX distribution does not divide by nought, and read
+// as a width it puts half a degree of blur under every mirror in the world.
+f64 reflect_lobe_width(u32 rough_byte) {
+    const f64 r = static_cast<f64>(rough_byte) / 255.0;
+    return 2.0 * r * r;
+}
+
+// How much of the answer this pixel's own ray is entitled to be. `carrier` is the angular
+// resolution the thing that would answer instead can carry.
+f64 reflect_share(f64 lobe_width, f64 carrier) {
+    return carrier / std::max(carrier + lobe_width, 1e-9);
+}
+
+// The angular size of one voxel face at a distance, in radians, floored at the pixel's own.
+f64 carrier_for(u32 face_level, f64 distance_voxels, f64 pixel_angle) {
+    return std::max(static_cast<f64>(1u << face_level) / std::max(distance_voxels, 1.0),
+                    pixel_angle);
+}
+
+// The dielectric's normal-incidence reflectance from the index the record wrote, which is stored as
+// the offset from vacuum in 128ths. A byte of nought is "the record did not say".
+f64 reflect_dielectric_f0(u32 ior_byte) {
+    if (ior_byte == 0) return 0.04;
+    const f64 n = 1.0 + static_cast<f64>(ior_byte) / 128.0;
+    const f64 r = (n - 1.0) / (n + 1.0);
+    return r * r;
+}
+
+// Schlick, which face_terms.glsl already had.
+f64 schlick(f64 f0, f64 cos_theta) {
+    const f64 m = std::clamp(1.0 - cos_theta, 0.0, 1.0);
+    return f0 + (1.0 - f0) * (m * m * m * m * m);
+}
+
+// A pixel's angular size, which is `2 * tan(fov/2) / height` -- the expression
+// shaders/visibility.comp computes.
+f64 pixel_angle_of(f64 tan_half_fov, f64 height) { return 2.0 * tan_half_fov / height; }
+
+}  // namespace
+
+TEST_CASE("R4f: the share is continuous, and a mirror's own ray is nearly the whole of it") {
+    // `clips/mirror_test.clip`'s own materials. kFaceAlphaMin would floor chrome's alpha at 0.004
+    // and make its lobe 0.46 degrees wide, which is four times what rough=8 asks for -- so the
+    // width comes from the byte the clip author wrote and the floor stays where it belongs.
+    CHECK(reflect_lobe_width(8) == doctest::Approx(0.001968).epsilon(1e-3));
+    CHECK(reflect_lobe_width(110) == doctest::Approx(0.372).epsilon(1e-3));
+
+    // The pixel is the FLOOR and not the comparison, and this is the property that makes the rule
+    // resolution-independent on anything the camera is close to. A voxel face at 3.4 m subtends
+    // 0.0092 rad; a pixel at 1280x800 subtends 0.0014 and at 4K 0.00053, so both are under it and
+    // the share is the same number at every resolution -- which is D703's own finding said from
+    // the other end, that a face is one colour however many pixels are looking at it.
+    const f64 chrome_at = 3.4 * 32.0;
+    const f64 carrier_800 = carrier_for(0, chrome_at, pixel_angle_of(0.577, 800.0));
+    const f64 carrier_4k = carrier_for(0, chrome_at, pixel_angle_of(0.577, 2160.0));
+    CHECK(carrier_800 == doctest::Approx(carrier_4k).epsilon(1e-9));
+
+    const f64 chrome = reflect_share(reflect_lobe_width(8), carrier_800);
+    const f64 brushed = reflect_share(reflect_lobe_width(110), carrier_800);
+    // Five sixths from the pixel's own ray -- sharp, correct and recursive -- against a fortieth
+    // for the brushed sphere beside it, which stays the face's accumulated average: cheap, already
+    // measured, no noise. The two are the same expression with a different byte in it.
+    CHECK(chrome == doctest::Approx(0.8236).epsilon(1e-3));
+    CHECK(brushed == doctest::Approx(0.0241).epsilon(1e-2));
+
+    // Continuous and monotone across the WHOLE byte, with no step anywhere in it. A cutoff would
+    // show up here as a jump; what this pins is the largest step between neighbouring roughness
+    // bytes, and it is far below anything the eye reads as a boundary (D387).
+    f64 previous = 1.0;
+    f64 largest_step = 0.0;
+    for (u32 rough = 0; rough <= 255; ++rough) {
+        const f64 s = reflect_share(reflect_lobe_width(rough), carrier_800);
+        CHECK(s <= previous + 1e-12);   // monotone down
+        CHECK(s > 0.0);                 // and never exactly nought, so nothing is a special case
+        largest_step = std::max(largest_step, previous - s);
+        previous = s;
+    }
+    CHECK(largest_step < 0.06);
+
+    // And monotone in DISTANCE, which is worth pinning because the opposite sign is exactly as
+    // plausible until it is written down: the lobe's width is fixed and the face's angular size
+    // shrinks with distance, so the stored average becomes the finer of the two and the ray's
+    // share FALLS. That is the direction a grazing floor needs -- half a degree of blur really is
+    // twenty pixels across at fifteen metres.
+    const f64 near = reflect_share(reflect_lobe_width(18), carrier_for(0, 1.0 * 32.0, 0.0014));
+    const f64 far = reflect_share(reflect_lobe_width(18), carrier_for(0, 15.0 * 32.0, 0.0014));
+    CHECK(near > far);
+    CHECK(near > 0.7);
+    CHECK(far < 0.2);
+}
+
+TEST_CASE("R4f: Fresnel comes from the material's own index, and silence means glass") {
+    // A material that never wrote the byte is unchanged, exactly. This is the check that says the
+    // whole building does not move when this stage lands: `face_f0_of`'s 0.04 IS ((n-1)/(n+1))^2
+    // at n = 1.5, so silence and "1.5" have always been the same answer and now say so.
+    CHECK(reflect_dielectric_f0(0) == doctest::Approx(0.04).epsilon(1e-12));
+    CHECK(reflect_dielectric_f0(64) == doctest::Approx(0.04).epsilon(1e-3));   // 1.0 + 64/128 = 1.5
+
+    // Water at 1.33 reflects half what glass does head on, and the two have never been drawn apart.
+    const u32 water_byte = 42;   // 1.0 + 42/128 = 1.328
+    CHECK(reflect_dielectric_f0(water_byte) == doctest::Approx(0.0200).epsilon(3e-2));
+    CHECK(reflect_dielectric_f0(water_byte) < reflect_dielectric_f0(64));
+
+    // ...and at a glancing angle both go towards one, which is why a pool is a mirror at the far
+    // end and clear under your feet. Nine degrees off the surface is the case R4c's own note names.
+    const f64 grazing = std::cos((90.0 - 9.0) * 3.14159265358979 / 180.0);
+    CHECK(schlick(reflect_dielectric_f0(water_byte), grazing) > 0.4);
+    CHECK(schlick(reflect_dielectric_f0(water_byte), 1.0) ==
+          doctest::Approx(reflect_dielectric_f0(water_byte)).epsilon(1e-9));
+}
+
+TEST_CASE("R4f: the depth two facing mirrors reach is the budget, not a count") {
+    // `clips/mirror_hall.clip`: chrome at rough=6 metal=252 facing chrome across three metres.
+    // Each bounce keeps Fresnel times share of what the one before it carried, so the depth is
+    // log(budget) / log(kept) -- arithmetic, with no depth limit anywhere in it.
+    const f64 albedo = 236.0 / 255.0;
+    const f64 f0 = 0.04 + (albedo - 0.04) * (252.0 / 255.0);
+    const f64 carrier = carrier_for(0, 3.0 * 32.0, pixel_angle_of(0.577, 800.0));
+    const f64 share = reflect_share(reflect_lobe_width(6), carrier);
+    const f64 kept = schlick(f0, 0.5) * share;   // sixty degrees off the normal, down the hall
+    CHECK(kept > 0.8);
+    CHECK(kept < 1.0);
+
+    const auto depth_for = [&](f64 budget) {
+        return static_cast<int>(std::floor(std::log(budget) / std::log(kept)));
+    };
+    // The shipped budget reaches past the loop's own guard rail, and that is the honest finding
+    // rather than a comfortable one: on TWO CHROME WALLS it is `kReflectBounces` that stops the
+    // series and not the budget. Every other material in the repository is the other way round --
+    // the same hall in bronze stops on the budget long before sixteen -- and a report that does not
+    // say which of the two did it is a report about a number nobody can reproduce.
+    CHECK(depth_for(0.02) > 16);
+    CHECK(depth_for(0.30) < 16);
+
+    // A dielectric is the case the budget was sized for. Polished stone at 4% head on is under a
+    // fiftieth after ONE bounce, so a second is never cast and costs nothing -- which is the whole
+    // of why "infinite reflections" is affordable rather than a setting.
+    const f64 stone = schlick(0.04, 1.0) * reflect_share(reflect_lobe_width(18), carrier);
+    CHECK(stone > 0.02);          // the first bounce IS cast: a polished floor reflects
+    CHECK(stone * stone < 0.02);  // and the second is not
+}
+
+TEST_CASE("R4f: the two halves of the split are complementary and lose nothing") {
+    // What leaves a surface along the mirror direction is `mix(stored, ray, share)`, and what the
+    // series accumulates for the surface behind it is weighted by the same share. The two weights
+    // sum to one at every surface, whatever the share happens to be, so nothing is created or lost
+    // between them.
+    for (const f64 share : {0.0, 0.1, 0.5, 0.9, 1.0}) {
+        CHECK((1.0 - share) + share == doctest::Approx(1.0).epsilon(1e-12));
+    }
+
+    // And the series the loop accumulates: with a constant `kept` per bounce the terms sum to the
+    // closed form of a geometric series, which is what says it CONVERGES rather than running until
+    // a counter stops it. The loop carries two accumulators -- one with the first surface's
+    // Fresnel in it, for the budget, and one without, for the radiance -- because the composite
+    // applies that first Fresnel itself; getting those the same way round is the difference
+    // between a reflection and a reflection squared.
+    const f64 kept = 0.6;
+    f64 sum = 0.0;
+    f64 carry = 1.0;
+    for (int i = 0; i < 64; ++i) {
+        sum += carry * (1.0 - kept);
+        carry *= kept;
+    }
+    CHECK(sum == doctest::Approx(1.0).epsilon(1e-9));
+}

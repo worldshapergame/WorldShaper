@@ -41,8 +41,52 @@ layout(binding = 26, rgba32ui) uniform writeonly uimage2D out_behind;
 // is enough and shaders/beam.comp for what the number is.
 layout(binding = 27, r32f) uniform readonly image2D in_beam;
 
+// R4f: what the reflected CONTINUATION of this pixel's primary ray found, already shaded, and in
+// `a` the share of the pixel's specular that ray is entitled to be.
+//
+// The same argument `out_behind` above makes, for the other half of the same interface: shading a
+// reflected surface here needs the whole composite, and marching for one in the composite needs the
+// whole node pool bound there. This carries the ANSWER across instead of the machinery. Where it
+// differs from `out_behind` is that a reflection RECURSES -- the answer is a series over several
+// surfaces, not one surface -- so what crosses is a radiance rather than a hit. See
+// shaders/reflect.glsl.
+layout(binding = 28, rgba16f) uniform writeonly image2D out_reflect;
+
 #include "node.glsl"
 #include "beam.glsl"
+
+// The sky, for the reflected segments that reach it, and the surfaces they land on.
+//
+// The same three shims shaders/shade_faces.comp uses and for the same reason, which is written out
+// at length there: `pt_sky.glsl` wants a `kPi`, a `hash_u32` and a `trace` with the sun in it, and
+// a stage may declare only one push block -- this one already has `NodeConstants`. The two fields
+// the sky functions actually read are carried there and copied into a struct of that name at the
+// top of main. Everything else in the real `trace` is clouds, fog and quality, which nothing here
+// touches.
+//
+// It is the same file and not a second sky model, which matters for the same reason it matters in
+// the face pass: a reflection of the sky drawn out of one model and the sky itself drawn out of
+// another is a mirror that does not match what it is reflecting.
+const float kPi = 3.14159265358979;
+// A chunk's edge in voxels, which `pt_clouds.glsl` needs to lift a camera-relative point into
+// world space. Declared here rather than pulled in with a header for the reason the shim below is
+// a shim: the only other file that carries it is the composite, and this pass wants three
+// constants out of it and not five hundred lines.
+const int kChunkEdge = 256;
+uint hash_u32(uint x) { return node_hash_mix(x); }
+struct SkyTrace {
+    vec4 sun;
+    vec4 sun_colour;
+};
+SkyTrace trace;
+#include "pt_sky.glsl"
+// ...and the cloud deck, because a reflected ray that escapes has to come back with what the eye
+// would be shown for that direction, and what the eye is shown has a deck over it. The composite
+// reads that deck out of an image the cloud pass marched ONE RAY PER PIXEL -- indexed by pixel, so
+// it answers for the direction the PRIMARY ray went and for no other. A reflected direction is not
+// in it. See `reflect_escaped` in shaders/reflect.glsl.
+#include "pt_clouds.glsl"
+#include "reflect.glsl"
 
 // The distance this pixel's ray is allowed to start at, in voxels from the eye.
 //
@@ -200,6 +244,10 @@ uvec4 visibility_pack_behind(NodeHit far, vec3 lets_past, bool edge, uint far_co
 }
 
 void main() {
+    // The two fields pt_sky.glsl reads, out of the push block the marcher already carries.
+    trace.sun = node_push.sun;
+    trace.sun_colour = node_push.sun_colour;
+
     // ---- R9c: the dispatch is the screen plus a margin, and the margin is not the screen --------
     //
     // The host sizes this dispatch to cover the screen grown by `probe_halo_margin()` pixels on
@@ -617,6 +665,36 @@ void main() {
         behind = visibility_pack_behind(far, vec3(1.0 - covered), true, far_coverage, sky_beyond);
     }
     imageStore(out_behind, pixel, behind);
+
+    // ---- R4f: and the REFLECTED half of the same interface ---------------------------------------
+    //
+    // D652 put what goes THROUGH a surface back on the ray. This is what comes OFF it, and the two
+    // are the same event seen from either side of the Fresnel term: part of what arrives bends into
+    // the medium and marches on, part leaves along the mirror direction and marches on. The
+    // transmitted half is the block above; this is the block beside it.
+    //
+    // It is a CONTINUATION and not a gather: one ray carries on, exactly as the refracted one does,
+    // and where it lands on something reflective it carries on again. Nothing samples a hemisphere
+    // and nothing reads a stored distribution to get a sharp answer.
+    //
+    // The whole of it is skipped on a pixel whose reflection is not worth a march, and that test is
+    // `reflect_share` against the budget rather than a roughness cutoff -- see shaders/reflect.glsl.
+    // On a scene with no polished material the test fails at every pixel and this costs one
+    // comparison and one store of nought.
+    //
+    // The store is UNCONDITIONAL because nothing clears this image: `node_writes_faces` is a
+    // constant in main.cpp and the clear beside it is unreachable while the node pool is the
+    // marcher, so a pixel that stops reflecting has to say so rather than leave last frame's answer
+    // where the composite will read it. A share of nought is how "no ray was cast here" is spelled,
+    // and it is a different fact from a ray that found black -- which is why the share is stored and
+    // not inferred from the radiance.
+    vec4 reflection = vec4(0.0);
+    if (hit.hit) {
+        const ReflectAnswer r = reflect_trace(push.origin.xyz, dir, hit, pixel_angle,
+                                              node_bayer(pixel), push.r4.z, report_face);
+        reflection = vec4(r.radiance, r.share);
+    }
+    imageStore(out_reflect, pixel, reflection);
 
     imageStore(out_visibility, pixel, packed);
     imageStore(out_depth, pixel, vec4(hit.hit ? hit.t : push.lens.y, 0, 0, 0));

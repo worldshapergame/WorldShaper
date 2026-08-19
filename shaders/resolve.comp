@@ -53,6 +53,12 @@ layout(binding = 7, r32ui) uniform readonly uimage2D in_face;
 // Zero everywhere else. visibility.comp writes it and documents the wire format at the store; this
 // pass is the only reader, and it unpacks it once, in main, beside the near surface.
 layout(binding = 14, rgba32ui) uniform readonly uimage2D in_behind;
+// ...and R4f's other half: what the reflected CONTINUATION of the primary ray found, already
+// shaded by the pass that marched it, with the share of this pixel's specular that ray is entitled
+// to be in `a`. A share of nought means no ray was cast at this pixel, which is a different fact
+// from a ray that found black -- so it is stored rather than inferred. shaders/visibility.comp
+// writes it and shaders/reflect.glsl is where the rule that fills it lives.
+layout(binding = 15, rgba16f) uniform readonly image2D in_reflect;
 // The card's own light, which the host never touches. See src/gpu/face_light.hpp.
 layout(std430, binding = 8) readonly buffer FaceLight { uint words[]; } face_light;
 // The stride comes from shaders/face_terms.glsl, which both this pass and the pass that writes the
@@ -513,6 +519,12 @@ uint lobe_block_of(uint slot) {
 // Every other term in this pass has such a view for the reason view 16's comment gives: a shaded
 // picture cannot tell a term that is wrong from a term that is absent.
 vec3 g_lobe_specular = vec3(0.0);
+// R4f's two, for the same reason and for views 25 and 26: what the reflected continuation found,
+// and how much of the answer it was entitled to be. A picture cannot tell "the ray is wrong" from
+// "no ray was cast", and the whole affordability claim of this stage is that on a scene with
+// nothing polished in it the second is true at every pixel.
+vec3 g_reflect_found = vec3(0.0);
+float g_reflect_share = 0.0;
 
 bool lobe_radiance(uint block, uint bins, uint side, vec2 at, out vec3 radiance) {
     radiance = vec3(0.0);
@@ -574,7 +586,16 @@ bool lobe_radiance(uint block, uint bins, uint side, vec2 at, out vec3 radiance)
 // whose word is rebuilt from a wire that carries one payload and puts nought in the field it is not
 // using. Reading it as a colour there would blend a voxel towards black by up to the whole step,
 // which is a distant railing's far half going dark for a reason nothing in the picture explains.
+//
+// `continued` is R4f: what the reflected continuation of the primary ray found, in rgb, and how
+// much of this surface's specular that ray is entitled to be, in a. It is a PARAMETER and not a
+// file-scope variable for the reason the paragraph above gives about the two reach values -- there
+// are two surfaces to shade and only one of them is the one the pixel's own ray reflected off, so a
+// shared variable would silently give the far surface the near one's reflection. The far surface is
+// passed a share of nought, which is the same thing as saying it has no continuation of its own,
+// and is the same division `level_pair` above draws for a different reason.
 vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_past, bool level_pair,
+                   vec4 continued,
                    out float media_sun_reach, out float media_sky_reach) {
     media_sun_reach = 1.0;
     media_sky_reach = 1.0;
@@ -1028,7 +1049,31 @@ vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_pa
                 vec3(ivec3(lobe_face.x, lobe_face.y, lobe_face.z)) * lobe_extent +
                 vec3(lobe_extent * 0.5) - vec3(push.camera_chunk.xyz * kChunkEdge);
             const vec3 view = normalize(push.origin.xyz - lobe_centre);
-            const vec3 f0 = face_f0_of(albedo, metal);
+            // ---- R4f: the dielectric's Fresnel comes from its own index of refraction ------
+            //
+            // `face_f0_of` mixes a fixed 0.04 towards the albedo, and 0.04 is exactly
+            // ((n-1)/(n+1))^2 at n = 1.5 -- so every dielectric in this renderer has been assumed
+            // to be window glass. The `ior` byte has been on the record since the record existed
+            // and D652 was the first ray to read it; this is the second, and it is the sentence
+            // *"more like ior bending light"* applied to the half of the interface that does not
+            // bend.
+            //
+            // The byte at NOUGHT is "the record did not say" and not "n = 1", which would be a
+            // surface that reflects nothing at all -- trap 7 in its usual shape. Water at 1.33
+            // comes out at 0.020 against glass's 0.040, which is the difference between a pool and
+            // a window and was previously not drawn at all.
+            //
+            // Gated on R4f being on, so `--no-ior-reflection` is D703's frame to the bit.
+            vec3 f0 = face_f0_of(albedo, metal);
+            if (push.r4.z > 0.0 && face_slot < face_medium.words.length()) {
+                const uint medium = face_medium.words[face_slot];
+                const uint ior_byte = face_medium_ior(medium);
+                if ((medium & kFaceMediumKnown) != 0u && ior_byte != 0u) {
+                    const float n = 1.0 + float(ior_byte) * (1.0 / 128.0);
+                    const float edge = (n - 1.0) / (n + 1.0);
+                    f0 = mix(vec3(edge * edge), albedo, float(metal) * (1.0 / 255.0));
+                }
+            }
             const float alpha = face_alpha_of(rough);
             const float n_dot_v = max(dot(normal, view), 1e-4);
 
@@ -1108,6 +1153,27 @@ vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_pa
                 if (readable && lobe_radiance(block, bins, bin_side, lobe_square, found)) {
                     reflected = found;
                 }
+            }
+            // ---- R4f: and the pixel's OWN ray, blended in by the share it earned --------------
+            //
+            // Everything above this line is a per-FACE distribution read along one direction, and
+            // six attempts to get a recognisable reflection out of one are D591, D592, D594, D599,
+            // D694 and D703. What arrives here instead is the primary ray CONTINUED: reflected at
+            // this surface, marched, landed, shaded, and continued again where what it landed on
+            // was itself polished -- so two facing mirrors recurse and stop on a contribution
+            // budget rather than on a depth count.
+            //
+            // The blend is the whole of the rough/sharp split and it has no threshold in it. The
+            // share is the lobe's angular width measured against what a per-face answer can carry,
+            // which is the face's own angular size floored at the pixel's -- so a mirror's tenth of
+            // a degree against a voxel's half a degree is nearly all ray, and a brushed metal's
+            // twenty degrees against the same half a degree is nearly all stored average. Nothing
+            // branches on roughness anywhere, and the stored average is kept for exactly this: it
+            // is what makes a rough surface free. See shaders/reflect.glsl for the rule.
+            //
+            // A share of nought is "no ray was cast at this pixel", so the frame is what it was.
+            if (push.r4.z > 0.0 && continued.a > 0.0) {
+                reflected = mix(reflected, continued.rgb, continued.a);
             }
             specular = face_lobe_environment(f0, n_dot_v, reflected);
             specular += face_lobe_sun(f0, normal, view, trace.sun.xyz, alpha, sun_visible) *
@@ -1356,7 +1422,7 @@ void main() {
                                                far_level == 0u ? 0u : payload, behind.w);
                 far_colour = shade_surface(dir, far_packed,
                                            far_named == 0xFFFFFFu ? kNoFace : far_named, far_t,
-                                           vec3(0.0), false, far_sun, far_sky);
+                                           vec3(0.0), false, vec4(0.0), far_sun, far_sky);
                 // ---- R5d's SECOND half: the THIRD layer -------------------------------------
                 //
                 // D663 built the first: a coarse node only part of which is matter stops being a
@@ -1435,9 +1501,20 @@ void main() {
         // the difference between the two stages here -- see the block above for why the near
         // surface's specular and emission have to go with its diffuse when it is a share of a pixel
         // rather than a pane.
+        //
+        // R4f's answer for this pixel, read once. It belongs to the NEAR surface: it is the
+        // continuation of the ray that landed on it, and the far layer -- whether that is a
+        // surface behind glass or the uncovered share of an edge -- has no continuation of its own
+        // and is passed a share of nought. A second reflected ray for the far layer is a second
+        // march on every glass pixel for a term already weighted by the pane's transmission; it is
+        // deliberately not built, and what it costs is that a room seen through a window shows no
+        // reflection in the wall behind it.
+        const vec4 continued = push.r4.z > 0.0 ? imageLoad(in_reflect, pixel) : vec4(0.0);
+        g_reflect_share = continued.a;
+        g_reflect_found = continued.rgb;
         colour = (edge ? (vec3(1.0) - through) : vec3(1.0)) *
                      shade_surface(dir, packed, face_slot, t, edge ? vec3(0.0) : through, true,
-                                   media_sun_reach, media_sky_reach) +
+                                   continued, media_sun_reach, media_sky_reach) +
                  through * far_colour;
         const float lets = (through.r + through.g + through.b) * (1.0 / 3.0);
         media_sun_reach = mix(media_sun_reach, far_sun, lets);
@@ -1735,6 +1812,35 @@ void main() {
                 }
             }
         }
+    } else if (push.resolution.z == 25u) {
+        // R4f: what the reflected continuation of the primary ray found, tone mapped, with nothing
+        // else in the frame.
+        //
+        // The view D703's own gate wanted and did not have. Walk past a mirror with it on: the
+        // picture in it should stay put on the world behind the camera and slide across the
+        // surface, and it should not fizz, band or lose stripes -- there is no stored cap to walk
+        // out of and no re-centring, so a stripe here is a fault in this stage rather than the one
+        // this stage was built to remove.
+        //
+        // GREEN at a third is no geometry. BLACK is a legitimate answer: most surfaces cast no
+        // reflected ray at all, and view 26 beside this one is what says which.
+        colour = hit ? pow(tonemap_aces(g_reflect_found * frame_exposure()), vec3(1.0 / 2.2))
+                     : vec3(0.0, 0.35, 0.0);
+    } else if (push.resolution.z == 26u) {
+        // R4f's share, which is the whole of the rough/sharp split drawn as a picture.
+        //
+        // GREY rising from black to white with how much of this pixel's specular came from its own
+        // ray rather than from the face's accumulated average. BLACK is a pixel that cast nothing,
+        // which is what a scene with no polished material in it must be everywhere -- and that is
+        // the measurement behind the claim that this stage costs nothing on such a scene, taken as
+        // a picture rather than as a counter, because a picture says WHERE.
+        //
+        // What it should look like is a continuous field and never a set of flat regions: the share
+        // is a smooth function of roughness and of how far away the surface is, so a boundary in
+        // this view would be a threshold somebody put in, which R4 does not allow.
+        //
+        // GREEN at a third is no geometry.
+        colour = hit ? vec3(g_reflect_share) : vec3(0.0, 0.35, 0.0);
     } else if (push.resolution.z == 23u) {
         // The lobe on its own, tone mapped, with the diffuse taken away entirely.
         //

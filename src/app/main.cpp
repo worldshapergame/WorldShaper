@@ -767,6 +767,24 @@ struct Options {
     // where it leaves, and what it crossed absorbs over the true distance rather than per voxel.
     // `--no-refraction` is the control arm and restores D604's straight ray exactly.
     bool refraction = true;
+    // R4f: the REFLECTED half of the same interface. A specular reflection is a continuation of
+    // the primary ray -- Fresnel over the material's own index of refraction splits it, part bends
+    // through (D652) and part reflects and marches on -- rather than a lookup into a face's stored
+    // distribution. Two facing mirrors recurse until the CONTRIBUTION budget below stops them.
+    // `--no-ior-reflection` is the control arm and leaves R4c's bins as the whole of the answer,
+    // which is D703 exactly. See shaders/reflect.glsl.
+    bool ior_reflection = true;
+    // ...and what that budget is, as a share of the pixel: a reflected segment worth less than
+    // this is not cast. A dial rather than a constant because it is the one number that decides
+    // both the depth two mirrors reach and what the stage costs on a scene with nothing polished
+    // in it, and those have to be priceable apart. See kReflectBudgetDefault.
+    f32 reflect_budget = 0.02f;
+    // R4f's cloud deck. The composite draws the deck out of a full-resolution history the cloud
+    // pass marches ONE RAY PER PIXEL, so it is indexed by pixel and answers only for the direction
+    // the primary ray went; a reflected direction is not in it and has to be marched again.
+    // `--no-reflect-clouds` is the control arm for that march on its own -- the reflection is
+    // identical in both and only the sky a ray escaped into differs.
+    bool reflect_clouds = true;
     // R4c's image: a face's outgoing bins cover a CAP about the direction the eye is in rather than
     // the whole hemisphere, so thirty-six bins are two degrees apart instead of thirteen and a half
     // and a reflection has a picture in it. `--no-reflected-image` is the control arm and puts them
@@ -1499,6 +1517,23 @@ bool parse_options_c(const std::string& arg, int& i, int argc, char** argv, Opti
         // R4d's other control arm: the ray behind the glass carries straight on, which is
         // what D604 built and what every figure before this was taken in.
         options.refraction = false;
+    } else if (arg == "--no-ior-reflection") {
+        // R4f's control arm: no primary ray continues as a reflection, so a specular surface is
+        // drawn out of R4c's stored bins alone -- which is D703 exactly and is what every figure
+        // before this was taken in. The bins, the pool, the cap and the energy split are identical
+        // in both arms; what an A/B prices is the march and nothing else.
+        options.ior_reflection = false;
+    } else if (arg == "--no-reflect-clouds") {
+        // R4f's deck, off: a reflected ray that escapes comes back with the clear sky alone,
+        // which is what every reflection in this renderer has shown since it existed and is what
+        // the user reported -- *"the reflections i see dont reflect the actual sky colors and
+        // neither clouds"*. It is a separate arm from `--no-ior-reflection` because it is a
+        // separate MARCH: the deck for a direction nobody has marched has to be marched.
+        options.reflect_clouds = false;
+    } else if (arg == "--reflect-budget" && i + 1 < argc) {
+        // How little a reflected segment may be worth and still be cast, as a share of the pixel.
+        // Larger is shallower and cheaper; 0 is the same arm as `--no-ior-reflection`.
+        options.reflect_budget = static_cast<f32>(std::atof(argv[++i]));
     } else if (arg == "--no-reflected-image") {
         // R4c's image, off: the bins go back to covering the whole hemisphere through the
         // hemi-octahedral map with the kernel widened to the bin, which is thirteen and a half
@@ -1692,6 +1727,10 @@ void print_help() {
         "                        with its coplanar neighbours'. R5a's control arm\n"
         "  --no-face-materials   no face works out what the surface under it is made of. R4a's\n"
         "                        control arm, and the picture is identical in both\n"
+        "  --no-ior-reflection   no primary ray continues as a reflection, so a polished surface\n"
+        "                        is drawn out of R4c's stored bins alone. R4f's control arm\n"
+        "  --reflect-budget X    how little a reflected segment may be worth and still be cast,\n"
+        "                        as a share of the pixel. Default 0.02; 0 is the arm above\n"
         "  --no-edge-aa          a node coarser than a voxel is drawn as a solid block whatever\n"
         "                        its coverage says, so a distant railing is a bar and every\n"
         "                        silhouette is a hard stair-step. R5d's control arm\n"
@@ -3124,6 +3163,8 @@ private:
     // the composite knows whether there is a second layer to blend at all. See shaders/
     // visibility.comp for the packing and shaders/resolve.comp for what it does with it.
     GpuImage behind_image_;
+    // R4f: what the reflected continuation found, and the share of the pixel it is entitled to be.
+    GpuImage reflect_image_;
     GpuImage render_target_;
     GpuImage depth_target_;
     VkDescriptorSetLayout resolve_layout_ = VK_NULL_HANDLE;
@@ -3440,6 +3481,17 @@ bool Application::create_render_target(u32 width, u32 height) {
     // answer about a different surface: what the ray reached once the glass let it past.
     behind_image_ = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_UINT,
                                          "behind glass");
+    // R4f's answer: what the reflected continuation of this pixel's primary ray found, and how
+    // much of the pixel's specular that ray is entitled to be.
+    //
+    // Half floats and not the visibility buffer's four full words, because what crosses here is a
+    // RADIANCE and a share rather than a surface -- the marching pass has already shaded it, which
+    // is the opposite of what `behind glass` carries and is why it is a separate image rather than
+    // four more bytes on that one. Eight bytes a pixel, written only where a reflection was
+    // actually cast and cleared to nought otherwise, so a scene with nothing polished in it pays
+    // for the clear and for nothing else.
+    reflect_image_ = create_storage_image(device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                          "reflection");
     render_target_ = create_storage_image(device_, width, height, VK_FORMAT_R8G8B8A8_UNORM,
                                           "render_target");
     depth_target_ = create_storage_image(device_, width, height, VK_FORMAT_R32_SFLOAT,
@@ -3483,6 +3535,9 @@ bool Application::create_render_target(u32 width, u32 height) {
     VkDescriptorImageInfo behind_info{};
     behind_info.imageView = behind_image_.view;
     behind_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkDescriptorImageInfo reflect_info{};
+    reflect_info.imageView = reflect_image_.view;
+    reflect_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
     VkDescriptorImageInfo cloud_info[2]{};
     cloud_info[0].imageView = cloud_image_.view;
@@ -3507,7 +3562,7 @@ bool Application::create_render_target(u32 width, u32 height) {
     //
     // `write_count` below is a literal beside the array, which is the shape D518 caught: removing
     // a write means renumbering everything after it AND the count, and only `--validation` says so.
-    VkWriteDescriptorSet writes[11]{};
+    VkWriteDescriptorSet writes[13]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.descriptorCount = 1;
@@ -3555,21 +3610,28 @@ bool Application::create_render_target(u32 width, u32 height) {
     writes[6].dstSet = resolve_set_;
     writes[6].dstBinding = 14;
     writes[6].pImageInfo = &behind_info;
-    u32 write_count = 7;
+    // R4f's reflection, to the composite on the same terms as the two above it.
+    writes[7].dstSet = resolve_set_;
+    writes[7].dstBinding = 15;
+    writes[7].pImageInfo = &reflect_info;
+    u32 write_count = 8;
     if (node_set_ != VK_NULL_HANDLE) {
-        writes[7].dstSet = node_set_;
-        writes[7].dstBinding = 0;
-        writes[7].pImageInfo = &vis_info;
         writes[8].dstSet = node_set_;
-        writes[8].dstBinding = 1;
-        writes[8].pImageInfo = &depth_info;
+        writes[8].dstBinding = 0;
+        writes[8].pImageInfo = &vis_info;
         writes[9].dstSet = node_set_;
-        writes[9].dstBinding = 11;
-        writes[9].pImageInfo = &face_info;
+        writes[9].dstBinding = 1;
+        writes[9].pImageInfo = &depth_info;
         writes[10].dstSet = node_set_;
-        writes[10].dstBinding = 26;
-        writes[10].pImageInfo = &behind_info;
-        write_count = 11;
+        writes[10].dstBinding = 11;
+        writes[10].pImageInfo = &face_info;
+        writes[11].dstSet = node_set_;
+        writes[11].dstBinding = 26;
+        writes[11].pImageInfo = &behind_info;
+        writes[12].dstSet = node_set_;
+        writes[12].dstBinding = 28;
+        writes[12].pImageInfo = &reflect_info;
+        write_count = 13;
     }
     vkUpdateDescriptorSets(device_.handle(), write_count, writes, 0, nullptr);
     return true;
@@ -3579,6 +3641,7 @@ void Application::destroy_render_target() {
     if (visibility_image_.valid()) destroy_image(device_, visibility_image_);
     if (face_image_.valid()) destroy_image(device_, face_image_);
     if (behind_image_.valid()) destroy_image(device_, behind_image_);
+    if (reflect_image_.valid()) destroy_image(device_, reflect_image_);
     if (render_target_.valid()) destroy_image(device_, render_target_);
     if (depth_target_.valid()) destroy_image(device_, depth_target_);
     // The cloud history and its march buffer, created here with the rest and until now not
@@ -8404,7 +8467,7 @@ void Application::record_frame(f32 time_seconds) {
     // true of one's lifetime is true of the other's.
     constexpr bool node_writes_faces = true;
     if (!face_ready_) {
-        for (const GpuImage* image : {&face_image_, &behind_image_}) {
+        for (const GpuImage* image : {&face_image_, &behind_image_, &reflect_image_}) {
             image_barrier(cmd, image->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                           VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                           VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -8424,6 +8487,10 @@ void Application::record_frame(f32 time_seconds) {
         // And all-zero for the behind layer, which is how "no second surface" is spelled.
         VkClearColorValue behind_clear{};
         vkCmdClearColorImage(cmd, behind_image_.image, VK_IMAGE_LAYOUT_GENERAL, &behind_clear, 1,
+                             &range);
+        // ...and for R4f's reflection, where all-zero is a SHARE of nought, which the composite
+        // reads as "no ray was cast here" and not as "the ray found black".
+        vkCmdClearColorImage(cmd, reflect_image_.image, VK_IMAGE_LAYOUT_GENERAL, &behind_clear, 1,
                              &range);
         VkMemoryBarrier2 face_clear{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
         face_clear.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
@@ -8629,8 +8696,13 @@ void Application::record_frame(f32 time_seconds) {
         params.r5b[1] = static_cast<f32>(options_.face_rest);
         params.r5b[2] = options_.light_name_cap ? 1.0f : 0.0f;
         params.r5b[3] = 0.0f;
-        params.r4[2] = 0.0f;
-        params.r4[3] = 0.0f;
+        // R4f, and the flag and the dial are ONE number on purpose: the budget IS the feature, so
+        // "off" is "nothing is worth casting" rather than a second bit that could disagree with it.
+        // Zero here and shaders/reflect.glsl casts nothing, shaders/resolve.comp reads a share of
+        // nought, and the frame is D703's exactly.
+        params.r4[2] = options_.ior_reflection ? std::max(options_.reflect_budget, 0.0f) : 0.0f;
+        // R4f's cloud deck, which is a march of its own and therefore its own arm.
+        params.r4[3] = options_.reflect_clouds ? 1.0f : 0.0f;
 
         // And remember this frame's camera for the next one. After the fill, so a frame always
         // blurs against the frame before it rather than against itself.
@@ -9653,7 +9725,7 @@ int Application::play(const Options& options) {
     // have to care which pass included them.
     // Nine now: 6 is the face store and 7 is the face-slot image, which together are how the
     // picture stops lighting itself per pixel and starts reading light off the surface.
-    VkDescriptorSetLayoutBinding resolve_bindings[15]{};
+    VkDescriptorSetLayoutBinding resolve_bindings[16]{};
     for (u32 i = 0; i < 6; ++i) {
         resolve_bindings[i].binding = i;
         // 0-1 images, 2-3 the type and visual tables, 4 the parameter block, 5 the
@@ -9702,10 +9774,14 @@ int Application::play(const Options& options) {
     resolve_bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     resolve_bindings[14].descriptorCount = 1;
     resolve_bindings[14].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    resolve_bindings[15].binding = 15;   // ...and what a reflected continuation found (R4f)
+    resolve_bindings[15].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    resolve_bindings[15].descriptorCount = 1;
+    resolve_bindings[15].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo resolve_layout_info{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    resolve_layout_info.bindingCount = 15;
+    resolve_layout_info.bindingCount = 16;
     resolve_layout_info.pBindings = resolve_bindings;
     WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &resolve_layout_info, nullptr,
                                       &resolve_layout_));
@@ -10078,11 +10154,13 @@ int Application::play(const Options& options) {
         // Twenty-six: 27 is R7's corner grid -- one start distance per 8x8 tile corner, written by
         // shaders/beam.comp and read by shaders/visibility.comp, which is why it is on this set and
         // not on one of its own. See kBeamBinding in src/gpu/beam_pass.hpp.
-        VkDescriptorSetLayoutBinding node_bindings[28]{};
-        for (u32 i = 0; i < 28; ++i) {
+        // Twenty-seven: 28 is the fourth image this set writes -- R4f's reflected continuation,
+        // already shaded, and the share of the pixel it is entitled to be.
+        VkDescriptorSetLayoutBinding node_bindings[29]{};
+        for (u32 i = 0; i < 29; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
-                (i < 2 || i == 11 || i == 26 || i == kBeamBinding)
+                (i < 2 || i == 11 || i == 26 || i == 28 || i == kBeamBinding)
                     ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
                 : (i == 8)                    ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
                                               : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -10091,7 +10169,7 @@ int Application::play(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 28;
+        node_layout_info.bindingCount = 29;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -10154,7 +10232,7 @@ int Application::play(const Options& options) {
         VkDescriptorImageInfo node_depth{};
         node_depth.imageView = depth_target_.view;
         node_depth.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkWriteDescriptorSet node_images[4]{};
+        VkWriteDescriptorSet node_images[5]{};
         for (u32 i = 0; i < 2; ++i) {
             node_images[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             node_images[i].dstSet = node_set_;
@@ -10182,7 +10260,16 @@ int Application::play(const Options& options) {
         node_images[3].descriptorCount = 1;
         node_images[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         node_images[3].pImageInfo = &node_behind;
-        vkUpdateDescriptorSets(device_.handle(), 4, node_images, 0, nullptr);
+        VkDescriptorImageInfo node_reflect{};
+        node_reflect.imageView = reflect_image_.view;
+        node_reflect.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        node_images[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_images[4].dstSet = node_set_;
+        node_images[4].dstBinding = 28;
+        node_images[4].descriptorCount = 1;
+        node_images[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        node_images[4].pImageInfo = &node_reflect;
+        vkUpdateDescriptorSets(device_.handle(), 5, node_images, 0, nullptr);
 
         // ---- R12c: set 1, the field the marcher derives from ---------------------------------
         //
