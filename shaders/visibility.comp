@@ -36,7 +36,35 @@ layout(binding = 11, r32ui) uniform writeonly uimage2D out_face;
 // ANSWER across instead of the machinery. See resolve.comp for the unpacking.
 layout(binding = 26, rgba32ui) uniform writeonly uimage2D out_behind;
 
+// R7a: how far this pixel's tile may begin, one texel per tile CORNER. Written by shaders/beam.comp
+// and read here by the four corners of the tile the pixel is in. See beam.glsl for why four corners
+// is enough and shaders/beam.comp for what the number is.
+layout(binding = 27, r32f) uniform readonly image2D in_beam;
+
 #include "node.glsl"
+#include "beam.glsl"
+
+// The distance this pixel's ray is allowed to start at, in voxels from the eye.
+//
+// The smallest of the four corners of the pixel's own tile, and it has to be the smallest: a corner
+// answer bounds only the rays that are on it, and the tile is bounded by whichever of its corners
+// found something first. Taking anything but the minimum -- an average, a nearest, a bilinear tap --
+// is a start past a surface for the pixels on the other side of the tile, which is a hole.
+//
+// Four loads of a texel that sixty-four pixels in the same tile all read, out of an image a
+// sixty-fourth of the screen. It is in cache by the second pixel of the tile.
+float beam_start_for(ivec2 pixel) {
+    if (!beam_enabled()) return 0.0;
+    const ivec2 tile = pixel >> 3;             // kBeamTile is 8; the shift is the divide
+    const ivec2 last = beam_corners() - ivec2(1);
+    const ivec2 a = clamp(tile, ivec2(0), last);
+    const ivec2 b = clamp(tile + ivec2(1), ivec2(0), last);
+    float start = imageLoad(in_beam, ivec2(a.x, a.y)).x;
+    start = min(start, imageLoad(in_beam, ivec2(b.x, a.y)).x);
+    start = min(start, imageLoad(in_beam, ivec2(a.x, b.y)).x);
+    start = min(start, imageLoad(in_beam, ivec2(b.x, b.y)).x);
+    return max(start, 0.0);
+}
 
 // The slot, looked up once, so every pixel on a face reads the same light -- or the slot of the
 // coarse face standing in for it while it catches up. kNoFace if there is nothing to read.
@@ -308,9 +336,18 @@ void main() {
         return;
     }
 
+    // ---- R7: and the only line of this pass that the whole stage is about ---------------------
+    //
+    // `start_t` rather than a moved origin, which is R5d's mechanism and node.glsl says at length
+    // why it is not the same thing: the eye stays the origin, so the detail clock, the world clip,
+    // the D156 nudge and the `t` that comes back are all still eye-relative and this pixel resolves
+    // exactly the level it resolved before. Only the empty metres in front of it are not walked.
+    //
+    // Nought with `--no-beam`, which is this call byte for byte as it was.
+    const float start_t = beam_start_for(pixel);
     NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
                              report_used, report_face, true, false, kThroughStop, kNodeUnbounded,
-                             0.0);
+                             start_t);
 
     uvec4 packed = uvec4(0xFFFFFFFFu, 0u, 0u, floatBitsToUint(hit.t));
     if (hit.hit) {

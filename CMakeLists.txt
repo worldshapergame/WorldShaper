@@ -305,6 +305,7 @@ add_library(ws_gpu STATIC
     src/gpu/type_tables.cpp
     src/gpu/screenshot.cpp
     src/gpu/shell_pass.cpp
+    src/gpu/beam_pass.cpp
     src/gpu/feedback.cpp
     src/gpu/field_gpu.cpp)
 target_include_directories(ws_gpu PUBLIC src)

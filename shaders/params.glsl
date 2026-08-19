@@ -61,3 +61,12 @@
     // default -- see kLobeWorthFloor in shaders/face_terms.glsl, and note that nought is a real
     // setting there and means every face asks. w spare.
     vec4 tone;
+
+    // ---- R7 primary ray ------------------------------------------------------------------------
+    // x: 1 when shaders/beam.comp has written this frame's start distances, 0 for `--no-beam` --
+    //    which makes shaders/visibility.comp start every ray at nought, exactly as it always did.
+    // y: 1 when the previous frame's depth may lower that start (R7b), 0 for
+    //    `--no-temporal-start` and on any frame whose depth image does not hold a usable previous
+    //    frame -- the first one after startup or a resize.
+    // zw spare.
+    vec4 beam;

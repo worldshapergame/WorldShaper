@@ -171,6 +171,20 @@ struct RenderParams {
     // because the accumulator it described went with R3d. D553 is why not: changing what a word
     // means makes every rule written about it suspect, and a spare field costs sixteen bytes once.
     f32 tone[4];
+
+    // ---- R7 primary ray -------------------------------------------------------------------
+    //
+    // x: 1 when shaders/beam.comp has written this frame's start distances, 0 for `--no-beam` --
+    //    which makes shaders/visibility.comp start every ray at nought, exactly as it always did.
+    // y: 1 when the previous frame's depth may lower that start (R7b), 0 for
+    //    `--no-temporal-start` and on any frame whose depth image does not hold a usable previous
+    //    frame -- the first one after startup or a resize.
+    // zw spare.
+    //
+    // Appended, not folded into a spare word of `tone`, and D553 is the standing reason: changing
+    // what a word means makes every rule written about it suspect, and a fresh vector costs sixteen
+    // bytes once.
+    f32 beam[4];
 };
 // Written out rather than accumulated as a sum of historical deltas, which is what this was and
 // which nobody could check: 41 vectors of 16 bytes, in the order shaders/params.glsl declares
@@ -180,8 +194,9 @@ struct RenderParams {
 // The count: origin, forward, right, up, camera_chunk, bounds_min, bounds_max, resolution, lens,
 // tint_visible, tint_occluded, tool_colour (12), box_min and box_max at 16 each (32), marks_min,
 // marks_max (2), clip_slot and clip_coarse at 16 each (32), edit_min, edit_max (2), prev_origin,
-// prev_forward, prev_right, prev_up, motion, sky_cloud, sky_wind, tone (8) -- 88 in all.
-static_assert(sizeof(RenderParams) == 88 * 16, "RenderParams must match the GLSL block");
+// prev_forward, prev_right, prev_up, motion, sky_cloud, sky_wind, tone (8) -- 88, and R7's `beam`
+// on the end makes 89.
+static_assert(sizeof(RenderParams) == 89 * 16, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.

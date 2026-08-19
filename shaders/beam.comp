@@ -1,0 +1,131 @@
+#version 450
+// R7a and R7b -- the beam pre-pass, and the temporal start distance it bounds.
+//
+// The primary ray is the only pass in this renderer whose cost is still a function of how many
+// pixels there are, and almost all of that cost is empty space: a ray from an eye inside the
+// facility walks the room it is standing in before it reaches the wall, and every one of the
+// sixty-four rays in a tile walks the same room. So one coarse ray per tile corner walks it once,
+// records how far it got before it could have hit anything, and the sixty-four start there.
+//
+// `04-rendering.md` §1 has asked for this since Stage 3 and it has never been built.
+//
+// Two things are recorded into one number, and which is which matters:
+//
+//   R7a, the coarse march, is the BOUND. It is conservative by construction -- see beam.glsl for
+//   the cone width that makes four corner rays enough, and note `occlude_unknown` below, which
+//   stops it dead on a cell the pool has not built rather than flying through the building.
+//
+//   R7b, the previous frame's depth reprojected, is a second and completely independent estimate
+//   of the same quantity. It is not trusted; it is allowed to LOWER the answer and nothing else.
+//   See the minimum at the bottom of main for why that is the whole safety property.
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// The depth image, holding the PREVIOUS frame.
+//
+// This pass runs before visibility overwrites it, so the image is last frame's answer at the
+// moment it is read -- which is the whole of R7b's input and costs no image of its own. The host
+// stopped transitioning it from UNDEFINED for exactly this reason; see `depth_ready_` in
+// src/app/main.cpp, because a layout transition out of UNDEFINED is a licence for the driver to
+// throw the contents away and a temporal term cannot have one.
+layout(binding = 1, r32f) uniform readonly image2D prev_depth;
+
+// One texel per tile corner: how far a ray through this corner may begin.
+layout(binding = 27, r32f) uniform writeonly image2D out_beam;
+
+#include "node.glsl"
+#include "beam.glsl"
+
+void main() {
+    const ivec2 corner = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 corners = beam_corners();
+    if (corner.x >= corners.x || corner.y >= corners.y) return;
+
+    const vec2 at = vec2(corner * kBeamTile);
+    const vec3 dir = beam_direction(at, push.forward.xyz, push.right.xyz, push.up.xyz);
+
+    // ---- R7a: the coarse march ------------------------------------------------------------
+    //
+    // Everything it is asked is chosen to make it stop EARLY rather than to make it look right,
+    // because the only use of the answer is "nothing can be in front of this".
+    //
+    //   `report`, `report_used` and `report_face` are all off. A beam ray has no pixel: it claims
+    //   no face, names no node to residency and asks the world for nothing, which is R9c's rule for
+    //   the halo arriving in the other direction. What it must not do is change what gets streamed.
+    //
+    //   `stand_in` is off and `occlude_unknown` is ON, and that pair is the important one. A cell
+    //   the world says has matter in it and the pool has not built yet is MATTER to this ray. With
+    //   it off the beam would fly through a building that has not streamed in, hand the fine rays
+    //   a start past it, and the building would be a hole with nothing left to ask for it. Stopping
+    //   there instead costs a start distance of nearly nought for as long as the pool is behind,
+    //   which is the renderer as it is today and is the safe direction to be wrong in.
+    //
+    //   The dither is nought rather than node_bayer's, because a beam ray has no pixel to key one
+    //   off and a dither can only push the level coarser -- which is free conservatism, but not
+    //   reproducible conservatism, and this number is read by sixty-four rays that did not roll it.
+    const NodeHit coarse = node_march(push.origin.xyz, dir, beam_cone_angle(), 0.0,
+                                      false, false, false, false, true, kThroughStop,
+                                      kNodeUnbounded, 0.0);
+
+    // A miss is a real answer and the most valuable one: a tile of open sky lets its rays skip the
+    // whole world clip. `push.lens.y` is what the marcher itself reports for a ray that reached the
+    // far plane, so the two arms agree about what "nothing here" is worth.
+    float start = beam_relieve(coarse.hit ? coarse.t : push.lens.y);
+
+    // ...but only out to where the corner rays are still conservative. Past `beam_trust` the level
+    // clamp in node.glsl has stopped the cone widening while the tile goes on getting wider, so the
+    // four corners no longer enclose what is between them. A ray beyond that range marches from
+    // there exactly as it does today rather than from a number nothing supports.
+    start = min(start, beam_trust());
+
+    // ---- R7b: and what the last frame saw, which is allowed to LOWER it and nothing else -----
+    //
+    // The previous frame's depth over this corner's own block of pixels, at full resolution --
+    // which is the thing the coarse march cannot see. A railing one pixel wide between two corner
+    // rays is invisible to R7a and was drawn by sixty-four pixels last frame.
+    //
+    // The block is the 8x8 CENTRED on the corner, so the four corners of a tile cover that tile
+    // exactly once between them and the whole pass reads each depth texel once.
+    if (beam_temporal_enabled()) {
+        float seen = push.lens.y;
+        const ivec2 base = corner * kBeamTile - ivec2(kBeamTile / 2);
+        const ivec2 last = ivec2(push.resolution.xy) - ivec2(1);
+        for (int y = 0; y < kBeamTile; ++y) {
+            for (int x = 0; x < kBeamTile; ++x) {
+                const ivec2 p = clamp(base + ivec2(x, y), ivec2(0), last);
+                seen = min(seen, imageLoad(prev_depth, p).x);
+            }
+        }
+
+        // Where that surface was, and how far it is from the eye NOW. The camera's previous basis
+        // is already in the parameter block for the motion blur, in the same camera-relative
+        // voxels as `origin` and corrected for a chunk crossing, so this is a subtraction rather
+        // than a coordinate system.
+        const vec3 prev_dir =
+            beam_direction(at, push.prev_forward.xyz, push.prev_right.xyz, push.prev_up.xyz);
+        const vec3 was = push.prev_origin.xyz + prev_dir * seen;
+        const float now = length(was - push.origin.xyz);
+
+        // ---- why this is a MINIMUM, and why that is the whole reason R7b is allowed to exist ---
+        //
+        // A reprojection is a guess about where a surface went. Guessing it too NEAR costs a few
+        // steps that were not needed. Guessing it too FAR moves the start past a surface, and a ray
+        // that begins past a surface does not draw it -- that is a hole in a building, and it is
+        // the failure every start-distance scheme has to be unable to produce rather than merely
+        // unlikely to.
+        //
+        // So the reprojection never decides. R7a's coarse march is conservative by construction and
+        // is the bound; this is a proposal, and `min` is what makes the pair unable to be wrong in
+        // the direction that costs a picture. Whatever the reprojection says -- stale, wrong basis,
+        // a surface that was deleted, a camera that teleported -- the used start is at most the one
+        // the coarse rays proved, so a bad frame of R7b is slower and never emptier.
+        //
+        // It is worth having in exactly the case R7a is weakest: a tile whose corners all miss and
+        // whose middle does not. There the coarse answer is the far plane and this one is the
+        // railing, and the minimum takes the railing.
+        start = min(start, beam_relieve(now));
+    }
+
+    imageStore(out_beam, corner, vec4(max(start, 0.0), 0.0, 0.0, 0.0));
+}

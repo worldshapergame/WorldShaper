@@ -45,6 +45,7 @@
 #include "game/clipboard.hpp"
 #include "game/repeat.hpp"
 #include "game/toolbelt.hpp"
+#include "gpu/beam_pass.hpp"
 #include "gpu/device.hpp"
 #include "gpu/feedback.hpp"
 #include "gpu/image.hpp"
@@ -671,6 +672,17 @@ struct Options {
     // a coarse node is a solid block whatever is really inside it, so a distant railing is a bar and
     // every silhouette against the sky is a stair-step that crawls as the camera moves.
     bool edge_aa = true;
+    // R7a, the beam pre-pass: one coarse ray per 8x8 tile corner marches the octree first, and
+    // every full-resolution ray in the tile starts from the distance it proved empty rather than
+    // from the eye. `--no-beam` is the control arm and starts every ray at nought, which is every
+    // build before this one -- and it is also the arm that says what the pass costs, because the
+    // dispatch is skipped with it rather than merely ignored.
+    bool beam = true;
+    // R7b: the previous frame's depth, reprojected, may LOWER that start distance. It never raises
+    // it -- see the minimum in shaders/beam.comp -- so its whole job is to catch what a coarse ray
+    // between two corners could not see. `--no-temporal-start` is the control arm and leaves R7a's
+    // bound standing on its own.
+    bool temporal_start = true;
     // How much of the node pool's payload buffer to use, in megabytes. 0 takes the budget's own
     // figure, clamped to what the driver will bind. There to make a small pool reachable without a
     // rebuild -- the same reason `--face-budget` exists.
@@ -1119,6 +1131,10 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.screenshot_frame = next_number(30);
     } else if (arg == "--no-vsync") {
         options.vsync = false;
+    } else if (arg == "--no-beam") {
+        options.beam = false;
+    } else if (arg == "--no-temporal-start") {
+        options.temporal_start = false;
     } else if (arg == "--validation") {
         options.validation = true;
     } else if (arg == "--target-fps" && i + 1 < argc) {
@@ -1466,6 +1482,10 @@ void print_help() {
         "  --no-level-blend      a hit draws the colour of the cell it stopped on outright, so a\n"
         "                        surface between two levels of detail comes out as two tones in a\n"
         "                        4x4 pattern. R5c's control arm; the geometry is the same in both\n"
+        "  --no-beam             every primary ray starts at the eye again, with no coarse ray\n"
+        "                        ahead of it saying which metres are empty. R7a's control arm\n"
+        "  --no-temporal-start   the beam's bound stands on its own, with the previous frame's\n"
+        "                        depth not allowed to lower it. R7b's control arm\n"
         "  --halo                claim faces past the edge of the screen, over a margin sized by\n"
         "                        how fast the camera is turning, so they are measuring before they\n"
         "                        arrive. Off by default: it costs the sun's refresh rate (D586)\n"
@@ -3073,6 +3093,13 @@ private:
     u64 chisel_bounds_ns_ = 0;
     u64 chisel_invalidate_ns_ = 0;
     ComputePipeline visibility_;
+    // R7: the beam pre-pass, which runs immediately before it and shares its descriptor set.
+    BeamPass beam_;
+    // Whether the depth image holds a usable PREVIOUS frame. False for one frame after startup and
+    // after every resize, because until this stage that image was transitioned out of UNDEFINED
+    // every frame -- which is a licence for the driver to discard it, and R7b's whole input is what
+    // is in it. See the barrier in `record`.
+    bool depth_ready_ = false;
     VkDescriptorSetLayout node_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet node_set_ = VK_NULL_HANDLE;
     u32 last_node_built_ = 0;
@@ -3129,6 +3156,10 @@ bool Application::create_render_target(u32 width, u32 height) {
     cloud_parity_ = 0;
 
     face_ready_ = false;
+    // R7: the corner grid follows the render target, and the depth image it reads a frame late has
+    // just been recreated -- so there is no previous frame in it until one has been drawn.
+    depth_ready_ = false;
+    beam_.ensure(device_, node_set_, width, height);
 
     // Images are the only bindings that change on resize; the world buffers are created
     // once and never move.
@@ -7933,11 +7964,29 @@ void Application::record_frame(f32 time_seconds) {
         vkCmdPipelineBarrier2(cmd, &dependency);
     }
 
-    for (const GpuImage* image : {&visibility_image_, &render_target_, &depth_target_}) {
+    for (const GpuImage* image : {&visibility_image_, &render_target_}) {
         image_barrier(cmd, image->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                       VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
     }
+    // The depth image is out of that loop, and R7b is the whole reason.
+    //
+    // An old layout of UNDEFINED is not a formality: it is a licence for the driver to throw the
+    // contents away, and the beam pre-pass reads this image one frame late -- the previous frame's
+    // depth is R7b's only input. Taking that licence every frame, on an image every frame
+    // overwrites in full, cost nothing while nobody read it and would silently cost the temporal
+    // term everything now.
+    //
+    // So: discarded once, the first time round after it is created, and carried GENERAL to GENERAL
+    // after that, with the dependency from the previous frame's writes named rather than assumed.
+    image_barrier(cmd, depth_target_.image,
+                  depth_ready_ ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                  VK_IMAGE_LAYOUT_GENERAL,
+                  depth_ready_ ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                               : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                  depth_ready_ ? VK_ACCESS_2_SHADER_WRITE_BIT : 0,
+                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
 
     // The face slots and the behind-glass layer, which are not in that loop, because only one of
     // the two marchers writes them. Discard-and-rewrite is right for an image every frame
@@ -8130,6 +8179,23 @@ void Application::record_frame(f32 time_seconds) {
         // sentinel the way tone[0] does. See kLobeWorthFloor in shaders/face_terms.glsl.
         params.tone[2] = options_.lobe_floor;
         params.tone[3] = 0.0f;
+
+        // ---- R7: whether the primary ray may start anywhere but the eye ------------------------
+        //
+        // Two dials rather than one, because they are two claims. `beam` is R7a's bound, and with
+        // it clear the pre-pass is not dispatched at all and shaders/visibility.comp starts every
+        // ray at nought -- the renderer as it was, not a pass that runs and is ignored.
+        // `temporal_start` is R7b, and it can only ever LOWER the bound R7a set (see the minimum in
+        // shaders/beam.comp), so clearing it leaves a picture that is at most slower.
+        //
+        // The temporal half is also cleared for one frame whenever the depth image does not yet
+        // hold a frame -- at startup and after a resize. Reading undefined depth would propose a
+        // start from noise; the minimum makes that harmless, but a term that is known to be
+        // meaningless is better switched off than relied on to be clamped.
+        params.beam[0] = options_.beam ? 1.0f : 0.0f;
+        params.beam[1] = (options_.beam && options_.temporal_start && depth_ready_) ? 1.0f : 0.0f;
+        params.beam[2] = 0.0f;
+        params.beam[3] = 0.0f;
 
         // And remember this frame's camera for the next one. After the fill, so a frame always
         // blurs against the frame before it rather than against itself.
@@ -8551,6 +8617,38 @@ void Application::record_frame(f32 time_seconds) {
         vkCmdPushConstants(cmd, visibility_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(node_constants), &node_constants);
     }
+
+    // ---- R7: the beam pre-pass, INSIDE this pass's timestamps ---------------------------------
+    //
+    // Nested rather than beside it, and that is the honest arrangement rather than a tidy one. The
+    // gate R7 is measured against is "primary visibility at 4K costs no more than 1.6x what it
+    // costs at 1440p", and a pre-pass timed in a row of its own would take work out of the number
+    // being gated and put it somewhere nobody was comparing. So the `visibility` row keeps meaning
+    // the whole of the primary ray, and `beam` appears under it as a child saying what its own
+    // share is. The profiler has had a stack since the fault at the top of tools/baseline.ps1.
+    //
+    // Skipped entirely with `--no-beam`, which is what makes that flag a control arm rather than a
+    // dial: the pipeline does not run, the barrier is not taken, and visibility.comp reads a dial
+    // that tells it to start at nought.
+    if (options_.beam) {
+        profiler_.begin_pass(cmd, "beam", 0.5);
+        const NodePush beam_constants = make_node_push(0);
+        beam_.record(cmd, node_set_, params_offset, &beam_constants, sizeof(beam_constants),
+                     render_extent);
+        profiler_.add_bytes(BeamPass::bytes(render_extent.width, render_extent.height));
+        profiler_.end_pass(cmd);
+        // The pipeline and the push block the primary dispatch was given above are the beam's now,
+        // so they are set again. Cheaper than moving the block that sets them, which would put the
+        // marcher's bind after a dispatch that is conditional on a flag.
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.pipeline());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.layout(), 0, 1,
+                                &node_set_, 1, &params_offset);
+        const NodePush node_constants = make_node_push(0);
+        vkCmdPushConstants(cmd, visibility_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(node_constants), &node_constants);
+    }
+    // The depth image now holds a frame the next one may read.
+    depth_ready_ = true;
 
     // The screen plus R9c's margin on every side. `halo_margin_` is nought whenever the camera is
     // not turning, so this is the dispatch it has always been in the settled case, and the two arms
@@ -9446,11 +9544,15 @@ int Application::play(const Options& options) {
         // able to ask about a roughness at all.
         // Twenty-five: 26 is the third image this set writes -- what the primary ray reached once
         // transmissive matter let it past. R4d.
-        VkDescriptorSetLayoutBinding node_bindings[27]{};
-        for (u32 i = 0; i < 27; ++i) {
+        // Twenty-six: 27 is R7's corner grid -- one start distance per 8x8 tile corner, written by
+        // shaders/beam.comp and read by shaders/visibility.comp, which is why it is on this set and
+        // not on one of its own. See kBeamBinding in src/gpu/beam_pass.hpp.
+        VkDescriptorSetLayoutBinding node_bindings[28]{};
+        for (u32 i = 0; i < 28; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
-                (i < 2 || i == 11 || i == 26) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                (i < 2 || i == 11 || i == 26 || i == kBeamBinding)
+                    ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
                 : (i == 8)                    ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
                                               : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             node_bindings[i].descriptorCount = 1;
@@ -9458,7 +9560,7 @@ int Application::play(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 27;
+        node_layout_info.bindingCount = 28;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -9588,6 +9690,23 @@ int Application::play(const Options& options) {
                          visibility_.last_error());
             return 1;
         }
+
+        // ---- R7: the beam pre-pass, on the same set and the same push block --------------------
+        //
+        // It marches exactly the geometry the primary ray marches, so it takes the marcher's set
+        // rather than one of its own -- the argument main.cpp already makes about the face shader.
+        // The corner grid is bound here as well as in create_render_target, because the render
+        // target is made before this set exists and its write was therefore skipped.
+        const std::filesystem::path beam_spirv = shaders / "beam.comp.spv";
+        const std::filesystem::path beam_source =
+            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "beam.comp";
+        if (!beam_.create(device_, beam_source, beam_spirv, node_layout_, sizeof(NodePush))) {
+            WS_LOG_FATAL("app", "could not create the beam pre-pass pipeline: {}",
+                         beam_.last_error());
+            return 1;
+        }
+        beam_.ensure(device_, node_set_, render_target_.extent.width,
+                     render_target_.extent.height);
         }
 
     const u64 t_pipelines = now_ns();
@@ -10861,6 +10980,9 @@ int Application::play(const Options& options) {
     destroy_buffer(device_, clip_staging_);
     destroy_buffer(device_, light_buffer_);
     visibility_.destroy();
+    // R7's pipeline and its corner grid, released with the pass they belong to rather than in
+    // destroy_render_target -- the image follows the render target's SIZE, not its lifetime.
+    beam_.destroy();
     // The face pass and its store, which were added without being added here.
     //
     // The cost of the omission is exactly what the note below predicts: validation reports three
