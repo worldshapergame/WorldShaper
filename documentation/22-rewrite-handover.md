@@ -730,7 +730,17 @@ the wiring is NOT one line at `build_bounds()`; it is `compile_field` taking a S
 returning the remapped set, then `clip_script.cpp` handing it all of them.
 
 **Do that first and gate it with the existing content hash**: `clips/sampler.clip --refine-all
---no-despeckle` must still answer `a7660d52378d3c27` at 1,430,152 voxels, both arms.
+--no-despeckle` must still answer **`a1f8bc6c656343b7` at 1,430,104 voxels**, both arms.
+
+**That figure was wrong here until 2026-08-19 and it cost an agent an afternoon.** This line used to
+say `a7660d52378d3c27` at 1,430,152, which is D683's, and D683 is the only place in the repository
+that number appears. The reference is recorded at D615, D616, D622 and D624, at
+`21-renderer-rewrite.md:1995`, and at line 1964 of THIS file — so the document contradicted itself,
+and the half that was quoted into two agent briefs was the half with one witness. Re-run on a clean
+tree at `5be06c0` under three separate invocations with no change applied: `a1f8bc6c656343b7`,
+1,430,104. **What moved D683's figure is still unknown and is worth finding**, because D683's own
+arms agreed with each other — so it measured something real, on a tree that answered differently
+from this one.
 
 **And know what 1.20x is worth before spending a day on it.** D687 prices R12c — the stage that
 gives the user everything they asked for — at 1,239 ms a frame, and it needs the field about **30x**
