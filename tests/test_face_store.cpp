@@ -729,3 +729,73 @@ TEST_CASE("a reclaimed slot carries nothing of the face before it") {
     CHECK(face_lit(face) == 0u);
     CHECK(store.validate());
 }
+
+// ---- R4b: the bin count a face earns, from coverage and roughness -----------------------------
+//
+// These are the rule's PROPERTIES and not a table of expected numbers, deliberately. A test that
+// pinned `face_bins_earned(64, 400)` to a constant would pass for ever and would go on passing if
+// the rule were replaced by a cutoff — which is the exact failure D599 recorded: coverage was built
+// as a threshold, and the threshold is what speckled the great door. What has to hold is that both
+// inputs are read as QUANTITIES: monotone, continuous, with no step anywhere but the pool's block.
+
+TEST_CASE("a face is never given more bins than the pixels looking at it") {
+    // The sentence the rule is: four pixels does not get what four hundred gets.
+    CHECK(face_bins_earned(8, 4.0f) == doctest::Approx(4.0f));
+    CHECK(face_bins_earned(8, 400.0f) == doctest::Approx(400.0f));
+    CHECK(face_bins_earned(8, 4.0f) < face_bins_earned(8, 400.0f));
+}
+
+TEST_CASE("a face nobody can see the sharpness of does not pay for sharpness") {
+    // Limestone at rough=230 has a lobe wider than any affordable number of bins can resolve, so
+    // however much of the screen it fills it earns almost nothing. Chrome at rough=8 earns whatever
+    // the pixels will pay for.
+    CHECK(face_bins_earned(230, 100000.0f) < 10.0f);
+    CHECK(face_bins_earned(8, 100000.0f) > 1000.0f);
+    // ...and it is the roughness half that caps the blunt one: more pixels buy it nothing at all.
+    CHECK(face_bins_earned(230, 100.0f) == doctest::Approx(face_bins_earned(230, 100000.0f)));
+}
+
+TEST_CASE("both halves of the rule are monotone, with no step in either") {
+    // Roughness: a sharper surface never earns fewer bins than a blunter one.
+    f32 previous = face_lobe_bins_wanted(255);
+    for (u32 rough = 254; rough > 0; --rough) {
+        const f32 wanted = face_lobe_bins_wanted(rough);
+        CHECK(wanted >= previous);
+        previous = wanted;
+    }
+    // Coverage: more pixels never earn fewer bins, and the walk crosses both of the pool's class
+    // sizes without anything discontinuous happening to the EARNED figure. What is quantised is the
+    // block the pool hands out, and that is the only place a bin count may be quantised.
+    previous = 0.0f;
+    for (u32 pixels = 1; pixels <= 4096; ++pixels) {
+        const f32 earned = face_bins_earned(8, static_cast<f32>(pixels));
+        CHECK(earned >= previous);
+        CHECK(earned - previous <= 1.001f);   // one pixel of coverage moves it by at most one bin
+        previous = earned;
+    }
+}
+
+TEST_CASE("coverage falls as the square of the distance, and a level is a size") {
+    // 0.00175 radians is about one pixel at eight hundred lines through a seventy-degree lens.
+    const f32 angle = 0.00175f;
+    const f32 near_by = face_coverage_pixels(0, 32.0f, angle);
+    CHECK(face_coverage_pixels(0, 64.0f, angle) == doctest::Approx(near_by * 0.25f));
+    // A face one level up is twice as wide, so at the same distance it covers four times as much.
+    CHECK(face_coverage_pixels(1, 32.0f, angle) == doctest::Approx(near_by * 4.0f));
+    // And neither a camera standing inside the geometry nor a degenerate lens divides by nothing.
+    CHECK(face_coverage_pixels(0, 0.0f, angle) > 0.0f);
+    CHECK(face_coverage_pixels(0, 32.0f, 0.0f) > 0.0f);
+}
+
+TEST_CASE("matte stone earns no sharp class however much of the screen it fills") {
+    // The facility's limestone, at every distance there is. It never reaches the sharp class, so
+    // the pool spends nothing on it — R4a's rule about the payload, said from this end.
+    for (f32 pixels = 1.0f; pixels < 1.0e6f; pixels *= 2.0f) {
+        CHECK(face_bins_earned(230, pixels) < 144.0f);
+    }
+    // ...and chrome does, once it is near enough — a metre away, and not six. Thirty-two voxels to
+    // the metre, so those are 32 and 192. That pair is the whole rule: the same material, the same
+    // roughness, two answers because of the pixels.
+    CHECK(face_bins_earned(8, face_coverage_pixels(0, 192.0f, 0.00175f)) < 144.0f);
+    CHECK(face_bins_earned(8, face_coverage_pixels(0, 32.0f, 0.00175f)) > 144.0f);
+}

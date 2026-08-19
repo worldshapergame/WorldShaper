@@ -199,6 +199,67 @@ inline constexpr u32 kFaceWindow = 256;
 // found. One level up would be four to one and would wait nearly as long as what it stands in for.
 inline constexpr u32 kFaceAncestorStep = 3;
 
+// ---- R4b: how many outgoing bins a face has EARNED -------------------------------------------
+//
+// D186's rule, which R4c's pool was built for and which nothing was asking. A face's block of
+// outgoing bins came out of the pool at one fixed size for every face that asked; how many pixels
+// were looking at it did not enter, so a voxel face four pixels across on the far side of the room
+// was given the same thirty-six directions as the one filling a quarter of the screen.
+//
+// Two quantities, and NEITHER is compared against a cutoff. That is not tidiness: materials here are
+// continuous and per voxel — a clip writes `rough=64 metal=225` as free numbers and `sample.cpp`
+// nudges them per voxel from a hash of where the voxel is — so there is no material identity to
+// switch on and a threshold on roughness would be inventing one. What is quantised is the POOL, and
+// only the pool: it hands out blocks of `kLobeBins` and runs of four, so the earned figure picks the
+// largest class that does not exceed it and the cheap class is the floor.
+//
+//   - **roughness says how many directions the material can tell apart.** A GGX lobe of width alpha
+//     covers about pi*alpha^2 steradians of the 2*pi a hemisphere has, so about 2/alpha^2 bins hold
+//     it without blurring it. Gilt at rough=64 wants about five hundred; limestone at rough=230
+//     wants three, and pays for none of them;
+//   - **coverage says how many eyes are reading them.** A face given more bins than it has pixels
+//     is storing directions nobody looks down, and it pays for them in RAYS — D592, D594 and D599
+//     each measured that bins cost rays one for one.
+//
+// So a face is never given more bins than the smaller of the two, which is the whole rule and is
+// why it needs no constant of its own.
+//
+// Mirrored in shaders/face_worklist.comp, which is the pass that applies it. The two are kept
+// together the way every other pair in this file is: the same three lines, named the same, with the
+// shader's copy pointing back here. The host's copy is what the suite can reach.
+inline constexpr f32 kFaceAlphaMin = 0.004f;   // must match kFaceAlphaMin in face_terms.glsl
+
+constexpr f32 face_alpha_of(u32 rough_byte) {
+    const f32 r = static_cast<f32>(rough_byte) * (1.0f / 255.0f);
+    return (r * r > kFaceAlphaMin) ? r * r : kFaceAlphaMin;
+}
+
+constexpr f32 face_lobe_bins_wanted(u32 rough_byte) {
+    const f32 alpha = face_alpha_of(rough_byte);
+    return 2.0f / (alpha * alpha);
+}
+
+// How many pixels a face of this level covers, at this distance, through a lens whose pixels
+// subtend `pixel_angle` radians. Everything is in VOXELS, so the level's extent and the distance
+// cancel their units and only the angle carries one.
+//
+// The distance is the caller's, and in the shader it is deliberately the distance to the face's
+// COARSE PATCH rather than to the face itself — see face_worklist.comp for why, and D599 for what
+// happens when it is not.
+constexpr f32 face_coverage_pixels(u32 level, f32 distance_voxels, f32 pixel_angle) {
+    const f32 extent = static_cast<f32>(1u << level);
+    const f32 reach = distance_voxels > extent ? distance_voxels : extent;
+    const f32 angle = pixel_angle > 1e-9f ? pixel_angle : 1e-9f;
+    const f32 across = extent / (reach * angle);
+    return across * across;
+}
+
+constexpr f32 face_bins_earned(u32 rough_byte, f32 coverage_pixels) {
+    const f32 wanted = face_lobe_bins_wanted(rough_byte);
+    const f32 covered = coverage_pixels > 0.0f ? coverage_pixels : 0.0f;
+    return wanted < covered ? wanted : covered;
+}
+
 constexpr u32 face_samples(const GpuFace& f) { return f.counters & 0xFFFFu; }
 constexpr u32 face_lit(const GpuFace& f) { return (f.counters >> 16) & 0xFFFFu; }
 constexpr f32 face_visibility(const GpuFace& f) {

@@ -444,4 +444,32 @@ inline constexpr f32 kLogLuminanceBias = 16.0f;    // log2 range is [-16, +16] b
 inline constexpr f32 kLogLuminanceUnit = 256.0f;   // and 1/256 of a stop is finer than sight
 inline constexpr f32 kExposureUnit = 65536.0f;
 
+// ---- R4b coverage bins -------------------------------------------------------------------------
+//
+// Appended at the end of the file rather than beside the other dial bits, so nothing above this
+// line moves: another worktree is reading this header for `shade_faces.comp` and `resolve.comp`
+// while this was written.
+//
+// D186's rule, and it is the half of R4b that was never built: how many outgoing bins a face gets
+// is a function of how many PIXELS it covers as well as of how sharp its material is. Both are read
+// as quantities and neither is compared against a cutoff -- see `face_bins_earned` in
+// src/world/face_store.hpp for the arithmetic and shaders/face_worklist.comp for the pass that
+// applies it.
+//
+// Off, every lobe is the one fixed block the shading pass hands out, whatever the face covers:
+// today exactly. `--no-coverage-bins` clears it. It is a separate lever from `--lobe-coverage`
+// (kProbeLobeCoverage), which is D599's ROUGHNESS-only sharp class and is still off by default;
+// with both on, a face may reach the sharp class by either route, which is why they are two bits
+// and not one.
+inline constexpr u32 kProbeCoverageBins = 1u << 14;
+
+// How many bytes one block of the lobe pool is, header and bins together. Derived from the two
+// figures above rather than written again, so a change to either cannot leave this behind.
+inline constexpr u32 kLobeBlockBytes = (kLobePoolWords / kLobeBlocks) * 4u;
+
+// How many blocks the sharp class is. Must match kLobeBigWays in shaders/face_terms.glsl, which is
+// the authority; it is here because the occupancy census in gpu/face_buffers.cpp has to turn a
+// count of sharp-class faces into bytes and cannot include a shader.
+inline constexpr u32 kLobeBigWays = 4;
+
 }  // namespace ws

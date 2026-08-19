@@ -25,11 +25,185 @@
 // its members at that base. The order faces end up in is therefore arbitrary between workgroups
 // and ascending within one, which nothing downstream depends on -- a face's answer is a function
 // of the face.
+//
+// # ...and R4b's coverage rule, which is here for a reason and not for convenience
+//
+// This is the one pass that walks the WHOLE store once a frame and is not the shading pass. That
+// makes it the place a per-face decision about the lobe POOL can be taken before the shading pass
+// acts on it: `node_face_lobe` runs inside the shading dispatch and its common path is "this face
+// already holds a block, hand it back", so a block placed here is simply found there. The barrier
+// between the two dispatches is already a full shader-write to shader-read one, because the list is
+// both data and a dispatch command, so nothing new is needed to order it.
+//
+// The alternative was to size the block inside `node_face_lobe` itself, and it is worse for a
+// reason that has nothing to do with which file it lives in: that function runs once per VISIT of a
+// face, which is one frame in `face_stride`, while the coverage of a face changes on every frame
+// the camera moves. Sizing it here re-asks the question at the frame rate for every live face, out
+// of a walk this pass was making anyway.
 #extension GL_GOOGLE_include_directive : require
 
 layout(local_size_x = 64) in;
 
 #include "node.glsl"
+
+// ---- R4b: the bin count a face earns, from its coverage and its roughness ----------------------
+//
+// D186's rule, and the half of R4b that was never built. `face_bins_earned` in
+// src/world/face_store.hpp carries the argument in full and the suite tests it there; this is the
+// same three lines, where the camera is.
+//
+// Must match kProbeCoverageBins in src/gpu/render_params.hpp. Spelled here rather than beside the
+// other dials in node.glsl because node.glsl belongs to the passes that READ a lobe, and this bit
+// is only ever asked about by the pass that sizes one.
+const uint kProbeCoverageBins = 1u << 14;
+bool probe_coverage_bins() { return (light_probe.words[0] & kProbeCoverageBins) != 0u; }
+
+// How many pixels this face covers, measured rather than guessed.
+//
+// `node_face_coverage` is the pool's VOLUMETRIC fill fraction and is a different quantity entirely.
+// What this wants is the screen, and the screen needs three things the record already has: the
+// face's own extent, which is its level; the distance to it, which is its coordinate against the
+// camera's; and what one pixel subtends, which is the lens. Everything is in voxels, so the extent
+// and the distance cancel their units and only the angle carries one.
+//
+// **The distance is taken to the face's COARSE PATCH and not to the face**, and that is the whole
+// of what D599 got wrong. Coverage varies smoothly across one flat surface, so a decision taken per
+// face flips face to face along the middle of it -- and R5's cross-face blend pairs a lobe only
+// with lobes cut into the same number of directions, so exactly the faces at that boundary get no
+// blending and stand out as noise. D387's standing measurement is that a hard per-face decision on
+// a smooth quantity is a new discontinuity per face. Shifting the coordinate down by
+// `kFaceAncestorStep` makes five hundred and twelve fine faces compute one distance and therefore
+// one class, by construction: the boundary between classes becomes a step at a patch edge, which
+// the blend can pair either side of, rather than a speckle through the middle of a surface.
+float face_coverage_pixels(Face face) {
+    const uint level = face_level_of(face.packed);
+    const float extent = float(1u << level);
+    // The patch this face is in, three levels up: the same shift the host takes for a stand-in.
+    // Not called `patch` — that is a reserved word in GLSL and the error it gives names the line
+    // after it, which is a wasted build.
+    const ivec3 coarse = ivec3(face.x, face.y, face.z) >> kFaceAncestorStep;
+    const float coarse_extent = extent * float(1 << kFaceAncestorStep);
+    const vec3 centre = (vec3(coarse) + 0.5) * coarse_extent - vec3(push.camera_chunk.xyz * 256);
+    // Never nearer than the face is wide, so a camera inside the geometry cannot divide by nothing.
+    const float reach = max(length(centre - push.origin.xyz), extent);
+    // The screen's own pixel, not the marcher's -- `push.lens.z` is the detail bias, and biasing
+    // this would make the rule a function of a dial about something else. The same expression
+    // shade_faces.comp takes for its rays.
+    const float pixel_angle = max(2.0 * push.lens.x / float(push.resolution.y), 1e-9);
+    const float across = extent / (reach * pixel_angle);
+    return across * across;
+}
+
+// ...and the rule, applied to the pool.
+//
+// It asks for the SHARP class and never for the cheap one, because the cheap one is the floor: a
+// face that earns less than a big block is left exactly as it was and the shading pass gives it the
+// one block it has always given it. So the arm this ships under adds allocation where the rule
+// earns it and takes none away, which is what makes `--no-coverage-bins` restore today's fixed
+// allocation to the byte rather than approximately.
+//
+// A face that earns nothing at all -- matte stone, which is most of a world -- is turned away by
+// `kLobeWorthFloor` before any of this, exactly as it always was.
+void face_coverage_bins(uint slot, Face face) {
+    if (!probe_coverage_bins() || !probe_lobe()) return;
+    if (!face_live_of(face.packed)) return;
+    if (slot >= kLobeSlotMask) return;
+
+    // Read only. What this face is made of is worked out by the SHADING pass and kept, and a face
+    // this pass reaches before that has ever happened simply has no class this frame and gets one
+    // the next -- which is one frame of the cheap block on a face that is about to be given four,
+    // against this pass taking a descent of its own to answer a question already being answered.
+    if (slot >= face_material.words.length()) return;
+    const uint material = face_material.words[slot];
+    if ((material & kFaceMaterialKnown) == 0u) return;
+
+    const uint rough = face_material_rough(material);
+    const float worth = face_lobe_worth(rough, face_material_metal(material));
+    const float floor_worth = push.tone.z >= 0.0 ? push.tone.z : kLobeWorthFloor;
+    if (worth < floor_worth) return;
+
+    // The two quantities, and the smaller of them is what the face has earned. No cutoff on either:
+    // what quantises the answer is the pool's own block, which is where a bin count has to be
+    // quantised.
+    const float earned = min(face_lobe_bins_wanted(rough), face_coverage_pixels(face));
+    if (earned < float(kLobeBigBins)) return;
+
+    const uint base = face_lobe_set(slot);
+    const uint mine = face_lobe_holder(slot, worth);
+    const uint frame = node_push.frame;
+
+    // Already holding something? A run is idempotent -- stamp it and stop. A single block is the
+    // cheap class and is what this is here to upgrade, so it falls through, and the way it is in is
+    // remembered so the take-over below can treat it as free to itself.
+    uint mine_at = kLobeWays;
+    for (uint way = 0u; way < kLobeWays; ++way) {
+        const uint header = face_lobe_header(base + way);
+        if (header + 1u >= face_lobe.words.length()) return;
+        const uint held = face_lobe.words[header];
+        if (!face_lobe_is_held(held) || face_lobe_holder_slot(held) != slot) continue;
+        const uint state = face_lobe.words[face_lobe_state_at(base + way)];
+        if ((state & (kLobeBig | kLobeFollower)) != 0u) {
+            const uint head = base + (way & ~(kLobeBigWays - 1u));
+            face_lobe.words[face_lobe_header(head) + 1u] = frame;
+            return;
+        }
+        mine_at = way;
+        break;
+    }
+
+    // ---- four consecutive blocks of one set, taken whole -------------------------------------
+    //
+    // The same walk `node_face_lobe` makes for the same class, and it gives up quietly for the same
+    // reason: a face that cannot get four keeps the one it has, which is a coarser lobe rather than
+    // none. Taking four warm blocks off four faces to serve one is a trade nothing here can price.
+    for (uint run = 0u; run + kLobeBigWays <= kLobeWays; run += kLobeBigWays) {
+        bool free_run = true;
+        for (uint way = run; way < run + kLobeBigWays; ++way) {
+            const uint header = face_lobe_header(base + way);
+            const uint held = face_lobe.words[header];
+            if (!face_lobe_is_held(held)) continue;
+            // My own cheap block inside the run is free to me: taking it back is not a take-over.
+            if (face_lobe_holder_slot(held) == slot) continue;
+            if (frame - face_lobe.words[header + 1u] <= kLobeCold) { free_run = false; break; }
+        }
+        if (!free_run) continue;
+
+        const uint head = base + run;
+        const uint header = face_lobe_header(head);
+        const uint was = face_lobe.words[header];
+        // One face may reach this for one slot, but two faces of one set reach it for two different
+        // slots in the same dispatch, and the loser has to find out. The same compare-and-swap
+        // `node_face_lobe` resolves that race with, and the loser simply keeps the block it had.
+        if (atomicCompSwap(face_lobe.words[header], was, mine) != was) continue;
+
+        // Whatever cheap block this face was holding OUTSIDE the run goes back now, and not before:
+        // released above the swap it would be given up by a face that then failed to get a run, and
+        // the next visit would hand it a fresh block and start its burst again for nothing.
+        if (mine_at < kLobeWays && (mine_at < run || mine_at >= run + kLobeBigWays)) {
+            face_lobe.words[face_lobe_header(base + mine_at)] = 0u;
+            face_lobe.words[face_lobe_state_at(base + mine_at)] = 0u;
+        }
+
+        for (uint way = 1u; way < kLobeBigWays; ++way) {
+            face_lobe.words[face_lobe_header(head + way)] = mine;
+            face_lobe.words[face_lobe_header(head + way) + 1u] = frame;
+            face_lobe.words[face_lobe_state_at(head + way)] = kLobeFollower;
+        }
+        face_lobe.words[header + 1u] = frame;
+        face_lobe.words[face_lobe_state_at(head)] = kLobeBig;
+        face_lobe.words[face_lobe_count_at(head)] = 0u;
+        // Zeroed and not carried over: the run may have been four other faces' answers a moment
+        // ago, and a weight of nought is exactly what tells every reader to fall back to the
+        // hemispherical mean until this lobe has something of its own.
+        for (uint bin = 0u; bin < kLobeBigBins; ++bin) {
+            const uint at = face_lobe_bin_at(head, bin);
+            if (at >= face_lobe.words.length()) return;
+            face_lobe.words[at] = 0u;
+            face_lobe.words[face_lobe_weight_at(head, bin, kLobeBigBins)] = 0u;
+        }
+        return;
+    }
+}
 
 // One counter and one base per workgroup.
 shared uint g_block_count;
@@ -53,6 +227,11 @@ void main() {
         // provisional tail is a separate, small, contiguous dispatch and is never compacted.
         const Face face = faces.items[slot];
         owed = face_work_of(slot, face, false).owed;
+        // R4b: and how many outgoing bins this face has earned, which is asked of every LIVE face
+        // and not only of the ones that owe work. A converged metal owes nothing and is still the
+        // surface a reflection is read off, so a class decided only for the busy faces would give
+        // the sharp class to a wall while it was settling and take it away the moment it settled.
+        face_coverage_bins(slot, face);
     }
 
     // Where this lane sits in the block. An atomicAdd on a shared word is cheap and its ordering

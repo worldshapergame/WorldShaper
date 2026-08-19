@@ -618,6 +618,12 @@ struct Options {
     // whoever comes back to it with a bigger budget; the machinery, the sizes and the audit line
     // are all built and priced.
     bool lobe_coverage = false;
+    // R4b's coverage rule (D186): how many outgoing bins a face gets is a function of how many
+    // PIXELS it covers as well as of how sharp its material is, and neither is compared against a
+    // cutoff. `--no-coverage-bins` is the control arm and restores the one fixed block every face
+    // has always been given. See face_bins_earned in src/world/face_store.hpp and the pass that
+    // applies it in shaders/face_worklist.comp.
+    bool coverage_bins = true;
     // R4d: a light ray carries on through glass and water instead of stopping dead on them, so a
     // room behind a window is lit through it. `--no-see-through` is the control arm and a window
     // blocks the sun exactly as a wall does, which is what this renderer has always done.
@@ -1093,6 +1099,8 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.face_gate = static_cast<u32>(std::atoll(argv[++i]));
     } else if (arg == "--no-face-gate") {
         options.face_gate = 0x7FFFFFFFu;
+    } else if (arg == "--no-coverage-bins") {
+        options.coverage_bins = false;   // R4b: every lobe is the one fixed block again
     } else if (arg == "--no-face-worklist") {
         options.face_worklist = false;
     } else if (arg == "--no-face-prolong") {
@@ -8126,6 +8134,7 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.face_lobe ? kProbeLobe : 0u) |
                               (options_.lobe_ray ? kProbeLobeRay : 0u) |
                               (options_.lobe_coverage ? kProbeLobeCoverage : 0u) |
+                              (options_.coverage_bins ? kProbeCoverageBins : 0u) |
                               (options_.see_through ? kProbeSeeThrough : 0u) |
                               (options_.refraction ? kProbeRefract : 0u) |
                               (options_.translucency ? kProbeTranslucent : 0u) |

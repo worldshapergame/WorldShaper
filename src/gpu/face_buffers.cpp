@@ -467,14 +467,32 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
                 // R4b's coverage rule, and it needs its own line because "nobody earns the
                 // expensive class" and "the pool has no room for it" are different faults with
                 // different fixes, and both print as an unchanged picture.
+                //
+                // In BYTES as well as in faces, and that is the whole point of the rule rather than
+                // a decoration on the line. A sharp-class face is four blocks, so a rule that hands
+                // the class out freely costs the store four times per face it changes its mind
+                // about — and a count of faces cannot show that, because the count goes DOWN as the
+                // bytes go up. Two builds whose picture differs and whose face count is the same
+                // differ here.
+                const u32 big = probe_words[kProbeLobeBigHeld];
+                const u32 cheap = held > big ? held - big : 0u;
+                const u64 payload_bytes =
+                    static_cast<u64>(cheap) * kLobeBlockBytes +
+                    static_cast<u64>(big) * kLobeBigWays * kLobeBlockBytes;
                 WS_LOG_INFO("faces",
                             "...of which {} hold the sharp class ({:.1f}%), which is four blocks "
-                            "and {} bins against {}",
-                            probe_words[kProbeLobeBigHeld],
-                            held > 0 ? 100.0 * probe_words[kProbeLobeBigHeld]
-                                           / static_cast<f64>(held)
-                                     : 0.0,
-                            kLobeBigBins, kLobeBins);
+                            "and {} bins against {}; {} bytes of payload over {} faces",
+                            big, held > 0 ? 100.0 * big / static_cast<f64>(held) : 0.0,
+                            kLobeBigBins, kLobeBins, payload_bytes, held);
+                // ...and which of the two rules put them there, because they are separable levers
+                // and a line that does not say which was on is a figure nobody can pair with
+                // another (trap 15). `--no-coverage-bins` clears the first; `--lobe-coverage`
+                // sets the second, which is D599's roughness-only class and is off by default.
+                WS_LOG_INFO("faces",
+                            "the sharp class is handed out by: coverage and roughness {}, "
+                            "roughness alone {}",
+                            (probe_words[0] & kProbeCoverageBins) != 0 ? "ON" : "off",
+                            (probe_words[0] & kProbeLobeCoverage) != 0 ? "ON" : "off");
             } else {
                 // Trap 15 once more: a pool nobody is asking about and a pool with nothing in it
                 // print the same nought, and only one of the two is a measurement.
