@@ -613,11 +613,22 @@ struct NodePoolBudget {
     // The angle one pixel subtends. Overridden per frame by `NodeView::pixel_angle` when the caller
     // fills it in; this is what the pool falls back to, and what the tests use.
     //
-    // The fallback is the 1280x800 figure, and the direction of the error is the one that matters:
-    // a HIGHER resolution has a smaller pixel angle, so rays there address finer nodes than this
-    // constant admits, and a pool trusting the constant would evict what they are looking at. It is
-    // safe at or below 1280 lines and it is not safe above them, which is why `NodeView` carries the
-    // real one and why this is only the default.
+    // The fallback has been described as "the 1280x800 figure" since it was written and it is not
+    // one. It is a RESOLUTION, and the arithmetic is one line: the angle is `2*tan(fov/2)/lines`,
+    // the lens is 90 degrees so the tangent is exactly 1, and `kSubPixelAngle` is 0.002 -- so
+    // 0.002 rad IS ONE THOUSAND LINES. Not 1280, and not 800.
+    //
+    // The direction of the error is the one that matters: a HIGHER resolution has a smaller pixel
+    // angle, so rays there address finer nodes than this constant admits, and a pool trusting it
+    // would evict what they are looking at. So it is safe at or below **1000** lines and unsafe
+    // above them -- which is why `NodeView` carries the real one and why this is only the default.
+    //
+    // Measured over every metre from 1 to 5,000 (`test_node_pool_evict.cpp`): against 4K's true
+    // 0.000926 rad the constant is 2.160x too coarse, the two first part company at **250 m**,
+    // they disagree at **4,070 of the first 5,000 metres**, and they are two whole levels apart
+    // between 500-540 m, 1000-1080 and 2000-2160. Every disagreement has the constant too COARSE;
+    // none has it too fine. The shipped 1280x800 is 800 LINES and so has always been on the safe
+    // side of it -- the figure in this comment was wrong by 28% and the behaviour never was.
     f64 pixel_angle = kSubPixelAngle;
 
     // How many levels finer than the marcher's own target the pool may still keep. Nought is the
