@@ -10896,3 +10896,92 @@ commit and workflow; a hand-built zip carries nothing but its checksum.
 | D695 | **A whole-world bake is a resuming loop, not a run** | decision | 18,816 of 27,315, then 26,496 of 36,427, each from the one before |
 | D695 | **`-RequireWhole`, and the release passes it** | decision | A partial world reads, gates and photographs exactly like a complete one |
 | D695 | **The gate opens the world from three cameras the bake never used** | D685 | A one-camera check proves the file was read and nothing about what is in it |
+
+---
+
+## D696 — the child source that is always there, and the fallback constant was a RESOLUTION
+
+**2026-08-19.** Two things in one file, and the second has been owed since R2b was written.
+
+### R8b: a hash over the key, because a hand-carved world has no field to ask
+
+What is left of R8 once R11 took R8c and R8d: **where a node's children come from when nothing else
+can answer.** §7 lists three sources — the material's own field (R11c), hashed variation, then what
+the player carved — and the middle one is the only one that is **always** available. The case it
+serves is not an edge case: a hand-carved world has no field by construction, and neither has a world
+loaded from a file whose clip is gone.
+
+**The tree is the coordinate.** A sub-voxel cell is *(its parent, which of the eight it is)* and
+nothing else, so the chain is a hash of the voxel it starts in plus one mix per octant on the way
+down. **There is no sub-voxel coordinate anywhere to overflow**, which is what makes *no cap —
+infinite* a property of the construction rather than a number somebody wrote down and hoped for. The
+test walks twenty levels below a voxel — thirty nanometres, past where a 32-bit ray can tell two
+cells apart (D156) — and it still answers.
+
+**Every step is integer, and that is the promise.** The one place not allowed to lose precision is
+the hashing, because a cell that has lost a low bit is not a slightly wrong grain, it is a
+*different* grain on one machine and not the other. The only float in the source is the knob a human
+wrote, quantised to 1/256ths once at `create`. The colour nudge shifts the **magnitude** and
+re-applies the sign, because a right shift of a negative integer is implementation-dependent in GLSL
+and defined in C++20, and the one form that is the same on both sides never shifts a negative.
+
+**It varies the MATERIAL and never the SHAPE, and that is a decision rather than an omission.** All
+eight children of a solid voxel are solid. Hashing the shape too is one line and it is wrong twice:
+it changes a wall's silhouette as you walk towards it, which is exactly the swimming this source
+exists to avoid, and **it does not conserve matter** — §7 keeps simulation, physics and the matter
+ledger at level 0, and a source that erodes a voxel into seven eighths of one has quietly handed the
+renderer a different world from the one the chisel reads.
+
+**Headless first, with a mirror, which is Stage 2's order rather than caution.** `mirror_variation`
+walks it exactly as `shaders/variation.glsl` walks it and is asserted against the world over the
+whole facility before the renderer is allowed near it: metre 4, **33,282,600 voxels in the clip's
+box, 995,234 solid, 0 voxels disagreeing with the world and 0 sub-voxel cells disagreeing with the
+mirror** at depths 1, 2 and 3. Two of R1a's four bugs were caught by a mirror and by nothing else.
+
+**Determinism measured across runs rather than argued.** Two separate runs both read
+**`7782aa5bb5c5a3a0`**, stable at frames 600 and 1200 within each. The box is fixed and stated in the
+line, because a fingerprint over whatever happened to be resident would differ between two runs for
+reasons that have nothing to do with the hash — and **a determinism gate that can fail for an
+unrelated reason is one nobody will believe the second time it goes red.**
+
+### R2b: the fallback constant was never a constant — it is one thousand lines
+
+`NodeView::pixel_angle` is filled in at last, from `2 · lens.x / resolution.y · lens.z`, verbatim
+from `visibility.comp` and `node.glsl` and off the same `render_extent` that fills
+`params.resolution`.
+
+**And the thing it replaces was mis-described in its own comment for as long as it has existed.**
+`kSubPixelAngle` is 0.002 rad; the angle is `2·tan(fov/2)/lines`; the lens is 90° so the tangent is
+exactly one; **so 0.002 rad IS ONE THOUSAND LINES.** The comment said "the 1280x800 figure" and
+"safe at or below 1280 lines". It is 1000, the comment was wrong by 28%, and it is corrected in the
+same change.
+
+**The error is one-sided, which is why nothing ever went wrong.** Measured over every metre from 1 to
+5,000: against 4K's true 0.000926 rad the constant is **2.160x too coarse**, the two first part
+company at **250 m**, they disagree at **4,070 of the first 5,000 metres**, and they are **two whole
+levels apart** between 500–540 m, 1000–1080 and 2000–2160. Every disagreement has the constant too
+COARSE and none has it too fine — the direction that gives up nodes rays are still reading. **The
+shipped 1280x800 is 800 LINES, so it has always been on the safe side**; the number in the comment
+was wrong and the behaviour never was.
+
+### And the rule still does not fire, which is the handover's finding standing
+
+Enclosed, close and outdoor, both arms, world pinned with `--refine-all --clip-metre 2` so all
+eighteen runs report `content f6c0d8fc96e2ffac`: the witness reads `sub-pixel STILL HELD 0 (0
+bytes); 0 refused, 0 given up` **on every run on both arms**, now with the real pixel angle rather
+than the fallback. Resident bytes and the image diff move by less than the control moves from itself.
+
+**Two method notes, both of which cost a pass.** A shot at settled+60 frames is not a settled shot —
+the control disagreed with *itself* by a mean of 7.01 of 255 on the enclosed camera, **more than
+either flag moved it**. And without `--refine-all` three arms settled at frames 248, 273 and 297 with
+three different content hashes, the ladder's order following frame timing, so an image diff taken
+across that measures the machine's mood.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D696 | **The hash chain is over the tree, not over a sub-voxel coordinate** | decision | Nothing to overflow, so "infinite" is a property of the construction |
+| D696 | **Variation moves the MATERIAL and never the shape** | decision | A hashed silhouette swims, and it does not conserve matter for the chisel |
+| D696 | **`kSubPixelAngle` 0.002 rad is 1000 lines, not 1280** | fault | `2·tan(45°)/lines`; the comment was wrong by 28%, the behaviour never was |
+| D696 | **The constant is one-sided: too coarse above 1000 lines, never too fine** | measurement | 2.160x at 4K, first divergence at 250 m, 4,070 of 5,000 metres disagree |
+| D696 | **R2b still does not fire on either named camera** | honesty | 0 held, 0 refused, 0 given up on all three cameras with the REAL angle in |
+| D696 | **A settled+60 shot is not settled** | trap | The control disagreed with itself by 7.01 of 255, more than either flag moved it |

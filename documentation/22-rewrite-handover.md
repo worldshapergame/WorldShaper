@@ -637,8 +637,8 @@ there are expected and are the integrator's.
 **Nobody was allowed into `documentation/`** — every agent hands its decision-log entry back as text
 and it is written here. That is why this file is one voice and not twelve.
 
-**FIVE ARE IN AS OF THIS WRITING, each built and tested on its own before the next was touched**,
-and the suite grew 637 → 667 cases with 0 failed at every step:
+**SEVEN ARE IN AS OF THIS WRITING, each built and tested on its own before the next was touched**,
+and the suite grew 637 → 681 cases with 0 failed at every step:
 
 | landed | what it turned out to be |
 |---|---|
@@ -647,6 +647,8 @@ and the suite grew 637 → 667 cases with 0 failed at every step:
 | the descent on the card (D691) | **the card was missing two of `Field::eval`'s three union culls.** 2,876 nodes a cell against 8,273, and the card is now AHEAD of the CPU arm on D681's own camera |
 | R11f (D692) | the format was already right; all three ways it could lose a building were outside it |
 | R4b (D694) | the coverage rule, in `face_worklist.comp` so no reader changed. The image is still missing and the lever is now named: `kLobeBigSamples` is 24 |
+| R8b + R2b (D696) | the hash child source, mirrored against the whole facility at 0 disagreements — **and `kSubPixelAngle` is ONE THOUSAND lines, not the 1280 its own comment claimed.** 2.160x too coarse at 4K, disagreeing at 4,070 of the first 5,000 metres, always in the direction that evicts what a ray is reading |
+| R11e + R11h far (D697) | light paths cause **0** sample jobs out of 150,584 offers, and at ten times the frames still 0 with the same world to the digit. **The far chisel now carves what the near one carves, byte for byte** — `ba1059f44662e644` from 60 m and from 1 m |
 
 **And one fault found by the integrator rather than by an agent, D693**: `run_clip_tool` exits 1
 silently on `clips/facility.clip` and works on `clips/sampler.clip`. **That is why every sampler gate
