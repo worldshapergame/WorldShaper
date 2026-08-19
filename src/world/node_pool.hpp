@@ -57,6 +57,7 @@
 // up. Chunks leave the *renderer*; they remain a storage grouping the renderer never sees.
 
 #include <bit>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -508,6 +509,18 @@ inline constexpr u32 kNodeUniform = 1u << 1;     // the whole subtree is one vox
 inline constexpr u32 kNodeEmissive = 1u << 2;    // something under here emits light
 inline constexpr u32 kNodeTransmissive = 1u << 3;   // something under here lets light through
 
+// R12c's other half: this node's child mask came from the CLIP and not from the world.
+//
+// It is here rather than in a side table because the one question anybody will ask of a seeded
+// node is "why does this mask disagree with `world_has`", and the answer has to travel with the
+// record that disagrees. `stale_masks` reads it to leave those nodes alone, `mirror_seed` reads it
+// to find them, and `retire_clip_seed` clears it.
+//
+// The shader never tests it. `node_flags_of` is read in exactly one place in shaders/node.glsl --
+// the kNodeLeaf test -- so a fifth bit is inert on the card, and the card is where the seeding has
+// to be visible for a descent to answer WANTED at all.
+inline constexpr u32 kNodeSeeded = 1u << 4;
+
 constexpr u32 node_level(const GpuNode& n) { return n.packed & 0xFFu; }
 constexpr u32 node_flags(const GpuNode& n) { return (n.packed >> 8) & 0xFFu; }
 constexpr u32 node_child_mask(const GpuNode& n) { return (n.packed >> 16) & 0xFFu; }
@@ -533,6 +546,118 @@ struct NodeFind {
     u32 level = 0;
     bool empty_below = false;
     bool wanted = false;
+};
+
+// ---- R12c's other half: the clip's extent, before anything has been sampled or pasted ----------
+//
+// R12c (D699) makes a descent that reaches a node the pool has not built EVALUATE the field there
+// and draw it. It works from the moment the ladder pastes anything, and it cannot touch the FIRST
+// frame of a cold world, for a reason that is entirely this file's:
+//
+//     frame 1 holds 0 chunks -> `index_world` finds nothing -> the pool seeds no roots ->
+//     `node_locate` answers kFoundEmpty rather than kFoundWanted -> there is nothing to derive.
+//
+// D673 shipped R11d with the coarse paste OFF (`no_coarse_paste` defaults true), so this is not an
+// edge case: on every cold load the world really is empty for the frames before the ladder's first
+// batch lands, and the screen really is sky. The marcher already knows how to draw the building
+// there. It is only never asked.
+//
+// So the pool is given its roots from the CLIP, which knows where the building is before anything
+// has sampled it.
+//
+// # What is seeded is the ADDRESSING, and that distinction is the whole safety argument
+//
+// A root is not a licence to allocate. What goes in is a chain of SHELLS -- a coordinate, a level
+// and a child mask, thirty-two bytes each -- from kEntryLevel down to `kClipSeedCellLevel`, and
+// nothing else. No leaf, no occupancy word, no payload byte, and no descent below the floor. The
+// pool's budget, its eviction policy and its residency argument (R2) are untouched, because a shell
+// is exactly what the pool would hold anyway the first time a ray asked about that block; the seed
+// only asks earlier and from a different source.
+//
+// # And the mask is the clip's, which means it does NOT agree with the world
+//
+// That is deliberate and it is the one dangerous thing here, so it is stated rather than hidden.
+// D621 is what happens when the render tree believes matter is somewhere the pool cannot build:
+// 304 lumps on screen and three separate audits agreeing perfectly with all of them, because every
+// one was downstream of the reader that was wrong. The defences are three:
+//
+//   * every seeded node carries `kNodeSeeded`, so a mask that disagrees with `world_has` says so
+//     in its own record rather than being inferred;
+//   * `mirror_seed` is an independent walker: it reads the pool's records, asks the FIELD through
+//     the same oracle the seed was built from and asks the WORLD through `world_has`, and reports
+//     the three facts separately -- agrees with the field, exceeds the world, misses the world.
+//     The claim it establishes is that the seed never claims LESS than the world has and never
+//     claims MORE than the field allows;
+//   * the seed RETIRES. It is in force only while the world holds no chunks at all, and the first
+//     `update` that sees one drops the seeded subtree, re-derives every seeded root's mask from the
+//     world, and clears the flag -- after which the pool is byte-for-byte the pool the control arm
+//     would have had. So a mask that exceeds the world cannot outlive the world being empty, which
+//     is what stops this being D133 wearing a new hat.
+//
+// The narrowness is the point and it is not an oversight: this serves the window before the world
+// exists, and hands over to D699's own mechanism the moment it does. Carrying the clip's mask into
+// a PARTIALLY built world needs a per-octant rule and is a separate change.
+//
+// # Where the floor is, and why it is not the leaf
+//
+// The seed's finest statement is "this 2^kClipSeedCellLevel cell may hold matter". Below that the
+// marcher derives. The floor is a trade between two costs that both grow eightfold a level: the
+// oracle is one field evaluation per candidate box, and a floor at the brick would be millions of
+// them on the estate (D686 -- there is no grain that is instant). What the floor buys is DERIVATION
+// pruned: a ray crossing a cell the clip says is empty jumps it analytically instead of paying a
+// field evaluation for it, and on frame 1 of a cold world every pixel is a candidate, so that is
+// the difference between a budget spent on sky and a budget spent on the building.
+//
+// **Level 8, and the reason it is not finer is a measurement rather than a budget.** On the estate
+// `forge::box_may_hold_matter` answers "may hold" for EVERY box inside the clip's own bounds, at 8 m,
+// 2 m, 1 m and 0.5 m alike -- 1,275 of 1,275, then 68,096 of 68,096, then 531,468 of 531,468, then
+// 4,160,325 of 4,160,325. It is not broken: the prune root's distance up the middle of the clip runs
+// 1.30 m at the ground to **17.29 m at the top of the extent**, and a 4 m half-box there still
+// answers "may", so the test is carrying about ten metres of slack -- which is D644 and D646's
+// finding arriving from the other side. Ten metres of slack cannot narrow a seed to the quarter of a
+// metre the marcher marches.
+//
+// So the only pruning that works here is the EXTENT ITSELF, and once the shells resolve the clip's
+// box, finer buys nothing: measured, the marcher derived 1,526 cells at the peak with an 8 m floor
+// and 1,407 with a 2 m one, for 11,153 shells instead of 308. Level 4 would be 610,717 shells --
+// twenty megabytes of addressing, which is no longer addressing.
+//
+// Level 8 is 256 voxels, which is what used to be a chunk and is the grain the ladder's coarsest
+// node is cut at. On the estate it is 308 shells and 1,275 field questions in 0.1 ms against a load
+// that is 297 ms to playable. `--derive-seed-level N` moves it, and nothing depends on its value.
+inline constexpr u32 kClipSeedCellLevel = 8;
+
+// "May this box of absolute voxels hold matter?" Supplied by the caller, because the answer lives
+// in `forge` and this file must not grow an opinion about the field.
+//
+// It must be CONSERVATIVE in one direction only: answering true over emptiness costs a derivation,
+// and answering false over matter loses a building. `forge::box_may_hold_matter` is written to that
+// standard and is what main.cpp passes.
+//
+// Both corners are inclusive, in absolute voxels, and already clipped to the extent.
+using NodeSeedOracle = std::function<bool(const i64 lo[3], const i64 hi[3])>;
+
+// What the seed cost and what it put in, so a run's log can say it rather than imply it.
+struct NodeSeedReport {
+    u32 roots = 0;        // entry-level shells placed in the table
+    u32 shells = 0;       // every shell, roots included
+    u64 asked = 0;        // oracle calls
+    u32 cells = 0;        // mask bits set at kClipSeedCellLevel -- what a ray may derive into
+    bool live = false;    // false when nothing was seeded, or when the seed has already retired
+    f64 ms = 0.0;
+};
+
+// The independent walker. Three facts kept apart, because a single "agrees" would be the shape of
+// audit D621 warns about.
+struct NodeSeedMirror {
+    u32 shells = 0;          // seeded nodes walked, from the pool's own records
+    u32 bits = 0;            // mask bits set across them
+    u32 agrees_field = 0;    // ...of which the oracle also says may hold matter
+    u32 differs_field = 0;   // ...and of which it does not. MUST be nought: the seed invented one
+    u32 exceeds_world = 0;   // bits the world has nothing under. Expected -- it is the whole point
+    u32 misses_world = 0;    // the world HAS it and the mask does not. MUST be nought
+    u32 leaves = 0;          // leaves under a seeded shell. MUST be nought -- no storage was seeded
+    u32 children = 0;        // built children under a seeded shell that are not themselves seeded
 };
 
 struct NodePoolBudget {
@@ -976,6 +1101,36 @@ public:
     // arithmetic and the exact way D674 went wrong.
     u32 subpixel_finest_for(const NodeKey& key) const;
 
+    // ---- R12c's other half: the clip's extent ---------------------------------------------------
+
+    // Give the pool its roots from the clip, before anything has been sampled or pasted.
+    //
+    // `lo`/`hi` are the clip's own extent in absolute voxels, inclusive. `may_hold` is the field's
+    // conservative answer for a box. Shells are built from kEntryLevel down to `cell_level`, whose
+    // mask bits are the finest statement the seed makes; nothing below it is addressed and nothing
+    // at all is stored.
+    //
+    // **Refused, and it says so, when the world is not empty.** A world with chunks in it has real
+    // roots or is about to get them from `index_world`, and seeding a clip mask over one would be
+    // exactly the disagreement `mirror_seed` exists to forbid. So this is a no-op on a warm load,
+    // which is the correct behaviour rather than a guard against misuse: a cached world does not
+    // need deriving.
+    //
+    // Call it once, after `create` and before the first `update`. Calling it again replaces
+    // nothing -- a seed already in force is kept and the report says `live`.
+    NodeSeedReport seed_from_clip(const World& world, const i64 lo[3], const i64 hi[3],
+                                  const NodeSeedOracle& may_hold,
+                                  u32 cell_level = kClipSeedCellLevel);
+
+    // What the last `seed_from_clip` put in, and whether it is still in force.
+    const NodeSeedReport& clip_seed() const { return seed_report_; }
+    bool clip_seed_live() const { return seed_live_; }
+
+    // The mirror. Walks the pool's own seeded records and compares each mask bit against the FIELD
+    // (through the same oracle) and against the WORLD (through `world_has`). See NodeSeedMirror for
+    // which of the six numbers are allowed to be non-zero and which are not.
+    NodeSeedMirror mirror_seed(const World& world, const NodeSeedOracle& may_hold) const;
+
     // ---- R8b -----------------------------------------------------------------------------------
 
     // Which arm the child source is running, after the budget has had its say.
@@ -1059,6 +1214,28 @@ private:
     // looked like empty.
     bool world_has(const World& world, const NodeKey& key) const;
     void index_world(const World& world);
+
+    // R12c's other half. One shell of the clip seed and everything under it, or kNoNode when the
+    // oracle says the whole box is empty. Recursive, and bounded by `cell_level` rather than by any
+    // per-frame budget: the seed is one call at load and its size is the clip's, not the screen's.
+    u32 seed_shell(const NodeKey& key, const NodeSeedOracle& may_hold, u32 cell_level,
+                   NodeSeedReport& into);
+    // Put a root in the entry table. Shared with `update`'s own root seeding so the two cannot
+    // disagree about how a root is addressed. False when the table is full.
+    bool place_entry(const NodeKey& key, u32 slot);
+    // Hand the addressing back. Every seeded root sheds its seeded subtree and re-derives its mask
+    // from the world, so what is left is what `index_world` would have built on its own.
+    void retire_clip_seed(const World& world);
+    // Free a seeded shell's seeded descendants and its run, and nothing else.
+    //
+    // Deliberately NOT `release_children`, which is the eviction path: that counts every node it
+    // frees into `evictions_` and into the eviction instrument, and retirement is not an eviction.
+    // A pool that reported a thousand evictions for handing back addressing nobody had read would
+    // make every churn figure on the run unreadable.
+    void free_seeded_subtree(u32 slot);
+    // A node's box clipped to the seeded extent, in absolute voxels. False when they do not meet,
+    // which is how the recursion prunes to the clip rather than to the 512 m block round it.
+    bool seed_box_of(const NodeKey& key, i64 lo[3], i64 hi[3]) const;
 
     // Does any part of this node's box fall inside the camera's frustum?
     //
@@ -1239,6 +1416,18 @@ private:
     // policy that is doing nothing costs one compare a frame. The pool already logs its own edit
     // refreshes on the same principle.
     u64 subpixel_said_ = 0;
+
+    // ---- R12c's other half ----------------------------------------------------------------------
+    //
+    // The roots the clip seeded, kept so retirement can find them without walking the whole array,
+    // and the flag that says whether the clip's masks are still standing. `seed_cell_level_` is
+    // kept because `mirror_seed` has to ask the oracle about the same boxes the seed asked about.
+    std::vector<u32> seed_roots_;
+    i64 seed_lo_[3] = {0, 0, 0};
+    i64 seed_hi_[3] = {-1, -1, -1};
+    u32 seed_cell_level_ = kClipSeedCellLevel;
+    bool seed_live_ = false;
+    NodeSeedReport seed_report_;
 
     // ---- R8b ------------------------------------------------------------------------------------
     bool hashed_variation_ = false;

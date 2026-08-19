@@ -1509,3 +1509,268 @@ TEST_CASE("R8b over the whole facility" * doctest::skip()) {
     second.create(budget, types);
     CHECK(second.variation_fingerprint(world, lo, hi, 4, 3, nullptr) == print);
 }
+
+// ---- R12c's other half: the clip's extent, before anything has been sampled --------------------
+//
+// The stage's own report (D699) says exactly what was missing and why it is here rather than in the
+// marcher: at frame 1 the world holds 0 chunks, so `index_world` seeds no roots, so the SHADER's
+// `node_locate` finds nothing in the entry table and answers kFoundEmpty -- and a descent that
+// answers empty has nothing to derive. `seed_from_clip` puts the clip's own answer in the tree as
+// addressing so the same descent answers WANTED.
+//
+// # The discriminator these tests use, and why it is not `NodeFind::wanted`
+//
+// `NodePool::locate` answers `wanted = true` when there is no root at the entry level, and the
+// shader answers kFoundEmpty for the same tree. That is not a disagreement to fix here -- it is
+// deliberate on both sides and both comments say so -- but it does mean `wanted` alone cannot tell
+// the seeded arm from the control arm. What CAN is `slot`: a descent that found a root has one, a
+// descent that found no root has kNoNode. So every case below asserts on the pair.
+
+namespace {
+
+// A stand-in for `forge::box_may_hold_matter`: conservative in the one direction that matters, and
+// with no field behind it, so the tests pin the pool's own arithmetic rather than the sampler's.
+// True for any box that meets the chosen solid, plus a voxel of slack in every direction so that
+// "may" really is may.
+struct SeedOracle {
+    i64 lo[3]{0, 0, 0};
+    i64 hi[3]{0, 0, 0};
+    mutable u64 asked = 0;
+
+    bool operator()(const i64 box_lo[3], const i64 box_hi[3]) const {
+        ++asked;
+        for (u32 axis = 0; axis < 3; ++axis) {
+            if (box_lo[axis] > hi[axis] + 1) return false;
+            if (box_hi[axis] < lo[axis] - 1) return false;
+        }
+        return true;
+    }
+};
+
+// The extent a clip would hand over: 2,048 voxels a side from the origin, which is 64 m and sits
+// inside one entry-level block, so the whole seed is one root and the arithmetic is checkable by
+// hand.
+constexpr i64 kSeedLo[3] = {0, 0, 0};
+constexpr i64 kSeedHi[3] = {2047, 2047, 2047};
+
+}  // namespace
+
+TEST_CASE("the clip's extent gives a cold pool the roots the first frame needs") {
+    Fixture fixture;
+    SeedOracle oracle;
+    // The "building": one 512-voxel cell in the middle of the extent.
+    oracle.lo[0] = oracle.lo[1] = oracle.lo[2] = 1024;
+    oracle.hi[0] = oracle.hi[1] = oracle.hi[2] = 1535;
+
+    // The control arm first, and it is the whole of D699's missing half in two lines: an empty
+    // world has no root, so the descent the shader performs finds nothing at the entry level.
+    const NodeFind cold = fixture.pool.locate(node_key_of(1200, 1200, 1200, kLeafLevel));
+    CHECK(cold.slot == kNoNode);
+
+    const NodeSeedReport seeded =
+        fixture.pool.seed_from_clip(fixture.world, kSeedLo, kSeedHi, std::cref(oracle));
+    CHECK(seeded.live);
+    CHECK(seeded.roots == 1);
+    CHECK(seeded.shells > 1);
+    CHECK(seeded.cells > 0);
+    // More questions than the seed itself counted, because `seed_from_clip` runs `mirror_seed` at
+    // the end and the mirror asks the field AGAIN about every bit it finds. That is the point of it
+    // -- an audit that reuses the seed's own answers is trap 26 -- so this is `>=` rather than `==`.
+    CHECK(oracle.asked > seeded.asked);
+    CHECK(fixture.pool.clip_seed_live());
+
+    // Inside the clip's matter: a root, and WANTED. This is the pair the marcher reads as
+    // "evaluate the field here" rather than "fly through".
+    const NodeFind inside = fixture.pool.locate(node_key_of(1200, 1200, 1200, kLeafLevel));
+    CHECK(inside.slot != kNoNode);
+    CHECK(inside.wanted);
+    CHECK(!inside.empty_below);
+
+    // Inside the extent and away from the matter: a root, and EMPTY at a known size, which is what
+    // lets a ray jump the cell instead of paying a field evaluation for it. This is the whole
+    // reason the seed goes below the root at all.
+    const NodeFind air = fixture.pool.locate(node_key_of(64, 64, 64, kLeafLevel));
+    CHECK(air.slot != kNoNode);
+    CHECK(!air.wanted);
+    CHECK(air.empty_below);
+
+    // Outside the extent altogether: no root, exactly as before the seed.
+    const NodeFind elsewhere = fixture.pool.locate(node_key_of(1 << 20, 0, 0, kLeafLevel));
+    CHECK(elsewhere.slot == kNoNode);
+
+    CHECK(fixture.pool.validate());
+}
+
+TEST_CASE("what the clip seeds is addressing and never storage") {
+    Fixture fixture;
+    SeedOracle oracle;
+    oracle.lo[0] = oracle.lo[1] = oracle.lo[2] = 0;
+    oracle.hi[0] = oracle.hi[1] = oracle.hi[2] = 2047;   // the whole extent may hold matter
+
+    const NodeSeedReport seeded =
+        fixture.pool.seed_from_clip(fixture.world, kSeedLo, kSeedHi, std::cref(oracle));
+    REQUIRE(seeded.live);
+
+    // R2's residency argument is that what the pool holds follows the pixels. A seed that allocated
+    // a leaf, an occupancy word or a payload byte would have undone it before a frame was drawn.
+    CHECK(fixture.pool.leaf_watermark() == 0);
+    CHECK(fixture.pool.payload_watermark() == 0);
+    const NodePoolStats stats = fixture.pool.stats();
+    CHECK(stats.leaves == 0);
+    CHECK(stats.payload_in_use == 0);
+    CHECK(stats.builds == 0);   // `builds_` counts what the WORLD built; the clip built nothing
+    CHECK(stats.evictions == 0);
+
+    // ...and the addressing itself is small. 2,048 voxels a side at an 8 m floor is 512 cells, so
+    // the shells above them are a few hundred records of thirty-two bytes.
+    CHECK(seeded.cells == 512);
+    CHECK(fixture.pool.node_watermark() < 1024);
+
+    // A frame served against the still-empty world builds nothing and evicts nothing: the seed is
+    // not work the pool now has to do.
+    const NodeUploadBatch& batch = fixture.serve(1);
+    CHECK(batch.built == 0);
+    CHECK(batch.evicted == 0);
+    CHECK(batch.evicted_nodes == 0);
+    CHECK(batch.no_room == 0);
+    CHECK(!batch.out_of_memory);
+    CHECK(fixture.pool.clip_seed_live());
+}
+
+TEST_CASE("the seed's mirror says what it agrees with, and the three answers are kept apart") {
+    Fixture fixture;
+    SeedOracle oracle;
+    oracle.lo[0] = oracle.lo[1] = oracle.lo[2] = 1024;
+    oracle.hi[0] = oracle.hi[1] = oracle.hi[2] = 1535;
+
+    const NodeSeedReport seeded =
+        fixture.pool.seed_from_clip(fixture.world, kSeedLo, kSeedHi, std::cref(oracle));
+    REQUIRE(seeded.live);
+
+    const NodeSeedMirror mirror = fixture.pool.mirror_seed(fixture.world, std::cref(oracle));
+    CHECK(mirror.shells == seeded.shells);
+    CHECK(mirror.bits > 0);
+
+    // The two that must be nought. `differs_field` nought is "the seed never invented a bit the
+    // field does not allow"; `misses_world` nought is "the seed never lost one the world holds".
+    // D621 is what the second one looks like when nobody measures it.
+    CHECK(mirror.differs_field == 0);
+    CHECK(mirror.misses_world == 0);
+    // ...and the two that say the seed did what it says on the tin.
+    CHECK(mirror.leaves == 0);
+    CHECK(mirror.children == 0);
+    CHECK(mirror.agrees_field == mirror.bits);
+    // Every bit exceeds the world, because the world is empty. That is the disagreement this whole
+    // change is, stated by an instrument rather than left to be discovered from a screenshot.
+    CHECK(mirror.exceeds_world == mirror.bits);
+
+    // And the world-facing audit is not confused by it: a seeded mask is not a stale mask, because
+    // it never claimed to be the world's.
+    CHECK(fixture.pool.stale_masks(fixture.world) == 0);
+    CHECK(fixture.pool.stale_leaves(fixture.world) == 0);
+}
+
+TEST_CASE("the clip's seed retires the moment the world holds anything") {
+    Fixture fixture;
+    SeedOracle oracle;
+    oracle.lo[0] = oracle.lo[1] = oracle.lo[2] = 1024;
+    oracle.hi[0] = oracle.hi[1] = oracle.hi[2] = 1535;
+
+    REQUIRE(fixture.pool.seed_from_clip(fixture.world, kSeedLo, kSeedHi, std::cref(oracle)).live);
+    const u32 seeded_nodes = fixture.pool.node_watermark();
+
+    // The ladder pastes. Only a corner of what the clip claimed, which is the case that matters:
+    // the seed must not survive it anywhere, because a mask nothing can build under is a phantom
+    // request every frame for ever.
+    fixture.fill_box(1024, 1024, 1024, 1039, 1039, 1039);
+    fixture.serve(2);
+
+    CHECK(!fixture.pool.clip_seed_live());
+    const NodeSeedMirror after = fixture.pool.mirror_seed(fixture.world, std::cref(oracle));
+    CHECK(after.shells == 0);   // nothing carries the flag any more
+    // What is left is the pool the control arm would have had: one root, its mask the world's own.
+    CHECK(fixture.pool.stale_masks(fixture.world) == 0);
+    CHECK(fixture.pool.validate());
+    CHECK(fixture.pool.node_watermark() <= seeded_nodes);
+
+    // The world's own geometry still streams through the root the seed left behind.
+    //
+    // The descent is asked AFTER this rather than before it, and the difference is worth stating:
+    // straight after retirement the root is a bare shell, so every point under a set mask bit
+    // answers WANTED at the root's own level -- which is the ordinary state of an unbuilt tree and
+    // is what the control arm answers too. What retiring changes is what happens once the chain
+    // exists, and that is the line below.
+    fixture.want_box(1024, 1024, 1024, 1039, 1039, 1039);
+    fixture.serve(3);
+    CHECK(fixture.pool.mirror_voxel(1030, 1030, 1030) == fixture.stone);
+    CHECK(fixture.pool.mirror_voxel(1500, 1500, 1500) == kAir);
+    CHECK(fixture.pool.stale_masks(fixture.world) == 0);
+    CHECK(fixture.pool.stale_leaves(fixture.world) == 0);
+
+    // A cell the clip claimed and the world does not have reads as EMPTY rather than WANTED, which
+    // is the whole of what retiring is for: with the seed still standing this cell would be one the
+    // marcher derives from the field every frame, for ever, over a world that will never hold it.
+    const NodeFind gone = fixture.pool.locate(node_key_of(1500, 1500, 1500, kLeafLevel));
+    CHECK(gone.slot != kNoNode);
+    CHECK(!gone.wanted);
+    CHECK(gone.empty_below);
+}
+
+TEST_CASE("a world that already has chunks is not seeded from its clip") {
+    Fixture fixture;
+    SeedOracle oracle;
+    oracle.lo[0] = oracle.lo[1] = oracle.lo[2] = 1024;
+    oracle.hi[0] = oracle.hi[1] = oracle.hi[2] = 1535;
+
+    // A warm load: the world came off disk before the pool was made. It has real roots one
+    // `index_world` away, and a clip mask over them would be the one disagreement `mirror_seed`
+    // forbids -- so this is refused rather than merged.
+    fixture.fill_box(1024, 1024, 1024, 1039, 1039, 1039);
+    const NodeSeedReport refused =
+        fixture.pool.seed_from_clip(fixture.world, kSeedLo, kSeedHi, std::cref(oracle));
+    CHECK(!refused.live);
+    CHECK(refused.roots == 0);
+    CHECK(refused.shells == 0);
+    CHECK(oracle.asked == 0);
+    CHECK(!fixture.pool.clip_seed_live());
+    CHECK(fixture.pool.node_watermark() == 0);
+}
+
+TEST_CASE("a pool that was seeded settles on the same tree as one that never was") {
+    // The gate that matters more than the first frame: a first frame that changes the world it
+    // settles to is a different world, not a faster one. Two pools, one world, the same requests.
+    SeedOracle oracle;
+    oracle.lo[0] = oracle.lo[1] = oracle.lo[2] = 1024;
+    oracle.hi[0] = oracle.hi[1] = oracle.hi[2] = 1535;
+
+    Fixture seeded;
+    REQUIRE(seeded.pool.seed_from_clip(seeded.world, kSeedLo, kSeedHi, std::cref(oracle)).live);
+    seeded.serve(1);   // a frame with the seed standing and the world still empty
+
+    Fixture control;
+
+    for (Fixture* arm : {&seeded, &control}) {
+        arm->fill_box(1024, 1024, 1024, 1055, 1055, 1055);
+        arm->serve(2);
+        arm->want_box(1024, 1024, 1024, 1055, 1055, 1055);
+        arm->serve(3);
+    }
+
+    u64 differ = 0;
+    u64 solid = 0;
+    for (i64 z = 1020; z < 1060; ++z) {
+        for (i64 y = 1020; y < 1060; ++y) {
+            for (i64 x = 1020; x < 1060; ++x) {
+                const VoxelTypeId a = seeded.pool.mirror_voxel(x, y, z);
+                const VoxelTypeId b = control.pool.mirror_voxel(x, y, z);
+                if (a != b) ++differ;
+                if (a != kAir) ++solid;
+            }
+        }
+    }
+    CHECK(differ == 0);
+    CHECK(solid == 32 * 32 * 32);
+    CHECK(seeded.pool.stale_masks(seeded.world) == 0);
+    CHECK(seeded.pool.stale_leaves(seeded.world) == 0);
+    CHECK(seeded.pool.validate());
+}

@@ -214,6 +214,19 @@ struct Options {
     // the device: the cells being derived at that moment averaged 273 us each, 325x the mean, which
     // is D688's two-hundredfold spread arriving inside a budget. 16 M grants a quarter as many.
     u32 derive_visits_m = 16;
+    // R12c's other half: the node pool takes its roots from the CLIP's extent before anything has
+    // been sampled or pasted, so a descent on the FIRST frame of a cold world answers WANTED where
+    // the clip says there is a building and the marcher has something to derive.
+    //
+    // OFF, and a no-op unless `--derive-in-marcher` is on as well: a pool seeded with roots it
+    // cannot fill is a pool reporting wanted nodes nobody can build, which is D133 in a new
+    // structure. See NodePool::seed_from_clip and kClipSeedCellLevel.
+    bool derive_first_frame = false;
+    // ...and how fine the seed's own statement is. The mask bits it sets are over cells of
+    // 2^derive_seed_level voxels, and a ray crossing one the clip says is empty jumps it instead of
+    // paying a field evaluation for it. Finer prunes more derivations and costs more field
+    // questions at load; see kClipSeedCellLevel for the trade and what it was measured at.
+    u32 derive_seed_level = kClipSeedCellLevel;
     // Count the nodes each cell walks instead of building a world. What a dispatch costs is
     // (nodes walked) x (what a step costs); no clock separates those two and this measures one.
     bool gpu_visits = false;
@@ -1174,6 +1187,10 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.gpu_sample_check = static_cast<u32>(next_number(64));
     } else if (arg == "--derive-in-marcher") {
         options.derive_in_marcher = true;
+    } else if (arg == "--derive-first-frame") {
+        options.derive_first_frame = true;
+    } else if (arg == "--derive-seed-level") {
+        options.derive_seed_level = static_cast<u32>(next_number(kClipSeedCellLevel));
     } else if (arg == "--derive-cap") {
         options.derive_cap = static_cast<u32>(next_number(20000));
     } else if (arg == "--derive-visits") {
@@ -1687,6 +1704,17 @@ void print_help() {
         "                        is still reported, so the CPU still builds the node properly; what\n"
         "                        changes is what the ray draws THIS frame. OFF -- D687 prices an\n"
         "                        uncapped frame on the enclosed camera at 1,239 ms\n"
+        "  --derive-first-frame  ...and give the node pool its roots from the CLIP's extent before\n"
+        "                        anything has been sampled, so the FIRST frame of a cold world has\n"
+        "                        something to derive. Without it frame 1 holds 0 chunks, the pool\n"
+        "                        seeds no roots, a descent answers EMPTY rather than WANTED, and the\n"
+        "                        screen is sky. Shells only -- no leaf, no payload -- and they are\n"
+        "                        handed back the moment the ladder pastes anything. OFF, and a\n"
+        "                        no-op without --derive-in-marcher\n"
+        "  --derive-seed-level N how fine that seed's own statement is, as a node level (8 = 8 m\n"
+        "                        cells). A ray crossing a cell the clip says is empty jumps it\n"
+        "                        instead of paying a field evaluation for it, so finer prunes\n"
+        "                        derivations and costs more field questions at load\n"
         "  --derive-cap N        how many cells ONE dispatch may derive before the rest fall back to\n"
         "                        the stand-in (20000)\n"
         "  --derive-visits N     ...and how many FIELD NODES it may walk doing so, in millions (16;\n"
@@ -2162,8 +2190,17 @@ private:
     void update_tools(const InputState& input, bool chisel_has_wheel, bool clipboard_has_wheel,
                       f64 dt);
     void invalidate_edited_chunks(const std::vector<Op>& ops);
+
+    // WHY the world changed, because three of the four callers are not edits and one is.
+    //
+    // `kEdit` is a chisel, a paste, an undo -- somebody changed the building. `kRefinement` is the
+    // ladder delivering a node at finer detail, which is the SAME building arriving in focus. They
+    // want almost all of the same work and differ on exactly one thing: whether the faces inside
+    // the box are told to drop their accumulated light. See the function.
+    enum class WorldChange : u8 { kEdit, kRefinement };
     // The same, for a writer that is not made of ops. See the function.
-    void announce_world_change(const i64 lo[3], const i64 hi[3]);
+    void announce_world_change(const i64 lo[3], const i64 hi[3],
+                               WorldChange why = WorldChange::kEdit);
     void refresh_world_bounds();
 
     // The interface, one frame of it, and what it decided. Drawn after the world's own composite
@@ -4439,7 +4476,8 @@ void Application::deliver_refinement(RefineDelivery delivered) {
             lo[0] + std::max(job.result->clip.size[0] * scale - 1, i64{0}),
             lo[1] + std::max(job.result->clip.size[1] * scale - 1, i64{0}),
             lo[2] + std::max(job.result->clip.size[2] * scale - 1, i64{0})};
-        announce_world_change(lo, hi);
+        // The ladder delivering a node. NOT an edit: see announce_world_change.
+        announce_world_change(lo, hi, WorldChange::kRefinement);
     }
     const f64 paste_ms = ns_to_ms(now_ns() - paste_began);
     refine_total_paste_ms_ += paste_ms;
@@ -4934,7 +4972,8 @@ void Application::clean_world_stipple() {
     for (const ChunkCoord& coord : cleaned.changed) {
         const i64 lo[3] = {coord.x << 8, coord.y << 8, coord.z << 8};
         const i64 hi[3] = {lo[0] + 255, lo[1] + 255, lo[2] + 255};
-        announce_world_change(lo, hi);
+        // The world being re-derived by --clean-world. NOT an edit: see announce_world_change.
+        announce_world_change(lo, hi, WorldChange::kRefinement);
     }
 
     usize kept = 0;
@@ -5209,7 +5248,8 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
         const i64 hi[3] = {lo[0] + std::max(job.result->clip.size[0] * scale - 1, i64{0}),
                            lo[1] + std::max(job.result->clip.size[1] * scale - 1, i64{0}),
                            lo[2] + std::max(job.result->clip.size[2] * scale - 1, i64{0})};
-        announce_world_change(lo, hi);
+        // The ladder delivering a node. NOT an edit: see announce_world_change.
+        announce_world_change(lo, hi, WorldChange::kRefinement);
         if (!covered_any) {
             covered_low = job.settings.low;
             covered_high = job.settings.high;
@@ -6786,7 +6826,7 @@ u64 Application::edit_box_hash() const {
 //
 // It takes a BOX rather than a list of ops because the paste is not made of ops. The edit path
 // unions its group and hands the union over, which is what the light window already used.
-void Application::announce_world_change(const i64 lo[3], const i64 hi[3]) {
+void Application::announce_world_change(const i64 lo[3], const i64 hi[3], WorldChange why) {
     // The world changed, so the last sweep's answer is stale whatever the camera is doing: carving
     // a wall is exactly what turns a refused node into a reachable one. A refinement paste comes
     // through here too, and must NOT expire the refusal memos with it -- see rearm_refinement.
@@ -6808,7 +6848,28 @@ void Application::announce_world_change(const i64 lo[3], const i64 hi[3]) {
     // tried and it is the smearing, every voxel placed relighting the whole scene at once.
     // This keeps every measured value and simply re-measures faster for a moment.
     shadow_refresh_frames_ = kShadowRefreshFrames;
-    edit_window_opened_ = true;   // see the member: the faces in the box drop their history once
+    // ...and the faces in the box drop their history once -- FOR AN EDIT, and never for the ladder
+    // delivering a node.
+    //
+    // Reported from playing, and it is the loudest of the three: *after any node is loaded the path
+    // tracer resets, which causes flickering and loss of information, especially noticeable in
+    // reflections.* That is this line. Three of this function's four callers are refinement pastes
+    // -- the ladder streaming the world in -- so during a load every node that arrived told every
+    // face around it to throw away what it had measured, thousands of times over. A reflection
+    // takes about a hundred and eight visits to converge (D703), so it is the term with the most to
+    // lose and the one a player sees losing it.
+    //
+    // **A paste does not need this, and the reason is the face KEY.** A face is (node, level,
+    // direction): when a coarse node is replaced by finer geometry the faces on it get NEW keys and
+    // start from nothing anyway, which is right and costs nothing to arrange. A face whose key
+    // survives a paste is a face whose geometry did not change -- the same surface, still there,
+    // now with sharper neighbours -- and its measured light is still the correct answer. Dropping
+    // it is throwing away a right answer to re-derive the same one.
+    //
+    // An EDIT is the case the mechanism was written for and it is genuinely different: a chisel
+    // changes what is behind a face whose key is unchanged, so the history really is stale and
+    // D319's unanimity test really is no test at all for it. That case is untouched.
+    if (why == WorldChange::kEdit) edit_window_opened_ = true;
     lights_dirty_ = true;   // a placed lamp is a light nothing can aim at until this is rebuilt
     // ...and WHICH chunks have to be looked at again, which is the whole of R9g's first half.
     //
@@ -9572,6 +9633,58 @@ int Application::play(const Options& options) {
         node_budget_leaves_ = node_budget.max_occupancy_leaves;
         const u64 t_node_buffers = now_ns();
         WS_LOG_INFO("load", "node pool {:.0f} ms", ns_to_ms(t_node_buffers - t_pool));
+
+        // R12c's other half: the clip's extent, handed to the pool before the first frame.
+        //
+        // Here rather than in `seed_refine_nodes`, which is where the extent is worked out, because
+        // `build_world` runs on the loading thread and finishes long BEFORE this line -- the pool
+        // does not exist while the clip is being read. Everything this needs (`refine_plan_`,
+        // `refine_bounds_*`, `refine_at_`, `refine_authored_`) is settled by then and unchanged.
+        //
+        // Gated on `--derive-in-marcher` as well as its own flag: seeding roots the marcher cannot
+        // derive from leaves the pool reporting wanted nodes nobody can build, which is a phantom
+        // request every frame for as long as the world stays empty (D133).
+        if (options_.derive_first_frame && options_.derive_in_marcher && refine_plan_.ok()) {
+            const f64 per = static_cast<f64>((refine_authored_ > 0) ? refine_authored_
+                                                                   : kVoxelsPerMetre);
+            const i64 lo[3] = {
+                static_cast<i64>(std::floor(refine_bounds_low_.x * per)) + refine_at_[0],
+                static_cast<i64>(std::floor(refine_bounds_low_.y * per)) + refine_at_[1],
+                static_cast<i64>(std::floor(refine_bounds_low_.z * per)) + refine_at_[2]};
+            const i64 hi[3] = {
+                static_cast<i64>(std::ceil(refine_bounds_high_.x * per)) - 1 + refine_at_[0],
+                static_cast<i64>(std::ceil(refine_bounds_high_.y * per)) - 1 + refine_at_[1],
+                static_cast<i64>(std::ceil(refine_bounds_high_.z * per)) - 1 + refine_at_[2]};
+            // The oracle is `forge`'s own, so the pool's masks and the ladder's own no-op test are
+            // the same answer from the same reader. `box_may_hold_matter` is conservative in the
+            // one direction that matters: it may say yes over emptiness, which costs a derivation,
+            // and it may not say no over matter, which would lose a building.
+            const forge::SamplePlan& plan = refine_plan_;
+            const i32 authored = (refine_authored_ > 0) ? refine_authored_ : kVoxelsPerMetre;
+            const i64 at[3] = {refine_at_[0], refine_at_[1], refine_at_[2]};
+            // The extent in BOTH units, because the seed's masks are only as right as this
+            // conversion and a metre read as a voxel is a box thirty-two times too big -- which
+            // answers "may hold matter" everywhere and looks exactly like a clip that fills its own
+            // bounds. Printed once, at load, beside the clip's own bounds line.
+            WS_LOG_INFO("pool",
+                        "R12c: the clip's extent is {:.1f},{:.1f},{:.1f} .. {:.1f},{:.1f},{:.1f} m "
+                        "at {} voxels a metre, stamped at {},{},{} -- voxels {},{},{} .. {},{},{}",
+                        refine_bounds_low_.x, refine_bounds_low_.y, refine_bounds_low_.z,
+                        refine_bounds_high_.x, refine_bounds_high_.y, refine_bounds_high_.z,
+                        authored, at[0], at[1], at[2], lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+            node_pool_.seed_from_clip(
+                world_, lo, hi,
+                [&plan, per, authored, &at](const i64 box_lo[3], const i64 box_hi[3]) {
+                    const forge::Vec3 low{static_cast<f64>(box_lo[0] - at[0]) / per,
+                                          static_cast<f64>(box_lo[1] - at[1]) / per,
+                                          static_cast<f64>(box_lo[2] - at[2]) / per};
+                    const forge::Vec3 high{static_cast<f64>(box_hi[0] + 1 - at[0]) / per,
+                                           static_cast<f64>(box_hi[1] + 1 - at[1]) / per,
+                                           static_cast<f64>(box_hi[2] + 1 - at[2]) / per};
+                    return forge::box_may_hold_matter(plan, low, high, authored);
+                },
+                options_.derive_seed_level);
+        }
         if (!node_buffers_.create(device_, node_budget)) {
             WS_LOG_FATAL("app", "could not create the node pool buffers");
             return 1;

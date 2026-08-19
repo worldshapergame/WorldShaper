@@ -152,6 +152,14 @@ void NodePool::create(const NodePoolBudget& budget, const VoxelTypeTable& types)
                 subpixel_margin_ == 1 ? "" : "s",
                 subpixel_rule_ ? "refused and given up" : "built and kept, as before");
 
+    // R12c's other half: no clip has said anything yet.
+    seed_roots_.clear();
+    seed_lo_[0] = seed_lo_[1] = seed_lo_[2] = 0;
+    seed_hi_[0] = seed_hi_[1] = seed_hi_[2] = -1;
+    seed_cell_level_ = kClipSeedCellLevel;
+    seed_live_ = false;
+    seed_report_ = NodeSeedReport{};
+
     // R8b's arm, on the same terms and for the same reason.
     hashed_variation_ = budget_.hashed_variation;
     variation_seed_ = budget_.variation_seed;
@@ -277,6 +285,25 @@ bool NodePool::world_has(const World& world, const NodeKey& key) const {
 // Open addressing with linear probing over nodes at or above kEntryLevel. Everything below is
 // reached by descending from one of these, so this table holds a small fraction of the tree and a
 // probe stays short.
+
+// One place, because there are now two things that seed roots -- the world's chunk index and the
+// clip's extent -- and a table two writers disagree about is a ray entering a tree that is not
+// there. Nothing is ever removed: a cold root sheds its children and keeps its entry (D324).
+bool NodePool::place_entry(const NodeKey& key, u32 slot) {
+    const usize capacity = entries_.size();
+    if (capacity == 0) return false;
+    const usize bucket = entry_bucket(key, capacity);
+    for (usize probe = 0; probe < capacity; ++probe) {
+        const usize index = (bucket + probe) & (capacity - 1);
+        u32& cell = entries_[index];
+        if (cell == kNoNode) {
+            cell = slot;
+            dirty_entries_.mark(index);
+            return true;
+        }
+    }
+    return false;
+}
 
 u32 NodePool::find(const NodeKey& key) const {
     if (entries_.empty()) return kNoNode;
@@ -593,6 +620,12 @@ u32 NodePool::stale_masks(const World& world, NodeKey* first) const {
         // child nodes -- `stale_leaves` is what covers those.
         if (level <= kLeafLevel) continue;
         if ((node_flags(node) & kNodeLeaf) != 0) continue;
+        // R12c's other half. A seeded node's mask is the CLIP's answer and is not claiming to be
+        // the world's -- while the seed is in force the world is empty by construction, so every
+        // one of them would be counted here and this instrument would report the seed instead of
+        // reporting a fault. `mirror_seed` is what asks about these, and it asks the field and the
+        // world separately rather than folding them into one number.
+        if ((node_flags(node) & kNodeSeeded) != 0) continue;
 
         const NodeKey key{node.x, node.y, node.z, level};
         u32 want = 0;
@@ -607,6 +640,354 @@ u32 NodePool::stale_masks(const World& world, NodeKey* first) const {
         ++stale;
     }
     return stale;
+}
+
+// ---- R12c's other half: the clip's extent, before anything has been sampled --------------------
+//
+// The long form is over `kClipSeedCellLevel` in the header. The short form: on frame 1 of a cold
+// load the world holds nothing, so `index_world` seeds no roots, so `node_locate` answers
+// kFoundEmpty and R12c's derivation never fires. This puts the CLIP's answer in the tree instead,
+// as addressing and nothing else, and takes it back out the moment there is a world.
+
+bool NodePool::seed_box_of(const NodeKey& key, i64 lo[3], i64 hi[3]) const {
+    const i64 span = i64{1} << key.level;
+    const i64 base[3] = {key.x << key.level, key.y << key.level, key.z << key.level};
+    for (u32 axis = 0; axis < 3; ++axis) {
+        lo[axis] = (base[axis] > seed_lo_[axis]) ? base[axis] : seed_lo_[axis];
+        const i64 last = base[axis] + span - 1;
+        hi[axis] = (last < seed_hi_[axis]) ? last : seed_hi_[axis];
+        if (lo[axis] > hi[axis]) return false;
+    }
+    return true;
+}
+
+u32 NodePool::seed_shell(const NodeKey& key, const NodeSeedOracle& may_hold, u32 cell_level,
+                         NodeSeedReport& into) {
+    const u32 child_level = key.level - 1;
+
+    // The mask is worked out BEFORE the node is allocated, and the children before the mask, so
+    // that a branch the oracle prunes to nothing costs no slot at all. The alternative -- allocate,
+    // then discover the subtree is empty -- is how a seed of "the addressing" quietly becomes a
+    // seed of storage.
+    u32 mask = 0;
+    u32 kids[8];
+    for (u32 octant = 0; octant < 8; ++octant) kids[octant] = kNoNode;
+
+    for (u32 octant = 0; octant < 8; ++octant) {
+        const NodeKey child{(key.x << 1) | static_cast<i64>(octant & 1),
+                            (key.y << 1) | static_cast<i64>((octant >> 1) & 1),
+                            (key.z << 1) | static_cast<i64>((octant >> 2) & 1), child_level};
+        i64 lo[3];
+        i64 hi[3];
+        // Outside the clip's own extent. Not "empty" as far as the world is concerned -- simply
+        // nothing this seed has an opinion about, and the bit stays clear so a ray skips it.
+        if (!seed_box_of(child, lo, hi)) continue;
+
+        if (child_level > cell_level) {
+            kids[octant] = seed_shell(child, may_hold, cell_level, into);
+            if (kids[octant] != kNoNode) mask |= (1u << octant);
+            continue;
+        }
+
+        // The floor. What the seed says here is a BIT and not a node: "a ray entering this cell may
+        // find matter, so ask the field rather than flying through".
+        ++into.asked;
+        if (may_hold(lo, hi)) {
+            mask |= (1u << octant);
+            ++into.cells;
+        }
+    }
+
+    if (mask == 0) return kNoNode;
+
+    const u32 slot = allocate_node();
+    if (slot == kNoNode) {
+        for (u32 octant = 0; octant < 8; ++octant) {
+            if (kids[octant] == kNoNode) continue;
+            free_seeded_subtree(kids[octant]);
+            nodes_[kids[octant]] = GpuNode{};
+            dirty_nodes_.mark(kids[octant]);
+            free_singles_.push_back(kids[octant]);
+        }
+        return kNoNode;
+    }
+
+    nodes_[slot].x = static_cast<i32>(key.x);
+    nodes_[slot].y = static_cast<i32>(key.y);
+    nodes_[slot].z = static_cast<i32>(key.z);
+    nodes_[slot].children = kNoNode;
+    // No colour, deliberately. A stand-in is drawn from a node's FOLDED colour and a seeded shell
+    // has never been folded from anything, so nought is the honest value and `node_march` already
+    // refuses to draw it (D237's own guard). What a seeded cell gets drawn from is the field.
+    nodes_[slot].colour = 0;
+    nodes_[slot].packed = pack_node(key.level, kNodeSeeded, mask);
+    dirty_nodes_.mark(slot);
+    ++into.shells;
+
+    bool any_kids = false;
+    for (u32 octant = 0; octant < 8; ++octant) any_kids = any_kids || (kids[octant] != kNoNode);
+    if (any_kids) {
+        const u32 run = allocate_children();
+        if (run == kNoNode) {
+            // No run, so the children cannot be reached from here. Give the whole branch back
+            // rather than leaving a shell whose mask claims a subtree nothing stands behind --
+            // `mirror_seed` reads exactly that as the seed inventing a bit, and a rule the audit
+            // cannot state is a rule nobody can check. A seed that runs out of room seeds LESS.
+            for (u32 octant = 0; octant < 8; ++octant) {
+                if (kids[octant] == kNoNode) continue;
+                free_seeded_subtree(kids[octant]);
+                nodes_[kids[octant]] = GpuNode{};
+                dirty_nodes_.mark(kids[octant]);
+                free_singles_.push_back(kids[octant]);
+            }
+            nodes_[slot] = GpuNode{};
+            dirty_nodes_.mark(slot);
+            free_singles_.push_back(slot);
+            --into.shells;
+            return kNoNode;
+        }
+        nodes_[slot].children = run;
+        dirty_nodes_.mark(slot);
+        for (u32 octant = 0; octant < 8; ++octant) {
+            if (kids[octant] == kNoNode) continue;
+            // Built into a slot of its own and MOVED here, exactly as `refine` does, so both ends
+            // are marked: the destination gains the record and the source is cleared before it goes
+            // back on the free list. Marking only one end is the fault NodeBuffers::audit caught at
+            // byte 18,240.
+            nodes_[run + octant] = nodes_[kids[octant]];
+            nodes_[kids[octant]] = GpuNode{};
+            dirty_nodes_.mark(run + octant);
+            dirty_nodes_.mark(kids[octant]);
+            node_last_read_[run + octant] = static_cast<u32>(touch_frame_);
+            free_singles_.push_back(kids[octant]);
+        }
+    }
+    return slot;
+}
+
+void NodePool::free_seeded_subtree(u32 slot) {
+    if (slot >= nodes_.size()) return;
+    GpuNode& node = nodes_[slot];
+    if ((node_flags(node) & kNodeLeaf) != 0 || node.children == kNoNode) return;
+
+    // Only a run whose every occupant is seeded or empty may go back whole. Nothing else can
+    // happen while the seed is in force -- `build_shell` refuses every child the world is empty
+    // under, and the world is empty -- but a run given back with a live node in it is the
+    // double-free `release_contents` documents, and the check is two lines.
+    bool all_seeded = true;
+    for (u32 octant = 0; octant < 8; ++octant) {
+        const GpuNode& child = nodes_[node.children + octant];
+        if (node_level(child) == 0) continue;
+        if ((node_flags(child) & kNodeSeeded) == 0) all_seeded = false;
+    }
+
+    for (u32 octant = 0; octant < 8; ++octant) {
+        const u32 child = node.children + octant;
+        if (node_level(nodes_[child]) == 0) continue;
+        if ((node_flags(nodes_[child]) & kNodeSeeded) == 0) continue;
+        free_seeded_subtree(child);
+        nodes_[child] = GpuNode{};
+        dirty_nodes_.mark(child);
+        node_last_read_[child] = static_cast<u32>(touch_frame_);
+        if (child < node_reads_.size()) node_reads_[child] = 0;
+    }
+    if (!all_seeded) return;
+    free_runs_.push_back(node.children);
+    node.children = kNoNode;
+    dirty_nodes_.mark(slot);
+}
+
+NodeSeedReport NodePool::seed_from_clip(const World& world, const i64 lo[3], const i64 hi[3],
+                                        const NodeSeedOracle& may_hold, u32 cell_level) {
+    if (seed_live_) return seed_report_;
+
+    NodeSeedReport out;
+    seed_report_ = out;
+    if (!may_hold || entries_.empty() || nodes_.empty()) return seed_report_;
+    // A world with chunks in it already has real roots, or is one `index_world` away from them.
+    // Seeding a clip mask over that is the disagreement `mirror_seed` exists to forbid, and a warm
+    // load has nothing to derive anyway. Refused rather than merged.
+    if (world.chunk_count() != 0) return seed_report_;
+    for (u32 axis = 0; axis < 3; ++axis) {
+        if (lo[axis] > hi[axis]) return seed_report_;
+    }
+
+    const auto began = std::chrono::steady_clock::now();
+    seed_cell_level_ = cell_level;
+    if (seed_cell_level_ < kLeafLevel) seed_cell_level_ = kLeafLevel;
+    if (seed_cell_level_ >= kEntryLevel) seed_cell_level_ = kEntryLevel - 1;
+    for (u32 axis = 0; axis < 3; ++axis) {
+        seed_lo_[axis] = lo[axis];
+        seed_hi_[axis] = hi[axis];
+    }
+    seed_roots_.clear();
+
+    const i64 first[3] = {lo[0] >> kEntryLevel, lo[1] >> kEntryLevel, lo[2] >> kEntryLevel};
+    const i64 last[3] = {hi[0] >> kEntryLevel, hi[1] >> kEntryLevel, hi[2] >> kEntryLevel};
+    for (i64 z = first[2]; z <= last[2]; ++z) {
+        for (i64 y = first[1]; y <= last[1]; ++y) {
+            for (i64 x = first[0]; x <= last[0]; ++x) {
+                const NodeKey key{x, y, z, kEntryLevel};
+                if (live_.find(key) != live_.end()) continue;
+                const u32 slot = seed_shell(key, may_hold, seed_cell_level_, out);
+                if (slot == kNoNode) continue;
+                if (!place_entry(key, slot)) {
+                    free_seeded_subtree(slot);
+                    nodes_[slot] = GpuNode{};
+                    dirty_nodes_.mark(slot);
+                    free_singles_.push_back(slot);
+                    continue;
+                }
+                live_.emplace(key, Resident{slot, 0, 0});
+                seed_roots_.push_back(slot);
+                ++out.roots;
+            }
+        }
+    }
+
+    out.live = out.roots > 0;
+    out.ms = std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - began)
+                 .count();
+    seed_live_ = out.live;
+    seed_report_ = out;
+    WS_LOG_INFO("pool",
+                "R12c: the clip seeded {} root{} and {} shells down to level {} ({} m cells), {} "
+                "cells the marcher may derive into, {} field questions, {:.1f} ms. The world is "
+                "empty, so this is what a descent on the first frame answers WANTED from",
+                out.roots, out.roots == 1 ? "" : "s", out.shells, seed_cell_level_,
+                static_cast<f64>(i64{1} << seed_cell_level_) / static_cast<f64>(kVoxelsPerMetre),
+                out.cells, out.asked, out.ms);
+
+    // ...and the mirror, run here rather than only in a test, because the one thing a seed can do
+    // that nothing else in this file can is claim matter where there is none. D621's three audits
+    // all agreed with 304 lumps on screen because they were all downstream of the reader that was
+    // wrong; this one reads the pool's own records back and asks the FIELD and the WORLD separately.
+    // Two of its six numbers must be nought and it says so in the line rather than in a comment.
+    const NodeSeedMirror mirror = mirror_seed(world, may_hold);
+    WS_LOG_INFO("pool",
+                "R12c: the seed's mirror walked {} shells and {} mask bits -- {} agree with the "
+                "field, {} do NOT (must be 0), {} exceed the world (expected: the world is empty), "
+                "{} lose something the world has (must be 0), {} leaves (must be 0), {} unseeded "
+                "children (must be 0)",
+                mirror.shells, mirror.bits, mirror.agrees_field, mirror.differs_field,
+                mirror.exceeds_world, mirror.misses_world, mirror.leaves, mirror.children);
+    return seed_report_;
+}
+
+void NodePool::retire_clip_seed(const World& world) {
+    if (!seed_live_) return;
+    u32 roots = 0;
+    for (const u32 root : seed_roots_) {
+        if (root >= nodes_.size()) continue;
+        const u32 flags = node_flags(nodes_[root]);
+        // Already gone -- the erosion sweep may have taken it if a load ran past `cold_frames`.
+        if ((flags & kNodeSeeded) == 0) continue;
+        const NodeKey key{nodes_[root].x, nodes_[root].y, nodes_[root].z,
+                          node_level(nodes_[root])};
+        free_seeded_subtree(root);
+        // ...and the mask is re-derived from the WORLD, which is exactly what `build_shell` would
+        // have put here had this root been seeded by `index_world` a moment ago. From this line on
+        // the pool is what the control arm's pool is.
+        u32 mask = 0;
+        for (u32 octant = 0; octant < 8; ++octant) {
+            const NodeKey child{(key.x << 1) | static_cast<i64>(octant & 1),
+                                (key.y << 1) | static_cast<i64>((octant >> 1) & 1),
+                                (key.z << 1) | static_cast<i64>((octant >> 2) & 1), key.level - 1};
+            if (world_has(world, child)) mask |= (1u << octant);
+        }
+        nodes_[root].packed = pack_node(key.level, flags & ~kNodeSeeded, mask);
+        nodes_[root].colour = 0;
+        dirty_nodes_.mark(root);
+        ++roots;
+    }
+    seed_roots_.clear();
+    seed_live_ = false;
+    seed_report_.live = false;
+    WS_LOG_INFO("pool",
+                "R12c: the clip's seed is retired -- the world holds {} chunks now, so {} root{} "
+                "went back to the world's own mask and the {} shells under them were given back",
+                world.chunk_count(), roots, roots == 1 ? "" : "s", seed_report_.shells);
+}
+
+NodeSeedMirror NodePool::mirror_seed(const World& world, const NodeSeedOracle& may_hold) const {
+    // Read off the pool's own records rather than off `seed_roots_`, and over the WHOLE array
+    // rather than the set the seed remembers: a different reader over a different set, which is
+    // the only kind of audit trap 26 counts for anything. A seeded node the seed forgot about
+    // would be invisible to a walk of `seed_roots_` and is caught here.
+    NodeSeedMirror out;
+    for (u32 slot = 0; slot < next_free_; ++slot) {
+        const GpuNode& node = nodes_[slot];
+        const u32 level = node_level(node);
+        if (level == 0 || (node_flags(node) & kNodeSeeded) == 0) continue;
+        ++out.shells;
+        if ((node_flags(node) & kNodeLeaf) != 0) {
+            // A seeded node is never a leaf. If one is, the seed has allocated storage, which is
+            // the one thing it promises not to do.
+            ++out.leaves;
+            continue;
+        }
+
+        const NodeKey key{node.x, node.y, node.z, level};
+        const u32 mask = node_child_mask(node);
+        for (u32 octant = 0; octant < 8; ++octant) {
+            const NodeKey child{(key.x << 1) | static_cast<i64>(octant & 1),
+                                (key.y << 1) | static_cast<i64>((octant >> 1) & 1),
+                                (key.z << 1) | static_cast<i64>((octant >> 2) & 1), level - 1};
+            const bool set = (mask & (1u << octant)) != 0;
+            const bool world_here = world_has(world, child);
+            // The world half first, and it is the half with no excuse: a bit CLEAR over something
+            // the world holds is geometry the marcher will fly straight through, and no feedback
+            // will ever ask for it because a ray never goes there.
+            if (!set && world_here) {
+                ++out.misses_world;
+                continue;
+            }
+            if (!set) continue;
+            ++out.bits;
+            if (!world_here) ++out.exceeds_world;
+
+            i64 clo[3];
+            i64 chi[3];
+            const bool inside = seed_box_of(child, clo, chi);
+            if (!inside) {
+                // A bit over a cell outside the extent the seed was given. Nothing asked the field
+                // about it, so nothing can vouch for it.
+                ++out.differs_field;
+                continue;
+            }
+
+            if (level - 1 == seed_cell_level_) {
+                // The floor, and the only level the oracle was actually asked about. Everything
+                // coarser carries a bit because a DESCENDANT was built, and re-asking the oracle at
+                // a scale it was never asked at would be a second reader inventing a second answer.
+                if (may_hold && may_hold(clo, chi)) {
+                    ++out.agrees_field;
+                } else if (may_hold) {
+                    ++out.differs_field;
+                }
+                continue;
+            }
+
+            // Coarser: the bit must have a seeded child shell under it, or the mask is claiming a
+            // subtree the recursion never built and a descent will answer WANTED at a cell nothing
+            // stands behind.
+            if (node.children == kNoNode) {
+                ++out.differs_field;
+                continue;
+            }
+            const GpuNode& built = nodes_[node.children + octant];
+            if (node_level(built) == 0) {
+                ++out.differs_field;
+                continue;
+            }
+            if ((node_flags(built) & kNodeSeeded) == 0) {
+                ++out.children;
+            } else {
+                ++out.agrees_field;
+            }
+        }
+    }
+    return out;
 }
 
 // ---- building --------------------------------------------------------------------------------
@@ -1330,6 +1711,17 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     // is for, and rebuilding this on every edit would walk the world on every mouse-down frame.
     if (indexed_chunks_ != world.chunk_count() || occupied_.empty()) {
         index_world(world);
+        // R12c's other half hands the addressing back here, and this is the whole of its lifetime.
+        //
+        // The clip's seed exists to answer WANTED while the world holds NOTHING -- frame 1 of a
+        // cold load, which is every load, because D673 ships R11d with the coarse paste off. The
+        // moment the ladder pastes anything, `index_world` has real occupancy and the loop below
+        // has real roots, and a clip mask standing over that would be a mask nothing can build
+        // under: D133 in a new structure, and D621's 304 lumps in the making.
+        //
+        // Retired BEFORE the loop, so a root the clip seeded is already carrying the world's own
+        // mask when the loop skips it as live. See `retire_clip_seed`.
+        if (seed_live_ && world.chunk_count() != 0) retire_clip_seed(world);
         // Every entry block the world occupies gets a root, whether anything has looked at it or
         // not. That is what lets "no root here" mean "the world is empty here" — and without it a
         // ray crossing open sky finds nothing at the entry level, cannot tell absent-from-the-pool
@@ -1346,15 +1738,7 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
             u32 seed_budget = 1;
             const u32 slot = build_shell(world, key, seed_budget);
             if (slot == kNoNode) continue;
-            const usize capacity = entries_.size();
-            const usize bucket = entry_bucket(key, capacity);
-            bool placed = false;
-            for (usize probe = 0; probe < capacity && !placed; ++probe) {
-                const usize index = (bucket + probe) & (capacity - 1);
-                u32& cell = entries_[index];
-                if (cell == kNoNode) { cell = slot; placed = true; dirty_entries_.mark(index); }
-            }
-            if (!placed) { release(slot); continue; }
+            if (!place_entry(key, slot)) { release(slot); continue; }
             live_.emplace(key, Resident{slot, frame, 0});
             batch_.nodes.push_back(slot);
         }
