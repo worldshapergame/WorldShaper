@@ -3772,3 +3772,32 @@ indistinguishable from one that finished, so the next run either threw away the 
 half — it now records which, and can deliberately carry on. And the size worry was overstated by
 **8.3×**: a complete estate adds about **9 MB** to a download, not the seventy-odd I had been
 quoting, because worlds compress extremely well and nothing ships raw.
+
+## Glow around bright things is rebuilt, and a measuring tool had been lying for weeks
+
+The glow around a lamp or a bright window was being made the expensive way: for every pixel on the
+screen, look at up to **437 neighbouring pixels** and add up how bright they are. That cost grows
+with the square of how far the glow reaches, and the reach has to grow with the resolution — so at 4K
+it was becoming the most expensive thing in the frame for something you barely notice.
+
+It's now made the way it should be: shrink the picture by half, then half again, and again — glow at
+each size, then add them back up on the way out. The taps per pixel never change, so the cost is
+simply proportional to how many pixels there are. Measured: **0.11 ms at 1280×800, 0.33 at 1440p,
+0.71 at 4K**, against a budget of 1.0 ms. It's within budget standing still, and slightly over
+(1.11 ms) while the camera is turning fast, because motion blur then has real work to do. What's left
+is 0.37 ms of pure copying that I know how to remove.
+
+Motion blur arrived with it. Its cost had the same problem in a subtler form — the number of samples
+along a streak was the streak's *length in pixels*, so at 4K it was paying twice for the resolution.
+
+**And a measuring tool had been quietly lying.** When the reference renderer was deleted a while
+back, five scripts kept passing the option that asked for it. The game warns about an option it
+doesn't recognise and then carries on regardless — so those runs came back with perfectly ordinary,
+perfectly clean-looking numbers for a mode that no longer exists. One of them, the face-counting
+tool, did it on *every single run*. They now refuse and say why, which is what the main benchmark
+script already did.
+
+One honest note: the glow is currently applied *after* the picture has been squeezed into displayable
+brightness, which means a lamp a hundred times brighter than white and one four times brighter glow
+identically. The fix is small and written down; it needs one file that another piece of work is
+currently in.

@@ -654,7 +654,7 @@ there are expected and are the integrator's.
 **Nobody was allowed into `documentation/`** — every agent hands its decision-log entry back as text
 and it is written here. That is why this file is one voice and not twelve.
 
-**ELEVEN ARE IN AS OF THIS WRITING, each built and tested on its own before the next was touched**,
+**TWELVE ARE IN AS OF THIS WRITING, each built and tested on its own before the next was touched**,
 and the suite grew 637 → 687 cases with 0 failed at every step:
 
 | landed | what it turned out to be |
@@ -669,6 +669,7 @@ and the suite grew 637 → 687 cases with 0 failed at every step:
 | R7a + R7b (D698) | the beam pre-pass, one coarse ray per tile CORNER. **4K, arm to arm: 1.18 ms against 16.81 outdoors, 1.96 against 15.07 close** — and 0.76 against 0.56 at distant, where the ray was already trivial. `start = min(beam, temporal)` is the safety property: a wrong reprojection can only cost time |
 | R12c (D699) | **the marcher derives rather than stops — step 12's headline, built and OFF.** Enclosed 7.57 ms against 6.60; uncapped it is a 38-second frame. **A cap on CELLS is a cap on nothing** and a visit budget read after the fact bounds nothing; each cost a device before it was understood. D687's thirty-times verdict stands |
 | the rule bounds (D700) | **the best result of the wave.** The eight unbounded rules were TWO withheld boxes; 8 asked at every solid voxel → **0**. The estate builds in **13.9 s against 31.1**, the campanile loses 619 voxels of courtyard weed and stone, and `max` is settled as the INTERSECTION by a factor of twenty-seven. **The estate's paint moves — every estate hash and baseline before this commit is stale** |
+| R6a + R6b (D702) | post is its own pass and the glare is a chain: **0.706 ms at 4K on the fixed grid, gate met**; 1.113 turning, over it, with the remainder priced at 0.374 ms of copy. **Five harnesses were passing `--pathtrace` and one did it unconditionally** — warned-and-ignored, so every face-count run since R3d measured the real-time path and said tracer |
 | the bake, second half (D701) | **a whole world and a partial one are told apart AT READ TIME**: 0 regions left and one hash from four cameras, against four hashes and *more left from outside than from where the bake stood*. `-Resume` and a stamp that knows interrupted from finished. The size budget was the RAW size and was 8.3x out |
 
 **And one fault found by the integrator rather than by an agent, D693**: `run_clip_tool` exits 1
