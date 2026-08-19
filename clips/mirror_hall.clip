@@ -1,0 +1,73 @@
+# Two mirrors facing each other, and nothing else in the way.
+#
+# `clips/mirror_test.clip` has a mirror sphere and a mirror floor and no PAIR: every reflection in
+# it terminates after one bounce, because whatever the reflected ray lands on is rough. So it can
+# show that a reflection has a picture in it and it cannot show that a reflection has a reflection
+# in it, which is the other half of what was asked for -- *"make reflections support infinite
+# reflections between them"*.
+#
+# This is that case and only that case. Two parallel chrome walls three metres apart, facing each
+# other across a polished floor, with three coloured posts between them so there is something in
+# the tunnel to count. Looked at obliquely from between them, so the near wall shows the far wall,
+# which shows the near wall, and so on until the contribution budget stops it.
+#
+#   --cam "0.0,1.30,2.30,-64,-3"    down the hall, both walls in frame
+#   --cam "-1.05,1.30,1.40,-30,0"   close to the west wall, into the tunnel
+#
+# What decides how deep it goes is arithmetic and not a count: chrome's Fresnel is about 0.9 and a
+# voxel face at this distance earns a share near 0.95, so each bounce keeps about 0.85 of what the
+# one before it carried. The budget is a share of the pixel, so the depth is log(budget)/log(0.85).
+# Change `--reflect-budget` and the tunnel gets longer or shorter; that is the measurement, and it
+# is why no number is written into this clip.
+
+metre 32
+bounds -3 -0.6 -7   3 4 3
+
+material floor_polish rgb=182,180,186 rough=18  metal=30
+material chrome       rgb=236,236,240 rough=6   metal=252
+material kerb         rgb=104,102,100 rough=230
+material post_red     rgb=176,52,48   rough=200
+material post_blue    rgb=48,72,168   rough=200
+material post_gold    rgb=214,168,72  rough=40  metal=240
+
+# The floor, polished, so the tunnel has a bottom to it that is also a mirror.
+let mh_slab  = box -3 -0.6 -7   3 0 3 round=0.02
+
+# The two walls. Fifteen centimetres thick so they are solid at metre 32 rather than a sheet, and
+# three metres apart, which is a corridor rather than a slot -- a ray crossing it covers ground
+# between bounces, so the tunnel is a row of separated images and not one smear.
+let mh_west  = box -1.65 0 -7   -1.50 3.0 3
+let mh_east  = box  1.50 0 -7    1.65 3.0 3
+
+# Three posts down the middle, at increasing distance, so the tunnel has something countable in it:
+# each successive image of the hall shows them again, smaller and dimmer.
+let mh_post  = cylinder 0 0.9 0 r=0.14 h=1.8 axis=y
+let mh_p_a   = translate { mh_post }  0.0 0 -1.2
+let mh_p_b   = translate { mh_post } -0.6 0 -3.4
+let mh_p_c   = translate { mh_post }  0.6 0 -5.6
+let mh_posts = union { mh_p_a mh_p_b mh_p_c }
+
+let mh_kerb  = box -3 0 2.6   3 0.4 3 round=0.03
+
+let grain = fbm size=0.06 octaves=3 seed=17
+
+let mh_all = union { mh_slab mh_west mh_east mh_posts mh_kerb }
+let mh_all = displace { mh_all grain } amount=0.004
+
+# `below` is widened past the 4 mm the grain displaces by, for the reason mirror_test.clip's own
+# header gives: a voxel that exists only because the grain pushed the surface outward sits OUTSIDE
+# the shape its rule names, so a tight test misses it and it falls back to the first coat.
+paint floor_polish
+paint floor_polish where=mh_slab below=0.008
+paint chrome       where=mh_west below=0.008
+paint chrome       where=mh_east below=0.008
+paint post_red     where=mh_p_a  below=0.008
+paint post_blue    where=mh_p_b  below=0.008
+paint post_gold    where=mh_p_c  below=0.008
+paint kerb         where=mh_kerb below=0.008
+
+# Deliberately small. A mirror is the one surface where a per-voxel roughness jitter is visible as
+# a texture rather than as variety, and this clip exists to look at what the mirror reflects.
+variation colour=0.010 rough=0.015 seed=9
+
+solid mh_all

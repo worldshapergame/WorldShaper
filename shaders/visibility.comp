@@ -68,6 +68,11 @@ layout(binding = 28, rgba16f) uniform writeonly image2D out_reflect;
 // the face pass: a reflection of the sky drawn out of one model and the sky itself drawn out of
 // another is a mirror that does not match what it is reflecting.
 const float kPi = 3.14159265358979;
+// A chunk's edge in voxels, which `pt_clouds.glsl` needs to lift a camera-relative point into
+// world space. Declared here rather than pulled in with a header for the reason the shim below is
+// a shim: the only other file that carries it is the composite, and this pass wants three
+// constants out of it and not five hundred lines.
+const int kChunkEdge = 256;
 uint hash_u32(uint x) { return node_hash_mix(x); }
 struct SkyTrace {
     vec4 sun;
@@ -75,6 +80,12 @@ struct SkyTrace {
 };
 SkyTrace trace;
 #include "pt_sky.glsl"
+// ...and the cloud deck, because a reflected ray that escapes has to come back with what the eye
+// would be shown for that direction, and what the eye is shown has a deck over it. The composite
+// reads that deck out of an image the cloud pass marched ONE RAY PER PIXEL -- indexed by pixel, so
+// it answers for the direction the PRIMARY ray went and for no other. A reflected direction is not
+// in it. See `reflect_escaped` in shaders/reflect.glsl.
+#include "pt_clouds.glsl"
 #include "reflect.glsl"
 
 // The distance this pixel's ray is allowed to start at, in voxels from the eye.
@@ -680,7 +691,7 @@ void main() {
     vec4 reflection = vec4(0.0);
     if (hit.hit) {
         const ReflectAnswer r = reflect_trace(push.origin.xyz, dir, hit, pixel_angle,
-                                              node_bayer(pixel), push.r4.z);
+                                              node_bayer(pixel), push.r4.z, report_face);
         reflection = vec4(r.radiance, r.share);
     }
     imageStore(out_reflect, pixel, reflection);

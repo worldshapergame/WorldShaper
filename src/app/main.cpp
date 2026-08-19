@@ -715,6 +715,12 @@ struct Options {
     // both the depth two mirrors reach and what the stage costs on a scene with nothing polished
     // in it, and those have to be priceable apart. See kReflectBudgetDefault.
     f32 reflect_budget = 0.02f;
+    // R4f's cloud deck. The composite draws the deck out of a full-resolution history the cloud
+    // pass marches ONE RAY PER PIXEL, so it is indexed by pixel and answers only for the direction
+    // the primary ray went; a reflected direction is not in it and has to be marched again.
+    // `--no-reflect-clouds` is the control arm for that march on its own -- the reflection is
+    // identical in both and only the sky a ray escaped into differs.
+    bool reflect_clouds = true;
     // R4c's image: a face's outgoing bins cover a CAP about the direction the eye is in rather than
     // the whole hemisphere, so thirty-six bins are two degrees apart instead of thirteen and a half
     // and a reflection has a picture in it. `--no-reflected-image` is the control arm and puts them
@@ -1433,6 +1439,13 @@ bool parse_options_c(const std::string& arg, int& i, int argc, char** argv, Opti
         // before this was taken in. The bins, the pool, the cap and the energy split are identical
         // in both arms; what an A/B prices is the march and nothing else.
         options.ior_reflection = false;
+    } else if (arg == "--no-reflect-clouds") {
+        // R4f's deck, off: a reflected ray that escapes comes back with the clear sky alone,
+        // which is what every reflection in this renderer has shown since it existed and is what
+        // the user reported -- *"the reflections i see dont reflect the actual sky colors and
+        // neither clouds"*. It is a separate arm from `--no-ior-reflection` because it is a
+        // separate MARCH: the deck for a direction nobody has marched has to be marched.
+        options.reflect_clouds = false;
     } else if (arg == "--reflect-budget" && i + 1 < argc) {
         // How little a reflected segment may be worth and still be cast, as a share of the pixel.
         // Larger is shallower and cheaper; 0 is the same arm as `--no-ior-reflection`.
@@ -8518,7 +8531,8 @@ void Application::record_frame(f32 time_seconds) {
         // Zero here and shaders/reflect.glsl casts nothing, shaders/resolve.comp reads a share of
         // nought, and the frame is D703's exactly.
         params.r4[2] = options_.ior_reflection ? std::max(options_.reflect_budget, 0.0f) : 0.0f;
-        params.r4[3] = 0.0f;
+        // R4f's cloud deck, which is a march of its own and therefore its own arm.
+        params.r4[3] = options_.reflect_clouds ? 1.0f : 0.0f;
 
         // And remember this frame's camera for the next one. After the fill, so a frame always
         // blurs against the frame before it rather than against itself.

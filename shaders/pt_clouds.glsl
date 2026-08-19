@@ -540,8 +540,29 @@ float sky_optical_depth(vec3 p, float height_m, float thickness) {
 // than by tuning. It is affordable here only because the density function above is cheap enough and
 // shaped sharply enough that sixteen samples resolve an edge -- with a smooth threshold and no
 // subtractive carve it would need the seventy-two the old one used.
-vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distance_m,
-                 out float transmittance) {
+// R4f: the same march at a quality the caller chooses.
+//
+// A REFLECTED ray needs the deck for a direction the cloud pass has not marched -- the image it
+// keeps is one ray per PIXEL, so it answers for the direction the primary ray went and for no
+// other. Marching it again at the primary's quality is what that costs, and it was measured:
+// 2.60 ms of primary visibility became 18.06, which is the deck costing six times the whole rest
+// of the frame to appear in a mirror.
+//
+// Two dials, and both are about the SHADING inside a cloud rather than about where the cloud is.
+// `max_steps` is how finely the slab is sampled, and `light_metres` is where the sun and sky
+// sub-marches stop being taken -- past it the optical depths come from the local density, which the
+// comment inside the loop describes as "the right shape and the wrong detail". They are
+// twenty-six of the thirty-one noise evaluations a lit step costs.
+//
+// A reflection in a voxel mirror is the case where that detail cannot be seen: the deck arrives
+// through a Fresnel term under one, blurred by whatever the surface's own lobe is, and read at a
+// resolution the face itself bounds. The SHAPE of the cloud is what a player recognises there, and
+// the shape is the density field rather than its internal shading.
+//
+// The primary caller passes the numbers this file has always used, so `clouds.comp` is bit for bit
+// what it was.
+vec3 cloud_march_at(vec3 origin, vec3 dir, float height_origin_m, float max_distance_m,
+                    int max_steps, float light_metres, out float transmittance) {
     transmittance = 1.0;
     vec3 scattered = vec3(0.0);
 
@@ -593,7 +614,7 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
     const float kStepFar = 1400.0;
     // Where the sun and sky marches stop being worth their cost. See the light marches below.
     const float kFullLightMetres = 14000.0;
-    int steps = kMaxSteps;
+    int steps = min(kMaxSteps, max_steps);
 
     float cos_angle = dot(dir, trace.sun.xyz);
     vec4 phases = cloud_phases(cos_angle);
@@ -639,7 +660,7 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
         // Beyond the fade the optical depths are estimated from the local density instead, which is
         // the right shape and the wrong detail, and the detail is what the haze is removing anyway.
         float thickness = deck_at(h).thickness;
-        bool near_enough = travelled < kFullLightMetres;
+        bool near_enough = travelled < light_metres;
         float sun_od = near_enough ? sun_optical_depth(at, h, trace.sun.xyz, thickness)
                                    : density * 6.0;
 
@@ -695,6 +716,13 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
     float air = exp(-travelled / kAirVisibility);
     scattered = scattered * air + air_colour * (1.0 - transmittance) * (1.0 - air);
     return scattered;
+}
+
+// The march as every caller before R4f had it: the full step schedule and the light sub-marches out
+// to where the haze has taken them. One expression, so the two cannot drift.
+vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distance_m,
+                 out float transmittance) {
+    return cloud_march_at(origin, dir, height_origin_m, max_distance_m, 44, 14000.0, transmittance);
 }
 
 // How much sun reaches a point on the ground through whatever is above it.

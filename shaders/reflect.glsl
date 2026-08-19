@@ -74,11 +74,38 @@ const float kReflectBudgetDefault = 0.02;
 
 // How many bounces the loop is WRITTEN for, which is not the same as how many it takes.
 //
-// GLSL wants a bound; the budget is what actually stops a march, and the report has to say which of
-// the two did it. Sixteen is past where chrome-on-chrome dies (0.9 Fresnel times a 0.82 share is
-// 0.74 a bounce, and 0.74^13 is under a fiftieth), so the budget is the live limit and this is the
-// guard rail behind it.
+// GLSL wants a bound, and the report has to say which of the two actually stopped a given series.
+// For every dielectric in this repository it is the budget, and long before sixteen: polished stone
+// at four per cent head on is under a fiftieth after ONE bounce, so a second is never cast.
+//
+// **For two CHROME walls it is this number, and that is measured rather than assumed.**
+// `clips/mirror_hall.clip` keeps 0.83 of the pixel per bounce -- a Fresnel of 0.918 sixty degrees
+// off the normal times a share of 0.904 -- so a budget of a fiftieth would reach twenty-one. Swept
+// against the picture, the hall stops changing between `--reflect-budget 0.05` and 0.02 (2.28 of
+// 255 against a same-arm floor of 2.27) and its cost stops rising with it (12.77 ms against 12.86),
+// which is exactly where the arithmetic puts the sixteenth bounce. At 0.30 it stops at six and the
+// BUDGET is what stops it: the picture moves 3.84 between 0.30 and 0.12 and 7.49 between 0.12 and
+// 0.05.
+//
+// So: sixteen images of a hall, and a number that could be raised if anybody ever wants more.
 const uint kReflectBounces = 16u;
+
+// ---- and what a reflected escape pays for the cloud deck ----------------------------------------
+//
+// The deck a reflection sees has to be MARCHED -- see `reflect_escaped` below for why there is no
+// cache to read it out of -- and marching it at the primary ray's quality was measured at 2.60 ms
+// of visibility becoming 18.06 on `clips/mirror_test.clip`. That is the deck costing six times the
+// whole rest of the frame in order to appear in a mirror, which is not a trade anybody would take.
+//
+// Both numbers are about the SHADING inside a cloud rather than about where the cloud is, and a
+// reflection is the case where that shading cannot be seen: it arrives through a Fresnel term under
+// one, blurred by the surface's own lobe, at a resolution the face bounds. Sixteen steps still
+// resolve the density field, which is the shape a player recognises; nought metres of light march
+// takes the sun and sky optical depths from the local density, which is the estimate `cloud_march`
+// already falls back to past fifteen kilometres for the same reason -- the detail is being thrown
+// away by the haze anyway.
+const int kReflectCloudSteps = 16;
+const float kReflectCloudLightMetres = 0.0;
 
 // ---- Fresnel from the material's own index of refraction ---------------------------------------
 //
@@ -137,6 +164,65 @@ float reflect_lobe_width(uint rough_byte) {
 // in it that could be read as a threshold.
 float reflect_share(float lobe_width, float carrier) {
     return carrier / max(carrier + lobe_width, 1e-9);
+}
+
+// ---- what a reflected ray that ESCAPES is worth --------------------------------------------------
+//
+// **Reported by the user while this was being built**: *"the reflections i see dont reflect the
+// actual sky colors and neither clouds."* Both halves are here and they have different causes.
+//
+// # The colours
+//
+// `sky_radiance` is the composite's own `sky_colour`, the same function out of the same file, so a
+// reflection and the eye see one sky rather than two plausible ones. What made the OLD reflection
+// disagree was not the sky model: it was that a bin is an average over thirteen degrees, so the
+// gradient the eye sees across a sky arrived in a lobe as one colour. A ray has a direction and
+// needs no such averaging.
+//
+// # The clouds, and this is the part that does not come free
+//
+// The composite draws the deck out of `in_cloud`, which is a full-resolution history the cloud pass
+// marches ONE RAY PER PIXEL along -- so it is indexed by pixel, and a pixel names the direction the
+// PRIMARY ray went. A reflected direction is a different direction and that image has no answer for
+// it, whatever pass reads it. There is no cache to look in and no shim to fix: the deck for a
+// direction nobody has marched has to be marched.
+//
+// So it is, with `cloud_march` -- the same function, the same decks, the same weather field and the
+// same wind as the pass that draws the sky the eye sees, which is what makes this one answer rather
+// than a second plausible one. It runs at most ONCE per pixel, on the segment that escapes, and
+// only where the reflection was worth casting at all: a scene with nothing polished in it marches
+// no clouds, and a scene with an overcast switched off (`push.sky_cloud.x`) marches none either.
+//
+// # And the sun's DISC is deliberately taken back out
+//
+// `sky_evaluate` draws the disc so that "a mirror reflects something rather than a flat gradient" --
+// its own comment. But R4c's split already puts the sun back through the lobe analytically and
+// clamped (`face_lobe_sun`, and the clamp there is the engine's own sun), so returning the disc
+// here as well is the same light counted twice, and on a mirror it is the brightest thing in the
+// frame -- straight into the light meter and every firefly counter in the store. The environment
+// half must therefore be the sky WITHOUT the disc, which is what the split means.
+//
+// The expression is the one `sky_evaluate` adds, spelled again to subtract it. That is a second
+// copy and it should be a `sky_evaluate` that never adds it; the report hands back that patch.
+vec3 reflect_escaped(vec3 origin, vec3 dir) {
+    vec3 radiance = sky_radiance(dir);
+    const float to_sun = dot(dir, trace.sun.xyz);
+    if (to_sun > trace.sun.w) {
+        radiance -= sun_radiance() * smoothstep(trace.sun.w, mix(trace.sun.w, 1.0, 0.15), to_sun);
+    }
+    radiance = max(radiance, vec3(0.0));
+    if (push.sky_cloud.x > 0.0 && push.r4.w > 0.0) {
+        const vec3 from = world_position(origin);
+        float through = 1.0;
+        vec3 scattered = cloud_march_at(from, dir, world_height_metres(from), kCloudFarMetres,
+                                        kReflectCloudSteps, kReflectCloudLightMetres, through);
+        // A mean that has had a NaN in it is a NaN for ever, which is what clouds.comp says here.
+        if (any(isnan(scattered)) || any(isinf(scattered))) scattered = vec3(0.0);
+        if (isnan(through) || isinf(through)) through = 1.0;
+        // The composite's own compositing, exactly: `cloud.rgb + cloud.a * colour`.
+        radiance = scattered + through * radiance;
+    }
+    return radiance;
 }
 
 // ---- what a surface the ray landed on is giving off ---------------------------------------------
@@ -224,12 +310,37 @@ vec3 reflect_face_average(uint slot) {
 
 // Which record answers for this hit: the surface's own face, then the coarse faces standing over
 // it, then nothing. R9f's search, and the same one `bounce_radiance` runs.
-uint reflect_answering_slot(NodeHit h, out uint own_slot) {
+uint reflect_answering_slot(NodeHit h, bool claim, out uint own_slot) {
     own_slot = node_face_lookup(h.face_node, h.face_level, h.face_dir);
     // This ray is integrating that face, so the face is worth measuring. R9b's stamp, before the
     // readiness test rather than after it, because the case it exists for is the one that fails it.
     node_face_gathered(own_slot);
     if (reflect_face_ready(own_slot)) return own_slot;
+    // ---- R9a: and if there is no face there at all, ASK for one ------------------------------
+    //
+    // **This is the difference between a mirror with a picture in it and a mirror with a hole in
+    // it, and the hole is what the first build of this stage drew.** A face is claimed where a
+    // PIXEL lands, so the store holds exactly what the camera can see -- and the middle band of a
+    // sphere seen head on reflects what is BEHIND the camera, which is precisely the set that has
+    // no faces. It came back black with a speckle of the few surfaces that happened to be claimed,
+    // which is §8 R9's own table saying *a mirror facing a wall behind the camera reflects
+    // nothing* with a picture attached.
+    //
+    // R9a is the mechanism and it was built for this: the ray names the ONE face it landed on down
+    // the same feedback channel, tagged secondary, and the host claims it. It is deliberately not
+    // "report everything the ray crossed" -- that is the unbounded streaming this rewrite exists to
+    // stop -- and the two are told apart by the same distinction R9a draws: a ray names what it
+    // LANDED on.
+    //
+    // Throttled on the caller's side because there is no slot to stamp -- the whole point is that
+    // this face is not in the store yet. `claim` is the primary pass's own face lattice, one pixel
+    // in `stride` each way, and it is true only for the FIRST reflected segment: a deeper bounce is
+    // dimmer by its own throughput and asking for its faces too would multiply the entry count by
+    // the depth. D431 is what bounds this: 1,538,219 reports against a capacity of 131,072 took the
+    // streaming reports down with them.
+    if (claim && own_slot == kNoFace && h.face_level != kNoFaceLevel) {
+        node_face_request(h.face_node, h.face_level, h.face_dir);
+    }
     for (int step = 1; step <= kFaceAncestorStep; ++step) {
         const uint anc = node_face_lookup(h.face_node >> step, h.face_level + uint(step), h.face_dir);
         if (reflect_face_ready(anc)) return anc;
@@ -272,7 +383,7 @@ struct ReflectAnswer {
 // returns, or every reflection is squared. `carry` is the same product with that first factor left
 // out. They differ by exactly one term and by nothing else.
 ReflectAnswer reflect_trace(vec3 eye, vec3 dir, NodeHit first, float pixel_angle, float dither,
-                            float budget) {
+                            float budget, bool claim) {
     ReflectAnswer answer;
     answer.radiance = vec3(0.0);
     answer.share = 0.0;
@@ -350,7 +461,7 @@ ReflectAnswer reflect_trace(vec3 eye, vec3 dir, NodeHit first, float pixel_angle
         answer.bounces += 1u;
 
         if (!h.hit) {
-            answer.radiance += carry * sky_radiance(away);
+            answer.radiance += carry * reflect_escaped(from, away);
             break;
         }
 
@@ -361,8 +472,9 @@ ReflectAnswer reflect_trace(vec3 eye, vec3 dir, NodeHit first, float pixel_angle
         carry *= h.through;
 
         uint own = kNoFace;
-        const uint slot =
-            (h.face_level == kNoFaceLevel) ? kNoFace : reflect_answering_slot(h, own);
+        const uint slot = (h.face_level == kNoFaceLevel)
+                              ? kNoFace
+                              : reflect_answering_slot(h, claim && bounce == 0u, own);
         uint next_material = 0u;
         if (own != kNoFace && own != kFaceTombstone && own < face_material.words.length()) {
             next_material = face_material.words[own];
