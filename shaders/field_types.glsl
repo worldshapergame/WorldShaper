@@ -453,10 +453,12 @@ bool ws_child_bounded(uint word, uint slot) { return (word & (WS_NODE_CHILD_0 <<
 // `ws_box_away_sq` for a child the parent's word already knows about.
 //
 // An UNBOUNDED child then costs nothing instead of two loads out of a record eighty bytes away and
-// a page away in the buffer, and that is not a rounding: D675 counted **923 of the estate's 18,250
-// nodes carrying no box**, and an ancestor of an unbounded node cannot be bounded either, so about
-// a quarter of the tree answers nought here. Nought is what `ws_box_away_sq` answers for the
-// infinite box too, so this is the same number by a cheaper route and not a different rule.
+// a page away in the buffer, and that is not a rounding. **D675 counted 923 of the nodes a cell
+// WALKS carrying no box — a quarter of the walk** — and this build counts 2,811 of the estate's
+// 18,250 in that state, 15.4%; the two are different denominators and both are worth knowing, since
+// an ancestor of an unbounded node cannot be bounded either and the walk is where that compounds.
+// Nought is what `ws_box_away_sq` answers for the infinite box too, so this is the same number by a
+// cheaper route and not a different rule.
 float ws_child_away_sq(uint word, uint slot, uint at, vec3 p) {
     if (!ws_child_bounded(word, slot)) return 0.0;
     return ws_box_away_sq(at, p);

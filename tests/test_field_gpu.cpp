@@ -342,8 +342,9 @@ TEST_CASE("the accelerator's word describes the boxes the field actually has") {
     f.build_bounds();
 
     // The premise first, because every assertion below is vacuous if the field turns out to be all
-    // bounded or all not. D675 counted 923 of the estate's 18,250 nodes carrying no box; this clip
-    // needs at least one of each for the test to be about anything.
+    // bounded or all not. 2,811 of the estate's 18,250 nodes carry no box, and D675 counted 923 of
+    // the nodes a cell WALKS in that state; this clip needs at least one of each either way, or the
+    // assertions below are about nothing.
     REQUIRE_FALSE(f.bounds_of(near_box).infinite());
     REQUIRE(f.bounds_of(grain).infinite());
 

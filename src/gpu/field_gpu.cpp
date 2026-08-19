@@ -390,8 +390,10 @@ bool FieldSampler::upload(const forge::SamplePlan& plan, u32 bounds_node, bool h
     // R12's accelerator, and what it can actually reach on THIS clip. Said out loud because it is
     // the one thing about the cull that varies from clip to clip and nothing else reports it: a
     // node with no box can never be rejected, an ancestor of one cannot be bounded either, and
-    // D675 counted 923 of the estate's 18,250 in that state. A clip where this share falls is a
-    // clip whose walk got longer, and the log is the only place that would show.
+    // this build measures 2,811 of the estate's 18,250 in that state, and D675 counted 923 of the
+    // nodes a cell WALKS — a quarter of the walk, which is the denominator that decides the cost.
+    // A clip where this share falls is a clip whose walk got longer, and the log is the only place
+    // that would show it.
     WS_LOG_INFO("clip",
                 "field accelerator: {} of {} nodes carry a box ({:.1f}%), {} unions worth sorting",
                 bounded_nodes_, node_count_,
