@@ -38,6 +38,12 @@ struct LoadingFrame {
     std::string count_text;      // the same thing as a number the player can watch move
     std::string left_text;       // how much longer, or empty when it is too early to say
     f32 accent[3] = {0.42f, 0.62f, 1.0f};
+
+    // The way in, before the load has finished. 0 is no button at all, which is every frame of
+    // every load until the build says there is something to enter; 1 is offered; 2 is under the
+    // pointer; 3 is pressed, or taken, and the screen is on its way out.
+    u32 button = 0;
+    std::string button_text;     // at most eight characters -- see the push block
 };
 
 class LoadingScreen {
@@ -60,6 +66,15 @@ public:
     // Returns false when the swapchain could not be acquired, which the caller should treat as
     // "skip this frame", not as an error.
     bool present(Swapchain& swapchain, const LoadingFrame& frame);
+
+    // The image the last frame was drawn into, so `--loading-shot` can photograph it.
+    //
+    // There is a `--title-shot` and there was nothing for this screen, which meant the one piece
+    // of interface a player looks at for ten seconds was the one piece nothing could look at
+    // without a person watching. It is the screen's own target rather than the swapchain's, for
+    // the same reason the real frame's screenshot path uses the render target: a presented image
+    // is owned by the presentation engine by the time anybody wants to read it.
+    const GpuImage& image() const { return target_; }
 
 private:
     bool ensure_target(u32 width, u32 height);

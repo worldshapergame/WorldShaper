@@ -55,6 +55,43 @@ u64 to_bits(f64 value) {
 
 }  // namespace
 
+void LoadSteps::begin() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    steps_.clear();
+}
+
+void LoadSteps::add(const char* name, f64 seconds) {
+    if (name == nullptr) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    steps_.emplace_back(name, seconds);
+}
+
+std::string LoadSteps::line() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string out;
+    for (const auto& [name, seconds] : steps_) {
+        // A step under a millisecond is not news and there are a dozen of them; printing them all
+        // would bury the one that took sixteen seconds in a line nobody reads to the end of.
+        if (seconds < 0.0005) continue;
+        if (!out.empty()) out += "  ";
+        out += name;
+        out += ' ';
+        out += std::to_string(static_cast<int>(seconds * 1000.0 + 0.5));
+        out += "ms";
+    }
+    return out;
+}
+
+f64 LoadSteps::total() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    f64 sum = 0.0;
+    for (const auto& [name, seconds] : steps_) {
+        (void)name;
+        sum += seconds;
+    }
+    return sum;
+}
+
 const char* stage_name(LoadStage stage) {
     switch (stage) {
         case LoadStage::Reading:   return "reading the clip";
@@ -137,7 +174,21 @@ void LoadProgress::begin(const LoadHistory& history, bool from_cache) {
     done_.store(0, std::memory_order_relaxed);
     expected_.store(0, std::memory_order_relaxed);
     complete_.store(false, std::memory_order_relaxed);
+    offer_.store(false, std::memory_order_relaxed);
+    asked_.store(false, std::memory_order_relaxed);
+    entered_.store(false, std::memory_order_relaxed);
     stage_began_ns_[0] = began_ns_;
+}
+
+void LoadProgress::offer_early_entry() { offer_.store(true, std::memory_order_release); }
+
+void LoadProgress::ask_to_enter() {
+    // Only ever honoured where the build has said it is safe. A press that arrives while the
+    // screen is not offering one is not queued for later: the button was not there, so nobody
+    // pressed it, and a press remembered from before the offer would take the player out of a
+    // stage that has no way out.
+    if (!offer_.load(std::memory_order_acquire)) return;
+    asked_.store(true, std::memory_order_release);
 }
 
 void LoadProgress::enter(LoadStage stage) {
@@ -190,6 +241,11 @@ f64 LoadProgress::weight_of(LoadStage stage) const {
 
 LoadProgress::Snapshot LoadProgress::look() const {
     Snapshot out;
+    // Read before the early return, because a load that finished on its own still has to be able
+    // to say whether the player left it early — the frame that draws a full bar and the frame that
+    // draws a pressed button are the same frame.
+    out.entering = asked_.load(std::memory_order_acquire);
+    out.may_enter = offer_.load(std::memory_order_acquire) && !out.entering;
     out.complete = complete_.load(std::memory_order_acquire);
     if (out.complete) {
         out.stage = LoadStage::Settling;

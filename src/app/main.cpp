@@ -18,6 +18,7 @@
 #include <deque>
 #include <fstream>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -165,6 +166,29 @@ struct Options {
     // across cameras (D633). And the loading bar, which is the whole point: it does not go with
     // this flag alone, which is why `stipple_at_coarse` above moved in the same change.
     bool no_coarse_paste = true;
+    // ---- the way in, before the load has finished (R11i, D712) ----------------------------
+    //
+    // `--enter-now` presses the loading screen's button the moment it appears, which is what makes
+    // the feature measurable: `everything ready` from a run that waited and from a run that left
+    // early are the two arms, and one of them cannot be taken by a script without this.
+    //
+    // `--no-early-entry` is the other control arm and it is the one that matters for every figure
+    // taken before this existed: no button is offered at all, the load runs to its own end, and the
+    // run is the load `--settle` and `baseline.ps1` have always measured.
+    bool enter_now = false;
+    bool no_early_entry = false;
+    // The control arm for compiling the six pipelines at once: create each one and wait for it
+    // before starting the next, which is what every load did until R11i. One binary, two arms —
+    // the alternative is two builds, and two builds of a shader compile are two different states
+    // of the driver's own cache, which is the quantity being measured.
+    bool serial_pipelines = false;
+    // `--loading-shot FILE` photographs the loading screen itself after `--loading-shot-frame N`
+    // of its frames have gone out, and offers the way in so that what is photographed is what a
+    // player sees. There is a `--title-shot` and there was nothing for this screen -- so the one
+    // piece of interface somebody looks at for ten seconds was the one piece that could not be
+    // checked without a person watching, which is how a button ships drawn in the wrong place.
+    std::string loading_shot;
+    u64 loading_shot_frame = 2;
     // How many nodes the ladder picks and samples per wake. 0 keeps kRefineBatch. This is how the
     // default was chosen and is the control arm for it.
     usize refine_batch = 0;
@@ -1175,6 +1199,16 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         // the disk. It reports a hash identical for the reason a cache is identical. The headless
         // clip report never touches the cache and needs nothing.
         ws::forge::compile_fields(arg == "--compile-field");
+    } else if (arg == "--enter-now") {
+        options.enter_now = true;
+    } else if (arg == "--serial-pipelines") {
+        options.serial_pipelines = true;
+    } else if (arg == "--loading-shot") {
+        if (i + 1 < argc) options.loading_shot = argv[++i];
+    } else if (arg == "--loading-shot-frame") {
+        options.loading_shot_frame = static_cast<u64>(std::max<i64>(1, next_number(2)));
+    } else if (arg == "--no-early-entry") {
+        options.no_early_entry = true;
     } else if (arg == "--no-clip-cache") {
         options.no_clip_cache = true;
     } else if (arg == "--no-paste-pool") {
@@ -1695,6 +1729,16 @@ void print_help() {
         "  --settle              start the measurement window once the world stops sharpening,\n"
         "                        rather than at frame nought. Any figure to be compared with\n"
         "                        another run needs this\n"
+        "  --enter-now           press the loading screen's `play now` button the moment it is\n"
+        "                        offered, so a scripted run can take the early arm. A scripted\n"
+        "                        run is offered no button unless this says so, so --settle and\n"
+        "                        --screenshot measure the load they always measured\n"
+        "  --no-early-entry      offer no button at all, scripted or not\n"
+        "  --serial-pipelines    compile the six pipelines one after another and wait for each,\n"
+        "                        which is what every load did before R11i. The control arm\n"
+        "  --loading-shot FILE   photograph the LOADING SCREEN after --loading-shot-frame N of\n"
+        "                        its frames, with the way in showing, and carry on\n"
+        "  --loading-shot-frame N  which of its frames to photograph (2)\n"
         "  --preview x0,..,z1,s  force a preview box on: six voxel coordinates then a state\n"
         "                        (1 carve, 2 place, 3 refused, 6 the cursor marker)\n"
         "  --preview-mark x,y,z  drop a constraint cross, repeatable\n"
@@ -2276,6 +2320,28 @@ std::vector<std::string> shipped_world_candidates(const std::string& opened_path
     }
     return out;
 }
+
+// A stopwatch over a linear sequence of load steps: `lap` files everything since the last one
+// under a name and starts the next, `skip` starts the next without filing anything.
+//
+// It exists because `settling` — one of the seven stages the loading bar knows about — has been
+// measured at 16,395 ms of a 16,545 ms load with four sub-timings beside it adding to under a
+// second. A bucket that big is not a measurement, it is a place for a measurement to hide, and
+// every step it hid is one line of this.
+class StepClock {
+public:
+    explicit StepClock(LoadSteps& into) : into_(into), at_(now_ns()) {}
+    void lap(const char* name) {
+        const u64 now = now_ns();
+        into_.add(name, static_cast<f64>(now - at_) * 1e-9);
+        at_ = now;
+    }
+    void skip() { at_ = now_ns(); }
+
+private:
+    LoadSteps& into_;
+    u64 at_;
+};
 
 std::string default_clip_path() {
     const std::filesystem::path candidates[] = {
@@ -2978,9 +3044,30 @@ private:
     void log_starting_material() const;
 
     LoadHistory load_history_;
+    LoadSteps load_steps_;
     u64 load_began_ns_ = 0;
     u64 loading_drawn_ns_ = 0;    // when the last loading frame went out, so it can be paced
     bool loading_quit_ = false;   // the window was closed while it was still building
+
+    // ---- the way in, before the load has finished (R11i, D712) ----------------------------
+    //
+    // When the button first appeared, so a run can report the number the request was actually
+    // about: not how long the load took, but how long a player had to look at it before they were
+    // allowed to stop looking at it. Nought when it was never offered.
+    u64 load_button_ns_ = 0;
+    // ...and when it was pressed, which is the other end of the same measurement.
+    u64 load_entered_ns_ = 0;
+    // When the load reached the point at which entering became POSSIBLE, whether or not a button
+    // was put on the screen. A scripted run is offered none (see `Options::scripted`) and a
+    // scripted run is the only kind that can be repeated, so without this the one number the
+    // request was about would be unmeasurable by the only runs that can measure anything.
+    u64 load_could_enter_ns_ = 0;
+    // How many loading frames have been presented, which is what `--loading-shot-frame` counts.
+    u64 loading_frames_ = 0;
+    // Held down, so the button can light up under the press rather than only on the release. A
+    // press that starts inside and is released outside is not a click, which is what every other
+    // button on this machine does and is the whole reason `mouse_left_released` exists.
+    bool loading_button_held_ = false;
 
     ComputePipeline resolve_;
     // R6a and R6b: the glare chain and the shutter, after the composite and before the blit.
@@ -3789,11 +3876,55 @@ void Application::draw_loading() {
 
     const LoadProgress::Snapshot look = progress_.look();
 
+    // --- the way in ---------------------------------------------------------------------
+    //
+    // Asked for directly: a button that stops waiting and puts the player in the world with
+    // everything already loaded still loaded. It is answered on the RELEASE inside the rectangle,
+    // like every other button in this game, and by Enter or Space as well — a player who has just
+    // watched a bar for ten seconds has their hand nowhere near the mouse.
+    //
+    // The hit test and the drawing read one rectangle, from `loading_button_rect`. It is the only
+    // arithmetic either of them does about where the button is.
+    u32 button = 0;
+    if (look.entering) {
+        // Already taken — by an earlier frame of this loop, or by `--enter-now` straight off the
+        // offer, which does not go through the pointer at all.
+        button = 3;
+        if (load_button_ns_ == 0) load_button_ns_ = at;
+        if (load_entered_ns_ == 0) load_entered_ns_ = at;
+    } else if (look.may_enter) {
+        const InputState& in = window_.input();
+        const LoadingButtonRect rect =
+            loading_button_rect(swapchain_.extent().width, swapchain_.extent().height);
+        const bool over = rect.contains(in.mouse_x, in.mouse_y);
+        if (in.mouse_left_pressed && over) loading_button_held_ = true;
+        if (!in.mouse_left) {
+            const bool clicked = loading_button_held_ && in.mouse_left_released && over;
+            loading_button_held_ = false;
+            if (clicked) progress_.ask_to_enter();
+        }
+        // Enter and Space as well — a player who has just watched a bar for ten seconds has their
+        // hand nowhere near the mouse.
+        if (in.was_pressed(Key::Enter) || in.was_pressed(Key::Space)) progress_.ask_to_enter();
+        if (progress_.asked_to_enter()) {
+            button = 3;
+            if (load_entered_ns_ == 0) load_entered_ns_ = now_ns();
+        } else {
+            button = (loading_button_held_ && over) ? 3u : (over ? 2u : 1u);
+        }
+        if (load_button_ns_ == 0) load_button_ns_ = at;
+    }
+
     LoadingFrame frame;
     frame.fraction = static_cast<f32>(look.fraction);
     frame.seconds = static_cast<f32>(static_cast<f64>(at - load_began_ns_) * 1e-9);
     frame.stage = static_cast<u32>(look.stage);
     frame.stage_text = stage_name(look.stage);
+    frame.button = button;
+    // The shell's own word for entering a world is `play` (src/ui/shell.cpp), so this is that word
+    // with the thing that makes it different from waiting. Eight characters is the whole allowance
+    // and this is eight; see the push block in src/gpu/loading_screen.cpp.
+    frame.button_text = "play now";
     if (look.expected > 0) {
         frame.count_text = short_count(look.done) + " OF " + short_count(look.expected) + " VOXELS";
     } else if (look.done > 0) {
@@ -3806,7 +3937,20 @@ void Application::draw_loading() {
     // nothing to say, so a default here is a colour almost nobody will see rather than a decision
     // quietly made on the player's behalf.
 
-    loading_screen_.present(swapchain_, frame);
+    if (!loading_screen_.present(swapchain_, frame)) return;
+
+    // `--loading-shot`: the screen itself, photographed. See Options::loading_shot.
+    //
+    // After the present rather than before it, because the image is only complete once the frame
+    // has been recorded — and `save_image_png` waits for the device, so the copy is reading a
+    // finished picture rather than a half-drawn one.
+    ++loading_frames_;
+    if (!options_.loading_shot.empty() && loading_frames_ == options_.loading_shot_frame) {
+        if (save_image_png(device_, loading_screen_.image(), options_.loading_shot)) {
+            WS_LOG_INFO("gpu", "wrote {} (the loading screen at its frame {}, button state {})",
+                        options_.loading_shot, loading_frames_, frame.button);
+        }
+    }
 }
 
 // Begin sampling the next rung, if there is one.
@@ -6051,6 +6195,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
 
 void Application::build_world() {
     const u64 start = now_ns();
+    StepClock clock(load_steps_);
 
     // The facility *is* the scene. There is no scripted fallback any more: a hand-written scene
     // in C++ and a clip file were two ways of saying the same thing, and only one of them can be
@@ -6133,6 +6278,7 @@ void Application::build_world() {
         }
 
         JobSystem jobs;
+        clock.lap("read the file");
 
         forge::Script script = forge::parse_clip_script(source, types_, tags_);
         script.errors.insert(script.errors.begin(), trouble.begin(), trouble.end());
@@ -6238,6 +6384,44 @@ void Application::build_world() {
             }
         }
         const u64 parsed_at = now_ns();
+        clock.lap("parse the clip");
+
+        // THE WAY IN OPENS HERE, and this is the earliest point at which it can.
+        //
+        // Everything above this line is what the ladder needs in order to exist at all: the text,
+        // the field it is parsed into, and the resolution. Below it is work whose every result the
+        // ladder can produce again — a coarse sample it will replace, a variation over that sample,
+        // a paste of it into the world, and a cache write for next time. So from here on, leaving
+        // early costs the player time and nothing else, which is the only condition on which a
+        // button that skips work is honest.
+        //
+        // `--no-early-entry` is the control arm: no offer, no button, and the load is the one every
+        // figure before R11i was taken against.
+        // A SCRIPTED RUN IS NEVER OFFERED ONE, and that is not tidiness — it is what keeps every
+        // measurement in this repository meaningful now that a load has two end points.
+        //
+        // `Options::scripted()` is already the list of flags every figure here is taken with, and
+        // a run under any of them must reach the same state as the run before it. A window that
+        // sits for six minutes with a live button is a window one stray keystroke can cut the load
+        // short in — which is not hypothetical: a 403-second `--coarse-paste` run in this very
+        // session logged `taken at t+373416 ms` with nobody at the keyboard on purpose. It skipped
+        // nothing that time, because the sample had already started, and next time it would not
+        // be so lucky. So `--settle`, `--screenshot`, `--benchmark` and the rest measure exactly
+        // what they measured before, and `--enter-now` is the one way to take the other arm.
+        const bool offer_a_way_in =
+            !options_.no_early_entry &&
+            (!options_.scripted() || options_.enter_now || !options_.loading_shot.empty());
+        // Recorded whether or not the offer is made, because it is the number the request was
+        // about — "how long before a player could stop watching" — and a scripted run, which is
+        // the only kind that can be repeated, is exactly the run that is never offered one.
+        load_could_enter_ns_ = now_ns();
+        if (offer_a_way_in) progress_.offer_early_entry();
+        // `--enter-now` presses it HERE rather than waiting for the drawing thread to notice,
+        // and the difference is not cosmetic: the screen draws thirty times a second, so a load
+        // whose remaining work is shorter than a frame would finish before the press landed and
+        // the scripted arm would silently be the control arm. A test that sometimes takes the
+        // other arm is worse than no test.
+        if (options_.enter_now) progress_.ask_to_enter();
 
         // A world already built from exactly this text, at exactly this resolution, is worth more
         // than the ability to build it again. Two hundred million field evaluations do not fit in
@@ -6410,12 +6594,47 @@ void Application::build_world() {
                                       bake_key);
                 }
                 const WorldStats cached_stats = world_.stats();
+                clock.lap("open the saved world");
                 WS_LOG_INFO("world", "'{}' loaded from cache in {:.0f} ms [t+{:.0f} ms]: {} chunks, {} solid "
                                      "voxels", path, ns_to_ms(now_ns() - start),
                             ns_to_ms(now_ns() - load_began_ns_),
                             cached_stats.chunks, cached_stats.solid_voxels);
                 return;
             }
+            // A miss, and it cost whatever the file was worth trying. Filed rather than folded
+            // into the parse, because "your saved world did not match" and "your clip is slow to
+            // read" are different complaints with the same symptom.
+            clock.lap("look for a saved world");
+        }
+
+        // THE BUTTON, READ BEFORE THE UP-FRONT BUILD AND NOT AFTER IT.
+        //
+        // What follows is a whole-clip sample, a variation over it, a paste of it into the world
+        // and a cache write. It is nought by default (R11d, D673) and it is tens of seconds under
+        // `--coarse-paste` — D686 measured the estate at 22 s of it at half-metre voxels and 130 s
+        // at quarter-metre. That is the wait this button exists to end.
+        //
+        // **It skips work, it does not skip setup.** The ladder still gets its plan and its seed
+        // nodes and the palette is still named, because those are what a world IS rather than what
+        // it holds — returning from here instead would hand the player a world with no sampler
+        // behind it and one material in the palette. Everything skipped is something the ladder
+        // produces again from where the player is actually standing, which is the condition the
+        // offer was made on.
+        const bool stop_for_button = progress_.asked_to_enter();
+        if (stop_for_button) {
+            progress_.note_entered_early();
+            // WHAT THE WORLD HELD AT THE MOMENT THE BUTTON WAS PRESSED, and it is here so that
+            // the promise can be checked rather than asserted. `everything ready` prints the same
+            // two numbers again; the gate on this feature is that they are the same two numbers.
+            // Nothing between these lines writes a voxel — the whole of what is skipped is work
+            // that would have ADDED to the world — but "nothing writes a voxel" is a claim about
+            // code and a pair of hashes is a measurement.
+            const WorldStats held = world_.stats();
+            WS_LOG_INFO("load",
+                        "entered early with {} solid voxels in {} chunks, content {:016x}; the "
+                        "up-front build and the cache write are skipped and the ladder builds the "
+                        "rest from where the player is standing",
+                        held.solid_voxels, held.chunks, world_.content_hash());
         }
 
         if (script.ok()) {
@@ -6435,8 +6654,12 @@ void Application::build_world() {
             // An unsampled `built` is empty, and every use of it downstream is a no-op on an empty
             // clip by construction: `despeckle` and `apply_variation` have nothing to walk, the
             // paste is already skipped, and `origin_voxel` is read only by the paste.
+            // ...and it is not taken when somebody has pressed the button either, for exactly the
+            // reason above written the other way round: an unsampled `built` is empty, and every
+            // use of it downstream is already a no-op on an empty clip. So one term added here
+            // turns the whole of the up-front chain off, and nothing below needs a second guard.
             const bool coarse_sample_needed =
-                !options_.no_coarse_paste || options_.stipple_at_coarse;
+                (!options_.no_coarse_paste || options_.stipple_at_coarse) && !stop_for_button;
             forge::SampleResult built;
             if (coarse_sample_needed) {
                 progress_.enter(LoadStage::Sampling);
@@ -6546,7 +6769,11 @@ void Application::build_world() {
                             "ladder builds the world from nothing (R11d)");
                 (void)skipped_at;
             }
-            const PasteStats stamped = options_.no_coarse_paste
+            // `stop_for_button` as well, and it is not merely an optimisation over an empty clip:
+            // `built.origin_voxel` is only meaningful when something was sampled, and a paste is
+            // the one caller that reads it. Skipping the sample and then pasting from its origin
+            // is reading a number nobody wrote.
+            const PasteStats stamped = (options_.no_coarse_paste || stop_for_button)
                 ? PasteStats{}
                 : paste_clip(
                 world_, ledger_, built.clip,
@@ -6557,6 +6784,9 @@ void Application::build_world() {
                 coarse);
             const u64 pasted_at = now_ns();
             if (stamped.chunks_left_empty && !options_.no_coarse_paste) world_.compact();
+            // The whole up-front chain as one step, because that is what the button skips and a
+            // breakdown is only worth having if the thing a flag removes is a line in it.
+            clock.lap("build the world up front");
 
             // Hold on to everything the ladder needs. The script owns the field, which the
             // background sampler reads and nothing else touches once parsing is done.
@@ -6637,7 +6867,13 @@ void Application::build_world() {
             // the write is save_refined_world's, which happens at the fixed point and carries the
             // list of which boxes are sharp; here there is no ladder and the world is already what
             // the clip asked for.
-            if (!options_.no_clip_cache && coarse <= 1) {
+            // ...and not when the button was pressed, which is not merely "it would be slow": the
+            // world here holds nothing, because the sample and the paste were both skipped, and
+            // writing that would put an EMPTY world in the cache under this clip's key. The next
+            // launch would read it, find it valid, and start from nothing while believing it had
+            // resumed. The way out is the same one every session already has — the world is kept
+            // on the way out (D673), by which time the ladder has actually built something.
+            if (!options_.no_clip_cache && coarse <= 1 && !stop_for_button) {
                 progress_.enter(LoadStage::Caching);
                 WorldCache cache;
                 cache.tags = &tags_;
@@ -6647,6 +6883,7 @@ void Application::build_world() {
                 cache.ledger = &ledger_;
                 cache.materials = materials_;
                 write_world_cache(cache_path, key, cache);
+                clock.lap("keep it for next time");
             }
             return;
         }
@@ -9609,7 +9846,13 @@ int Application::play(const Options& options) {
 
     load_history_ = LoadHistory::read(loading_cache_path());
     progress_.begin(load_history_, LoadProgress::likely_cached(load_history_));
+    load_steps_.begin();
     load_began_ns_ = now_ns();
+    load_button_ns_ = 0;
+    load_entered_ns_ = 0;
+    load_could_enter_ns_ = 0;
+    loading_frames_ = 0;
+    loading_button_held_ = false;
 
     // The build runs on its own thread and this one draws. Everything the build reports is atomic
     // and relaxed, so there is no lock between them and a bar one frame stale is a bar nobody can
@@ -9643,6 +9886,14 @@ int Application::play(const Options& options) {
     progress_.enter(LoadStage::Uploading);
     draw_loading();
 
+    // Every step from here to the frame loop, by name and with what it cost.
+    //
+    // The seven stages the bar knows about put ALL of this into one of them, `settling`, and that
+    // bucket has been measured at 16,395 ms of a 16,545 ms load with `type tables`, `node pool`,
+    // `node buffers` and `pipelines` printed beside it adding to under a second. Whatever was slow
+    // was slow between two of those lines and nothing said which. It does now.
+    StepClock steps(load_steps_);
+
     // The VRAM share, the brick-slot arithmetic and the residency budget that stood here were
     // the chunk system's, and they are gone with it (R1e). The node pool sizes itself from
     // `NodePoolBudget` and the face store from `FaceStoreBudget`, both a few lines below.
@@ -9655,6 +9906,7 @@ int Application::play(const Options& options) {
     // How far the world reaches, which is what a ray is clipped to. It used to be a side effect
     // of rebuilding the coarse grids.
     refresh_world_bounds();
+    steps.lap("measure the world");
     progress_.within(0.30);
     draw_loading();
 
@@ -9666,6 +9918,7 @@ int Application::play(const Options& options) {
     }
 
     if (!feedback_.create(device_)) return 1;
+    steps.lap("type tables");
     progress_.within(0.70);
     draw_loading();
 
@@ -9868,10 +10121,13 @@ int Application::play(const Options& options) {
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &cloud_alloc, &cloud_set_));
     }
 
+    steps.lap("descriptor sets");
+
     {
         const VkExtent2D render = scaled_extent();
         create_render_target(render.width, render.height);
     }
+    steps.lap("render target");
 
     // The pipelines. This was the rest of the wait while the reference tracer existed: one large
     // shader whose compile is seconds rather than milliseconds on a cold driver cache, measured at
@@ -9895,6 +10151,67 @@ int Application::play(const Options& options) {
                         field_sampler_.why_not());
         }
     }
+    steps.lap("the field sampler");
+
+    // ---- THE SIX COMPUTE PIPELINES, COMPILED ALL AT ONCE AND WITH THE BAR STILL MOVING -------
+    //
+    // This is where the loading screen's time actually goes, and until `load steps:` existed
+    // nothing said so. Cold driver cache, facility, one run:
+    //
+    //     visibility.comp 13,223 ms   shade_faces.comp 5,917 ms   resolve.comp 641 ms
+    //     beam.comp 129 ms   clouds.comp 124 ms   face_worklist.comp 96 ms
+    //
+    // **Nineteen seconds of a twenty-second load, and they were compiled one after another on the
+    // only thread that could draw the bar.** So the screen also stood still for the thirteen
+    // seconds in the middle of it, which is the state a player reports as "it has hung".
+    //
+    // Neither of those had a reason. Six shaders that share nothing but a device compile
+    // independently, and `vkCreatePipelineLayout`, `vkCreateShaderModule` and
+    // `vkCreateComputePipelines` are all internally synchronised — a `VkDevice` is not an
+    // externally-synchronised parameter to any of them, and no pipeline cache is passed, which is
+    // the one object that would have needed a lock. So they go on their own threads and the main
+    // thread does what it was doing before and could not: draw.
+    //
+    // The wall clock is now the LONGEST of them rather than the sum, and the sum was six numbers
+    // with nothing to do with each other. `post_pass_` and `field_sampler_` are deliberately not
+    // in here: they build their own images and descriptor pools rather than one plain pipeline,
+    // and between them they are 67 ms of the twenty seconds. There is nothing to win and a class
+    // of thing to get wrong.
+    //
+    // The second run of the same binary is 8 ms for all of them, because the driver keeps its own
+    // compiled code. This is the FIRST launch after anything changes a shader — which for a player
+    // is every update, and is the launch they judge the game's loading by.
+    std::vector<std::thread> compiles;
+    std::atomic<u32> compiling{0};
+    // Takes what to do rather than what to make, because the beam pre-pass owns a corner grid as
+    // well as a pipeline and so has a `create` of its own shape. One launcher, six callers, and
+    // every caller still reads as the line it replaced.
+    const auto compile = [&](const char* name, std::function<void()> make) {
+        compiling.fetch_add(1, std::memory_order_relaxed);
+        compiles.emplace_back([this, &compiling, name, make = std::move(make)] {
+            const u64 began = now_ns();
+            make();
+            // Filed by the thread that did it, so the breakdown still names every shader and its
+            // own cost. They no longer ADD to the wall clock, which is the point, so the line
+            // beside them says what the wall clock was.
+            load_steps_.add(name, static_cast<f64>(now_ns() - began) * 1e-9);
+            compiling.fetch_sub(1, std::memory_order_release);
+        });
+        // The control arm, taken here rather than by not spawning at all: `--serial-pipelines`
+        // must run the SAME code down to the thread, so that what the two arms differ by is
+        // whether they overlap and nothing else.
+        if (options_.serial_pipelines) {
+            while (compiling.load(std::memory_order_acquire) > 0) draw_loading();
+            compiles.back().join();
+        }
+    };
+    const auto await_compiles = [&] {
+        while (compiling.load(std::memory_order_acquire) > 0) draw_loading();
+        for (std::thread& thread : compiles) {
+            if (thread.joinable()) thread.join();
+        }
+        compiles.clear();
+    };
 
     // The node pool, its buffers, its descriptor set and its pipeline. Created unconditionally
     // rather than behind the flag: the point of R1c is that the two marchers can be swapped at
@@ -9938,6 +10255,7 @@ int Application::play(const Options& options) {
         node_budget_leaves_ = node_budget.max_occupancy_leaves;
         const u64 t_node_buffers = now_ns();
         WS_LOG_INFO("load", "node pool {:.0f} ms", ns_to_ms(t_node_buffers - t_pool));
+        steps.lap("the node pool");
 
         // R12c's other half: the clip's extent, handed to the pool before the first frame.
         //
@@ -10124,6 +10442,7 @@ int Application::play(const Options& options) {
         }
         WS_LOG_INFO("load", "node buffers {:.0f} ms  [t+{:.0f} ms]",
                     ns_to_ms(now_ns() - t_node_buffers), ns_to_ms(now_ns() - load_began_ns_));
+        steps.lap("the node buffers");
 
         // 0-1 out images, 2-6 the pool, 7 feedback, 8 the parameter block, 9-10 the faces,
         // 11 the face-slot image, 12 the card's provisional faces, 13 the face light, 14 the lamps.
@@ -10342,104 +10661,123 @@ int Application::play(const Options& options) {
             vkUpdateDescriptorSets(device_.handle(), 9, field_writes, 0, nullptr);
         }
 
-        const std::filesystem::path node_spirv = shaders / "visibility.comp.spv";
-        const std::filesystem::path node_source =
-            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "visibility.comp";
+        // Timed from here rather than by the step clock, because the step clock's laps are taken
+        // by THIS thread and the compiles are not on it. In the serial arm that difference showed
+        // up as `the post stage 19730ms`: the lap after the six waits had spanned all six.
+        const u64 t_shaders = now_ns();
+        const std::filesystem::path source_dir(WS_SHADER_SOURCE_DIR);
         // The face shader shares the marcher's set: a shadow ray has to march exactly the
         // geometry the primary ray stopped on, so giving it its own set would be two places to
         // bind the same buffers. Its push constant is larger -- a sun direction and a count --
         // and a pipeline layout takes the size it is given, so they are made separately.
-        const std::filesystem::path shade_spirv = shaders / "shade_faces.comp.spv";
-        const std::filesystem::path shade_source =
-            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "shade_faces.comp";
-        if (!shade_faces_.create(device_, shade_source, shade_spirv, node_layout_,
-                                 sizeof(NodePush), field_layout_)) {
-            WS_LOG_FATAL("app", "could not create the face shading pipeline: {}",
-                         shade_faces_.last_error());
-            return 1;
-        }
-
+        compile("shade_faces.comp", [this, source_dir, shaders] {
+            shade_faces_.create(device_, source_dir / "shade_faces.comp",
+                                shaders / "shade_faces.comp.spv", node_layout_, sizeof(NodePush),
+                                field_layout_);
+        });
         // The compaction pass that decides which slots the shading dispatch covers.
-        const std::filesystem::path worklist_spirv = shaders / "face_worklist.comp.spv";
-        const std::filesystem::path worklist_source =
-            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "face_worklist.comp";
-        if (!face_worklist_.create(device_, worklist_source, worklist_spirv, node_layout_,
-                                   sizeof(NodePush), field_layout_)) {
-            WS_LOG_FATAL("app", "could not create the face work list pipeline: {}",
-                         face_worklist_.last_error());
-            return 1;
-        }
-
+        compile("face_worklist.comp", [this, source_dir, shaders] {
+            face_worklist_.create(device_, source_dir / "face_worklist.comp",
+                                  shaders / "face_worklist.comp.spv", node_layout_,
+                                  sizeof(NodePush), field_layout_);
+        });
         // The same push range as the face shader, because they include the same file and a
         // stage may declare only one block: the marcher writes the first two fields and ignores
         // the rest, but its layout has to reserve what the block declares.
-        if (!visibility_.create(device_, node_source, node_spirv, node_layout_,
-                                     sizeof(NodePush), field_layout_)) {
-            WS_LOG_FATAL("app", "could not create the node visibility pipeline: {}",
-                         visibility_.last_error());
-            return 1;
-        }
-
+        compile("visibility.comp", [this, source_dir, shaders] {
+            visibility_.create(device_, source_dir / "visibility.comp",
+                               shaders / "visibility.comp.spv", node_layout_, sizeof(NodePush),
+                               field_layout_);
+        });
         // ---- R7: the beam pre-pass, on the same set and the same push block --------------------
         //
         // It marches exactly the geometry the primary ray marches, so it takes the marcher's set
         // rather than one of its own -- the argument main.cpp already makes about the face shader.
         // The corner grid is bound here as well as in create_render_target, because the render
         // target is made before this set exists and its write was therefore skipped.
-        const std::filesystem::path beam_spirv = shaders / "beam.comp.spv";
-        const std::filesystem::path beam_source =
-            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "beam.comp";
-        if (!beam_.create(device_, beam_source, beam_spirv, node_layout_, sizeof(NodePush))) {
+        compile("beam.comp", [this, source_dir, shaders] {
+            beam_.create(device_, source_dir / "beam.comp", shaders / "beam.comp.spv",
+                         node_layout_, sizeof(NodePush));
+        });
+        // ...and the two that used to wait for all four above to finish before they started. The
+        // composite and the cloud volume are on their own layouts and share nothing with the
+        // marcher's, so there was never a reason beyond the order the lines happened to be in.
+        // The composite takes the same push constant the tracer took: the sun, the weather and
+        // the air, none of which it could see before -- which is why it drew a hardcoded gradient.
+        compile("resolve.comp", [this, source_dir, shaders] {
+            resolve_.create(device_, source_dir / "resolve.comp", shaders / "resolve.comp.spv",
+                            resolve_layout_, sizeof(TracePush));
+        });
+        // The cloud volume keeps the set the path tracer had: its binding numbers are ones the
+        // shaders and gpu/render_params.hpp agree about, and renumbering them is R3d's follow-on
+        // rather than part of deleting the pass.
+        compile("clouds.comp", [this, source_dir, shaders] {
+            clouds_.create(device_, source_dir / "clouds.comp", shaders / "clouds.comp.spv",
+                           cloud_layout_, sizeof(TracePush));
+        });
+
+        // R6a and R6b, on THIS thread while the six above are on theirs. Not one of them because
+        // it owns images and a descriptor pool rather than a single pipeline, and it is 62 ms of
+        // the twenty seconds -- nothing to win and a class of thing to get wrong. Not fatal
+        // either: a build whose glare will not compile still has a game in it, and
+        // `PostPass::record` returns without recording anything when it is not valid.
+        const u64 t_post = now_ns();
+        if (!post_pass_.create(device_, source_dir, shaders)) {
+            WS_LOG_ERROR("app", "no post stage this run; the composite's frame is presented as it is");
+        }
+        load_steps_.add("the post stage", static_cast<f64>(now_ns() - t_post) * 1e-9);
+
+        // And here the load waits, DRAWING, until the last of them is done -- which is the longest
+        // of the six rather than the sum of them, and is the whole of what this change is.
+        await_compiles();
+        load_steps_.add("the pipelines, all at once",
+                        static_cast<f64>(now_ns() - t_shaders) * 1e-9);
+        steps.skip();
+
+        // What could not be made. Reported after the join rather than inside each thread, because
+        // a thread that fails has nothing useful to do about it and six messages interleaved from
+        // six threads is a log nobody can read.
+        if (shade_faces_.pipeline() == VK_NULL_HANDLE) {
+            WS_LOG_FATAL("app", "could not create the face shading pipeline: {}",
+                         shade_faces_.last_error());
+            return 1;
+        }
+        if (face_worklist_.pipeline() == VK_NULL_HANDLE) {
+            WS_LOG_FATAL("app", "could not create the face work list pipeline: {}",
+                         face_worklist_.last_error());
+            return 1;
+        }
+        if (visibility_.pipeline() == VK_NULL_HANDLE) {
+            WS_LOG_FATAL("app", "could not create the node visibility pipeline: {}",
+                         visibility_.last_error());
+            return 1;
+        }
+        if (!beam_.valid()) {
             WS_LOG_FATAL("app", "could not create the beam pre-pass pipeline: {}",
                          beam_.last_error());
             return 1;
         }
+        if (resolve_.pipeline() == VK_NULL_HANDLE) {
+            WS_LOG_FATAL("app", "could not create the resolve pipeline: {}",
+                         resolve_.last_error());
+            return 1;
+        }
+        // Not fatal. A sky with no cloud in it is a worse picture and a working one.
+        if (clouds_.pipeline() == VK_NULL_HANDLE) {
+            WS_LOG_ERROR("app", "no clouds this run: {}", clouds_.last_error());
+        }
+
+        // After the join, because there is nothing to bind until beam.comp exists.
         beam_.ensure(device_, node_set_, render_target_.extent.width,
                      render_target_.extent.height);
         }
 
-    const u64 t_pipelines = now_ns();
-
-    progress_.within(0.25);
-    draw_loading();
-
-    const std::filesystem::path resolve_spirv = shaders / "resolve.comp.spv";
-    const std::filesystem::path resolve_source =
-        std::filesystem::path(WS_SHADER_SOURCE_DIR) / "resolve.comp";
-    // The same push constant the tracer takes. It carries the sun, the weather and the air, none
-    // of which this pass could see before ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which is why it drew a hardcoded gradient.
-    if (!resolve_.create(device_, resolve_source, resolve_spirv, resolve_layout_,
-                         sizeof(TracePush))) {
-        WS_LOG_FATAL("app", "could not create the resolve pipeline: {}",
-                     resolve_.last_error());
-        return 1;
-    }
-
-    // R6a and R6b. Not fatal: a build whose glare will not compile still has a game in it, and
-    // `PostPass::record` returns without recording anything when it is not valid.
-    if (!post_pass_.create(device_, std::filesystem::path(WS_SHADER_SOURCE_DIR), shaders)) {
-        WS_LOG_ERROR("app", "no post stage this run; the composite's frame is presented as it is");
-    }
-
+    // The composite, the post stage and the cloud volume USED TO BE CREATED HERE, one after the
+    // four above and one after another. They are compiled with them now, on their own threads,
+    // because they share no layout with the marcher and there was never a reason for the order
+    // beyond the order the lines happened to be in. See the launcher above `the node pool`.
     progress_.within(0.40);
     draw_loading();
-
-    {
-        // The cloud volume, on what used to be the tracer's set and push constants. The set is
-        // kept whole rather than trimmed to what the cloud pass names: its binding numbers are
-        // ones the shaders and gpu/render_params.hpp agree about, and renumbering them is R3d's
-        // follow-on rather than part of deleting the pass.
-        const std::filesystem::path cloud_spirv = shaders / "clouds.comp.spv";
-        const std::filesystem::path cloud_source =
-            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "clouds.comp";
-        if (!clouds_.create(device_, cloud_source, cloud_spirv, cloud_layout_,
-                            sizeof(TracePush))) {
-            // Not fatal. A sky with no cloud in it is a worse picture and a working one.
-            WS_LOG_ERROR("app", "no clouds this run: {}", clouds_.last_error());
-        }
-
-        WS_LOG_INFO("load", "pipelines {:.0f} ms", ns_to_ms(now_ns() - t_pipelines));
-    }
 
     // The two tables the composite turns a voxel into a colour with. Everything else the marcher
     // used to be handed -- the wrapped chunk grid, the records, the masks, the popcount prefixes,
@@ -10593,6 +10931,7 @@ int Application::play(const Options& options) {
     apply_quality();
     applied_quality_level_ = quality_.level();
     seed_knobs();
+    steps.lap("settings and quality");
     WS_LOG_INFO("quality", "target {:.0f} fps ({}), level {} of {}{}", quality_.target_fps(),
                 options_.target_fps > 0.0f ? "asked for" : "the monitor's refresh rate",
                 quality_.level(), kQualityLevels - 1,
@@ -10601,6 +10940,7 @@ int Application::play(const Options& options) {
     progress_.within(0.85);
     draw_loading();
     if (!hud_.create(device_, window_, swapchain_.format())) return 1;
+    steps.lap("the interface");
 
     // A hundred per cent, and the next thing that happens is a real frame.
     //
@@ -10645,6 +10985,53 @@ int Application::play(const Options& options) {
                          std::to_string(static_cast<int>(seconds * 1000.0)) + "ms";
         }
         WS_LOG_INFO("app", "load stages: {}", breakdown);
+    }
+
+    // ...and the same load one level finer, which is the line that can answer "why".
+    //
+    // `load stages:` names seven buckets and six of them are one thing each. The seventh,
+    // `settling`, is the pool, nine device buffers, two descriptor layouts, seven compute
+    // pipelines, the render target and the interface — and it has been measured at 16,395 ms of a
+    // 16,545 ms load. This says which of those it was.
+    WS_LOG_INFO("app", "load steps: {}", load_steps_.line());
+
+    // WHEN A PLAYER WAS FIRST ALLOWED TO STOP WATCHING, which is the number the request was
+    // actually about. `everything ready` is when the load finished; this is when it stopped being
+    // compulsory. On a run nobody pressed the button on they are two ends of the same load and
+    // both are printed, so the pair can be read off any log without a special build.
+    if (load_could_enter_ns_ != 0) {
+        const f64 possible = ns_to_ms(load_could_enter_ns_ - load_began_ns_);
+        WS_LOG_INFO("load", "a player could have entered from t+{:.0f} ms{}", possible,
+                    (load_button_ns_ != 0) ? "" : " (no button: --no-early-entry, or a scripted run"
+                                                  " -- see --enter-now)");
+    }
+    if (load_button_ns_ != 0) {
+        const f64 offered = ns_to_ms(load_button_ns_ - load_began_ns_);
+        if (load_entered_ns_ != 0) {
+            // What it actually bought, and it is allowed to be nothing. A press that arrives
+            // after the world work has finished skips nothing, because there is nothing left that
+            // a frame can be drawn without — and saying so is the difference between a button
+            // that did nothing and a button that was pressed too late to do anything.
+            WS_LOG_INFO("load",
+                        "the way in was offered at t+{:.0f} ms and taken at t+{:.0f} ms; {}",
+                        offered, ns_to_ms(load_entered_ns_ - load_began_ns_),
+                        progress_.entered_early()
+                            ? "the up-front build and the cache write were skipped"
+                            : "the world was already built, so nothing was left to skip");
+            // ...and the same two numbers, taken here, with the whole of the GPU setup in between.
+            // If they differ from the pair above, something between the button and the frame loop
+            // re-derived or dropped what the player had already been given, which is the one thing
+            // this feature must never do.
+            if (progress_.entered_early()) {
+                const WorldStats kept = world_.stats();
+                WS_LOG_INFO("load", "and it is still {} solid voxels in {} chunks, content {:016x}",
+                            kept.solid_voxels, kept.chunks, world_.content_hash());
+            }
+        } else {
+            WS_LOG_INFO("load", "the way in was offered at t+{:.0f} ms and not taken", offered);
+        }
+    } else if (options_.no_early_entry) {
+        WS_LOG_INFO("load", "--no-early-entry: no way in was offered and the load ran to its end");
     }
 
     // The screen holds a full-resolution image and startup is the only thing that needs it.

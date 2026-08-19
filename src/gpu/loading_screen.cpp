@@ -4,6 +4,11 @@
 #include <cmath>
 #include <cstring>
 
+// The interface scale, which is the one number the hit test and the drawing must agree about.
+// It lives with the load's own state rather than here because a rectangle needs no device, and a
+// rectangle nothing can test without a device is a rectangle nothing tests. See
+// `loading_button_rect` there for the whole of that argument.
+#include "app/loading.hpp"
 #include "core/log.hpp"
 #include "gpu/swapchain.hpp"
 
@@ -12,10 +17,14 @@ namespace {
 
 // The push constant block, laid out to match shaders/loading.comp exactly.
 //
-// Vulkan guarantees at least 128 bytes and this is 120: forty-eight of numbers and seventy-two of
-// text, three lines of twenty-four characters packed four to a uint. That leaves eight bytes of
-// headroom, so a fourth line of text would not fit and would have to become a uniform buffer —
-// worth knowing before somebody tries.
+// Vulkan guarantees at least 128 bytes and this is now exactly 128 — forty-eight of numbers,
+// seventy-two of text (three lines of twenty-four characters packed four to a uint) and eight of
+// button label. It was 120 with eight bytes spare, and the way-in button took them: the two
+// reserved words became `button` and `button_chars`, and the eight bytes on the end are the label.
+//
+// **It is full.** A fourth line of text does not fit and never did; anything else this screen wants
+// to be told has to become a uniform buffer, and the alternative — asking for more than 128 bytes
+// of push constants — is a limit some device somewhere does not have.
 struct Push {
     f32 resolution[2];
     f32 time;
@@ -23,18 +32,24 @@ struct Push {
 
     f32 scale;
     u32 stage;
-    u32 pad0 = 0;
-    u32 pad1 = 0;
+    u32 button = 0;         // 0 hidden, 1 offered, 2 under the pointer, 3 taken
+    u32 button_chars = 0;   // how long the label is, so the eight bytes need no terminator
 
     f32 accent[3];
     f32 pad2 = 0.0f;
 
     u32 text[18]{};
+    u32 button_text[2]{};
 };
-static_assert(sizeof(Push) == 120, "the shader's push block is laid out to match this");
+static_assert(sizeof(Push) == 128, "the shader's push block is laid out to match this");
 
 constexpr u32 kSlotUints = 6;    // twenty-four characters, four to a uint
 constexpr u32 kSlotChars = kSlotUints * 4;
+
+// The label's whole allowance, and it is eight because eight is what was left. `play now` is
+// eight; the shell's own word for this is `play`, so there is room for the idiom and no room for
+// a sentence, which is the right size for a button anyway.
+constexpr usize kButtonChars = 8;
 
 // Packs a string into a slot, four characters to a uint, zero-terminated.
 //
@@ -183,13 +198,24 @@ bool LoadingScreen::present(Swapchain& swapchain, const LoadingFrame& frame) {
     for (u32 i = 0; i < 3; ++i) push.accent[i] = frame.accent[i];
 
     // Interface pixels are sized from the window's SHORT side, so the layout keeps its proportions
-    // on a wide monitor instead of growing until the column runs off the sides.
-    const f32 across = static_cast<f32>(std::min(extent.width, extent.height));
-    push.scale = std::max(1.0f, std::floor(across / 420.0f));
+    // on a wide monitor instead of growing until the column runs off the sides. Shared with the
+    // hit test through `loading_ui_scale`, because a button drawn at one scale and clicked at
+    // another is the fault this whole arrangement exists to make impossible.
+    push.scale = loading_ui_scale(extent.width, extent.height);
 
     pack(push.text, 0, frame.stage_text);
     pack(push.text, 1, frame.count_text);
     pack(push.text, 2, frame.left_text);
+
+    push.button = frame.button;
+    {
+        const usize count = std::min(frame.button_text.size(), kButtonChars);
+        push.button_chars = static_cast<u32>(count);
+        for (usize i = 0; i < count; ++i) {
+            push.button_text[i / 4] |= static_cast<u32>(
+                static_cast<u8>(frame.button_text[i])) << ((i % 4) * 8);
+        }
+    }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_.pipeline());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_.layout(), 0, 1, &set_,
