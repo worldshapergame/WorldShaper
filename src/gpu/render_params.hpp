@@ -216,7 +216,12 @@ struct RenderParams {
     //      was measured in. `--no-reflected-image`.
     //   y  R4d's DISPERSION. 0 gives every medium one index of refraction for all three channels,
     //      which is D652 exactly. `--no-dispersion`.
-    //   zw spare.
+    //   z  R4f's CONTRIBUTION BUDGET, as a share of the pixel: a reflected segment worth less than
+    //      this is not cast. The flag and the dial are one number on purpose -- "off" is "nothing
+    //      is worth casting", so `--no-ior-reflection` and `--reflect-budget 0` are the same arm
+    //      and there is no second bit that could disagree with the first. See
+    //      kReflectBudgetDefault in shaders/reflect.glsl.
+    //   w spare.
     //
     // Appended rather than folded into `tone`, whose y and z are already `--denoise-edge` and
     // `--lobe-floor`: D553 is the standing measurement of what changing a word's meaning costs, and
