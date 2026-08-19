@@ -51,6 +51,26 @@ SkyTrace trace;
 #include "pt_sky.glsl"
 #include "face_terms.glsl"
 
+// ---- R5b's and R9h's three control arms, out of the parameter block --------------------------
+//
+// In `push.r5b` and not in a probe dial bit, and that is the same sentence `push.r4` carries: the
+// dials live in word 0 of the light probe buffer and the bits that name them are declared in
+// node.glsl, which this stage may not touch. A vec4 of the parameter block costs sixteen bytes
+// once and is read straight into a register by the pass that wants it.
+bool face_ema_on() { return push.r5b.x != 0.0; }
+// Nought is `--no-face-rest` and is every build before this one: no face ever stops casting at the
+// sun. See kFaceSunRest in face_terms.glsl for both halves of what a rest is.
+uint face_rest_samples() { return uint(max(push.r5b.y, 0.0)); }
+bool light_name_cap() { return push.r5b.z != 0.0; }
+
+// R9h's stamp table, in the tail of the light probe buffer past every word node.glsl names. See
+// kFaceNameStamps in face_terms.glsl and kProbeNameStampBase in gpu/render_params.hpp.
+const uint kProbeNamesAsked = kLightProbeWords;
+const uint kProbeNamesSuppressed = kLightProbeWords + 1u;
+// R5b's rest census, in the third of the three words the host clears past the map.
+const uint kProbeSunResting = kLightProbeWords + 2u;
+const uint kProbeNameStampBase = kLightProbeWords + 3u;
+
 // The outward normal of one of the six faces, in the order node_face_coverage uses so that a
 // direction never has to be translated between the two.
 ivec3 face_normal(uint face) {
@@ -1105,7 +1125,43 @@ SkySample sky_cast(uint index, float max_t) {
     // the caller decides whether this ray is one of the ones asking, because the throttle is per
     // gathering face and there is no slot here to stamp.
     if (g_sky_report_face && hit.hit && !hit.unknown && hit.face_level != kNoFaceLevel) {
-        node_face_request(hit.face_node, hit.face_level, hit.face_dir);
+        // ...and R9h's last clause, which was true of the CELL a light ray stops on and has never
+        // been true of the FACE it lands on. See the block over `face_name_hash` in face_terms.glsl
+        // for the whole of it; what is here is the stamp.
+        //
+        // Counted before the table is asked, so the denominator is how many rays WANTED to name a
+        // face rather than how many managed to — which is kProbeSunRamped's lesson one stage along:
+        // with one counter, a frame where nothing wanted to name anything and a frame where every
+        // ray was suppressed print the same nought.
+        bool name_it = true;
+        if (light_name_cap()) {
+            probe_add(kProbeNamesAsked);
+            const uint mixed = face_name_hash(hit.face_node, hit.face_level, hit.face_dir);
+            const uint at = kProbeNameStampBase + face_name_slot(mixed);
+            if (at < light_probe.words.length()) {
+                // The window is the same period the caller's own throttle uses, so the two halves
+                // of the bound are one number rather than two that have to be kept in step.
+                const uint period = max(node_push.secondary_period, 1u);
+                const uint tag = face_name_tag(mixed);
+                // A plain exchange rather than a compare-and-swap, for `node_face_report_read`'s
+                // reason: two rays racing on one key both read the stale stamp and both report,
+                // which costs one duplicate entry out of thousands and cannot cost correctness.
+                const uint was = atomicExchange(light_probe.words[at],
+                                                face_name_stamp(tag, node_push.frame));
+                // The TAG first: a slot some other key stamped says nothing about this one, and
+                // suppressing on it would be refusing to name a face nobody has named. Then the
+                // frame, unsigned and masked exactly as node_light_due does it -- a slot never
+                // stamped reads nought and `frame - 0` is past any period from the first frames.
+                const uint had_tag = was >> kFaceNameTagShift;
+                const uint since =
+                    (node_push.frame - (was & kFaceNameFrameMask)) & kFaceNameFrameMask;
+                if (had_tag == tag && since < period) {
+                    probe_add(kProbeNamesSuppressed);
+                    name_it = false;
+                }
+            }
+        }
+        if (name_it) node_face_request(hit.face_node, hit.face_level, hit.face_dir);
     }
 
     // The near field. What carries the shape of a room is HOW FAR the ray got, not whether it
@@ -1955,6 +2011,34 @@ void main() {
     // thirty-two bytes read it was before.
     const bool sun_due = work.sun_due;
 
+    // ---- R5b: ...and whether it is owed one AT ALL, which until now it always was ---------------
+    //
+    // A face that has taken `kFaceSunRest` rays at the sun and reached it on none of them stops
+    // casting. See kFaceSunRest in face_terms.glsl for why that is kSkyConverged's own argument
+    // rather than a new one, and for why only the SHADOWED extreme rests.
+    //
+    // `photons` bit 31 is last visit's answer to "was that a shadow or was that ignorance", and it
+    // is read out of the record fetched at the top of this invocation rather than re-derived: a
+    // face unanimous about the TREE is not unanimous about the light, and resting on that is how a
+    // hole in residency becomes a permanent shadow.
+    const bool sun_ignorant = (face.photons & 0x80000000u) != 0u;
+    const bool sun_resting = face_sun_resting(face_samples_of(counters), face_lit_of(counters),
+                                              sun_ignorant, face_rest_samples());
+    // Counted where it is DECIDED, so the pass prints how much of the store has stopped paying
+    // beside every timing of it -- which is the rule D527 and D557 wrote down three times: a
+    // convergence figure belongs next to a cost, or a cheaper pass is indistinguishable from a
+    // diluted one.
+    if (sun_resting) probe_add(kProbeSunResting);
+    const bool sun_cast = sun_due && !sun_resting;
+
+    // Whether a sample went into the sun this frame and what it was, for the mean below. Two
+    // locals rather than a second read of the counters, because the two sites that accumulate are
+    // in different branches and the mean has to be able to tell "no ray this frame" from "a ray
+    // that found nothing" — which is trap 7 in the one place it would be invisible: both leave the
+    // record exactly as it was.
+    bool sun_sampled = false;
+    bool sun_sample = false;
+
     // Nothing at all is owed to this face this frame: the sun is not due and the ambient term is
     // finished. Out here, before anything is fetched.
     //
@@ -2000,6 +2084,18 @@ void main() {
     // measure is to let it measure, all at once, and be finished with it -- and the peak that
     // leaves is one second of 3.18 ms against 1.14, once, after the screen has completely turned
     // over. Metering that peak costs three times as much spread over eight times as long.
+    // `sun_due` and NOT `sun_cast`, and the difference was measured rather than reasoned.
+    //
+    // A resting face is owed no RAY. It is still owed its visit: this return is above
+    // `node_face_lobe`, which is what keeps a face's block of outgoing bins alive, and above the two
+    // denoises and the ambient block that sets `kFaceAmbientDone`. Resting on `sun_cast` here cost
+    // the lobe pool **32,913 blocks held against 38,705** on `mirror_test` at the same content hash,
+    // which is 5,792 polished faces that had gone cold and lost their reflection while a pixel was
+    // looking straight at them -- and left 6,183 faces short of `kFaceAmbientDone` for ever, because
+    // the block that sets it is below this line too.
+    //
+    // So the rest skips the MARCH and nothing else. That is the whole of what it is for: the march
+    // is the unbounded ray and the rest of the visit is a few loads.
     if (!sun_due && ambient_idle && lamp_idle) return;
 
     const uint direction = face_dir_of(face.packed);
@@ -2032,11 +2128,13 @@ void main() {
     // changes at all.
     const bool sun_through = !sun_possible && translucent && facing < 0.0;
 
-    if (!sun_possible && !sun_through && sun_due && may_cast) {
+    if (!sun_possible && !sun_through && sun_cast && may_cast) {
         // Counted as a ray that did not reach the sun, which is what it is. The fraction then
         // falls as the samples come in rather than snapping to nought, and this is the same
         // arithmetic a lit face does with one term different.
         faces.items[slot].counters = face_accumulate(counters, false);
+        sun_sampled = true;
+        sun_sample = false;
     }
 
     // A point ON the face, somewhere different every frame.
@@ -2095,7 +2193,7 @@ void main() {
     // not carried, because it costs the smaller window a finer ray and buys nothing measurable. The
     // reasoning was sound and the answer was still no, which is D417's shape exactly.
     const float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
-    if ((sun_possible || sun_through) && sun_due && may_cast) {
+    if ((sun_possible || sun_through) && sun_cast && may_cast) {
         const uint cone_seed = node_hash_mix(seed ^ 0x85EBCA6Bu);
         const vec2 disc = vec2(float(cone_seed & 0xFFFFu), float((cone_seed >> 16) & 0xFFFFu)) /
                           65536.0;
@@ -2142,6 +2240,8 @@ void main() {
         // soft edge costs the face a few frames instead of costing every pixel that looks at it a
         // ray of its own, every frame, for ever.
         faces.items[slot].counters = face_accumulate(counters, lit);
+        sun_sampled = true;
+        sun_sample = lit;
 
         // How far the ray got before it gave up, for the rays that reached nothing. `photons` is
         // GPU-owned and unwritten until the photon pass exists, so this borrows it rather than
@@ -2360,6 +2460,47 @@ void main() {
     // not update how far that sun is to be believed.
     face_sun_stand_in(slot, light_at, ivec3(face.x, face.y, face.z), level, direction,
                       provisional_face);
+
+    // ---- R5b: the sun as a mean that FORGETS, which is the temporal half of that line -----------
+    //
+    // Here, and the position is load-bearing in both directions for the two reasons the stand-in
+    // immediately above is here: the reset block above zeroes every word of a record the store has
+    // just handed out, so a mean published above it would be wiped by the line that is there to
+    // wipe the last occupant's — and this is above every early return under this point, so there is
+    // no path on which a visited face updates its sun and does not update the mean of it.
+    //
+    // See the block over `face_sun_ema_step` in face_terms.glsl for why the mean cannot live in the
+    // counters themselves and why, once it exists, the counters are written FROM it rather than
+    // four readers being taught a new word.
+    // A card-claimed stand-in never keeps one, and that is the sentence every accumulator in
+    // this pass carries: its record is rewritten on every frame it is needed, so it cannot
+    // accumulate anything and a mean is the slowest accumulator here.
+    if (face_ema_on() && !provisional_face) {
+        const uint after = faces.items[slot].counters;
+        const uint after_n = face_samples_of(after);
+        if (after_n != 0u) {
+            const uint word = face_light.words[light_at + kFaceSunEma];
+            float ema;
+            if ((word & kFaceSunKnown) != 0u) {
+                ema = face_sun_unpack(word);
+                if (sun_sampled) {
+                    ema = face_sun_ema_step(ema, sun_sample ? 1.0 : 0.0, after_n, kFaceSunMemory);
+                    // ...and back into the pair every reader of the sun already reads. Only on the
+                    // frames a ray was actually taken: writing it on a visit that cast nothing
+                    // would re-round the same number for no reason, and a write to `counters` is a
+                    // write to a record the host mirrors.
+                    faces.items[slot].counters = face_sun_counters(after_n, ema);
+                }
+            } else {
+                // No mean yet, so take the one the counters already hold — which below the memory
+                // IS this mean, exactly: an average whose alpha is 1/samples is the cumulative
+                // average. So a face adopting the mean adopts nothing new, and this frame's sample
+                // is not counted twice.
+                ema = float(face_lit_of(after)) / float(after_n);
+            }
+            face_light.words[light_at + kFaceSunEma] = face_sun_pack(ema);
+        }
+    }
 
     // ---- what this face is made of (R4a) ------------------------------------------------------
     //

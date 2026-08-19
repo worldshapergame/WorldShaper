@@ -654,30 +654,64 @@ there are expected and are the integrator's.
 **Nobody was allowed into `documentation/`** — every agent hands its decision-log entry back as text
 and it is written here. That is why this file is one voice and not twelve.
 
-**THIRTEEN ARE IN AS OF THIS WRITING, each built and tested on its own before the next was touched**,
-and the suite grew 637 → 687 cases with 0 failed at every step:
+**NINETEEN ARE IN AS OF THIS WRITING, each built and tested on its own before the next was
+touched, and the suite grew 637 → 717 cases with 0 failed at every step.** Sixty commits.
+
+The wave did not stop at twelve: **a stage merging frees its files, so the moment one landed
+another went out into them.** Three waves ran, and the user was playing the build throughout
+and reporting faults into it — six of the nineteen exist because of something they saw.
 
 | landed | what it turned out to be |
 |---|---|
-| the bake (D695) | `--refine-all`, and the finding that `kSettleGiveUp` is 30,000 FRAMES inside the `--settle` branch, so one run can never finish the estate whatever `--max-seconds` says |
-| the field compiler (D690) | a SET of roots; the crash was `count_op` indexing before its range check. OFF, because `--part` refuses on any clip with an `origin` |
-| the descent on the card (D691) | **the card was missing two of `Field::eval`'s three union culls.** 2,876 nodes a cell against 8,273, and the card is now AHEAD of the CPU arm on D681's own camera |
-| R11f (D692) | the format was already right; all three ways it could lose a building were outside it |
-| R4b (D694) | the coverage rule, in `face_worklist.comp` so no reader changed. The image is still missing and the lever is now named: `kLobeBigSamples` is 24 |
-| R8b + R2b (D696) | the hash child source, mirrored against the whole facility at 0 disagreements — **and `kSubPixelAngle` is ONE THOUSAND lines, not the 1280 its own comment claimed.** 2.160x too coarse at 4K, disagreeing at 4,070 of the first 5,000 metres, always in the direction that evicts what a ray is reading |
-| R11e + R11h far (D697) | light paths cause **0** sample jobs out of 150,584 offers, and at ten times the frames still 0 with the same world to the digit. **The far chisel now carves what the near one carves, byte for byte** — `ba1059f44662e644` from 60 m and from 1 m |
-| R7a + R7b (D698) | the beam pre-pass, one coarse ray per tile CORNER. **4K, arm to arm: 1.18 ms against 16.81 outdoors, 1.96 against 15.07 close** — and 0.76 against 0.56 at distant, where the ray was already trivial. `start = min(beam, temporal)` is the safety property: a wrong reprojection can only cost time |
-| R12c (D699) | **the marcher derives rather than stops — step 12's headline, built and OFF.** Enclosed 7.57 ms against 6.60; uncapped it is a 38-second frame. **A cap on CELLS is a cap on nothing** and a visit budget read after the fact bounds nothing; each cost a device before it was understood. D687's thirty-times verdict stands |
-| the rule bounds (D700) | **the best result of the wave.** The eight unbounded rules were TWO withheld boxes; 8 asked at every solid voxel → **0**. The estate builds in **13.9 s against 31.1**, the campanile loses 619 voxels of courtyard weed and stone, and `max` is settled as the INTERSECTION by a factor of twenty-seven. **The estate's paint moves — every estate hash and baseline before this commit is stale** |
-| R4c + R4d (D703) | **the reflected image, at last** — the bins cover a CAP about the eye rather than the hemisphere, because the composite reads one direction and a face is one voxel. Chrome gets 2.0 degree bins instead of 13.5 for the same rays. Dispersion is built, correct and **a millimetre**, and the arithmetic says why |
-| R6a + R6b (D702) | post is its own pass and the glare is a chain: **0.706 ms at 4K on the fixed grid, gate met**; 1.113 turning, over it, with the remainder priced at 0.374 ms of copy. **Five harnesses were passing `--pathtrace` and one did it unconditionally** — warned-and-ignored, so every face-count run since R3d measured the real-time path and said tracer |
-| the bake, second half (D701) | **a whole world and a partial one are told apart AT READ TIME**: 0 regions left and one hash from four cameras, against four hashes and *more left from outside than from where the bake stood*. `-Resume` and a stamp that knows interrupted from finished. The size budget was the RAW size and was 8.3x out |
+| the bake (D695, D701) | `--refine-all`; `kSettleGiveUp` is 30,000 FRAMES so one run can never finish the estate; and **a whole world and a partial one are told apart AT READ TIME** — 0 regions left and one hash from four cameras, against four hashes and more left from outside |
+| the field compiler (D690, D705) | a SET of roots — 686 on the estate. Shipped OFF, then ON once names survived compilation: **5,091 of 5,091 kept, nought on the walk**, and a FIFTH root nobody had noticed (`variation.by`) whose control arm is 51 failed assertions |
+| the descent on the card (D691) | **the card was missing two of `Field::eval`'s three union culls.** 2,876 nodes a cell against 8,273, and the card is now AHEAD of the CPU arm on the camera D681 measured it 2.7x behind on |
+| R11f (D692) | the format was already right; all three ways it could still lose a building were outside it |
+| R4b (D694) | the coverage rule, in `face_worklist.comp` so no reader changed |
+| R8b + R2b (D696) | the hash child source, 0 disagreements over the facility — and `kSubPixelAngle` is ONE THOUSAND lines, not the 1280 its own comment claimed |
+| R11e + R11h (D697) | light paths cause **0** sample jobs of 150,584 offers; the far chisel carves what the near one carves, byte for byte |
+| R7a + R7b (D698) | the beam pre-pass. **4K outdoors 16.81 → 1.18 ms**; a net cost at `distant`, said rather than averaged away |
+| R12c (D699) | the marcher derives rather than stops. **A cap on CELLS is a cap on nothing**; two budgets each cost a device before the third worked |
+| the rule bounds (D700) | the eight unbounded rules were TWO WITHHELD BOXES. Estate **13.9 s against 31.1**, and the campanile stops wearing courtyard weed |
+| R6a + R6b (D702) | post is its own pass; the glare is a chain. **0.706 ms at 4K still, 1.113 turning.** Five harnesses were passing a flag the binary no longer parses |
+| R4c + R4d (D703) | the bins cover a CAP about the eye, not the hemisphere — and the mirror finally carried a picture. **Superseded the same day by D707** |
+| R12c's first frame (D699's other half) | the pool takes its roots from the clip. 413,450 nodes wanted against 0 — and the gate is NOT met, because `box_may_hold_matter` carries ten metres of slack |
+| the light stops resetting | **reported from playing.** Three of `announce_world_change`'s four callers are the ladder, not an edit, and all four told every face to drop its measured light |
+| the website (D708) | the index named what BAKED, not what exists. **101 clips; one run baked 82 and the page showed 82** |
+| R5c + R5d (D710) | the second halves cost **no wire at all** and **nine bits**. Three runs of the default arm identical to the byte; the arm it replaces is not identical to itself |
+| the occlusion cull (D711) | **asked for directly.** Sixteen times the world on a small clip, +43–52% more matter a minute on the estate — and the facility no longer settles from a static camera, which is R2's rule with visibility taken out of it |
+| the orangery, colonnade, library (D706, D712) | **three faults a player saw and no instrument did.** Four metres of building inside another; a gravel ring with no end running through the crypt; and every bookshelf in the library facing its wall |
+| R5b + R9h (D713) | the sun gets a memory: **12.7% off the faces pass for the same answer**. And the field-name collision the size assert cannot see |
 
-**And one fault found by the integrator rather than by an agent, D693**: `run_clip_tool` exits 1
-silently on `clips/facility.clip` and works on `clips/sampler.clip`. **That is why every sampler gate
-this wave ran on `sampler.clip` alone** — three agents wanted a facility gate and none could take
-one. It is pre-existing, it is not fixed yet because the fix is in `main.cpp` and six agents are
-holding that file, and **it is the first thing to do when the wave is in.**
+**THREE INSTRUMENT FAULTS FOUND BY THE INTEGRATOR RATHER THAN BY AN AGENT, and each one produced a
+wrong conclusion before it was found. They are the first things to fix.**
+
+1. **`run_clip_tool` exits 1 silently on `clips/facility.clip`** (D693) and works on
+   `clips/sampler.clip`. **That is why every sampler gate of this wave ran on `sampler.clip`
+   alone** — three agents wanted a facility gate and none could take one. Confirmed at
+   integration to be about the SIZE of the sample rather than the estate's content: a bounded
+   box works and the whole clip does not, which is what its own arithmetic guessed (17.0 billion
+   voxels of box at the authored resolution) and could not confirm. The fix its own entry names:
+   say what the sample will cost and refuse with the number, rather than dying with none.
+
+2. **`--clip-bounds` STALLS on a decimal corner and zeroes the rest** (D706). `parse_numbers` is
+   `strtoll(...,10)` into `i64 corners[6]`: on `12.5` it reads 12, stops at the `.`, and because
+   that is not a comma it never advances — so the loop re-reads one character, every later corner
+   stays 0, and the box comes back **inverted and empty**, which reports no matter and reads as
+   *there is nothing there*. **The clip language's own `bounds` takes reals.** This is what made
+   the integrator tell the user twice that the orangery did not overlap anything.
+
+3. **`--clip-part` silently ignores `--clip-bounds`** (D706). The part query samples its own box
+   and the bounds are dropped, so *"does this part have matter in that region"* — the obvious
+   question to ask about two buildings that may intersect — **cannot be asked at all** and
+   answers as though it had been.
+
+**And the technique that worked when all three of those failed, which is worth more than any of
+them: A UNION HIDES AN OVERLAP, AND SEPARATING IT IS WHAT MEASURES IT.** Two buildings occupying
+one voxel contribute one voxel, so an overlap is invisible in a count and every census of the
+shared box reads as though only one of them were there. Move them apart and the total rises by
+exactly what they were sharing: **140,924 → 142,147 on the estate, and the 1,223 IS the volume
+that was inside both buildings at once.**
 
 **THE ONE THING THAT BLOCKED MORE OF THIS WAVE THAN ANYTHING ELSE, said once rather than in five
 separate reports: THE ESTATE CANNOT BE GATED.** Three agents needed a facility or estate figure and

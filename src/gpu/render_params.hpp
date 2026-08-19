@@ -244,7 +244,41 @@ struct RenderParams {
     //
     // Both are read as `!= 0.0` and neither is a magnitude, for the same reason `r4`'s two are: a
     // control arm that can be half on is a control arm nobody can quote a figure against.
+    // R5b/R9h ---------------------------------------------------------------------------------
+    //
+    // Three control arms, here for exactly the reason `r4` above is here and not one line further
+    // up: the dials live in word 0 of the light probe buffer and the bits that name them are
+    // declared in `shaders/node.glsl`, which this stage may not touch.
+    //
+    //   x  R5b's temporal half. 0 is `--no-face-ema`: the sun's counters are the windowed count
+    //      halved at `kFaceWindow` that every build before this one carried, and the pass writes no
+    //      mean back. Bit-exact, not nearly — see `face_sun_ema_step` in shaders/face_terms.glsl.
+    //   y  How many UNANIMOUS shadow rays a face takes before it stops casting at the sun, and 0
+    //      is `--no-face-rest`, which is every build before this one: a settled face goes on
+    //      spending one unbounded march every `face_stride` frames re-measuring a sun that
+    //      `make_node_push` hands the card as a compile-time constant. See kFaceSunRest.
+    //   z  R9h's rule. 0 is `--no-light-name-cap`: R9a's face request is bounded per GATHERING
+    //      FACE and not per named node, which is the one clause of R9h's rule that the one path
+    //      R9a opened never honoured.
+    //   w  spare.
     f32 r5[4];
+
+    // R5b/R9h's dials, and they are a SEPARATE vector from `r5` for a reason worth keeping.
+    //
+    // Two agents of one wave both appended a `vec4 r5`, both against a block of 91, and both
+    // moved the assert to 92. Merged, git saw two identical `f32 r5[4];` lines and kept one —
+    // and the `static_assert` was satisfied, because the SIZE was right. What was wrong was the
+    // MEANING: `main.cpp` filled `params.r5[0..3]` twice with different dials, the second write
+    // won, and `resolve.comp` read the sun's settings as its blend settings.
+    //
+    // **That is the one failure this assert cannot catch**, and it is worth saying so next to
+    // it: the assert counts vectors and does not compare what they are for. Two fields of one
+    // name are one field, and the compiler is content.
+    //
+    // x: 1 for the sun's exponential mean, 0 for `--no-face-ema`. y: how many unanimous rays a
+    // face must take before it stops casting at the sun, 0 for `--no-face-rest`. z: 0 for
+    // `--no-light-name-cap`, so R9a's face request is bounded per gathering face alone. w spare.
+    f32 r5b[4];
 };
 // Written out rather than accumulated as a sum of historical deltas, which is what this was and
 // which nobody could check: 41 vectors of 16 bytes, in the order shaders/params.glsl declares
@@ -264,7 +298,12 @@ struct RenderParams {
 // count left at 89 is the host writing one structure while every shader reads another, at every
 // offset past the gap, silently. The field ORDER has to be checked by eye as well -- the assert
 // counts and does not compare -- and it was: beam, derive, r4, r5, in that order in both files.
-static_assert(sizeof(RenderParams) == 92 * 16, "RenderParams must match the GLSL block");
+// counts and does not compare -- and it was: beam, derive, r4, in that order in both files.
+//
+// ...and a FOURTH the next day: R5b/R9h's `r5` makes 92, appended after `r4` in both files. The
+// arithmetic above is left as it was written so that the next one adds a clause rather than
+// rewriting the sum, and the ORDER was checked by eye again: beam, derive, r4, r5.
+static_assert(sizeof(RenderParams) == 93 * 16, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.
@@ -554,5 +593,45 @@ inline constexpr u32 kLobeBlockBytes = (kLobePoolWords / kLobeBlocks) * 4u;
 // the authority; it is here because the occupancy census in gpu/face_buffers.cpp has to turn a
 // count of sharp-class faces into bytes and cannot include a shader.
 inline constexpr u32 kLobeBigWays = 4;
+
+// ---- R5b: how many words a face's light record is ----------------------------------------------
+//
+// Must match `kFaceLightWords` in shaders/face_terms.glsl, which is the authority and carries the
+// word map. It is here because `main.cpp` allocates the array and had the figure written out as a
+// bare `21` beside a comment naming the shader — so the two could only be held together by somebody
+// reading both. The shader refuses to write a record that would not fit (D332), which turns a
+// mismatch into a face pass that silently does nothing rather than into a corruption somewhere else
+// in the frame; silent is still the wrong failure, and `tests/test_sun_confidence.cpp` reads the
+// shader's line and holds it against this one.
+inline constexpr u32 kFaceLightWords = 22;
+
+// ---- R9h: one entry per node per window, on R9a's face request ---------------------------------
+//
+// The stamp table that bounds it, in the TAIL of the light probe buffer past every word node.glsl
+// names — which is where every host-written number in this pass already lives, for D660's reason.
+// A power of two, so the index is a mask, and sized against the WINDOW rather than the frame:
+// `secondary_period` is 64 frames and the facility's enclosed camera has ~1,830 rays a frame due to
+// name something, so one window is ~117,000 keys. The first version was 64Ki slots -- a load factor
+// of 1.8 -- and reported 83% of rays as repeats, most of which were collisions. 256Ki words is 1 MB
+// and a load factor of 0.45; the eight-bit tag beside the frame is what makes the rest countable.
+// Must match `kFaceNameStamps` in shaders/face_terms.glsl.
+inline constexpr u32 kFaceNameStamps = 1u << 18;
+
+// ...and the two counters that say what it did, which are the numbers R9h is gated on. They sit
+// between the word map and the stamps, and they need a fill of their own every frame: the fill in
+// `main.cpp` that clears the card's counters stops at `kProbeSecondaryStride`, because words 32-35
+// are the HOST's and a fill across them would race the updates that write them.
+inline constexpr u32 kProbeNamesAsked = kLightProbeWords;
+inline constexpr u32 kProbeNamesSuppressed = kLightProbeWords + 1;
+// ...and R5b's own convergence figure in the third of them: how many of the faces this pass
+// visited have stopped casting at the sun. It is here rather than in the map node.glsl owns for
+// the same reason the other two are, and it is REQUIRED beside any timing of this pass — a pass
+// that got cheaper because faces finished and a pass that got cheaper because faces are being
+// refreshed less often are the same number in a table (D527, D557).
+inline constexpr u32 kProbeSunResting = kLightProbeWords + 2;
+// How many words past the map the host must clear every frame.
+inline constexpr u32 kProbeExtraCounters = 3;
+inline constexpr u32 kProbeNameStampBase = kLightProbeWords + kProbeExtraCounters;
+inline constexpr u32 kLightProbeTotalWords = kProbeNameStampBase + kFaceNameStamps;
 
 }  // namespace ws

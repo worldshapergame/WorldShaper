@@ -257,26 +257,50 @@ TEST_CASE("the composite has no random number in it, and never had the dither it
     CHECK(sky.find("vec3 star_field(vec3 dir)") != std::string::npos);
 }
 
-TEST_CASE("the parameter block grew by one vector and the new one is last") {
-    // The assert in the header counts and does not compare, and three separate worktrees appended a
+TEST_CASE("the parameter block's tail is in one order in both files, and no name is used twice") {
+    // The assert in the header counts and does not compare, and FIVE separate worktrees appended a
     // vector to this block in one afternoon without any of them knowing about the others. So the
-    // ORDER is checked here: `r5` is the last field, and `r4` is the one before it.
-    CHECK(sizeof(RenderParams) == 92u * 16u);
-    CHECK(offsetof(RenderParams, r5) == 91u * 16u);
+    // ORDER is checked here, and since one of those collisions was two agents choosing the same
+    // NAME, so is that.
+    //
+    // That collision is why this case is worth more than it looks. Two worktrees both added a
+    // `vec4 r5`; merged, git saw two identical `f32 r5[4];` lines and kept one, the `static_assert`
+    // was satisfied because the SIZE was right, and `main.cpp` then filled one field twice with two
+    // different sets of dials. The second write won and the composite read the sun's settings as its
+    // own. **A duplicate name is the one failure the size assert cannot see**, and nothing but a
+    // check like this one catches it.
+    CHECK(sizeof(RenderParams) == 93u * 16u);
     CHECK(offsetof(RenderParams, r4) == 90u * 16u);
+    CHECK(offsetof(RenderParams, r5) == 91u * 16u);
+    CHECK(offsetof(RenderParams, r5b) == 92u * 16u);
     CHECK(offsetof(RenderParams, r5) - offsetof(RenderParams, r4) == 16u);
+    CHECK(offsetof(RenderParams, r5b) - offsetof(RenderParams, r5) == 16u);
 
     // ...and shaders/params.glsl declares them in that same order, which is the half the assert
     // cannot see at all.
     const std::string params = shader_text("params.glsl");
     const usize at_r4 = params.find("vec4 r4;");
     const usize at_r5 = params.find("vec4 r5;");
+    const usize at_r5b = params.find("vec4 r5b;");
     REQUIRE(at_r4 != std::string::npos);
     REQUIRE(at_r5 != std::string::npos);
+    REQUIRE(at_r5b != std::string::npos);
     CHECK(at_r4 < at_r5);
-    // Nothing declared after it, or the host would be writing one structure while every shader
-    // reads another at every offset past the gap.
-    CHECK(params.find("vec4 ", at_r5 + 8) == std::string::npos);
-    CHECK(params.find("uvec4 ", at_r5 + 8) == std::string::npos);
-    CHECK(params.find("ivec4 ", at_r5 + 8) == std::string::npos);
+    CHECK(at_r5 < at_r5b);
+
+    // Every vector in the block is declared exactly once. `find` on the next occurrence rather than
+    // a count, so the failure names which one repeated.
+    for (const char* field : {"vec4 r4;", "vec4 r5;", "vec4 r5b;", "vec4 beam;", "uvec4 derive;"}) {
+        const usize first = params.find(field);
+        REQUIRE(first != std::string::npos);
+        INFO("declared twice in params.glsl: " << field);
+        CHECK(params.find(field, first + 1) == std::string::npos);
+    }
+
+    // Nothing declared after the last one, or the host would be writing one structure while every
+    // shader reads another at every offset past the gap.
+    const usize after = at_r5b + 9;
+    CHECK(params.find("vec4 ", after) == std::string::npos);
+    CHECK(params.find("uvec4 ", after) == std::string::npos);
+    CHECK(params.find("ivec4 ", after) == std::string::npos);
 }

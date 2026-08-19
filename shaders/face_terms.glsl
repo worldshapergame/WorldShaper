@@ -71,7 +71,11 @@
 //         why it is the last one and why it is not called a filtered anything: words 12-18 are
 //         this face's own answer smoothed, and this is somebody else's answer standing by. See
 //         kFaceSunStandIn.
-const uint kFaceLightWords = 21u;
+//   21    R5b: this face's OWN sun visibility as a mean that forgets, in the same sixteen bits and
+//         with the same known bit as the word above it. The counters carry the same number
+//         quantised to 1/samples and every reader goes on reading those; this is where the
+//         precision the counters cannot hold is kept between visits. See kFaceSunEma.
+const uint kFaceLightWords = 22u;
 const uint kFaceFilteredSky = 12u;      // the filtered far field
 const uint kFaceFilteredBounce = 13u;   // ...and the three words of filtered bounce after it
 const uint kFaceFilteredLamp = 16u;     // ...and the three of filtered lamp irradiance after that
@@ -1046,5 +1050,197 @@ vec3 face_lobe_sun(vec3 f0, vec3 normal, vec3 view, vec3 to_sun, float alpha, fl
                                       face_ggx_vis(n_dot_v, n_dot_l, alpha) * n_dot_l,
                                   1.0);
     return face_fresnel(f0, v_dot_h) * (reflectance * visible);
+}
+
+// ---- R5b's OTHER half: the sun as a mean that forgets, and a face that stops paying -----------
+//
+// Appended at the end of the file rather than beside `face_sun_believed`, so nothing above this
+// line moves: three other worktrees were reading this header while it was written.
+//
+// D660 built the SEED — where a new face's sun estimator starts. D665 built the RAMP — how far it
+// is believed while it is short. What R5b's line asks for and neither of those is, is the TEMPORAL
+// half: **an exponential moving average per face, so a face that has settled stops paying and a
+// face whose light has changed re-converges rather than jumping.**
+//
+// # Why the counters alone cannot be that mean, which is where the first attempt died
+//
+// The sun lives in a pair of sixteen-bit counts and `face_accumulate` halves both at `kFaceWindow`.
+// The obvious EMA is to HOLD the count at the window instead of halving it — scale the pair by
+// (N-1)/N and add the sample — and it does not work, for D293's reason one representation along:
+// the decay of a count is `lit / N`, which for a face at 77 of 256 is 0.3 of a count, and an integer
+// cannot hold 0.3. Rounded, the decay is nought below half the window and one above it, so every
+// face below half drifts UP to half and every face above drifts DOWN to it. Truncated, the decay is
+// one everywhere and every face drifts to nought. **A running mean of a fraction cannot be stored
+// in the numerator of that fraction**, which is exactly the sentence D293 wrote about eight-bit
+// means and is why the lamps keep a float sum.
+//
+// So the mean is a WORD, at sixteen bits of a quantity whose own estimator tops out at 256 samples
+// — the same packing and the same known bit as `kFaceSunStandIn`, one word along, and for the same
+// reason (trap 7: nought is a legal sun visibility).
+//
+// # ...and then the counters are written FROM it, so that no reader changes at all
+//
+// Every reader of the sun — the composite, a gathering ray, the audit, `face_accumulate`'s own
+// unanimity test — computes `lit / samples`. Rather than teach four readers a new word, the pass
+// writes `lit = round(ema * samples)` back into the pair it already writes. `samples` is untouched,
+// so `face_sun_confidence`, `kFaceEager`, `sun_due` and the stride all behave exactly as they did;
+// what changes is only the VALUE of the ratio, and only once a face has more samples than the
+// memory. Below that the two are the same number by construction — an EMA whose alpha is
+// `1 / samples` IS the cumulative mean — so this cannot move a face that is still converging, and
+// `--no-face-ema` skips the write-back for a control arm that is bit-exact rather than nearly.
+//
+// # The memory is kFaceWindow, and that is a promise not to make the picture noisier
+//
+// An EMA of memory N has the variance of a simple mean of 2N-1 samples, so at 256 this is QUIETER
+// than the 128-to-256 count it replaces, not louder. What actually changes is the rate a face
+// forgets at: halving makes that rate a sawtooth — every sample after a halve is worth 1/129, and
+// the one before the next halve is worth 1/256, so how fast a face notices the world changed
+// depends on where in the window it happens to be. An EMA makes it one number, for ever, which is
+// the "rather than jumping" half of R5b's sentence.
+const uint kFaceSunEma = 21u;        // where the mean lives; see the record at the top of this file
+// Must match kFaceWindow in node.glsl. It cannot be SPELLED as that constant here, because the
+// include runs the other way — node.glsl includes this file — so what holds the two together is
+// `tests/test_sun_confidence.cpp`, which reads both lines out of both files.
+const uint kFaceSunMemory = 256u;
+
+// How many UNANIMOUS shadow rays a face must have taken before it stops casting them, and the
+// asymmetry below it is the whole of this constant.
+//
+// # Why a face may stop at all, which is kSkyConverged's argument and not a new one
+//
+// The near field stopped having a window when it stopped having anything to forget: "an edit
+// announces itself and resets the record outright, a re-claimed slot is zeroed, and the only other
+// thing that can move the answer is the pool building or shedding what the rays crossed, which the
+// ignorance hold in shade_faces.comp is for". Every clause of that is true of the SUN as well —
+// `make_node_push` hands the card a compile-time constant direction, so the one thing `kFaceWindow`
+// was built for (D-era: "so the sun may move") does not happen in this build. A settled face
+// therefore spends one unbounded march every `face_stride` frames re-measuring a constant, for the
+// life of the face, and that march is the expensive ray in this pass.
+//
+// # ...but only the SHADOWED extreme stops, and that is not caution, it is R9i
+//
+// A face at nought of sixty-four is in a room. The only thing that can light it is an edit, and an
+// edit announces itself on the exact frame (`edit_min.w == 2`) and reseeds it to `kFaceEditSeed`
+// samples, which is below this and starts it casting again.
+//
+// A face at sixty-four of sixty-four is in the open, and the thing that can SHADOW it is geometry
+// arriving — a region streaming in, a shed subtree coming back. That is **R9i, the biggest open
+// fault in this renderer**: a sealed room filling with sunlight as the pool sheds. A fully lit face
+// that stopped casting would be that fault arriving through a new door, and it would err BRIGHT,
+// which is the direction this renderer is required never to err in (D541-D543). So it goes on
+// paying. The population that rests is the one indoors, which is the case the budget is written
+// for, and the population that keeps paying is the one outdoors, which is the cheap case.
+//
+// # Sixty-four, and it is kLampConverged's figure for kLampConverged's reason
+//
+// After n unanimous misses the posterior mean of a fraction is about 1/(n+2), so sixty-four rays at
+// the sun with none reaching it says the true visibility is under 0.015 — a hundredth of full sun,
+// which is far under this renderer's own run-to-run floor and under the step the counters can even
+// represent. Going further costs unbounded rays for a difference nothing can see, which is
+// kSkyFarConverged's sentence exactly.
+const uint kFaceSunRest = 64u;
+
+// One sample into the mean. `alpha` is `1 / min(samples, memory)` and `samples` is the count AFTER
+// this frame's ray, so below the memory this is the cumulative mean to the bit and above it the
+// mean forgets at one fixed rate.
+//
+// It is `samples` and not a count of its own for the reason every confidence in this file is that
+// count: an edit drops a face to `kFaceEditSeed` = 8 and `face_accumulate`'s unanimity rule drops a
+// contradicted face to 2, and BOTH of those must speed the mean back up. Keeping a second count
+// here would be a face that kept its answer, lost its confidence, and then went on averaging as
+// though it had not — which is D373's fault said about the mean instead of about the counters.
+float face_sun_ema_step(float ema, float ray, uint samples, uint memory) {
+    // `ray` and not `sample`, which is a reserved word in GLSL and is a compile error in five
+    // passes at once.
+    const float n = float(max(min(samples, memory), 1u));
+    return ema + (ray - ema) / n;
+}
+
+// The count a reader sees, written back into the pair every reader already reads. Rounded rather
+// than truncated for `face_reseed`'s reason: a face at 255 of 256 must not come back at 254.
+uint face_sun_counters(uint samples, float ema) {
+    const uint lit = uint(clamp(ema, 0.0, 1.0) * float(samples) + 0.5);
+    return (samples & 0xFFFFu) | ((min(lit, samples) & 0xFFFFu) << 16);
+}
+
+// Whether this face has finished with the sun. See kFaceSunRest for both halves of it, and note
+// that `ignorant` is not a guard bolted on: a face whose last ray was stopped by a cell the pool
+// has not built is unanimous about the TREE and not about the light, and resting on that is how a
+// hole in residency becomes a permanent shadow.
+bool face_sun_resting(uint samples, uint lit, bool ignorant, uint rest) {
+    return rest != 0u && !ignorant && samples >= rest && lit == 0u;
+}
+
+// ---- R9h: one entry per node per window, on the one path that never had it --------------------
+//
+// R9h's rule, in the words §8 states it in: **a light path may name the one cell that STOPPED it
+// and the one face it LANDED on. Never what it crossed, and never more than one entry per node per
+// window.** D589 measured the other two thirds of R9h and found both needed nothing — the sky half
+// has been done since R9's bounce landed, and the folded-colour half is worth three gathering rays
+// of 482,773 in the worst state this engine reaches. This is the third.
+//
+// **The last clause was true of the cell and never of the face.** `node_light_due` bounds the cell
+// per NODE per window with `node_seen`, which is D431 and is what makes a busy brick one entry
+// rather than thousands. `node_face_request` is bounded per GATHERING FACE instead — its own
+// comment in node.glsl says so in as many words, "there is no slot to stamp: the whole point is
+// that this face is not in the store yet, so node_seen's trick has nothing to key on" — so a
+// thousand faces in a room whose far rays all land on the same wall put a thousand identical
+// entries into a feedback buffer of 131,072 that the STREAMER shares. That is D431's fault exactly,
+// and its consequence is not a slow frame: it is the streaming reports going over the side.
+//
+// **The key is the face's own three numbers, and the table is the stamp `node_seen` would have
+// been.** A hash of (node, level, direction) into a power-of-two table of frame stamps, in the tail
+// of the light probe buffer — which is where every host-written number in this pass already lives,
+// for the reason D660 records: the push block is exactly the 128 bytes Vulkan guarantees, and D553
+// forbids spelling a new lever by changing what an existing field means.
+//
+// A collision suppresses a DIFFERENT key for one window, which costs that face a deferred claim and
+// nothing else — it is asked again next window, by the same ray, on the same schedule. There is no
+// correctness in this table, only a bound, which is why a plain exchange is enough and an atomic
+// compare-and-swap would be a read-modify-write on every gathering ray to save an entry nobody
+// misses. `node_face_report_read` makes the same call for the same reason.
+// **The table has to be sized against the WINDOW and not against the frame**, and the first one
+// was not. `secondary_period` is 64 frames and the facility's enclosed camera has about 1,830 rays
+// a frame due to name something, so a window is a hundred and seventeen thousand keys — into 64Ki
+// slots, which is a load factor of 1.8 and a table that is nearly always occupied. It reported 83%
+// of rays as repeats and most of them were COLLISIONS: a key landing on a slot some other key had
+// stamped a few frames ago, suppressed for a reason that has nothing to do with what it names.
+// 256Ki words is 1 MB and a load factor of 0.45, and the tag below is what makes the remainder
+// countable rather than merely rare.
+const uint kFaceNameStamps = 1u << 18;   // must match kFaceNameStamps in gpu/render_params.hpp
+
+// ...and eight bits of a SECOND hash stored beside the frame, so a slot can say which key wrote it.
+//
+// Without it "this slot was stamped inside the window" and "this KEY was named inside the window"
+// are one answer, and only the second is the rule. That is trap 7 in a hash table: two different
+// facts sharing one value. With it, a collision is a slot whose tag does not match — which is a
+// MISS rather than a suppression, so it costs a duplicate entry (harmless, and what the arm without
+// this does anyway) instead of silently refusing to name a face nobody has named.
+//
+// Twenty-four bits of frame is seventy-seven days at sixty a second. `node_seen` gives its stamp a
+// whole word for exactly this reason, and sixteen bits there wrapped in eighteen minutes; this is
+// two orders the other side of that.
+const uint kFaceNameTagShift = 24u;
+const uint kFaceNameFrameMask = (1u << kFaceNameTagShift) - 1u;
+
+// The three coordinates mixed at different primes, then the level and the direction, so two faces
+// of one cell and one face of two cells are as far apart in the table as any other pair. Returns
+// the slot in the low bits and the tag in the high eight, from one mix rather than two.
+uint face_name_hash(ivec3 node, uint level, uint dir) {
+    uint h = uint(node.x) * 0x9E3779B9u;
+    h ^= uint(node.y) * 0x85EBCA6Bu;
+    h ^= uint(node.z) * 0xC2B2AE35u;
+    h ^= (level * 6u + dir) * 0x27D4EB2Fu;
+    h ^= h >> 15;
+    h *= 0x2545F491u;
+    h ^= h >> 13;
+    return h;
+}
+uint face_name_slot(uint h) { return h & (kFaceNameStamps - 1u); }
+// The tag is taken from the TOP of the mix, so it and the slot index share no bits -- two keys in
+// one slot are then as likely to differ in the tag as any two keys are.
+uint face_name_tag(uint h) { return (h >> 24) & 0xFFu; }
+uint face_name_stamp(uint tag, uint frame) {
+    return (tag << kFaceNameTagShift) | (frame & kFaceNameFrameMask);
 }
 #endif  // WS_FACE_TERMS_GLSL

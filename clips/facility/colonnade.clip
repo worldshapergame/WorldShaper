@@ -827,7 +827,26 @@ let colon_ground = box -26.55 -0.90 -16.65   26.55 0.00 14.85
 let colon_ground_at = translate { colon_ground } 0 0 -29.00   # the twin the rules name
 let colon_grav_out = cylinder 0 -0.14 0  r=27.90 h=0.32 axis=y
 let colon_grav_in  = cylinder 0 -0.14 0  r=21.55 h=0.50 axis=y
-let colon_gravel = difference { colon_grav_out colon_grav_in }
+
+# AND CLIPPED TO THE GROUND IT LIES ON, which it was not, and which put it inside the crypt.
+#
+# Reported from playing: *"the colonnade also overlaps with the front of the main facilities
+# crypt"*. The apron is an annulus about the oval's centre of outer radius 27.90, and NOTHING
+# bounded it -- so its northern arc ran to local z +27.90, which is **world z -1.10**, while
+# `colon_ground` beside it stops at local +14.85 (world -14.15). The main block reaches z 8.00
+# and the crypt spans z -9.50 .. 6.00 at y -1.50 .. 2.00, and the gravel sits at y -0.30 .. 0.02
+# -- so a 0.32 m slab of gravel ran under the building and straight through the crypt's front.
+#
+# The header of this file already said where the colonnade ends: the arms open toward the great
+# steps, *which end at z = -15.70*. The stone obeyed that. The gravel did not, because a
+# cylinder has no end and nobody gave it one.
+#
+# Clipped to the ground's own footprint rather than to a number invented here, so the two can
+# never drift: gravel outside the ground is gravel with nothing under it. The box is the
+# ground's x and z with a generous y, because `colon_ground` is y -0.90 .. 0.00 and the apron
+# stands 0.02 proud of it -- intersecting the ground directly would shave that lip off.
+let colon_grav_foot = box -26.55 -1.00 -16.65   26.55 1.00 14.85
+let colon_gravel = intersection { difference { colon_grav_out colon_grav_in } colon_grav_foot }
 let colon_gravel_at = translate { colon_gravel } 0 0 -29.00   # the twin the rules name
 
 let colon_pave_slab = cylinder 0 -0.27 0  r=21.60 h=0.60 axis=y

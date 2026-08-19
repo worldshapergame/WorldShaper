@@ -293,7 +293,9 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
     // went missing from the only case that costs.
     const u64 probe_offset = cursor;
     const u64 probe_bytes =
-        probe != VK_NULL_HANDLE ? static_cast<u64>(kLightProbeWords) * sizeof(u32) : 0;
+        probe != VK_NULL_HANDLE
+            ? static_cast<u64>(kLightProbeWords + kProbeExtraCounters) * sizeof(u32)
+            : 0;
     cursor += probe_bytes;
     // The WHOLE ring rather than one frame's region of it: this has stalled the device before it
     // got here, so no frame in flight owns any of it, and measuring against the per-frame capacity
@@ -425,6 +427,47 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
                 WS_LOG_INFO("faces",
                             "the sun's confidence ramp: off (--no-sun-confidence), so a face is "
                             "believed the moment it has one shadow ray");
+            }
+
+            // ---- R5b's temporal half, and it is REQUIRED beside any timing of this pass --------
+            //
+            // How many of the faces the pass visited have stopped casting at the sun. D527 and
+            // D557 are the same fault twice and this is the defence they both name: a pass that
+            // got cheaper because faces FINISHED and a pass that got cheaper because faces are
+            // being refreshed less often are the same number in a table, and only the second is a
+            // quality setting nobody agreed to.
+            //
+            // Only the fully SHADOWED extreme rests. A fully lit face goes on casting, because
+            // geometry arriving in front of it is R9i -- the sealed room that fills with sunlight
+            // as the pool sheds -- and a face that had stopped would never hear about it. See
+            // kFaceSunRest in shaders/face_terms.glsl.
+            WS_LOG_INFO("faces",
+                        "the sun's rest: {} of the faces visited this frame have finished with it "
+                        "and cast no shadow ray at all (0 is --no-face-rest, or nothing has "
+                        "reached the threshold yet)",
+                        probe_words[kProbeSunResting]);
+
+            // ---- R9h's rule, on the one path that never honoured it ---------------------------
+            //
+            // `asked` is gathering rays that landed on a face worth naming and were due to name it;
+            // `suppressed` is those whose key had already been named inside the window. Two numbers
+            // and not one, for kProbeSunRamped's reason: with one counter, a frame where no ray was
+            // due and a frame where every ray was a repeat print the same nought.
+            //
+            // What a large suppressed share says is that the feedback buffer was carrying that many
+            // duplicate entries a frame, into a buffer of `resolution.w` that the STREAMER shares --
+            // which is D431's fault and its consequence is not a slow frame, it is streaming
+            // reports going over the side.
+            {
+                const u32 asked = probe_words[kProbeNamesAsked];
+                const u32 suppressed = probe_words[kProbeNamesSuppressed];
+                WS_LOG_INFO("faces",
+                            "R9h, one entry per node per window: {} gathering rays were due to "
+                            "name the face they landed on, {} of them ({:.1f}%) had already been "
+                            "named inside the window, so {} entries were written",
+                            asked, suppressed,
+                            asked > 0 ? 100.0 * suppressed / static_cast<f64>(asked) : 0.0,
+                            asked - suppressed);
             }
             // R4c's pool, counted where the blocks are handed out. Three numbers because they are
             // three different states and only one of them is a problem:

@@ -1834,7 +1834,7 @@ makes the whole thing free, and R10g is what makes it survive eviction.
   *Original gate, still owed on a machine with a card: speckle down 4× against the R0 baseline on
   the enclosed-room camera; two identical frames are bit-identical; a slow dolly-out shows no
   transition.*
-- **R5c — deterministic two-level blend. First half in — D664.** The marcher's ordered dither is
+- **R5c — deterministic two-level blend. DONE, both halves — D664 then D710.** The second half cost **no wire at all**: at a level-0 hit the marcher already sets `result.colour` to the leaf's average (for the gathering rays) and `visibility.comp` packs it at every level without asking, and the pool holds nothing between a voxel and a brick — so `packed.z` at level 0 **is** `colour(1)`, the coarse end of the pair, and had been sitting unread in the buffer since the marcher existed. The emission scales by the same weight, because the coarse arm has no material and so no glow. Three runs of the default arm are **identical to the byte** below the cloud deck and the arm it replaces is not identical to itself. Older note: first half in — D664. The marcher's ordered dither is
   KEPT and the colour is taken off it: a hit blends its folded colour towards the folded colour of
   the level the dither did not pick for that pixel, by `fract(log2(footprint))`, so both members of
   the pair aim at the same number. Deleting the dither is what this line used to ask for and it is
@@ -1848,7 +1848,7 @@ makes the whole thing free, and R10g is what makes it survive eviction.
   **Two halves are still owed**: the level-0 arm of the (0, 1) pair, which needs the composite to
   stop reading a type id there, and the composite's own `hash_u32` ordered dither, which is what the
   gate's *no per-pixel random numbers* clause is about.
-- **R5d — analytic edge AA** from `face_coverage[6]`, compositing up to three partial hits.
+- **R5d — analytic edge AA. DONE, both halves — D663 then D710.** The plan's *up to three partial hits* cost **nine bits**, not a third surface: a third surface is ~88 bits against 13 spare, but when the third layer is the **sky** the composite already has the direction, so it needs only the share. `visibility.comp` packs the far node's coverage at bits 19–26 and a sky-beyond bit at 27; the third march reports nothing and claims no face, so the store costs **1,287 live slots against 1,328 with it off**. Where the third layer is not sky the far surface stays opaque, erring towards the picture it replaces. **The far railing reads as a grey lattice with sky through it** where it was a hard checkerboard. 3.7–5.4x the run-to-run floor, at no measurable cost. Older note: analytic edge AA from `face_coverage[6]`, compositing up to three partial hits.
   *Gate: speckle down 4× against the R0 baseline on the enclosed-room camera; two identical frames
   are bit-identical; a slow dolly-out shows no transition.*
 

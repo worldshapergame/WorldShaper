@@ -89,4 +89,18 @@
     // D664 exactly -- `--no-voxel-blend`. y: 0 makes visibility.comp leave the far node's coverage
     // byte and its "sky beyond" bit at nought, so the composite draws the far surface of an edge
     // opaque, which is D663 exactly -- `--no-edge-layers`. zw spare.
+    // R5b/R9h's control arms, appended at the END and for the same reason `r4` above was: the dials
+    // live in word 0 of the light probe buffer and their bits are declared in shaders/node.glsl, so
+    // a stage that may not touch that file has nowhere to put a bit. x: 0 for `--no-face-ema`, so
+    // the sun's counters are the windowed count they have always been. y: how many unanimous rays a
+    // face must take before it stops casting at the sun, 0 for `--no-face-rest` and every build
+    // before this one. z: 0 for `--no-light-name-cap`, so R9a's face request is bounded per
+    // gathering face alone, exactly as it was. w spare. See RenderParams in
+    // src/gpu/render_params.hpp.
     vec4 r5;
+
+    // R5b/R9h's dials. A separate vector from `r5` because two agents of one wave both
+    // appended an `r5`, and merged they became one field carrying two meanings — see the long
+    // note in src/gpu/render_params.hpp. x: the sun's exponential mean. y: unanimous rays
+    // before a face stops casting at the sun. z: R9a's per-node face-request cap. w spare.
+    vec4 r5b;
