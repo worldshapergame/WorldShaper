@@ -198,6 +198,21 @@ struct Options {
     // Sample N nodes both ways and count the cells that differ. The gate R12 is held to, and the
     // reason it is a mode rather than a test: it needs a device, and `ws_tests` has none.
     u32 gpu_sample_check = 0;
+    // R12c: a descent that reaches a node the pool has not built evaluates the field there instead
+    // of drawing R2d's stand-in. OFF, because D687 prices an uncapped frame of it on the enclosed
+    // camera at 1,239 ms and the field has to get about thirty times cheaper before it is playable.
+    bool derive_in_marcher = false;
+    // ...and how many cells ONE dispatch may derive. Past it a ray falls back to the stand-in.
+    u32 derive_cap = 20000;
+    // ...and how many FIELD NODES it may walk while doing so, in millions. This is the budget that
+    // actually bounds a frame, and it is not a refinement of the one above: D688 measured a cell
+    // under the podium at 1,073,935 nodes and 372 ms against a typical 5,195 and 1.8, so a cap on
+    // cells is a cap on nothing. Measured here: 20,000 cells with no work budget lost the device.
+    // 16 million, and the number came DOWN from a measurement. 64 M is about 32 ms of this card at
+    // the MEAN cost of an evaluation, and the outdoor camera settled a 2,240 ms frame on it and lost
+    // the device: the cells being derived at that moment averaged 273 us each, 325x the mean, which
+    // is D688's two-hundredfold spread arriving inside a budget. 16 M grants a quarter as many.
+    u32 derive_visits_m = 16;
     // Count the nodes each cell walks instead of building a world. What a dispatch costs is
     // (nodes walked) x (what a step costs); no clock separates those two and this measures one.
     bool gpu_visits = false;
@@ -1117,6 +1132,12 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.field_accel = false;
     } else if (arg == "--gpu-sample-check") {
         options.gpu_sample_check = static_cast<u32>(next_number(64));
+    } else if (arg == "--derive-in-marcher") {
+        options.derive_in_marcher = true;
+    } else if (arg == "--derive-cap") {
+        options.derive_cap = static_cast<u32>(next_number(20000));
+    } else if (arg == "--derive-visits") {
+        options.derive_visits_m = static_cast<u32>(next_number(16));
     } else if (arg == "--refine-all") {
         options.refine_all = true;
     } else if (arg == "--clip-at") {
@@ -1601,6 +1622,21 @@ void print_help() {
         "  --gpu-sample-check N  sample the first N nodes the ladder picks a SECOND time on the\n"
         "                        CPU and compare them cell for cell. The gate R12 is held to,\n"
         "                        counted three ways: matter, material and the clip mask\n"
+        "  --derive-in-marcher   R12c: a ray that reaches a node the pool has not built EVALUATES\n"
+        "                        the field there instead of drawing R2d's stand-in over it. The miss\n"
+        "                        is still reported, so the CPU still builds the node properly; what\n"
+        "                        changes is what the ray draws THIS frame. OFF -- D687 prices an\n"
+        "                        uncapped frame on the enclosed camera at 1,239 ms\n"
+        "  --derive-cap N        how many cells ONE dispatch may derive before the rest fall back to\n"
+        "                        the stand-in (20000)\n"
+        "  --derive-visits N     ...and how many FIELD NODES it may walk doing so, in millions (16;\n"
+        "                        0 for none). It is charged BEFORE a cell is derived and reconciled\n"
+        "                        after, because a budget read after the fact bounds nothing when a\n"
+        "                        million lanes read it at once. This is the budget that\n"
+        "                        bounds a frame -- a cap on CELLS is a cap on nothing, because one\n"
+        "                        cell deep in stone walks 1,073,935 nodes where a typical one walks\n"
+        "                        5,195 (D688), and 20,000 cells with no work budget LOSES THE\n"
+        "                        DEVICE\n"
         "  --gpu-visits          count the nodes each cell WALKS instead of building a world.\n"
         "                        What a dispatch costs is (nodes walked) x (what a step\n"
         "                        costs), and no clock tells those two apart\n"
@@ -3102,6 +3138,19 @@ private:
     bool depth_ready_ = false;
     VkDescriptorSetLayout node_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet node_set_ = VK_NULL_HANDLE;
+    // R12c: set 1, the field the marcher derives from. See the remap at the top of node.glsl.
+    VkDescriptorSetLayout field_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSet field_set_ = VK_NULL_HANDLE;
+    bool field_marcher_tried_ = false;
+    // What the last frame that reported derived, kept so the settle line can print an average
+    // rather than one window. A counter read from inside the change is not a control, so both are
+    // printed against the arm with --derive-in-marcher off, where they are nought by construction.
+    u64 derive_frames_ = 0;
+    u64 derive_total_ = 0;
+    u64 derive_total_capped_ = 0;
+    u64 derive_total_evals_ = 0;
+    u64 derive_total_visits_ = 0;
+    u32 derive_peak_ = 0;
     u32 last_node_built_ = 0;
     u32 last_node_evicted_ = 0;
     u32 last_node_evicted_nodes_ = 0;
@@ -3628,6 +3677,23 @@ void Application::gpu_check_report() {
 }
 
 void Application::ensure_field_on_card() {
+    // R12c, and it is deliberately ABOVE the two early returns below.
+    //
+    // The ladder samples on the CPU by default (D678, D681), so `ensure_field_on_card` returns at
+    // the next line on almost every run -- and the marcher needs the field whether or not the
+    // ladder is using the card for anything. Its own copy, on its own descriptor set, built from
+    // the same plan.
+    if (options_.derive_in_marcher && !field_marcher_tried_ && refine_script_ != nullptr &&
+        refine_plan_.ok()) {
+        field_marcher_tried_ = true;
+        const forge::SampleSettings& marcher_settings = refine_script_->settings;
+        if (!node_buffers_.upload_field(refine_plan_, marcher_settings.bounds,
+                                        marcher_settings.has_bounds)) {
+            // Said out loud. A marcher that quietly stopped deriving would make every figure below
+            // it a figure about the other arm.
+            WS_LOG_WARN("clip", "the marcher cannot derive: {}", node_buffers_.field_why_not());
+        }
+    }
     if (field_card_tried_ || options_.cpu_sample) return;
     if (refine_script_ == nullptr || !refine_plan_.ok()) return;
     field_card_tried_ = true;
@@ -5480,6 +5546,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
                                       refine_script_->paint);
     log_the_plan("resumed");
     field_card_tried_ = false;   // R12: a new plan is a new field to put on the card
+    field_marcher_tried_ = false;   // R12c: ...and a new field for the marcher to derive from
     refine_resumed_ = true;      // this world is older than this camera; see refine_resolution_census
     // What the world on disk is already at: the coarse rung it was built with. A cached world may
     // hold sharpened boxes as well, which resume_refinement marks below.
@@ -7689,6 +7756,21 @@ void Application::record_frame(f32 time_seconds) {
 
     profiler_.begin_frame(cmd, swapchain_.frame_index());
     feedback_.begin_frame(cmd);
+    // R12c: zero this frame's derivation counters and take the reading off the slot the swapchain
+    // has already waited on. Unconditional, so the arm with the flag OFF prints nought because it
+    // derived nothing rather than because nobody was counting.
+    node_buffers_.begin_derive_frame(cmd, swapchain_.frame_index());
+    {
+        const DeriveStats& derived = node_buffers_.last_derive();
+        const u32 granted =
+            (derived.derived < options_.derive_cap) ? derived.derived : options_.derive_cap;
+        ++derive_frames_;
+        derive_total_ += granted;
+        derive_total_capped_ += derived.capped;
+        derive_total_evals_ += derived.evaluations;
+        derive_total_visits_ += derived.visits_k;
+        if (granted > derive_peak_) derive_peak_ = granted;
+    }
 
     // ---- streaming ------------------------------------------------------------------
     // The node pool, updated and copied before anything reads it. Its own pass, so the cost is
@@ -8169,6 +8251,15 @@ void Application::record_frame(f32 time_seconds) {
         // room is allowed to be dark. Nought hands the shader its own default; see
         // kExposureMaxDefault in shaders/resolve.comp for the number and what it was measured
         // against.
+        // R12c. The field has to be on the card before a ray may ask it anything: a root of
+        // nought into an empty buffer is a walk over whatever the allocator left there.
+        params.derive[0] = (options_.derive_in_marcher && node_buffers_.field_loaded()) ? 1u : 0u;
+        params.derive[1] = options_.derive_cap;
+        params.derive[2] = static_cast<u32>(swapchain_.frame_index());
+        // In units of 1024 nodes, which is what the shader counts in so a dispatch cannot
+        // overflow the word: a million nodes is 977 of them.
+        params.derive[3] = options_.derive_visits_m * 977u;
+
         params.tone[0] = options_.exposure_max;
         // ...and how hard R5a's filter weighs a neighbour against what a face already holds.
         // Negative hands the shader its own figure. See kDenoiseEdgeSharp in shade_faces.comp.
@@ -8610,6 +8701,11 @@ void Application::record_frame(f32 time_seconds) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.pipeline());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.layout(), 0,
                                 1, &node_set_, 1, &params_offset);
+        // R12c: set 1 is the field the marcher may derive from. Bound whether or not
+        // --derive-in-marcher is on, because the shader declares it either way and a descriptor a
+        // shader declares and nobody bound is undefined behaviour on the frame it is reached.
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.layout(), 1,
+                                1, &field_set_, 0, nullptr);
         // The entry table's size and how far a probe may run. A push constant rather than a
         // field in the parameter block, because it belongs to this pipeline and nothing else
         // reads it ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and because the block is already at the size AMD gives (128 bytes) once.
@@ -8786,6 +8882,8 @@ void Application::record_frame(f32 time_seconds) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, face_worklist_.pipeline());
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, face_worklist_.layout(),
                                     0, 1, &node_set_, 1, &params_offset);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, face_worklist_.layout(),
+                                    1, 1, &field_set_, 0, nullptr);
             const NodePush list_push = make_node_push(face_count);
             vkCmdPushConstants(cmd, face_worklist_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                sizeof(list_push), &list_push);
@@ -8815,6 +8913,8 @@ void Application::record_frame(f32 time_seconds) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.pipeline());
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.layout(), 0,
                                     1, &node_set_, 1, &params_offset);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.layout(), 1,
+                                    1, &field_set_, 0, nullptr);
             if (face_count > 0) {
                 NodePush shade_push = make_node_push(face_count);
                 shade_push.from_worklist = use_worklist ? 1u : 0u;
@@ -9251,12 +9351,16 @@ int Application::play(const Options& options) {
         // The two sets left here bind the type tables, the clip, the face store and its light.
         // Counted generously: running out of pool is a failure at start-up with a message
         // nobody connects to the binding they just added.
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 60},
+        // ...and R12c's set 1 adds eight: the field's seven buffers and the derivation counters.
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 72},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 4},
+        // R12c: the block field_types.glsl declares as a push constant, bound as a plain uniform
+        // buffer because a stage gets exactly one push-constant block and the marcher's is taken.
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
     };
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pool_info.maxSets = 4;
-    pool_info.poolSizeCount = 3;
+    pool_info.maxSets = 5;
+    pool_info.poolSizeCount = 4;
     pool_info.pPoolSizes = pool_sizes;
     WS_VK(vkCreateDescriptorPool(device_.handle(), &pool_info, nullptr, &descriptor_pool_));
 
@@ -9653,6 +9757,67 @@ int Application::play(const Options& options) {
         node_images[3].pImageInfo = &node_behind;
         vkUpdateDescriptorSets(device_.handle(), 4, node_images, 0, nullptr);
 
+        // ---- R12c: set 1, the field the marcher derives from ---------------------------------
+        //
+        // Its own set because set 0 has no room: 0 and 1 are this pass's images, 2..25 the node
+        // pool's, and `field_types.glsl` asks for seven consecutive bindings from zero. The remap
+        // at the top of shaders/node.glsl moves the file's own `set = 0` to `set = 1` without
+        // editing it. Bindings 0..6 are its buffers in declaration order, 7 the block it declares
+        // as a push constant, and 8 the derivation counters.
+        //
+        // Bindings 3, 4 and 5 -- the sample boxes and the two outputs -- belong to the batch
+        // sampler and this pass never touches them. They are still written, at a buffer of the
+        // right type, because a descriptor the shader declares and the layout omits is a
+        // validation error on the frames it happens to be statically reachable and nothing at all
+        // on the others, which is the worst of both.
+        {
+            VkDescriptorSetLayoutBinding field_bindings[9]{};
+            for (u32 i = 0; i < 9; ++i) {
+                field_bindings[i].binding = i;
+                field_bindings[i].descriptorType = (i == 7)
+                                                       ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                                       : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                field_bindings[i].descriptorCount = 1;
+                field_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo field_layout_info{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            field_layout_info.bindingCount = 9;
+            field_layout_info.pBindings = field_bindings;
+            WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &field_layout_info, nullptr,
+                                              &field_layout_));
+
+            VkDescriptorSetAllocateInfo field_alloc{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            field_alloc.descriptorPool = descriptor_pool_;
+            field_alloc.descriptorSetCount = 1;
+            field_alloc.pSetLayouts = &field_layout_;
+            WS_VK(vkAllocateDescriptorSets(device_.handle(), &field_alloc, &field_set_));
+
+            const VkBuffer field_buffers[9]{
+                node_buffers_.field_nodes(),   node_buffers_.field_parameters(),
+                node_buffers_.field_rules(),   node_buffers_.derive_stats(),
+                node_buffers_.derive_stats(),  node_buffers_.derive_stats(),
+                node_buffers_.field_pieces(),  node_buffers_.field_push(),
+                node_buffers_.derive_stats(),
+            };
+            VkDescriptorBufferInfo field_infos[9]{};
+            VkWriteDescriptorSet field_writes[9]{};
+            for (u32 i = 0; i < 9; ++i) {
+                field_infos[i].buffer = field_buffers[i];
+                field_infos[i].offset = 0;
+                field_infos[i].range = VK_WHOLE_SIZE;
+                field_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                field_writes[i].dstSet = field_set_;
+                field_writes[i].dstBinding = i;
+                field_writes[i].descriptorCount = 1;
+                field_writes[i].descriptorType = (i == 7) ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                                          : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                field_writes[i].pBufferInfo = &field_infos[i];
+            }
+            vkUpdateDescriptorSets(device_.handle(), 9, field_writes, 0, nullptr);
+        }
+
         const std::filesystem::path node_spirv = shaders / "visibility.comp.spv";
         const std::filesystem::path node_source =
             std::filesystem::path(WS_SHADER_SOURCE_DIR) / "visibility.comp";
@@ -9664,7 +9829,7 @@ int Application::play(const Options& options) {
         const std::filesystem::path shade_source =
             std::filesystem::path(WS_SHADER_SOURCE_DIR) / "shade_faces.comp";
         if (!shade_faces_.create(device_, shade_source, shade_spirv, node_layout_,
-                                 sizeof(NodePush))) {
+                                 sizeof(NodePush), field_layout_)) {
             WS_LOG_FATAL("app", "could not create the face shading pipeline: {}",
                          shade_faces_.last_error());
             return 1;
@@ -9675,7 +9840,7 @@ int Application::play(const Options& options) {
         const std::filesystem::path worklist_source =
             std::filesystem::path(WS_SHADER_SOURCE_DIR) / "face_worklist.comp";
         if (!face_worklist_.create(device_, worklist_source, worklist_spirv, node_layout_,
-                                   sizeof(NodePush))) {
+                                   sizeof(NodePush), field_layout_)) {
             WS_LOG_FATAL("app", "could not create the face work list pipeline: {}",
                          face_worklist_.last_error());
             return 1;
@@ -9685,7 +9850,7 @@ int Application::play(const Options& options) {
         // stage may declare only one block: the marcher writes the first two fields and ignores
         // the rest, but its layout has to reserve what the block declares.
         if (!visibility_.create(device_, node_source, node_spirv, node_layout_,
-                                     sizeof(NodePush))) {
+                                     sizeof(NodePush), field_layout_)) {
             WS_LOG_FATAL("app", "could not create the node visibility pipeline: {}",
                          visibility_.last_error());
             return 1;
@@ -10472,6 +10637,19 @@ int Application::play(const Options& options) {
                                 static_cast<u64>(hash_hi[2] - hash_lo[2] + 1),
                             edit_box_hash());
             }
+            // R12c: what the marcher derived, printed on BOTH arms. With the flag off every number
+            // here is nought, which is what makes it a control rather than a claim -- the counters
+            // are cleared and read every frame whether anything derived or not.
+            WS_LOG_INFO("frame",
+                        "derived in the marcher: {} cells a frame on average ({} at the peak), {} "
+                        "field evaluations and {} thousand field nodes walked a frame, {} rays a "
+                        "frame refused by the cap of {} cells and {} M nodes{}",
+                        derive_frames_ > 0 ? derive_total_ / derive_frames_ : 0, derive_peak_,
+                        derive_frames_ > 0 ? derive_total_evals_ / derive_frames_ : 0,
+                        derive_frames_ > 0 ? derive_total_visits_ / derive_frames_ : 0,
+                        derive_frames_ > 0 ? derive_total_capped_ / derive_frames_ : 0,
+                        options_.derive_cap, options_.derive_visits_m,
+                        options_.derive_in_marcher ? "" : " -- the flag is OFF, so this is the control arm");
             // The two ways the world can lie to the render tree, counted where they are standing
             // rather than where they were made. `world_has` asks whether a brick is ALLOCATED and
             // answers level 8 and above out of the set of chunks that EXIST, so either of these
@@ -11003,6 +11181,10 @@ int Application::play(const Options& options) {
     face_worklist_.destroy();
     destroy_buffer(device_, face_work_);
     node_buffers_.destroy();
+    if (field_layout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device_.handle(), field_layout_, nullptr);
+        field_layout_ = VK_NULL_HANDLE;
+    }
     if (node_layout_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device_.handle(), node_layout_, nullptr);
         node_layout_ = VK_NULL_HANDLE;

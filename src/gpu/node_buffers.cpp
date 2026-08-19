@@ -1,10 +1,45 @@
 #include "gpu/node_buffers.hpp"
 
 #include <cstring>
+#include <vector>
 
 #include "core/log.hpp"
 
 namespace ws {
+namespace {
+
+// The block field_types.glsl declares as a push constant and this pass binds as a uniform buffer.
+// Byte for byte the same eight scalars; std140 packs them at four bytes each and the block rounds
+// to 32, which is already a multiple of sixteen.
+struct MarcherFieldPush {
+    u32 root;
+    u32 bounds;
+    u32 has_bounds;
+    u32 rule_count;
+    u32 box_count;
+    u32 first_type;
+    f32 half_cell;
+    u32 flags;
+};
+static_assert(sizeof(MarcherFieldPush) == 32, "must match FieldPush in field_types.glsl");
+
+// `kHalfCellDiagonal` in src/forge/sample.cpp, handed over rather than written in the shader for
+// the reason field_gpu.cpp gives: the rescue's own test and the box test disagreeing about this
+// number is D613.
+constexpr f32 kMarcherHalfCellDiagonal = 0.8660254f;
+
+f32 narrow(f64 v) { return static_cast<f32>(v); }
+
+void write_box(f32* lo, f32* hi, const forge::Field::Aabb& box) {
+    lo[0] = narrow(box.low.x);
+    lo[1] = narrow(box.low.y);
+    lo[2] = narrow(box.low.z);
+    hi[0] = narrow(box.high.x);
+    hi[1] = narrow(box.high.y);
+    hi[2] = narrow(box.high.z);
+}
+
+}  // namespace
 
 bool NodeBuffers::create(Device& device, const NodePoolBudget& budget) {
     device_ = &device;
@@ -70,11 +105,53 @@ bool NodeBuffers::create(Device& device, const NodePoolBudget& budget) {
     staging_capacity_ = staging_bytes / kFramesInFlight;
     staging_ = create_staging_buffer(device, staging_bytes, "node staging");
 
+    // ---- R12c -------------------------------------------------------------------------------
+    //
+    // Allocated here rather than when a clip loads, because the descriptor set is written once at
+    // startup and a buffer that appears later would have nothing pointing at it. Empty until
+    // `upload_field` fills them, and the marcher is told to derive nothing until then.
+    field_nodes_ = create_device_buffer(device, kMaxFieldNodes * sizeof(GpuFieldNode), kStorage,
+                                        "marcher field nodes");
+    field_params_ = create_device_buffer(device, kMaxFieldParams * sizeof(f32), kStorage,
+                                         "marcher field parameters");
+    field_rules_ = create_device_buffer(device, kMaxFieldRules * sizeof(GpuPaintRuleRecord),
+                                        kStorage, "marcher paint rules");
+    field_pieces_ = create_device_buffer(device, kMaxFieldPieces * sizeof(GpuBoxRecord), kStorage,
+                                         "marcher rule pieces");
+    field_push_ = create_device_buffer(device, sizeof(MarcherFieldPush),
+                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, "marcher field push");
+    // Host-visible and read back a frame late. The card writes it with atomics and the host reads
+    // the slot the swapchain has already waited on, so nobody reads a word anybody is writing.
+    derive_stats_ =
+        create_staging_buffer(device, sizeof(DeriveStats) * kFramesInFlight, "derive stats",
+                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    if (derive_stats_.mapped != nullptr) {
+        std::memset(derive_stats_.mapped, 0, static_cast<size_t>(derive_stats_.size));
+    }
+
+    // The field is uploaded once per clip, outside any frame, so it gets its own command buffer and
+    // waits for it rather than sharing the frame's ring.
+    VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    pool_info.queueFamilyIndex = device.graphics_family();
+    if (vkCreateCommandPool(device.handle(), &pool_info, nullptr, &field_commands_) != VK_SUCCESS) {
+        field_commands_ = VK_NULL_HANDLE;
+    } else {
+        VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        alloc.commandPool = field_commands_;
+        alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc.commandBufferCount = 1;
+        vkAllocateCommandBuffers(device.handle(), &alloc, &field_cmd_);
+        VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        vkCreateFence(device.handle(), &fence_info, nullptr, &field_fence_);
+    }
+
     stats_ = NodeBufferStats{};
     stats_.device_bytes =
         node_bytes + leaf_bytes + occupancy_bytes + entry_bytes + budget.payload_bytes;
     return entries_.valid() && nodes_.valid() && leaves_.valid() && occupancy_.valid() &&
-           payload_.valid() && staging_.valid();
+           payload_.valid() && staging_.valid() && field_nodes_.valid() && field_push_.valid() &&
+           derive_stats_.valid();
 }
 
 void NodeBuffers::destroy() {
@@ -85,7 +162,190 @@ void NodeBuffers::destroy() {
     destroy_buffer(*device_, occupancy_);
     destroy_buffer(*device_, payload_);
     destroy_buffer(*device_, staging_);
+    destroy_buffer(*device_, field_nodes_);
+    destroy_buffer(*device_, field_params_);
+    destroy_buffer(*device_, field_rules_);
+    destroy_buffer(*device_, field_pieces_);
+    destroy_buffer(*device_, field_push_);
+    destroy_buffer(*device_, derive_stats_);
+    if (field_fence_ != VK_NULL_HANDLE) {
+        vkDestroyFence(device_->handle(), field_fence_, nullptr);
+        field_fence_ = VK_NULL_HANDLE;
+    }
+    if (field_commands_ != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(device_->handle(), field_commands_, nullptr);
+        field_commands_ = VK_NULL_HANDLE;
+        field_cmd_ = VK_NULL_HANDLE;
+    }
     device_ = nullptr;
+}
+
+// ---- R12c: the field, mirrored -----------------------------------------------------------------
+
+bool NodeBuffers::upload_once(GpuBuffer& target, const void* data, u64 bytes, const char* what) {
+    if (bytes == 0) return true;
+    if (bytes > target.size) {
+        field_why_not_ = std::string("the ") + what + " do not fit the marcher's buffer";
+        return false;
+    }
+    if (field_cmd_ == VK_NULL_HANDLE || field_fence_ == VK_NULL_HANDLE) {
+        field_why_not_ = "no command buffer for the field copy";
+        return false;
+    }
+    GpuBuffer staging = create_staging_buffer(*device_, bytes, "marcher field staging");
+    if (!staging.valid()) {
+        field_why_not_ = "no staging buffer for the field copy";
+        return false;
+    }
+    std::memcpy(staging.mapped, data, static_cast<size_t>(bytes));
+
+    vkResetCommandBuffer(field_cmd_, 0);
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(field_cmd_, &begin);
+    VkBufferCopy copy{};
+    copy.size = bytes;
+    vkCmdCopyBuffer(field_cmd_, staging.buffer, target.buffer, 1, &copy);
+    vkEndCommandBuffer(field_cmd_);
+
+    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &field_cmd_;
+    vkResetFences(device_->handle(), 1, &field_fence_);
+    const VkResult submitted =
+        vkQueueSubmit(device_->graphics_queue(), 1, &submit, field_fence_);
+    if (submitted != VK_SUCCESS) {
+        destroy_buffer(*device_, staging);
+        field_why_not_ = "the field copy would not submit";
+        return false;
+    }
+    vkWaitForFences(device_->handle(), 1, &field_fence_, VK_TRUE, ~0ull);
+    destroy_buffer(*device_, staging);
+    return true;
+}
+
+bool NodeBuffers::upload_field(const forge::SamplePlan& plan, u32 bounds_node, bool has_bounds) {
+    field_node_count_ = 0;
+    field_rule_count_ = 0;
+    if (device_ == nullptr || !plan.ok()) {
+        field_why_not_ = "no device, or no plan";
+        return false;
+    }
+    const forge::Field& field = *plan.field;
+    const usize count = field.size();
+    if (count > kMaxFieldNodes) {
+        field_why_not_ = "the field has more nodes than the marcher's buffer holds";
+        return false;
+    }
+
+    // The same records `FieldSampler::upload` writes, built the same way. Two copies of this loop
+    // is a real cost and it is the smaller one: the alternative is a handle out of a class another
+    // hand is inside, and a field the marcher reads that is not the field the sampler reads is
+    // D204 in the form this stage exists to avoid.
+    std::vector<GpuFieldNode> nodes(count);
+    for (usize i = 0; i < count; ++i) {
+        const forge::Node& from = field.node(static_cast<u32>(i));
+        GpuFieldNode& to = nodes[i];
+        to.op = static_cast<u32>(from.op);
+        to.children = from.children;
+        for (u32 c = 0; c < 4; ++c) to.child[c] = from.child[c];
+        for (u32 a = 0; a < 8; ++a) to.a[a] = narrow(from.a[a]);
+        write_box(to.lo, to.hi, field.bounds_of(static_cast<u32>(i)));
+    }
+
+    std::vector<f32> params(field.parameter_count());
+    for (usize i = 0; i < params.size(); ++i) params[i] = narrow(field.parameter_value(i));
+    if (params.size() > kMaxFieldParams) {
+        field_why_not_ = "more parameters than the marcher's buffer holds";
+        return false;
+    }
+
+    const usize rules = plan.widened.size();
+    if (rules > kMaxFieldRules) {
+        field_why_not_ = "more paint rules than the marcher's buffer holds";
+        return false;
+    }
+    std::vector<GpuPaintRuleRecord> rule_records(rules);
+    std::vector<GpuBoxRecord> pieces;
+    for (usize i = 0; i < rules; ++i) {
+        const forge::PaintRule& from = plan.widened[i];
+        GpuPaintRuleRecord& to = rule_records[i];
+        to.test = from.test;
+        to.type = from.type;
+        to.facing_axis = from.facing_axis;
+        to.facing_min = narrow(from.facing_min);
+        to.low = narrow(from.low);
+        to.high = narrow(from.high);
+        to.slack = (i < plan.rule_slack.size()) ? narrow(plan.rule_slack[i]) : 0.0f;
+        to.pad = 0;
+        to.piece_from = static_cast<u32>(pieces.size());
+        if (!plan.rule_piece_at.empty() && i + 1 < plan.rule_piece_at.size()) {
+            for (u32 p = plan.rule_piece_at[i]; p < plan.rule_piece_at[i + 1]; ++p) {
+                GpuBoxRecord piece{};
+                write_box(piece.lo, piece.hi, plan.rule_piece[p]);
+                pieces.push_back(piece);
+            }
+        }
+        to.piece_to = static_cast<u32>(pieces.size());
+        if (i < plan.rule_box.size()) {
+            write_box(to.lo, to.hi, plan.rule_box[i]);
+        } else {
+            const forge::Field::Aabb everywhere;
+            write_box(to.lo, to.hi, everywhere);
+        }
+    }
+    if (pieces.size() > kMaxFieldPieces) {
+        field_why_not_ = "more rule pieces than the marcher's buffer holds";
+        return false;
+    }
+
+    MarcherFieldPush push{};
+    push.root = plan.root;
+    push.bounds = bounds_node;
+    push.has_bounds = has_bounds ? 1u : 0u;
+    push.rule_count = static_cast<u32>(rules);
+    push.box_count = 0;
+    push.first_type = rules > 0 ? plan.widened.front().type : 0u;
+    push.half_cell = kMarcherHalfCellDiagonal;
+    push.flags = 0;
+
+    if (!upload_once(field_nodes_, nodes.data(), nodes.size() * sizeof(GpuFieldNode), "nodes") ||
+        !upload_once(field_params_, params.data(), params.size() * sizeof(f32), "parameters") ||
+        !upload_once(field_rules_, rule_records.data(),
+                     rule_records.size() * sizeof(GpuPaintRuleRecord), "paint rules") ||
+        !upload_once(field_pieces_, pieces.data(), pieces.size() * sizeof(GpuBoxRecord),
+                     "rule pieces") ||
+        !upload_once(field_push_, &push, sizeof(push), "field constants")) {
+        return false;
+    }
+
+    field_node_count_ = static_cast<u32>(count);
+    field_rule_count_ = static_cast<u32>(rules);
+    field_why_not_.clear();
+    WS_LOG_INFO("clip",
+                "the marcher can derive: {} field nodes ({} KB), {} parameters, {} paint rules, {} "
+                "zone pieces",
+                field_node_count_, (field_node_count_ * sizeof(GpuFieldNode)) / 1024, params.size(),
+                field_rule_count_, pieces.size());
+    return true;
+}
+
+void NodeBuffers::begin_derive_frame(VkCommandBuffer cmd, u32 frame_index) {
+    if (!derive_stats_.valid()) return;
+    const u64 at = static_cast<u64>(frame_index % kFramesInFlight) * sizeof(DeriveStats);
+    if (derive_stats_.mapped != nullptr) {
+        // What this slot finished as, kFramesInFlight frames ago. The swapchain has waited on that
+        // frame before this one was allowed to record, so the words are still and complete.
+        std::memcpy(&last_derive_, static_cast<const u8*>(derive_stats_.mapped) + at,
+                    sizeof(DeriveStats));
+    }
+    vkCmdFillBuffer(cmd, derive_stats_.buffer, at, sizeof(DeriveStats), 0);
+    VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0,
+                         nullptr);
 }
 
 bool NodeBuffers::stage(VkCommandBuffer cmd, const void* source, u64 bytes,

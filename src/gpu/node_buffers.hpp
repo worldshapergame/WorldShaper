@@ -24,11 +24,29 @@
 // If R1d shows this on the frame graph, `NodePool` grows a dirty-range list and this becomes a
 // scatter copy. Until then the simple thing is the honest thing.
 
+#include <string>
+
 #include "gpu/buffer.hpp"
+#include "gpu/field_gpu.hpp"
 #include "gpu/swapchain.hpp"
 #include "world/node_pool.hpp"
 
 namespace ws {
+
+// R12c: what one dispatch of the marcher derived, read back a frame late.
+//
+// A ring of these, one per frame in flight, so the slot the host reads is the one the swapchain has
+// already waited on. A single counter read while the card is writing it is a number that depends on
+// scheduling, which is the fault the frame statistics block documents at length.
+struct DeriveStats {
+    u32 derived = 0;      // cells the marcher evaluated the field for
+    u32 capped = 0;       // cells that wanted a derivation and got R2d's stand-in instead
+    u32 evaluations = 0;  // field_eval calls, which is the quantity D687 prices
+    // ...and the FIELD nodes those walked, in units of 1024. The second budget, and the one that
+    // bounds a frame: a cap on cells is not a cap on work, because D688 measured one cell at
+    // 1,073,935 nodes and 372 ms against a typical 5,195 and 1.8.
+    u32 visits_k = 0;
+};
 
 struct NodeBufferStats {
     u64 uploaded_this_frame = 0;
@@ -82,6 +100,35 @@ public:
     u32 entry_capacity() const { return entry_capacity_; }
     const NodeBufferStats& stats() const { return stats_; }
 
+    // ---- R12c: the field, mirrored onto the marcher's own descriptor set -----------------------
+    //
+    // The same records `FieldSampler::upload` writes, in a second copy. A second copy rather than a
+    // shared one because the two live on different descriptor sets and `FieldSampler` hands out no
+    // buffer handles; the estate's field is 1,425 KB, which is a rounding error against the pool's
+    // own 32 MB and is not worth an interface change on a file another hand is in.
+    //
+    // Returns false and stays unloaded when the field does not fit, which the marcher reads as
+    // "derive nothing". A marcher that derived from the first n nodes of a field would be drawing a
+    // different building with no error anywhere.
+    bool upload_field(const forge::SamplePlan& plan, u32 bounds_node, bool has_bounds);
+    bool field_loaded() const { return field_node_count_ > 0; }
+    const std::string& field_why_not() const { return field_why_not_; }
+    u32 field_node_count() const { return field_node_count_; }
+    u32 field_rule_count() const { return field_rule_count_; }
+
+    VkBuffer field_nodes() const { return field_nodes_.buffer; }
+    VkBuffer field_parameters() const { return field_params_.buffer; }
+    VkBuffer field_rules() const { return field_rules_.buffer; }
+    VkBuffer field_pieces() const { return field_pieces_.buffer; }
+    VkBuffer field_push() const { return field_push_.buffer; }
+    VkBuffer derive_stats() const { return derive_stats_.buffer; }
+
+    // Zero this frame's slot of the derivation counters, and take last time round's reading off it
+    // first. Recorded before anything marches, unconditionally -- a counter that is only cleared on
+    // the frames a feature is on reads as that feature's cost on the frame it was turned off.
+    void begin_derive_frame(VkCommandBuffer cmd, u32 frame_index);
+    const DeriveStats& last_derive() const { return last_derive_; }
+
 private:
     // One staging copy per array, all through one ring -- which holds kFramesInFlight regions,
     // one per frame that may be in flight, because the host writes it at record time and the card
@@ -90,6 +137,9 @@ private:
     bool stage(VkCommandBuffer cmd, const void* source, u64 bytes, GpuBuffer& destination);
     bool stage_at(VkCommandBuffer cmd, const void* source, u64 bytes, u64 destination_offset,
                   GpuBuffer& destination);
+    // A blocking one-shot copy on its own command buffer, for the field. It happens once per clip
+    // at load time and never inside a frame, so it is allowed to wait.
+    bool upload_once(GpuBuffer& target, const void* data, u64 bytes, const char* what);
 
     Device* device_ = nullptr;
     GpuBuffer entries_;
@@ -108,6 +158,30 @@ private:
     // Where this frame's region starts. Set at the top of every upload from the frame index.
     u64 staging_frame_base_ = 0;
     NodeBufferStats stats_;
+
+    // ---- R12c ---------------------------------------------------------------------------------
+    GpuBuffer field_nodes_;
+    GpuBuffer field_params_;
+    GpuBuffer field_rules_;
+    GpuBuffer field_pieces_;
+    GpuBuffer field_push_;      // the uniform block field_types.glsl declares as a push constant
+    GpuBuffer derive_stats_;    // host-visible; kFramesInFlight x DeriveStats
+    VkCommandPool field_commands_ = VK_NULL_HANDLE;
+    VkCommandBuffer field_cmd_ = VK_NULL_HANDLE;
+    VkFence field_fence_ = VK_NULL_HANDLE;
+    std::string field_why_not_;
+    u32 field_node_count_ = 0;
+    u32 field_rule_count_ = 0;
+    DeriveStats last_derive_;
+
+    // The estate's field is 18,250 nodes, 21 parameters, 628 rules and 18 zone pieces. These are a
+    // few times that rather than `FieldSampler`'s own ceilings: this is a SECOND copy of the same
+    // field and it is allocated on every run whether anything derives or not, so 5 MB of headroom
+    // is the right trade where 21 MB is not. A clip that outgrows them derives nothing and says so.
+    static constexpr u64 kMaxFieldNodes = 65536;
+    static constexpr u64 kMaxFieldRules = 4096;
+    static constexpr u64 kMaxFieldPieces = 16384;
+    static constexpr u64 kMaxFieldParams = 4096;
 };
 
 }  // namespace ws

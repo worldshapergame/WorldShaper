@@ -43,6 +43,58 @@
 // Guarded, so a shader that includes both in either order gets one copy.
 #include "face_terms.glsl"
 
+// ---- R12c: the field evaluator, so a ray can answer for a cell nobody has built -----------------
+//
+// The three files R12b built, included unchanged. They are somebody else's files and this one does
+// not get to edit them, which is the whole reason for the four lines of preprocessor below rather
+// than a copy of the evaluator -- and a second evaluator is D200k's fault in its worst form.
+//
+// **The remap, and it is the only obscure thing in this change.** `field_types.glsl` declares its
+// seven buffers at `set = 0, binding = 0..6` and its constants as a PUSH CONSTANT, and this pass
+// has neither of those free: bindings 0 and 1 of set 0 are the visibility pass's output images,
+// 2..25 are the node pool's own, and a stage is allowed exactly one push-constant block, which
+// `NodeConstants` below already is. So the field is moved onto descriptor SET 1 without touching
+// the file that declares it:
+//
+//   `binding` expands to `set = 1, binding`, so `layout(std430, set = 0, binding = 3)` becomes
+//   `layout(std430, set = 0, set = 1, binding = 3)`. A repeated layout-qualifier-name takes its
+//   LAST occurrence (GLSL 4.60 §4.4), so the set becomes 1 and the binding is untouched. The
+//   injected qualifier has to be a COMPLETE one -- `set = 1` and not `binding = 27 +` -- because
+//   the `= 3` in the source still belongs to whatever token the macro ends on.
+//
+//   `push_constant` expands to `std140, binding = 7`, which the line above then turns into
+//   `std140, set = 1, binding = 7`: the same block, as a uniform buffer at set 1 binding 7.
+//
+// Both are `#undef`ed immediately, so every binding this file declares for itself is its own.
+// Verified against glslc rather than reasoned about: set 1 bindings 0..7 out, set 0 untouched.
+#define binding set = 1, binding
+#define push_constant std140, binding = 7
+#include "field_types.glsl"
+#include "field_leaf.glsl"
+#include "field_walk.glsl"
+#undef binding
+#undef push_constant
+
+// What one dispatch derived, counted where it happens. Mirrors `DeriveStats` in
+// src/gpu/node_buffers.hpp, one per frame in flight; `push.derive.z` says which is this frame's.
+//
+// It is the cap as well as the instrument: D687 priced this stage at 1,239 ms a frame at the
+// estate's field cost, so a marcher that derives without a ceiling is a frame that never ends. The
+// ticket `derived` hands out IS the budget.
+struct DeriveStatsSlot {
+    uint derived;
+    uint capped;
+    uint evaluations;
+    // ...and the nodes of the FIELD those evaluations walked, in units of 1024 so a dispatch cannot
+    // overflow the word. This is the second budget and it is the one that actually bounds a frame:
+    // a cap on CELLS is not a cap on WORK. D688 measured a cell under the podium at 1,073,935 nodes
+    // and 372 ms where a typical one walks 5,195 and takes 1.8, so twenty thousand cells is
+    // anywhere between forty milliseconds and two hours. Measured here: a cap of 20,000 cells and
+    // no visit budget LOST THE DEVICE on a 150-second run, and 300,000 lost it inside ten seconds.
+    uint visits_k;
+};
+layout(std430, set = 1, binding = 8) buffer DeriveStats { DeriveStatsSlot slots[]; } derive_stats;
+
 const uint kNoNode = 0xFFFFFFFFu;
 const int kLeafLevel = 3;       // a brick: 8 voxels
 const int kEntryLevel = 14;     // 16,384 voxels Ã¢â‚¬â€ 512 m. Must match src/world/node_pool.hpp.
@@ -2997,6 +3049,254 @@ const float kNodeUnbounded = 3.4e38;
 // Keeping the eye as the origin and skipping forward in `t` keeps every distance in this function
 // eye-relative -- the footprint, the world clip, the D156 nudge and the `t` that comes back -- so
 // the caller has nothing to add on afterwards and nothing to get wrong.
+// ---- R12c: a ray answers for a cell the pool has not built --------------------------------------
+//
+// The descent reaches a node with a level of nought, the feedback report goes out exactly as it
+// always did -- the CPU still has to build it properly -- and instead of drawing the parent's
+// folded colour (R2d, D237) the ray asks the FIELD what is there and draws that.
+//
+// **What it asks is one question per cell, at the cell's centre.** The marching cell is one node of
+// the render tree at `outer_level`, and a node is the size of the pixel's own footprint by
+// construction, so a single evaluation answers at exactly the resolution the pixel resolves. That
+// is also the arithmetic D687 priced the stage with: misses a frame times the cost of one
+// evaluation.
+//
+// **The thin-feature rescue is deliberately NOT here.** `sample_field.comp` runs it because its
+// cells are voxels and a mullion half a voxel wide would be deleted outright; a marching cell is a
+// whole node, and rescuing at that size would fatten every silhouette by a pixel. What this draws
+// for one frame is the surface at the pixel's own resolution, and what the CPU builds behind it is
+// unchanged.
+//
+// **It is bounded, and the bound is a ticket rather than a rule of thumb.** D687: 368,876 nodes
+// wanted at the peak on the enclosed camera, four pixels each, 0.84 us an evaluation -- 1,239 ms of
+// card in one frame, before a single march step. `--derive-cap` is how many cells one dispatch may
+// derive; past it a ray falls back to R2d's stand-in, which is the behaviour this replaces and
+// therefore the only safe thing to fall back TO.
+
+const uint kDeriveRefused = 0xFFFFFFFFu;
+
+// What a derivation is CHARGED before it runs, in units of 1024 field nodes, refunded down to what
+// it actually cost when it finishes.
+//
+// **The charge is taken up front and reconciled afterwards, and that is the whole mechanism rather
+// than a nicety.** The first version of this budget read what the dispatch had already spent and
+// stopped when that passed the ceiling, which sounds equivalent and is not: at 1280x800 the whole
+// screen is in flight within a few waves, every one of them reads nought, and every one of them
+// proceeds. It measured a **2,279 ms frame at a 64 M-node ceiling and LOST THE DEVICE** -- 70x over
+// a budget that should have been 32 ms, because a retrospective budget shared by a million lanes
+// bounds nothing at all. Charging first bounds how many derivations may be OUTSTANDING at
+// ceiling/charge, whatever they each turn out to cost.
+//
+// **And the charge is the WORST case rather than the mean, which is the second thing measured
+// rather than reasoned.** It was 8 -- D681's measured mean of 8,231 nodes for a cell of the enclosed
+// camera -- and the outdoor camera still settled a 2,045 ms frame on a 16 M ceiling and lost the
+// device. 16 M over a charge of 8 is 2,048 outstanding derivations, and the ones left to derive
+// once a world is mostly built are D688's deep-interior cells at about a million nodes each: two
+// thousand of those IS two seconds. At 64 the same ceiling allows 256 outstanding, which is 256 ms
+// of the worst cell this clip has, and a cheap cell refunds itself back to about 8 the moment it
+// finishes -- so the budget still passes thousands of ordinary cells through a frame.
+const uint kDeriveChargeK = 64u;
+const uint kDeriveRefund = 0u - kDeriveChargeK;   // wraps, which is what an unsigned atomic wants
+
+const uint kDerivePhaseBounds = 0u;
+const uint kDerivePhaseSolid = 1u;
+const uint kDerivePhaseRule = 2u;
+const uint kDerivePhaseNormal = 3u;
+const uint kDerivePhaseDone = 4u;
+
+// Once this invocation has been refused a ticket it stops asking for one. A ray that kept asking
+// would spend the rest of its march on atomics that can only fail.
+bool g_derive_spent = false;
+
+// One of the six central-difference offsets, as `sub` counts 0..5. `ws_offset` in sample_field.comp.
+vec3 node_derive_offset(uint sub, float h) {
+    return ws_with_axis(vec3(0.0), sub >> 1u, ((sub & 1u) == 0u) ? h : -h);
+}
+
+// How far a point is from a paint rule's box, squared, and from one piece of its zone. Nought
+// inside, and nought for the infinite box a rule whose place could not be bounded carries. The same
+// two functions sample_field.comp has, because a zone that is the great steps and the cornice wash
+// has a bounding box of the whole building and rejects nothing without the pieces.
+float node_rule_box_away_sq(uint rule, vec3 p) {
+    const float lx = paint_rules.items[rule].lo[0];
+    if (lx <= -1.0e29 || paint_rules.items[rule].hi[0] >= 1.0e29) return 0.0;
+    const vec3 lo = vec3(lx, paint_rules.items[rule].lo[1], paint_rules.items[rule].lo[2]);
+    const vec3 hi = vec3(paint_rules.items[rule].hi[0], paint_rules.items[rule].hi[1],
+                         paint_rules.items[rule].hi[2]);
+    const vec3 d = max(max(lo - p, p - hi), vec3(0.0));
+    return dot(d, d);
+}
+
+float node_piece_away_sq(uint piece, vec3 p) {
+    const float lx = rule_pieces.items[piece].lo[0];
+    if (lx <= -1.0e29 || rule_pieces.items[piece].hi[0] >= 1.0e29) return 0.0;
+    const vec3 lo = vec3(lx, rule_pieces.items[piece].lo[1], rule_pieces.items[piece].lo[2]);
+    const vec3 hi = vec3(rule_pieces.items[piece].hi[0], rule_pieces.items[piece].hi[1],
+                         rule_pieces.items[piece].hi[2]);
+    const vec3 d = max(max(lo - p, p - hi), vec3(0.0));
+    return dot(d, d);
+}
+
+bool node_rule_could_apply(uint rule, vec3 p) {
+    if (node_rule_box_away_sq(rule, p) > 0.0) return false;
+    const uint from = paint_rules.items[rule].piece_from;
+    const uint to = paint_rules.items[rule].piece_to;
+    if (from == to) return true;
+    for (uint piece = from; piece < to; ++piece) {
+        if (node_piece_away_sq(piece, p) <= 0.0) return true;
+    }
+    return false;
+}
+
+// What the field says is at `p` metres, with `h` the cell's own size in metres.
+//
+// A LITTLE MACHINE AND NOT STRAIGHT-LINE CODE, for the reason sample_field.comp's header gives at
+// length: GLSL has no out-of-line call, the build compiles with `-O`, and a helper containing a
+// call is a private COPY of everything it calls -- including `field_eval`'s 128-frame stack. There
+// is exactly one call to `field_eval` in this function and it must stay that way (D677).
+//
+// `solid` and the returned type are separate answers: a clip with no paint rules at all has matter
+// and type nought, and a cell of air has neither. Conflating them is D133's shape in a new place.
+uint node_derive_type(vec3 p, float h, out uint asks, out bool solid) {
+    asks = 0u;
+    solid = false;
+    ws_field_visits = 0u;
+    ws_field_refused = 0u;
+    ws_field_refused_op = 0u;
+
+    uint phase = (field_push.has_bounds != 0u) ? kDerivePhaseBounds : kDerivePhaseSolid;
+    uint sub = 0u;
+    uint rule = 0u;
+    uint type = 0u;
+    vec3 hold = vec3(0.0);
+    vec3 away = vec3(0.0);
+    bool have_normal = false;
+
+    // 1 for the bounds, 1 for the shape, one per rule, six for a normal, and slack. The same shape
+    // of guard sample_field.comp uses, and for the same reason: a card is the wrong place to
+    // discover a loop that does not end.
+    const uint guard = 16u + 2u * field_push.rule_count;
+    for (uint turn = 0u; turn < guard && phase != kDerivePhaseDone; ++turn) {
+        // ---- and ONE cell is bounded too, which is the third thing this had to be taught ------
+        //
+        // The guard above bounds the number of QUESTIONS at 16 + 2 x 628, and every one of those is
+        // a full `field_eval` that may itself walk WS_FIELD_TURNS. So a single derivation was
+        // bounded at about 1,272 evaluations of a million nodes, and the two budgets outside this
+        // function -- cells, then field nodes charged before the walk -- both went on losing the
+        // device because neither of them bounds one cell. Measured: 256 outstanding derivations on
+        // a 16 M ceiling still made a **2,158 ms frame** on the settled outdoor camera, which is
+        // 8 ms a derivation.
+        //
+        // A cell that has walked its own charge stops asking and answers with what it has. The
+        // shape is what matters and it is the FIRST question; what is given up is some of the
+        // weathering, on a picture that lasts one frame and is replaced by the CPU's own.
+        if (ws_field_visits > kDeriveChargeK << 10u) {
+            // ...unless the shape itself is not known yet, in which case there is no answer to
+            // give and the stand-in is the honest one.
+            if (phase == kDerivePhaseBounds || phase == kDerivePhaseSolid) return kDeriveRefused;
+            break;
+        }
+        uint ask_node = field_push.root;
+        vec3 ask_at = p;
+        if (phase == kDerivePhaseBounds) {
+            ask_node = field_push.bounds;
+        } else if (phase == kDerivePhaseNormal) {
+            ask_at = p + node_derive_offset(sub, h);
+        } else if (phase == kDerivePhaseRule) {
+            // Whatever the boxes already answer for, without asking the field.
+            while (rule < field_push.rule_count && !node_rule_could_apply(rule, p)) ++rule;
+            if (rule >= field_push.rule_count) break;
+            ask_node = paint_rules.items[rule].test;
+        }
+
+        // ---- THE ONE CALL --------------------------------------------------------------------
+        const float v = field_eval(ask_node, ask_at);
+        ++asks;
+        // A refusal is not a value and must not read as air: the walk ran out of stack or out of
+        // turns and nobody computed this cell. The caller falls back to the stand-in, which is a
+        // coarse answer rather than no answer. D676, from the other side.
+        if (ws_field_refused != 0u) return kDeriveRefused;
+
+        if (phase == kDerivePhaseBounds) {
+            if (v > 0.0) return 0u;   // outside the clip's own shape: none of its business
+            phase = kDerivePhaseSolid;
+        } else if (phase == kDerivePhaseSolid) {
+            if (v > 0.0) return 0u;   // air at this cell's centre
+            solid = true;
+            phase = kDerivePhaseRule;
+        } else if (phase == kDerivePhaseRule) {
+            const float low = paint_rules.items[rule].low;
+            const float high = paint_rules.items[rule].high;
+            if (v < low || v > high) {
+                ++rule;
+            } else if (paint_rules.items[rule].slack >= 1.0e30 &&
+                       paint_rules.items[rule].facing_axis < 3u && !have_normal) {
+                // Only a rule the descent could settle for NOTHING asks which way a surface faces
+                // -- see GpuPaintRule::slack. Six more evaluations, once a cell at most.
+                phase = kDerivePhaseNormal;
+                sub = 0u;
+            } else {
+                if (paint_rules.items[rule].slack >= 1.0e30 &&
+                    paint_rules.items[rule].facing_axis < 3u) {
+                    const float component = ws_axis_of(away, paint_rules.items[rule].facing_axis);
+                    const float want = paint_rules.items[rule].facing_min;
+                    const bool passes = (want >= 0.0) ? (component >= want) : (component <= want);
+                    if (!passes) { ++rule; continue; }
+                }
+                type = paint_rules.items[rule].type;
+                ++rule;
+            }
+            if (phase == kDerivePhaseRule && rule >= field_push.rule_count) {
+                phase = kDerivePhaseDone;
+            }
+        } else if (phase == kDerivePhaseNormal) {
+            const uint axis = sub >> 1u;
+            if ((sub & 1u) == 0u) {
+                hold = ws_with_axis(hold, axis, v);
+            } else {
+                away = ws_with_axis(away, axis, ws_axis_of(hold, axis) - v);
+            }
+            ++sub;
+            if (sub >= 6u) {
+                // `forge::normalise`'s own answer for a zero vector, which is {0,1,0}: a rule keyed
+                // on "up" then matches, which is what the CPU does.
+                const float len = length(away);
+                away = (len > 0.0) ? (away / len) : vec3(0.0, 1.0, 0.0);
+                have_normal = true;
+                phase = kDerivePhaseRule;   // back to the rule that asked, with `rule` unchanged
+            }
+        }
+    }
+
+    // Matter with no rule that matched is still matter, and a hole in a wall is harder to notice
+    // than a wrong colour. sample_field.comp's last two lines.
+    if (solid && type == 0u && field_push.rule_count > 0u) type = field_push.first_type;
+    return type;
+}
+
+// The dispatch's budget, handed out one cell at a time. Returns false once it is gone, and says so
+// in the counters rather than silently drawing something cheaper.
+
+bool node_derive_take() {
+    if (g_derive_spent) return false;
+    const uint slot = push.derive.z;
+    // The WORK budget first, because it is the one that keeps a frame under the driver's watchdog.
+    if (push.derive.w != 0u) {
+        const uint spent = atomicAdd(derive_stats.slots[slot].visits_k, kDeriveChargeK);
+        if (spent >= push.derive.w) {
+            atomicAdd(derive_stats.slots[slot].visits_k, kDeriveRefund);
+            g_derive_spent = true;
+            atomicAdd(derive_stats.slots[slot].capped, 1u);
+            return false;
+        }
+    }
+    const uint before = atomicAdd(derive_stats.slots[slot].derived, 1u);
+    if (before < push.derive.y) return true;
+    g_derive_spent = true;
+    atomicAdd(derive_stats.slots[slot].capped, 1u);
+    return false;
+}
+
 NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
                    bool report_used, bool report_face, bool stand_in, bool occlude_unknown,
                    uint through_mode, float max_t, float start_t) {
@@ -3545,9 +3845,77 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     return result;
                 }
 
+                // ---- R12c: derive it rather than stand in ------------------------------------
+                //
+                // Everything above this line is untouched: the feedback report has already gone
+                // out, because the CPU still has to build this node properly and a ray that drew
+                // its own answer and said nothing would be a building that never streams.
+                //
+                // Gated on `stand_in` AND on the ray not seeing through matter, and both halves of
+                // that are about register budget rather than taste. `node_march` is inlined at
+                // every call site -- ten of them across the two passes that include this file --
+                // and each copy carries its own 128-frame field stack (D677, seventeen stacks and
+                // 1.05 MB of SPIR-V). `stand_in` is a compile-time FALSE at all four of the face
+                // pass's call sites and `through_mode == kThroughStop` at three of the six in the
+                // visibility pass, so the two together leave three copies instead of ten. It is
+                // also the right rule on its own terms: the stand-in is what a primary ray draws,
+                // and a segment inside glass has R4d's own answer for a cell it cannot see.
+                bool derived_empty = false;
+                if (stand_in && through_mode == kThroughStop && push.derive.x != 0u &&
+                    node_derive_take()) {
+                    // The cell's centre, in metres. `voxel` is the absolute voxel coordinate of the
+                    // cell's low corner and the world is kVoxelsPerMetreF voxels to the metre, which
+                    // is the same grid `forge::sample` turns a box in metres into -- so the two
+                    // agree to the integer rather than to a rounding.
+                    const float span = float(1 << outer_level);
+                    const vec3 at_m = (vec3(voxel) + 0.5 * span) * (1.0 / kVoxelsPerMetreF);
+                    uint asks = 0u;
+                    bool derived_solid = false;
+                    const uint derived_type =
+                        node_derive_type(at_m, span * (1.0 / kVoxelsPerMetreF), asks,
+                                         derived_solid);
+                    atomicAdd(derive_stats.slots[push.derive.z].evaluations, asks);
+                    // `ws_field_visits` accumulates across every call `node_derive_type` made,
+                    // because it is zeroed once at the top of it and by nothing after. The charge
+                    // taken before the walk is handed back in the same add, so what the counter
+                    // holds is what was actually walked and the budget corrects itself upward the
+                    // moment a cell turns out to be one of D688's expensive ones.
+                    atomicAdd(derive_stats.slots[push.derive.z].visits_k,
+                              (ws_field_visits >> 10u) + kDeriveRefund);
+                    if (derived_type != kDeriveRefused && derived_solid) {
+                        ivec3 derived_normal = last_normal;
+                        if (derived_normal == ivec3(0)) {
+                            // First step, camera inside the cell: no face was crossed to get here,
+                            // so face the ray, exactly as the stand-in below does.
+                            vec3 a = abs(dir);
+                            int dominant = (a.x > a.y && a.x > a.z) ? 0 : ((a.y > a.z) ? 1 : 2);
+                            derived_normal = ivec3(0);
+                            derived_normal[dominant] = -step_dir[dominant];
+                        }
+                        result.hit = true;
+                        result.t = t;
+                        result.normal = derived_normal;
+                        result.type_id = derived_type;
+                        result.colour = node_type_colour(derived_type);
+                        result.coverage = 255u;
+                        result.level = min(outer_level, kNodeMaxDetail);
+                        node_flush(report, has_pending, pending);
+                        node_flush_used(report_used, g_node_block);
+                        node_flush_read(report_used && found.slot != kNoNode, found.slot);
+                        node_face_hit(result, report_face, voxel, outer_level, derived_normal);
+                        return result;
+                    }
+                    // Air, and that is an ANSWER rather than an absence: the ray carries on and
+                    // may derive the next cell, which is what makes a derived first frame a
+                    // building against sky instead of R2d's blob against sky. A refusal is not
+                    // air and falls through to the stand-in below.
+                    derived_empty = derived_type != kDeriveRefused;
+                }
+
                 bool foldable = (node_flags_of(nodes.items[found.slot].packed) & kNodeLeaf) != 0 ||
                                 nodes.items[found.slot].children != kNoNode;
-                if (stand_in && found.level - 1 == outer_level && found.slot != kNoNode &&
+                if (!derived_empty && stand_in && found.level - 1 == outer_level &&
+                    found.slot != kNoNode &&
                     foldable && (nodes.items[found.slot].colour >> 24) != 0u) {
                     ivec3 stand_normal = last_normal;
                     if (stand_normal == ivec3(0)) {

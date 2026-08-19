@@ -50,11 +50,13 @@ ComputePipeline::~ComputePipeline() { destroy(); }
 
 bool ComputePipeline::create(Device& device, const std::filesystem::path& source_path,
                              const std::filesystem::path& spirv_path,
-                             VkDescriptorSetLayout set_layout, u32 push_constant_bytes) {
+                             VkDescriptorSetLayout set_layout, u32 push_constant_bytes,
+                             VkDescriptorSetLayout second_set_layout) {
     device_ = &device;
     source_path_ = source_path;
     spirv_path_ = spirv_path;
     set_layout_ = set_layout;
+    second_set_layout_ = second_set_layout;
     push_constant_bytes_ = push_constant_bytes;
 
     std::error_code ec;
@@ -65,9 +67,16 @@ bool ComputePipeline::create(Device& device, const std::filesystem::path& source
     range.offset = 0;
     range.size = push_constant_bytes_;
 
+    // R12c: a second set, and it is optional so no existing caller changes. The marcher's own
+    // buffers fill set 0 -- 0 and 1 are the visibility pass's images and 2..25 the node pool's --
+    // so the field the marcher derives from has nowhere to go but set 1. See the remap at the top
+    // of shaders/node.glsl.
+    const VkDescriptorSetLayout sets[2] = {set_layout_, second_set_layout_};
     VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layout_info.setLayoutCount = (set_layout_ != VK_NULL_HANDLE) ? 1u : 0u;
-    layout_info.pSetLayouts = &set_layout_;
+    layout_info.setLayoutCount = (set_layout_ == VK_NULL_HANDLE) ? 0u
+                                 : (second_set_layout_ == VK_NULL_HANDLE) ? 1u
+                                                                          : 2u;
+    layout_info.pSetLayouts = sets;
     layout_info.pushConstantRangeCount = (push_constant_bytes_ > 0) ? 1u : 0u;
     layout_info.pPushConstantRanges = &range;
     WS_VK(vkCreatePipelineLayout(device_->handle(), &layout_info, nullptr, &layout_));

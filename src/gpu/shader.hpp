@@ -27,9 +27,12 @@ public:
 
     // source_path is the .comp file; spirv_path is where the build wrote its .spv.
     // Both are kept so the shader can be recompiled in place at runtime.
+    // `second_set_layout` is R12c's: the marcher derives from the field, set 0 has no room for it,
+    // and every other pipeline passes nothing and is unchanged.
     bool create(Device& device, const std::filesystem::path& source_path,
                 const std::filesystem::path& spirv_path,
-                VkDescriptorSetLayout set_layout, u32 push_constant_bytes);
+                VkDescriptorSetLayout set_layout, u32 push_constant_bytes,
+                VkDescriptorSetLayout second_set_layout = VK_NULL_HANDLE);
     void destroy();
 
     // Recompiles and rebuilds only if the source file changed on disk. A compile error
@@ -54,6 +57,7 @@ private:
     std::filesystem::path spirv_path_;
     std::filesystem::file_time_type source_time_{};
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout second_set_layout_ = VK_NULL_HANDLE;
     u32 push_constant_bytes_ = 0;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;

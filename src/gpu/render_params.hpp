@@ -185,6 +185,24 @@ struct RenderParams {
     // what a word means makes every rule written about it suspect, and a fresh vector costs sixteen
     // bytes once.
     f32 beam[4];
+    // R12c derive in marcher
+    //
+    // x: 1 when a descent that reaches a node the pool has not built evaluates the field there
+    // instead of drawing R2d's stand-in (D237). Off by default and behind `--derive-in-marcher`.
+    // y: the CAP -- how many cells one dispatch may derive. Past it a ray falls back to the
+    // stand-in, which is the behaviour this replaces and so the only safe thing to fall back to.
+    // D687 priced an uncapped frame on the enclosed camera at 1,239 ms.
+    // z: which slot of the derivation counters this frame owns, so the host reads a slot nobody is
+    // writing.
+    // w: the WORK budget, in units of 1024 FIELD NODES one dispatch may walk deriving, 0 for none.
+    // The cell cap alone does not bound a frame and this is not a refinement of it: D688 measured
+    // one cell at 1,073,935 nodes and 372 ms against a typical 5,195 and 1.8, so twenty thousand
+    // cells is anywhere between forty milliseconds and two hours. Measured here: 20,000 cells with
+    // no visit budget lost the device on a 150-second run.
+    //
+    // A runtime value rather than a preprocessor define because shaders/node.glsl is included by
+    // three passes and a define would rebuild all of them into a different renderer.
+    u32 derive[4];
 };
 // Written out rather than accumulated as a sum of historical deltas, which is what this was and
 // which nobody could check: 41 vectors of 16 bytes, in the order shaders/params.glsl declares
@@ -194,9 +212,10 @@ struct RenderParams {
 // The count: origin, forward, right, up, camera_chunk, bounds_min, bounds_max, resolution, lens,
 // tint_visible, tint_occluded, tool_colour (12), box_min and box_max at 16 each (32), marks_min,
 // marks_max (2), clip_slot and clip_coarse at 16 each (32), edit_min, edit_max (2), prev_origin,
-// prev_forward, prev_right, prev_up, motion, sky_cloud, sky_wind, tone (8) -- 88, and R7's `beam`
-// on the end makes 89.
-static_assert(sizeof(RenderParams) == 89 * 16, "RenderParams must match the GLSL block");
+// prev_forward, prev_right, prev_up, motion, sky_cloud, sky_wind, tone (8) -- 88, R7's `beam`
+// makes 89 and R12c's `derive` makes 90. Both landed in the same wave and each was written
+// against 88, so the count is reconciled here rather than by either of them.
+static_assert(sizeof(RenderParams) == 90 * 16, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.

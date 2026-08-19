@@ -70,3 +70,9 @@
     //    frame -- the first one after startup or a resize.
     // zw spare.
     vec4 beam;
+    // R12c derive in marcher. x: 1 to evaluate the field at a cell the pool has not built
+    // instead of drawing R2d's stand-in (D237). y: how many cells one dispatch may derive before
+    // the rest fall back to that stand-in. z: which slot of the derivation counters this frame
+    // owns. w: the WORK budget -- field nodes one dispatch may walk deriving, in units of 1024, 0
+    // for none. Mirrors the block at the end of RenderParams.
+    uvec4 derive;

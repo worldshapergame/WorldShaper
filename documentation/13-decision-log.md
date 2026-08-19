@@ -11191,3 +11191,111 @@ hash. **The figures are comparable with each other and with nothing else in this
 | D698 | **14.0x outdoors and 1.35x SLOWER at distant, at 4K** | measurement | Where the ray was already trivial the beam is a net cost |
 | D698 | **The faces pass moves 7.4 → 13.4 ms at 4K enclosed and the offered cause is refuted** | honesty | The beam names nothing to residency — `report`, `report_used`, `report_face` all false. Open measurement, not a known regression |
 | D698 | **No R7 figure is settled, because the ladder's fixed point recedes** | trap | 42,650 → 44,652 → 47,578 leaves over three runs; measured with the world frozen instead |
+
+---
+
+## D699 — R12c is built, and a cap on CELLS is a cap on nothing
+
+**2026-08-19. The headline of step 12, and it ships OFF.** A descent that reaches a node the pool has
+not built now **evaluates the field there and draws that**, at the level the pixel resolves, instead
+of R2d's parent colour (D237). `--derive-in-marcher`, off, a runtime value on `RenderParams`. The
+feedback report is untouched — the CPU still builds the node properly — and **a derived cell that
+comes back AIR carries the march on**, which is what makes a derived frame a *building against sky*
+rather than a blob against sky.
+
+What it does shows the moment the ladder pastes anything. Enclosed camera, 60 s cold, uncapped: the
+world holds **4,406 solid voxels** and the screen shows columns, an entablature and a coffered
+ceiling — nearly everything visible is derived. **The control arm at the same moment is sky with grey
+stand-in blocks.**
+
+### The evaluator is R12b's, included unedited, moved to descriptor set 1 by four lines of preprocessor
+
+`field_types.glsl` asks for set 0 bindings 0..6 and a push-constant block, and the marcher has
+neither free — 0–1 are visibility's images, 2–25 the node pool's, and its own push block is taken.
+`binding` is expanded to `set = 1, binding`, and GLSL 4.60 §4.4 takes the **last** occurrence of a
+repeated layout-qualifier-name. The injected qualifier has to be complete — `set = 1`, never
+`binding = 27 +` — because the `= 3` in the source still belongs to whatever token the macro ends on.
+**Checked against glslc rather than reasoned about.**
+
+### Three budgets, and the second and third each cost a device
+
+- **`--derive-cap N` cells does not bound work.** D688's cell walks 1,073,935 nodes and 372 ms
+  against a typical 5,195 and 1.8, so twenty thousand cells is somewhere between 40 ms and two hours.
+  **300,000 lost the device in ten seconds; 20,000 lost it on a 150-second run.**
+- **`--derive-visits N` must be charged BEFORE the walk and reconciled after.** Read after the fact it
+  bounds nothing: at 1280x800 the whole screen is in flight within a few waves, so **every lane reads
+  nought and every lane proceeds** — 2,279 ms on a 64 M ceiling, seventy times a budget that should
+  have been 32 ms. And the charge has to be the WORST case (65,536 nodes) rather than D681's mean of
+  8,231, because at the mean the same ceiling allowed 2,048 outstanding and **the cells left once a
+  world is mostly built are the deep-interior ones**: 2,045 ms, and the device again.
+- **And ONE CELL had to be bounded, which neither of the others does.** The phase machine allows
+  16 + 2x628 questions and every one is a full `field_eval` of up to `WS_FIELD_TURNS`, so a single
+  derivation was bounded at about **1,272 million-node walks**. A cell that has walked its own charge
+  now stops asking and answers with the shape it has; only a cell whose shape is not yet known
+  refuses and takes the stand-in.
+
+### The price, and D687's verdict stands unchanged
+
+Matched 45 s arms, cold, 1280x800, GPU mean / worst frame:
+
+| | off | 16 M (default) | 64 M |
+|---|---|---|---|
+| enclosed | 6.60 / 16.2 ms | 7.57 / 156 | 15.55 / 1043 |
+| outdoor | 6.33 / 21.2 ms | 10.15 / 1383 | — |
+
+Uncapped, enclosed: **26,922 cells a frame, peak 848,556, 344 ms mean and a 38-second frame** — the
+same order as D687's predicted 368,876 x 4. **D687 priced this stage at 1,239 ms a frame and said it
+needs the field about thirty times cheaper to be playable. That is still true**, and it is why the
+flag is off. D691 took 2.8x of that thirty and D690 another 1.19x; the rest is not found yet.
+
+### The settled picture is unchanged, which is the gate that matters
+
+Outdoor camera, matched 45 s arms, **same content hash `72cde2f8e87729d7` in both**: same sky, same
+stand-in blocks in the same places, no geometry differs. Under `--settle` derivation falls to **4
+cells a frame** and the pictures agree again.
+
+### The first frame of a cold world is unchanged, and R12c cannot change it
+
+At frame 1 the world has 0 chunks, so the pool has no roots, so `node_locate` answers EMPTY rather
+than WANTED — **and there is nothing to derive.** Both arms, both cameras: identical sky, 0
+derivations. Deriving the *first* frame needs the pool to know the clip's extent before anything is
+pasted, which lives in `src/world/node_pool.*`. **That is the missing half of the stage and it is a
+node-pool change, not a marcher change.**
+
+### Including the evaluator is not free to the passes that include it
+
+`visibility.comp` 831 KB → **1,463 KB** of SPIR-V and glslc **15.4 s → 176.9 s**; `shade_faces.comp`
+980 KB → 1,096 KB and 22.1 s → 181.0 s. Derivation is gated on
+`stand_in && through_mode == kThroughStop`, which is a compile-time false at all four of the face
+pass's call sites and three of the six in the visibility pass, so **three copies of the 128-frame
+field stack survive instead of ten**. The stack was not shrunk.
+
+### And the integration cost that only shows when two agents land in one wave
+
+`RenderParams` and `shaders/params.glsl` are the one structure both halves of the engine read, and
+**R7 and R12c each appended a vector to it, each written against a block of 88.** Neither is wrong
+and neither could have known. Merged, the block is **90** and the `static_assert` was reconciled at
+integration rather than by either agent — which is exactly what that assert is for, and the reason
+it is worth having: a count that silently stayed at 89 would have been a renderer reading one
+structure while the shaders read another, and nothing about it would have looked like a compile
+error. The field ORDER was checked by hand as well, because the assert catches a wrong count and
+says nothing about a wrong order.
+
+**And R12c's own branch could not be cherry-picked commit by commit**: its first commit has
+`main.cpp` entirely CRLF and a later one converts it back, so replaying them in order conflicts on
+every line of a 13,000-line file. Merging from the branch's base instead skips the intermediate
+entirely and leaves one localised conflict. Worth knowing before the next scripted edit rewrites a
+file's line endings.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D699 | **R12c is built and ships OFF behind `--derive-in-marcher`** | decision | 7.57 ms against 6.60 enclosed, 10.15 against 6.33 outdoors, worst frames 156–1383 ms |
+| D699 | **A cap on CELLS is a cap on nothing** | fault | D688's spread is two hundredfold; 20,000 cells lost the device |
+| D699 | **A budget read after the fact bounds nothing** | fault | The whole screen is in flight within a few waves; every lane reads nought |
+| D699 | **One derivation had to be bounded on its own** | fault | 1,272 evaluations of up to a million nodes each |
+| D699 | **A derived cell that comes back AIR carries the march on** | build | Otherwise a derived frame is a blob against sky rather than a building |
+| D699 | **The first cold frame is a node_pool question, not a marcher one** | honesty | No chunks means no roots means nothing WANTED |
+| D699 | **The evaluator moves to set 1 by preprocessor, not by editing R12b** | decision | Repeated layout qualifiers take the last; verified against glslc |
+| D699 | **The settled picture is unchanged** | gate | Same content hash, same picture, derivation down to 4 cells a frame |
+| D699 | **D687's thirty-times verdict stands** | measurement | D691 took 2.8x of it and D690 1.19x; the rest is not found |
+| D699 | **Two agents each appended a vector to RenderParams against a block of 88** | integration | The size assert is what makes that safe; the field order had to be checked by hand |
