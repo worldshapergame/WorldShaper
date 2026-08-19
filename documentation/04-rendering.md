@@ -37,7 +37,7 @@ Detail therefore varies as a **continuous function of distance with no discrete 
 
 Empty-space traversal is the entire cost. Three accelerators:
 
-1. **Beam optimisation** — a 1/8-resolution pre-pass writes a conservative start distance per tile. Removes 60–80% of steps.
+1. **Beam optimisation** — a 1/8-resolution pre-pass writes a conservative start distance per tile. **BUILT, 2026-08-19, D698** — `shaders/beam.comp`, one coarse ray per 8x8 tile CORNER at sixteen pixel widths, and each tile starts its rays at the smallest of its four. The estimate here said 60–80% of steps; measured at 4K it is **1.18 ms against 16.81 outdoors and 1.96 against 15.07 close**, with `distant` a net cost at 0.76 against 0.56 because the ray there was already trivial. `--no-beam` restores this line's "before" exactly.
 2. **Temporal reprojection** — last frame's depth gives an even tighter start, validated against the coarse pass so it can never produce a wrong hit.
 3. **Optional raster prepass** — rasterise resident coarse-node bounds to establish tight per-pixel ray intervals. Built as an alternative path; a startup benchmark picks per device.
 
