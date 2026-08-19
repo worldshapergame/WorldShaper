@@ -12576,3 +12576,77 @@ differs is a miss rather than a suppression.
 | D713 | **The rest skips the MARCH and nothing else** | fault | Resting in the early return cost 5,792 polished faces their reflection and read as 2.09 against 6.16 ms |
 | D713 | **`--sun-seed` does not pay, with a card this time** | measurement | 0.094 of 255 inside a 0.150 spread; `kSunSeedMin` = 16 is the named suspect |
 | D713 | **A hash table is sized against the WINDOW, not the frame** | trap | 83% "suppressed" was collisions, and the STORE caught it, not the counter |
+
+---
+
+## D715 — The library's spines, the two mirrors inside one turn, and an instrument that was not in the build
+
+**2026-08-19.**
+
+### The tool the file cited by name did not exist
+
+A player reported a bookshelf across the library's doorway. The obvious way to check it is the
+instrument `clips/facility/library.clip`'s own audit quotes on the line above the fault — *"the
+doorway, across `--gap x@6.80,-3.42`  0.594 -> 1.062"*. **`tools/clipcheck.cpp` is 1,700 lines, it is
+in the repository, and `CMakeLists.txt` never built it.** Every `--gap` figure in the library's
+audit, and the crypt's, and the ballroom's, was taken with a binary nobody could produce any more.
+
+**A tool that is not built is a tool that is not there, and a comment quoting one reads exactly like
+a tool that is.** It is now an `add_executable`, and it failed `/W4 /WX` on restoration in two ways
+that were both real: a `best` shadowing a different `best` (renamed `busiest`), and three
+`static_cast<i32>(x * per) - built.origin_voxel[i]` where `origin_voxel` is `i64`, so the
+subtraction promotes and it is the *assignment* that narrows — casting the left operand only moves
+the warning off the line that truncates.
+
+Restored, it reproduces the audit exactly: `--gap x@6.80,-3.42 --metre 32` gives **clear 1.062 m,
+closed at both ends.** The doorway also measures **2.375 m of head height** and its through-passage
+runs clear, so the block the player saw is not in the library's own geometry — that is still open.
+
+### `rotate y=0.5` was two mirrors, and D712 removed both
+
+D712 fixed *"spines face into the wall"* by taking the half-turn off the north rank and putting it on
+the south. The spine logic was right — every book is drawn from `z = 0` with a different depth, so
+`z = 0` is the flush face — and the placement was not.
+
+**A half turn about y is a mirror in x AND a mirror in z, and the two halves were doing two different
+jobs.** The z half pointed the spines. **The x half PLACED the rank**: a rank is `nx=17` at 0.27, so
+4.365 m, in a press 7.02 m wide, and the turn is the only reason the north rank sat in the west half
+of it. Removing the turn slid every rank 4.365 m down the shelf it stands on.
+
+D712's own comment is where it went wrong — *"a rotation is an isometry and carries a box; it is
+caught in the zone box in any case"*. Both clauses are true and neither is the point. **The zone does
+catch it, and that is exactly what hid it**: a rank that has moved half the room is still entirely
+inside its zone and still reads as a shelf full of books. It is just a different shelf, and the one
+it left is bare.
+
+The second attempt paid the mirror back in the translate — six offsets for six spine widths — and
+came out **further** from the control than the first: **2,930,172 voxels and a floating component**,
+having torn books off a board to get there.
+
+So the transform splits. **North is `mirror axis=x`** — precisely the placement the turn gave it,
+without the flip that faced its spines at the wall. **South is `mirror axis=z`** — the x it always
+had, spines turned out. Not one offset changes and none of the six needs its own number.
+
+> When a composite transform is doing two jobs and one of them is wrong, **split the transform** —
+> do not correct the survivor downstream.
+
+### And the census is NOT the test, which took three arms to learn
+
+Probe census at `--metre 32`: **3,025,423 before D712, 3,016,584 after.** The first reading of that
+was *"a rotation is an isometry, so 8,839 voxels means the books moved"* — and the arithmetic
+agreed, so it looked settled. **It is not sound.** The scene is not the rank; it is the rank
+intersected with zones whose exclusions are asymmetric in z, so swapping which end is flush moves
+several thousand voxels legitimately and on its own.
+
+**What was actually diagnostic was the FLOATING COMPONENT** — 0 in the control, 1 in both attempts —
+because a detached piece cannot be explained by a legitimate change of clipping. One voxel is still
+floating at `-14.47 10.03 -4.03`, a quantisation crumb at the west end of the upper north rank,
+recorded rather than chased.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D715 | **A tool that is not built is a tool that is not there** | trap | `clipcheck` was cited by name in three rooms' audits and no `CMakeLists.txt` line built it |
+| D715 | **`rotate y=0.5` is two mirrors and only one was wrong** | fault | The z half pointed the spines; the x half placed the rank. D712 removed both |
+| D715 | **Split the transform, do not correct downstream** | design | Six compensating offsets were further from the control than the bug they fixed |
+| D715 | **"Caught in the zone box" is what HID it** | trap | A 4.365 m rank inside a 7.02 m zone can move half the room and still read as full |
+| D715 | **A voxel census is not a control for a turn here** | honesty | Asymmetric z exclusions move thousands of voxels legitimately; the floating component was the real signal |

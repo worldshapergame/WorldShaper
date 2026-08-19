@@ -767,6 +767,10 @@ struct Options {
     // where it leaves, and what it crossed absorbs over the true distance rather than per voxel.
     // `--no-refraction` is the control arm and restores D604's straight ray exactly.
     bool refraction = true;
+    // Whether the primary ray bends its way out of EVERY medium it meets or only the first.
+    // `--no-refract-stack` is the control arm and is bit-identical to every build before the loop
+    // existed, by construction rather than by care: at one medium the loop IS the old code.
+    bool refract_stack = true;
     // R4f: the REFLECTED half of the same interface. A specular reflection is a continuation of
     // the primary ray -- Fresnel over the material's own index of refraction splits it, part bends
     // through (D652) and part reflects and marches on -- rather than a lookup into a face's stored
@@ -1517,6 +1521,11 @@ bool parse_options_c(const std::string& arg, int& i, int argc, char** argv, Opti
         // R4d's other control arm: the ray behind the glass carries straight on, which is
         // what D604 built and what every figure before this was taken in.
         options.refraction = false;
+    } else if (arg == "--no-refract-stack") {
+        // One medium, which is what this renderer did until a player reported what it looks like:
+        // "translucent voxels behind translucent voxels dont render properly". Green glass behind
+        // green glass added no green, and a stack at an angle displaced no further than a sheet.
+        options.refract_stack = false;
     } else if (arg == "--no-ior-reflection") {
         // R4f's control arm: no primary ray continues as a reflection, so a specular surface is
         // drawn out of R4c's stored bins alone -- which is D703 exactly and is what every figure
@@ -9231,6 +9240,7 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.coverage_bins ? kProbeCoverageBins : 0u) |
                               (options_.see_through ? kProbeSeeThrough : 0u) |
                               (options_.refraction ? kProbeRefract : 0u) |
+                              (options_.refract_stack ? kProbeRefractStack : 0u) |
                               (options_.translucency ? kProbeTranslucent : 0u) |
                               (options_.edge_aa ? kProbeEdgeAA : 0u) |
                               (options_.level_blend ? kProbeLevelBlend : 0u) |

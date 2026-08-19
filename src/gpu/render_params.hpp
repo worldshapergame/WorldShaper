@@ -436,6 +436,12 @@ inline constexpr u32 kProbeSeeThrough = 1u << 8;
 // leaves it, and the medium absorbs over the true distance rather than once per voxel crossed.
 // Cleared by `--no-refraction`, which restores D604's straight ray exactly.
 inline constexpr u32 kProbeRefract = 1u << 9;
+// ...and it does that at EVERY medium on the way out rather than only at the first. Cleared by
+// `--no-refract-stack`, which is every build before the loop existed and is bit-identical to one
+// by construction: with a single medium the loop is line for line the code it replaced. Off, the
+// second pane of a stack contributes its opacity tint and none of its `absorb` colour, and the
+// path behind the first pane is straight.
+inline constexpr u32 kProbeRefractStack = 1u << 14;
 // R4e: a translucent face with the sun behind it casts the ray `sun_possible` used to throw away,
 // through the matter behind it, and is lit by what survives the crossing. Cleared by
 // `--no-translucency`, which is the state every figure before it was taken in: marble as granite.

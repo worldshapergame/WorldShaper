@@ -485,72 +485,127 @@ void main() {
             bool bent = false;
             vec3 refract_through = vec3(1.0);
             if (probe_refract()) {
-                const float ior = node_medium_ior(hit.type_id);
-                const vec3 face_normal = normalize(vec3(hit.normal));
-                const vec3 into = refract(dir, face_normal, 1.0 / max(ior, 1.0));
-                // A zero from `refract` is total internal reflection, which cannot happen entering a
-                // denser medium and can happen leaving one. Both are handled the same way -- keep
-                // the straight ray -- because the alternative at an entry face is a direction that
-                // does not exist.
-                if (dot(into, into) > 0.0) {
-                    const vec3 entry = push.origin.xyz + dir * hit.t + into * 1e-3;
+                // ---- EVERY medium on the way out, and not only the first ----------------------
+                //
+                // Reported from playing: *"translucent voxels behind translucent voxels dont
+                // render properly"*. They did not, and the whole of it is that the three segments
+                // below used to run once, straight through.
+                //
+                // What ran once was: bend into the pane the pixel landed on, cross it with
+                // `kThroughExit`, take THAT pane's Beer-Lambert absorption over its own path
+                // length, bend out, and then march the rest of the way with `kThroughPass`.
+                // `kThroughPass` slides through matter multiplying each voxel's OPACITY tint --
+                // and nothing else. So every medium behind the first one contributed its greyness
+                // and none of its COLOUR: `node_medium_absorb` was read exactly once, at
+                // `hit.type_id`, and a stack of green glass came out as green as a single sheet.
+                //
+                // And past that first pane the ray was straight. A stack of glass seen at an angle
+                // slid what was behind it sideways by one pane's worth however many panes there
+                // were, which is the one thing a stack visibly does that a sheet does not.
+                //
+                // So the segments become a loop over INTERFACES. Each turn bends in, crosses,
+                // takes that medium's own absorption over its own path, bends out, and marches on
+                // with `kThroughStop` -- which stops ON the next pane instead of sliding through
+                // it, so the next turn has an interface to bend at. The turn that lands on
+                // something which is not a medium has found the far surface, and ends it.
+                //
+                // **The last turn marches `kThroughPass`, which is what makes the control arm
+                // exact.** With `kRefractMedia` at one the loop is the old code line for line: one
+                // crossing, one absorption read at `hit.type_id`, one `kThroughPass` march, the
+                // same two lines of `t` and `through` accumulation. `--no-refract-stack` is
+                // therefore bit-identical to every build before this and not merely close to it.
+                //
+                // Reporting stays on for every segment, where before it was on for the one. That
+                // is not an oversight either: the intermediate marches used to cross panes and now
+                // they LAND on them, and a surface a player is looking at is a surface that claims
+                // its face (R3e). Without it the second pane in a stack has no face, no light of
+                // its own, and nothing for a reflection to find.
+                const uint media = probe_refract_stack() ? kRefractMedia : 1u;
+                float travelled = 0.0;              // the path already behind us, from the eye
+                vec3 seg_origin = push.origin.xyz;  // where the segment the ray is ON began
+                vec3 seg_dir = dir;
+                NodeHit surface = hit;              // the interface this turn bends at
+                vec3 crossed_through = vec3(1.0);   // what the media themselves let by
+                for (uint crossing = 0u; crossing < media; ++crossing) {
+                    const float ior = node_medium_ior(surface.type_id);
+                    const vec3 face_normal = normalize(vec3(surface.normal));
+                    const vec3 into = refract(seg_dir, face_normal, 1.0 / max(ior, 1.0));
+                    // A zero from `refract` is total internal reflection, which cannot happen
+                    // entering a denser medium and can happen leaving one. Both are handled the
+                    // same way -- keep what we have -- because the alternative at an entry face is
+                    // a direction that does not exist.
+                    if (dot(into, into) <= 0.0) break;
+                    const vec3 entry = seg_origin + seg_dir * surface.t + into * 1e-3;
                     NodeHit inside = node_march(entry, into, pixel_angle, node_bayer(pixel), false,
                                                 false, false, true, false, kThroughExit,
                                                 kNodeUnbounded, 0.0);
-                    if (inside.left_medium) {
-                        const float path_m = inside.exit_t * (1.0 / kVoxelsPerMetreF);
-                        const vec3 exit_normal = normalize(vec3(inside.exit_normal));
-                        vec3 out_dir = refract(into, exit_normal, ior);
-                        // Total internal reflection at the far face is a real answer and not an
-                        // error: past the critical angle a water surface is a mirror from
-                        // underneath. Reflecting keeps the ray in the world rather than dropping
-                        // the pixel to the straight-through fallback.
-                        if (dot(out_dir, out_dir) <= 0.0) out_dir = reflect(into, exit_normal);
-                        // The LAST segment carries the reporting, and that is not a detail: this
-                        // is the ray that lands on the surface a player is looking at through the
-                        // window, so it is the one that has to claim that surface's face and tell
-                        // residency about it. Cast it silently and the far surface has no face, no
-                        // light of its own and nothing to stream it in -- which is D604's whole
-                        // reason for reporting on the second march, arriving one segment later.
-                        // The two segments before it say nothing: the pane's own face was claimed
-                        // by the primary hit, and the glass is what they cross rather than land on.
-                        //
-                        // Both of these keep `start_t` at nought even though R5d has since given
-                        // node_march a way to say "carry on from here", and that is deliberate. A
-                        // bent segment does not continue the original ray -- it has its own origin
-                        // and its own direction -- so the eye-relative t it would need is not a
-                        // number this code has. What it loses is the detail clock, which restarts at
-                        // the pane and so resolves what is behind a window a little finer than the
-                        // pixel needs; a pane is centimetres from what it stands in front of, so the
-                        // error is small, and the picture that WAS looked at (D652, D656) is the one
-                        // with this behaviour in it. Not moved by a change about something else.
-                        const vec3 leaving = entry + into * inside.exit_t + out_dir * 1e-3;
-                        NodeHit beyond = node_march(leaving, out_dir, pixel_angle,
-                                                    node_bayer(pixel), report, report_used,
-                                                    report_face, true, false, kThroughPass,
-                                                    kNodeUnbounded, 0.0);
-                        // The distance the composite reads has to be the whole path, or a window
-                        // fogs as though what is behind it were at the pane.
-                        beyond.t += hit.t + inside.exit_t;
-                        beyond.through *= inside.through;
-                        far = beyond;
-                        bent = true;
-                        // Beer-Lambert over the TRUE path, which only a ray that knows where it
-                        // entered and where it left can take. `node_medium_through` above is a
-                        // product over voxels crossed -- exact along an axis and short on a
-                        // diagonal -- and this is the term the plan asked for beside it. Materials
-                        // that never wrote `absorb` come back at zero and this is exactly 1.0.
-                        refract_through = exp(-node_medium_absorb(hit.type_id) * path_m);
+                    // A ray that never found its way out of the medium keeps whatever the previous
+                    // turns built; on the first turn that is the straight-ray fallback below, which
+                    // is D604's picture and is right where guessing a direction would not be.
+                    if (!inside.left_medium) break;
+                    const float path_m = inside.exit_t * (1.0 / kVoxelsPerMetreF);
+                    const vec3 exit_normal = normalize(vec3(inside.exit_normal));
+                    vec3 out_dir = refract(into, exit_normal, ior);
+                    // Total internal reflection at the far face is a real answer and not an error:
+                    // past the critical angle a water surface is a mirror from underneath.
+                    // Reflecting keeps the ray in the world rather than dropping the pixel to the
+                    // straight-through fallback.
+                    if (dot(out_dir, out_dir) <= 0.0) out_dir = reflect(into, exit_normal);
+                    // Beer-Lambert over the TRUE path, at the type the ray is actually inside.
+                    // Reading it at `hit.type_id` was the bug: it named the FIRST pane on every
+                    // turn of what is now a loop. Materials that never wrote `absorb` come back at
+                    // zero and this is exactly 1.0.
+                    refract_through *= exp(-node_medium_absorb(surface.type_id) * path_m);
+                    crossed_through *= inside.through;
+                    travelled += surface.t + inside.exit_t;
+                    const vec3 leaving = entry + into * inside.exit_t + out_dir * 1e-3;
+                    // The last turn has nothing after it to bend at, so it is the one that may
+                    // slide: `kThroughPass` collects whatever tint is left on the way to the far
+                    // surface. Every earlier turn stops dead on the next interface.
+                    const bool last = (crossing + 1u == media);
+                    NodeHit beyond = node_march(leaving, out_dir, pixel_angle, node_bayer(pixel),
+                                                report, report_used, report_face, true, false,
+                                                last ? kThroughPass : kThroughStop, kNodeUnbounded,
+                                                0.0);
+                    bent = true;
+                    // Another medium, and budget left to cross it. The test is the marcher's own
+                    // (`node_medium_through` non-zero at level 0), so the loop turns on exactly
+                    // what `kThroughPass` would have slid through.
+                    const vec3 next_through =
+                        beyond.hit ? node_medium_through(beyond.type_id) : vec3(0.0);
+                    const bool next_is_medium =
+                        beyond.hit && beyond.level == 0 &&
+                        (next_through.r + next_through.g + next_through.b) > 0.0;
+                    if (!last && next_is_medium) {
+                        seg_origin = leaving;
+                        seg_dir = out_dir;
+                        surface = beyond;
+                        continue;
                     }
+                    // A COARSE stop is the one case `kThroughStop` cannot answer, and leaving it
+                    // alone would have been a regression rather than a limitation. Above level 0 a
+                    // hit carries a folded colour and no `type_id`, so there is no way to ask
+                    // whether it is a medium -- and the march that would have been cast without
+                    // this loop, `kThroughPass`, would have slid straight through it if it were.
+                    // Stopping on it instead would draw a part-glass node as an opaque wall.
+                    //
+                    // So the ray is cast once more the way the old code cast it. This costs a
+                    // second march only where an intermediate segment stopped on something coarse,
+                    // which is a distant or small node -- never the pane in front of a player --
+                    // and it makes the loop a strict improvement rather than a trade.
+                    if (!last && beyond.level > 0) {
+                        beyond = node_march(leaving, out_dir, pixel_angle, node_bayer(pixel),
+                                            report, report_used, report_face, true, false,
+                                            kThroughPass, kNodeUnbounded, 0.0);
+                    }
+                    // The distance the composite reads has to be the whole path, or a window fogs
+                    // as though what is behind it were at the pane.
+                    beyond.t += travelled;
+                    beyond.through *= crossed_through;
+                    far = beyond;
+                    break;
                 }
             }
-            // The straight ray, which is what a pane with no index of refraction on it gets, what
-            // `--no-refraction` gets, and what a ray that never found its way out of the medium
-            // falls back to. One march either way: the bent path replaces this one rather than
-            // being cast beside it, so a glass pixel pays for two segments or for one and never
-            // for both. The fallback matters as much as the feature -- a body of glass whose far
-            // side is a brick with nothing in it has no exit face to bend at, and drawing it as
-            // D604 did is right where guessing a direction would not be.
             if (!bent) {
                 far = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
                                  report_used, report_face, true, false, kThroughPass,

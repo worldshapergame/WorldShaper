@@ -25,7 +25,22 @@ let gt_post2  = cylinder  1.8 1.1 2.6 r=0.16 h=2.2 axis=y
 let gt_basin  = box -2.2 0.02 -4.4   2.2 0.62 -1.4 round=0.03
 let gt_hollow = box -2.0 0.18 -4.2   2.0 0.70 -1.6 round=0.02
 
-let gt_solid = union { gt_floor gt_backr gt_backb gt_pane_c gt_pane_g gt_post gt_post2 gt_basin }
+# GLASS BEHIND GLASS, which nothing in this repository had. The two panes above stand SIDE BY
+# SIDE -- clear at x -3.4..-0.2, green at 0.2..3.4, both at z 0..0.12 -- so no ray in this scene
+# ever crossed two of them, and the case a player reported was untested and unlooked at.
+#
+# Three panes, one behind the other, at z = 0.9, 1.8 and 2.7, each narrower than the last so the
+# picture shows one, two and three thicknesses side by side in a single frame. Seen from -z the
+# far wall behind them is red, so what each layer takes out of it is readable directly.
+#
+#   --cam "0,1.6,-4.2,0,-4"   square on to the stack
+#   --cam "-2.6,1.6,-3.4,38,-4"  across it, where refraction slides each layer a different way
+let gt_stk_a = box -5.0 0.3 0.90  -1.4 2.8 1.02
+let gt_stk_b = box -4.4 0.3 1.80  -1.4 2.8 1.92
+let gt_stk_c = box -3.8 0.3 2.70  -1.4 2.8 2.82
+
+let gt_solid = union { gt_floor gt_backr gt_backb gt_pane_c gt_pane_g gt_post gt_post2 gt_basin
+                       gt_stk_a gt_stk_b gt_stk_c }
 let gt_all   = difference { gt_solid gt_hollow }
 let gt_water = box -2.0 0.18 -4.2   2.0 0.54 -1.6
 let gt_all   = union { gt_all gt_water }
@@ -35,6 +50,11 @@ paint redwall    where=gt_backr below=0.02
 paint bluewall   where=gt_backb below=0.02
 paint clearglass where=gt_pane_c below=0.02
 paint greenglass where=gt_pane_g below=0.02
+# Clear on the outside and green in the middle, so a ray that crosses all three crosses two
+# different media and the order it meets them in is visible.
+paint clearglass where=gt_stk_a below=0.02
+paint greenglass where=gt_stk_b below=0.02
+paint clearglass where=gt_stk_c below=0.02
 paint brasspost  where=gt_post below=0.02
 paint brasspost  where=gt_post2 below=0.02
 paint deepwater  where=gt_water below=0.02

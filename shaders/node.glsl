@@ -711,6 +711,14 @@ const uint kProbeSeeThrough = 1u << 8;
 // where it would be with no pane there, which is what D604 built and is a window with no glass in
 // it. `--no-refraction` clears it.
 const uint kProbeRefract = 1u << 9;
+// EVERY medium on the way out, and not just the first one. Off, a ray bends at the pane it lands
+// on, takes that pane's Beer-Lambert colour over that pane's path, and then goes STRAIGHT through
+// everything behind it picking up each voxel's opacity tint and nothing else -- so a second sheet
+// of green glass added no green, and a stack seen at an angle displaced what was behind it exactly
+// as much as one sheet did. Off is what this renderer drew until now and is bit-identical to it by
+// construction, because the loop's last turn is the march the old code cast. `--no-refract-stack`
+// clears it.
+const uint kProbeRefractStack = 1u << 14;
 // R4e: a face whose material is translucent and whose sun is BEHIND it casts the sun ray it would
 // otherwise have skipped, through the matter behind it, and is lit by what gets through. Off, a
 // marble panel with the sun on the far side is as dark as granite -- which is what this renderer has
@@ -807,6 +815,7 @@ bool probe_lobe_ray() { return (light_probe.words[0] & kProbeLobeRay) != 0u; }
 bool probe_lobe_big() { return (light_probe.words[0] & kProbeLobeCoverage) != 0u; }
 bool probe_see_through() { return (light_probe.words[0] & kProbeSeeThrough) != 0u; }
 bool probe_refract() { return (light_probe.words[0] & kProbeRefract) != 0u; }
+bool probe_refract_stack() { return (light_probe.words[0] & kProbeRefractStack) != 0u; }
 bool probe_translucent() { return (light_probe.words[0] & kProbeTranslucent) != 0u; }
 bool probe_edge_aa() { return (light_probe.words[0] & kProbeEdgeAA) != 0u; }
 bool probe_level_blend() { return (light_probe.words[0] & kProbeLevelBlend) != 0u; }
@@ -2636,6 +2645,13 @@ struct NodeHit {
 const uint kThroughStop = 0u;   // transmissive matter stops the ray dead, as it always did
 const uint kThroughPass = 1u;   // the ray carries on, multiplying `through` by what each voxel let by
 const uint kThroughExit = 2u;   // ...and stops where it LEAVES the medium, for the caller to bend
+
+// How many media one primary ray will bend its way out of before it gives up and slides through the
+// rest. Four, because that is a window, its double glazing, and the water in the basin behind them,
+// and because each one costs two marches: the crossing and the segment after it. The turn that hits
+// the cap marches `kThroughPass`, so exceeding it degrades to exactly the picture this renderer
+// drew before the loop existed rather than to a hole.
+const uint kRefractMedia = 4u;
 // R4e, and it is about OPAQUE matter rather than transmissive: the ray crosses solid voxels of any
 // material, adding up how far it went through them, and gives up once it has crossed
 // `kCrossedMax`. Nothing is attenuated and nothing is bent -- what comes back is a distance.
