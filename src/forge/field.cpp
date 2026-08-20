@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace ws {
 namespace forge {
@@ -112,6 +113,27 @@ f64 squared_distance_to(const Field::Aabb& box, Vec3 p) {
     const f64 dy = std::max(std::max(box.low.y - p.y, p.y - box.high.y), 0.0);
     const f64 dz = std::max(std::max(box.low.z - p.z, p.z - box.high.z), 0.0);
     return dx * dx + dy * dy + dz * dz;
+}
+
+// The same question of the cull's own copy, which is the one the union and the difference actually
+// read. Same arithmetic, same absence of a short cut; what is different is where the six numbers
+// came from — a run of them sitting next to the parent instead of an `Aabb` at the child's node id.
+f64 squared_distance_to(const Field::CullBox& box, Vec3 p) {
+    const f64 dx = std::max(std::max(box.lo[0] - p.x, p.x - box.hi[0]), 0.0);
+    const f64 dy = std::max(std::max(box.lo[1] - p.y, p.y - box.hi[1]), 0.0);
+    const f64 dz = std::max(std::max(box.lo[2] - p.z, p.z - box.hi[2]), 0.0);
+    return dx * dx + dy * dy + dz * dz;
+}
+
+Field::CullBox cull_copy(const Field::Aabb& box) {
+    Field::CullBox out;
+    out.lo[0] = box.low.x;
+    out.lo[1] = box.low.y;
+    out.lo[2] = box.low.z;
+    out.hi[0] = box.high.x;
+    out.hi[1] = box.high.y;
+    out.hi[2] = box.high.z;
+    return out;
 }
 
 // --- deterministic value noise ----------------------------------------------------------
@@ -1283,8 +1305,23 @@ f64 Field::eval(u32 at, Vec3 p) const {
             f64 away[4] = {0.0, 0.0, 0.0, 0.0};
             const bool sorted = !bounds_.empty() && n.children > 1;
             if (sorted) {
-                for (u32 i = 0; i < n.children; ++i) {
-                    away[i] = squared_distance_to(bounds_[n.child[i]], p);
+                // The children's boxes as ONE run, next to this parent, rather than up to four
+                // `Aabb`s at four scattered node ids. The same six numbers per child, in the same
+                // precision — what changes is only where they sit. See `use_child_cull_boxes` in
+                // field.hpp, including what it measured at, which is less than the reasoning
+                // behind it would suggest. `cull_at_` is empty on the control arm and on a `Field`
+                // that has grown since `build_bounds`, and the branch below then reads `bounds_`
+                // exactly as it always did.
+                const u32 run = (at < cull_at_.size()) ? cull_at_[at] : kNoCull;
+                if (run != kNoCull) {
+                    const CullBox* boxes = cull_.data() + run;
+                    for (u32 i = 0; i < n.children; ++i) {
+                        away[i] = squared_distance_to(boxes[i], p);
+                    }
+                } else {
+                    for (u32 i = 0; i < n.children; ++i) {
+                        away[i] = squared_distance_to(bounds_[n.child[i]], p);
+                    }
                 }
                 // Four children at most, so an insertion sort is the whole of it.
                 for (u32 i = 1; i < n.children; ++i) {
@@ -1346,11 +1383,23 @@ f64 Field::eval(u32 at, Vec3 p) const {
         }
         case Op::Difference: {
             f64 d = eval(n.child[0], p);
+            // The cutters' boxes, out of this node's own run when there is one — the union's
+            // reason, and a difference reads them one at a time in the same scattered way.
+            const u32 run = (at < cull_at_.size()) ? cull_at_[at] : kNoCull;
+            const CullBox* boxes = (run == kNoCull) ? nullptr : cull_.data() + run;
             for (u32 i = 1; i < n.children; ++i) {
                 // Carving with something the point is nowhere near. Outside that child's box its
                 // distance is at least `away`, so the term it contributes is at most −away, and
                 // if the running answer already beats that the cut cannot reach here.
-                if (!bounds_.empty()) {
+                //
+                // The run holds the same numbers `bounds_` does, so this skips exactly the cutters
+                // it skipped before. Anything that made the box LARGER would only refuse to skip
+                // one it could have; anything that made it smaller would take a bite out of the
+                // shape that is not there, which is why nothing here is allowed to round inwards.
+                if (boxes != nullptr) {
+                    const f64 away = squared_distance_to(boxes[i], p);
+                    if (away > 0.0 && (d >= 0.0 || d * d <= away)) continue;
+                } else if (!bounds_.empty()) {
                     const f64 away = squared_distance_to(bounds_[n.child[i]], p);
                     if (away > 0.0 && (d >= 0.0 || d * d <= away)) continue;
                 }
@@ -1393,9 +1442,25 @@ f64 Field::eval(u32 at, Vec3 p) const {
         case Op::Rotate: {
             // Applied backwards, because moving the shape one way is asking about the point the
             // other. Euler xyz, in turns, because a quarter is a rounder thing to type than 90.
-            const f64 cx = std::cos(-a[0] * kTau), sx = std::sin(-a[0] * kTau);
-            const f64 cy = std::cos(-a[1] * kTau), sy = std::sin(-a[1] * kTau);
-            const f64 cz = std::cos(-a[2] * kTau), sz = std::sin(-a[2] * kTau);
+            //
+            // The six numbers come from the table when there is one -- they are constants of the
+            // node, and working them out here cost seventy-three million calls to `cos` and `sin`
+            // on the estate for three angles that were fixed when the clip was parsed. See
+            // `use_turn_cache`. The fall-back below is not only the control arm: a `Field` that
+            // has never had `build_bounds()` called on it has no table, and evaluating one is
+            // perfectly legitimate.
+            f64 cx, sx, cy, sy, cz, sz;
+            const u32 turn = (at < turn_at_.size()) ? turn_at_[at] : kNoTurn;
+            if (turn != kNoTurn) {
+                const Turn& t = turns_[turn];
+                cx = t.c[0]; sx = t.s[0];
+                cy = t.c[1]; sy = t.s[1];
+                cz = t.c[2]; sz = t.s[2];
+            } else {
+                cx = std::cos(-a[0] * kTau); sx = std::sin(-a[0] * kTau);
+                cy = std::cos(-a[1] * kTau); sy = std::sin(-a[1] * kTau);
+                cz = std::cos(-a[2] * kTau); sz = std::sin(-a[2] * kTau);
+            }
             Vec3 q = p;
             q = {q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx};
             q = {q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy};
@@ -2482,7 +2547,58 @@ void Field::build_bounds() {
 
     }
 
-    // Now the boxes exist, so the hierarchy over them can be built.
+    // Now the boxes exist, so the copy the CULL reads can be laid out the way the cull walks it.
+    //
+    // One run per parent, in node order, of exactly the children that parent has — so the boxes a
+    // union compares are contiguous instead of four `Aabb`s at four node ids that have nothing to
+    // do with one another. Only the two ops that cull get a run: a union, and a difference for its
+    // cutters. Everything else keeps `cull_at_[i] == kNoCull` and reads nothing, which is why this
+    // is 357 KB on the estate rather than the 764 KB a slot per node would be.
+    //
+    // The child boxes are the SAME boxes, in the same precision; they are copied rather than
+    // referred to, which is the whole of the change. `use_child_cull_boxes` in field.hpp has what
+    // that measured at and what the f32 version of it measured at, which is the more useful half.
+    cull_.clear();
+    cull_at_.clear();
+    if (child_cull_boxes_used()) {
+        usize entries = 0;
+        for (const Node& n : nodes_) {
+            if (n.op == Op::Union || n.op == Op::Difference) entries += n.children;
+        }
+        cull_at_.assign(nodes_.size(), kNoCull);
+        cull_.reserve(entries);
+        for (usize i = 0; i < nodes_.size(); ++i) {
+            const Node& n = nodes_[i];
+            if (n.op != Op::Union && n.op != Op::Difference) continue;
+            if (n.children == 0) continue;
+            cull_at_[i] = static_cast<u32>(cull_.size());
+            for (u32 c = 0; c < n.children; ++c) cull_.push_back(cull_copy(bounds_of(n.child[c])));
+        }
+    }
+
+    // And a `rotate`'s trigonometry, which is the same argument one level along: three numbers
+    // baked into a node at parse time, turned into six by `std::cos` and `std::sin` twelve million
+    // times over on the estate because nothing had ever said they could not move. See
+    // `use_turn_cache` in field.hpp. The values are the SAME doubles the loop was computing — this
+    // moves the call, it does not approximate it.
+    turns_.clear();
+    turn_at_.clear();
+    if (turn_cache_used()) {
+        turn_at_.assign(nodes_.size(), kNoTurn);
+        for (usize i = 0; i < nodes_.size(); ++i) {
+            const Node& n = nodes_[i];
+            if (n.op != Op::Rotate) continue;
+            Turn turn;
+            for (u32 k = 0; k < 3; ++k) {
+                turn.c[k] = std::cos(-n.a[k] * kTau);
+                turn.s[k] = std::sin(-n.a[k] * kTau);
+            }
+            turn_at_[i] = static_cast<u32>(turns_.size());
+            turns_.push_back(turn);
+        }
+    }
+
+    // And the hierarchy over the boxes.
     //
     // Only the OUTERMOST union of a chain gets one: flattening reaches everything below it, so an
     // accelerator on a nested union would be built, stored, and never consulted. A union is
@@ -2629,6 +2745,36 @@ bool g_rule_bounds = true;
 
 void use_rule_bounds(bool on) { g_rule_bounds = on; }
 bool rule_bounds_used() { return g_rule_bounds; }
+
+// See `use_child_cull_boxes` in field.hpp. Three states rather than two, because the default has
+// to be readable from the ENVIRONMENT: both arms of this have to be one binary (D407's rule, and
+// trap 32's), and the thing that turns it off sits under `build_bounds` with no command line
+// anywhere near it. `WS_FIELD_CULL_BOXES=0` is the control arm; anything else, or nothing at all,
+// is the shipped behaviour. Read once, on the first call, and never again.
+int g_child_cull_boxes = -1;
+
+bool child_cull_boxes_used() {
+    if (g_child_cull_boxes < 0) {
+        const char* set = std::getenv("WS_FIELD_CULL_BOXES");
+        g_child_cull_boxes = (set != nullptr && set[0] == '0') ? 0 : 1;
+    }
+    return g_child_cull_boxes != 0;
+}
+void use_child_cull_boxes(bool on) { g_child_cull_boxes = on ? 1 : 0; }
+
+// The same three states for the turn cache. `WS_FIELD_TURNS=0` is its control arm; the two flags
+// are separate so all four combinations come out of one binary, which is the only way to say which
+// of two changes in one build did the work.
+int g_turn_cache = -1;
+
+bool turn_cache_used() {
+    if (g_turn_cache < 0) {
+        const char* set = std::getenv("WS_FIELD_TURNS");
+        g_turn_cache = (set != nullptr && set[0] == '0') ? 0 : 1;
+    }
+    return g_turn_cache != 0;
+}
+void use_turn_cache(bool on) { g_turn_cache = on ? 1 : 0; }
 
 bool Field::value_range(u32 at, f64& low, f64& high) const {
     if (at >= nodes_.size()) return false;

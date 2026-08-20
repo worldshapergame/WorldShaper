@@ -91,6 +91,54 @@ Vec3 normalise(Vec3 v);
 void use_rule_bounds(bool on);
 bool rule_bounds_used();
 
+// Whether the union and difference culls read the children's boxes out of one run laid next to
+// their PARENT instead of out of `bounds_` at up to four scattered node ids. On;
+// `WS_FIELD_CULL_BOXES=0` in the environment is the control arm, and `use_child_cull_boxes(false)`
+// is the same switch for a caller that has one.
+//
+// A file-scope setting rather than an argument, for the reason `use_rule_bounds` is one: it is
+// read by `build_bounds` and by nothing else, and there is no call site between the command line
+// and `build_bounds` that does not already carry six other things.
+//
+// **What it is FOR.** D722 measured `Field::eval` on the estate at 632 node visits and 15.5 ns a
+// visit, and read that as memory: a union visit touched one `Node` and then up to four `Aabb`s of
+// 48 bytes each at whatever node ids its children happened to have — six to ten cache lines to
+// decide which children are worth asking. Copied into one run per parent, four children are one or
+// two lines however far apart their nodes are. `bounds_` is untouched and is still what everything
+// that wants a node's own box reads.
+//
+// **It is worth about 0.3%, and the honest reading of that is that the premise was wrong.** The
+// estate's boxes are 764 KB and its nodes 1.4 MB; both live in cache during a sample, so the four
+// scattered loads were never the bill. What the measurement DID settle is the next question along:
+// the same run stored in `f32` — half the bytes, and sound, because every corner is rounded
+// outwards so the box can only ever be too large — measured **2.5% SLOWER**, twice, in two
+// different layouts. The six `cvtss2sd` a box test needs to widen them cost more than the bytes
+// they saved, which says this walk is short of instruction throughput rather than of cache. That
+// is why the run is f64 and why `use_turn_cache` below, which removes work rather than moving it,
+// is five times the size of this.
+void use_child_cull_boxes(bool on);
+bool child_cull_boxes_used();
+
+// Whether a `rotate` node's six cosines and sines are worked out ONCE, at `build_bounds`, instead
+// of six times a visit for the whole life of the clip. On; `WS_FIELD_TURNS=0` is the control arm.
+//
+// **This is the one that was worth having, and it was found by counting rather than by reading.**
+// The visits on the estate, by op, over 387 million of them at one voxel a metre: union 25.2%,
+// box 14.2%, translate 8.1%, difference 6.8%, intersection 5.7%, displace 5.3%, and **rotate
+// 3.17%** — 12,277,513 visits, each of which called `std::cos` three times and `std::sin` three
+// times on three numbers that were baked into the node when the clip was parsed and have not
+// changed since. **Seventy-three million transcendental calls to answer three questions.**
+//
+// A `rotate`'s angles cannot move: `Field::rotate(child, turns)` bakes them into `a[0..2]`, and a
+// number a clip means to move is an `Op::Parameter` node instead, which is a different node with a
+// slot in `parameters_`. So the answer is not merely close, it is the SAME double — `std::cos` of
+// the same argument, computed at load rather than in the loop, and the three rotations are still
+// applied one axis at a time in the same order, which is what keeps the last bit identical. A
+// single combined matrix would be fewer multiplies and a different rounding, and is refused for
+// that reason alone.
+void use_turn_cache(bool on);
+bool turn_cache_used();
+
 // What a node does. The order is not meaningful; the grouping is, and it is the grouping the
 // clip file's vocabulary follows.
 enum class Op : u8 {
@@ -391,11 +439,28 @@ const char* op_name(Op op);
 // it too. **The cull still reads these boxes** -- see D644 for what fixing that measured at.
 bool op_reports_true_distance(Op op);
 
+// THE ORDER OF THESE FIELDS IS THE LAYOUT, and the layout is what one visit costs.
+//
+// `op`, `children` and `child[]` are what EVERY visit reads: the switch dispatches on the first,
+// the loops bound on the second, and the recursion goes through the third. `a` is read by the ops
+// that carry numbers and by no combining op at all — a union, an intersection, a difference, a min
+// and a max never touch it.
+//
+// Written with `a` first (its natural order, and the one this had for a year) the node is 96 bytes
+// and `op` at offset 0 sits a whole cache line away from `child[]` at offset 72, so a union visit
+// pulls in TWO lines to read twenty bytes and the sixty-four in between are numbers it will not
+// look at. Hoisted to the front they are twenty-four contiguous bytes, and the node is 88 rather
+// than 96 — three quarters of nodes then have their whole head inside one line, and `nodes_` on
+// the estate is 1.40 MB rather than 1.53.
+//
+// Nothing reads these positionally. Every construction in field.cpp is `Node n;` and then fields
+// by name, and `GpuFieldNode` is filled member by member in gpu/field_gpu.cpp — so the order is
+// free to be chosen for the machine rather than for the reader.
 struct Node {
     Op op = Op::Constant;
-    f64 a[8]{};
-    u32 child[4]{};
     u32 children = 0;
+    u32 child[4]{};
+    f64 a[8]{};
 };
 
 // A field: the nodes, their named parameters, and which node is the answer.
@@ -679,6 +744,27 @@ public:
         Vec3 high{1e30, 1e30, 1e30};
         bool infinite() const { return low.x <= -1e29 || high.x >= 1e29; }
     };
+
+    // The same box, for the CULL and for nothing else, stored next to its SIBLINGS rather than at
+    // its own node id — so a union's children are one contiguous run instead of four `Aabb`s at
+    // four unrelated indices.
+    //
+    // It holds the same six numbers `bounds_of` would give, and it may only ever be replaced by a
+    // box that is LARGER: the cull asks "could the point be nearer to something in here than to
+    // what I already have", so too large costs an evaluation nobody needed and too small is a piece
+    // of the clip quietly missing. Anything that wants to know where a shape actually is reads
+    // `bounds_of`, not this. Public only because a free function in field.cpp takes one.
+    struct CullBox {
+        f64 lo[3]{-1e30, -1e30, -1e30};
+        f64 hi[3]{1e30, 1e30, 1e30};
+    };
+
+    // A `rotate`'s six cosines and sines, worked out once. See `use_turn_cache`.
+    struct Turn {
+        f64 c[3]{1.0, 1.0, 1.0};
+        f64 s[3]{};
+    };
+
     Aabb bounds_of(u32 node) const;
     // A child's box moved by ONE transform node above it. The arithmetic `bounds_of` does for
     // translate, rotate, scale and mirror, in one place because `union_children` needs it too.
@@ -936,6 +1022,21 @@ private:
     std::vector<f64> parameters_;
     std::vector<std::string> names_;
     std::vector<Aabb> bounds_;   // empty until build_bounds(); never required for correctness
+
+    // The cull's own copy of the boxes, one run of `children` per union and per difference.
+    // `cull_at_[i]` is where node i's run starts, or `kNoCull` for a node whose op never culls.
+    // Both are empty when `use_child_cull_boxes(false)`, and then the union and the difference read
+    // `bounds_` exactly as they did — which is the control arm.
+    std::vector<CullBox> cull_;
+    std::vector<u32> cull_at_;
+    static constexpr u32 kNoCull = 0xFFFFFFFFu;
+
+    // A `rotate`'s trigonometry, one entry per rotate node, and `turn_at_[i]` is which. Compact
+    // rather than one slot per node: on the estate this is a few hundred entries beside a table of
+    // sixteen thousand, and the extra index load is answered by six transcendental calls it saves.
+    std::vector<Turn> turns_;
+    std::vector<u32> turn_at_;
+    static constexpr u32 kNoTurn = 0xFFFFFFFFu;
 
     // One per node, and almost all of them empty: only a union wide enough to be worth it gets
     // an accelerator, and only the outermost union of a chain, because flattening reaches
