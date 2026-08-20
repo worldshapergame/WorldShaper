@@ -8,6 +8,7 @@
 #include <map>
 #include <unordered_set>
 
+#include "core/hash.hpp"
 #include "core/log.hpp"
 #include "core/time.hpp"
 #include "core/version.hpp"
@@ -2027,25 +2028,37 @@ u64 cell_key(i32 x, i32 y) {
 // so a box pushed off its place lands beside it rather than at the end of the document — and along
 // the row before down it, because a graph is read left to right and a gap in a row is cheaper to
 // follow than a gap in a column.
-void take_free_cell(std::unordered_set<u64>& taken, f32& x, f32& y) {
-    i32 cx = static_cast<i32>(std::lround(x));
-    i32 cy = static_cast<i32>(std::lround(y));
+void take_free_cell(std::unordered_set<u64>& taken, f32& x, f32& y, u32 tall = 1, u32 wide = 1) {
+    const i32 cx = static_cast<i32>(std::lround(x));
+    const i32 cy = static_cast<i32>(std::lround(y));
+    const i32 deep = static_cast<i32>(std::max(1u, tall));
+    const i32 across = static_cast<i32>(std::max(1u, wide));
+    const auto all_free = [&](i32 at_x, i32 at_y) {
+        for (i32 c = 0; c < across; ++c) {
+            for (i32 k = 0; k < deep; ++k) {
+                if (taken.count(cell_key(at_x + c, at_y + k)) != 0) return false;
+            }
+        }
+        return true;
+    };
+    const auto claim = [&](i32 at_x, i32 at_y) {
+        for (i32 c = 0; c < across; ++c) {
+            for (i32 k = 0; k < deep; ++k) taken.insert(cell_key(at_x + c, at_y + k));
+        }
+        x = static_cast<f32>(at_x);
+        y = static_cast<f32>(at_y);
+    };
     for (i32 ring = 0; ring < 96; ++ring) {
         for (i32 dy = -ring; dy <= ring; ++dy) {
             for (i32 dx = -ring; dx <= ring; ++dx) {
                 if (std::max(std::abs(dx), std::abs(dy)) != ring) continue;
-                const u64 key = cell_key(cx + dx, cy + dy);
-                if (taken.count(key) != 0) continue;
-                taken.insert(key);
-                x = static_cast<f32>(cx + dx);
-                y = static_cast<f32>(cy + dy);
+                if (!all_free(cx + dx, cy + dy)) continue;
+                claim(cx + dx, cy + dy);
                 return;
             }
         }
     }
-    taken.insert(cell_key(cx, cy));
-    x = static_cast<f32>(cx);
-    y = static_cast<f32>(cy);
+    claim(cx, cy);
 }
 
 }  // namespace
@@ -2063,6 +2076,41 @@ void take_free_cell(std::unordered_set<u64>& taken, f32& x, f32& y) {
 // This sorts each column by where its neighbours sit and repeats, which is the ordinary barycentre
 // heuristic — six passes, alternating direction, because that is where it stops improving on the
 // documents in this repository.
+bool Shell::node_is_open(u32 index) const {
+    if (index >= graph_.nodes.size()) return false;
+    const std::string key = ClipGraph::key_of(graph_.nodes[index]);
+    return std::find(opened_.begin(), opened_.end(), key) != opened_.end();
+}
+
+void Shell::open_node(u32 index, bool open) {
+    if (index >= graph_.nodes.size()) return;
+    const std::string key = ClipGraph::key_of(graph_.nodes[index]);
+    const auto at = std::find(opened_.begin(), opened_.end(), key);
+    if (open && at == opened_.end()) {
+        opened_.push_back(key);
+    } else if (!open && at != opened_.end()) {
+        opened_.erase(at);
+    }
+    lay_out_graph();
+}
+
+// How many cells a box covers. Two rows to a cell when it is open, which at full size is about a
+// row's worth of pixels each — the same height they have in the panel on the left, because they
+// are the same rows.
+u32 Shell::cells_tall(u32 index) const {
+    if (index >= graph_.nodes.size() || !node_is_open(index)) return 1;
+    usize rows = 0;
+    for (const ClipProperty& offer : clip_properties_of(graph_.nodes[index].head)) {
+        rows += offer.parts;
+    }
+    if (rows == 0) return 1;
+    return 1 + static_cast<u32>((rows + 1) / 2);
+}
+
+u32 Shell::cells_wide(u32 index) const {
+    return (index < graph_.nodes.size() && node_is_open(index)) ? 2u : 1u;
+}
+
 void Shell::go_inside(u32 index) {
     if (index >= graph_.nodes.size()) return;
     inside_.push_back(ClipGraph::key_of(graph_.nodes[index]));
@@ -2246,16 +2294,23 @@ void Shell::lay_out_graph() {
     // keeps its cell and the layout's own guess is what gives way. Two authored boxes on one cell
     // — a hand-written `#@`, or a file merged from two — is settled by which line comes first,
     // which is at least an answer a reader can predict.
+    node_tall_.assign(count, 1);
+    node_wide_.assign(count, 1);
+    for (usize i = 0; i < count; ++i) {
+        if (!node_shown_[i]) continue;
+        node_tall_[i] = cells_tall(static_cast<u32>(i));
+        node_wide_[i] = cells_wide(static_cast<u32>(i));
+    }
     std::unordered_set<u64> taken;
     for (usize i = 0; i < count; ++i) {
         if (!node_shown_[i] || !graph_.nodes[i].placed) continue;
         graph_x_[i] = graph_.nodes[i].at_x;
         graph_y_[i] = graph_.nodes[i].at_y;
-        take_free_cell(taken, graph_x_[i], graph_y_[i]);
+        take_free_cell(taken, graph_x_[i], graph_y_[i], node_tall_[i], node_wide_[i]);
     }
     for (usize i = 0; i < count; ++i) {
         if (!node_shown_[i] || graph_.nodes[i].placed) continue;
-        take_free_cell(taken, graph_x_[i], graph_y_[i]);
+        take_free_cell(taken, graph_x_[i], graph_y_[i], node_tall_[i], node_wide_[i]);
     }
     // The document's own box, one column past everything and level with the middle of it. Only
     // outside a node: inside one, what is on the canvas is that box and its parts, and the file is
@@ -2279,8 +2334,8 @@ void Shell::lay_out_graph() {
 
     for (usize i = 0; i < count; ++i) {
         if (!node_shown_[i]) continue;
-        graph_wide_ = std::max(graph_wide_, graph_x_[i] + 1.0f);
-        graph_tall_ = std::max(graph_tall_, graph_y_[i] + 1.0f);
+        graph_wide_ = std::max(graph_wide_, graph_x_[i] + static_cast<f32>(node_wide_[i]));
+        graph_tall_ = std::max(graph_tall_, graph_y_[i] + static_cast<f32>(node_tall_[i]));
     }
     if (doc_shown_) {
         graph_wide_ = std::max(graph_wide_, doc_x_ + 1.0f);
@@ -2310,15 +2365,36 @@ std::string Shell::new_part(std::string_view kind, std::string_view name) {
     return make_part(which, std::string(name));
 }
 
+bool Shell::open_node_named(std::string_view name) {
+    if (editing_.empty()) return false;
+    refresh_graph();
+    for (usize i = 0; i < graph_.nodes.size(); ++i) {
+        if (graph_.nodes[i].name != name) continue;
+        if (clip_properties_of(graph_.nodes[i].head).empty()) return false;
+        open_node(static_cast<u32>(i), true);
+        return true;
+    }
+    return false;
+}
+
 u32 Shell::boxes_overlapping() const {
     std::unordered_set<u64> taken;
     u32 twice = 0;
     for (usize i = 0; i < graph_.nodes.size(); ++i) {
         if (i >= node_shown_.size() || !node_shown_[i]) continue;
-        if (!taken.insert(cell_key(static_cast<i32>(std::lround(graph_x_[i])),
-                                   static_cast<i32>(std::lround(graph_y_[i]))))
-                 .second) {
-            ++twice;
+        const i32 at_x = static_cast<i32>(std::lround(graph_x_[i]));
+        const i32 at_y = static_cast<i32>(std::lround(graph_y_[i]));
+        const u32 deep = (i < node_tall_.size()) ? std::max(1u, node_tall_[i]) : 1u;
+        const u32 across = (i < node_wide_.size()) ? std::max(1u, node_wide_[i]) : 1u;
+        // Every cell an open box covers, not only the one its name is on: a tall box standing on
+        // another one is the same fault and looks worse.
+        for (u32 c = 0; c < across; ++c) {
+            for (u32 k = 0; k < deep; ++k) {
+                if (!taken.insert(cell_key(at_x + static_cast<i32>(c), at_y + static_cast<i32>(k)))
+                         .second) {
+                    ++twice;
+                }
+            }
         }
     }
     if (doc_shown_ && !taken.insert(cell_key(static_cast<i32>(std::lround(doc_x_)),
@@ -2858,7 +2934,12 @@ void Shell::draw_visual_view(const Rect& page) {
         const std::pair<f32, f32> at = place_of(i);
         const f32 x = canvas.x0 + graph_pan_x_ + at.first * cell_w;
         const f32 y = canvas.y0 + graph_pan_y_ + at.second * cell_h;
-        return Rect{x, y, x + node_w, y + node_h};
+        // An open box covers several cells and stops at the same place in the last of them, so the
+        // lane along the bottom of that row is clear exactly as it is under a box of one cell.
+        const u32 deep = (i < node_tall_.size()) ? std::max(1u, node_tall_[i]) : 1u;
+        const u32 across = (i < node_wide_.size()) ? std::max(1u, node_wide_[i]) : 1u;
+        return Rect{x, y, x + static_cast<f32>(across - 1) * cell_w + node_w,
+                    y + static_cast<f32>(deep - 1) * cell_h + node_h};
     };
     // Where a wire leaves a node, and where its n-th wire arrives.
     const auto out_port = [&](const Rect& box) {
@@ -2906,11 +2987,24 @@ void Shell::draw_visual_view(const Rect& page) {
     {
         // Which cells have a box on them, so a straight run can be checked against them.
         std::unordered_set<u64> filled;
+        // And the lanes a box runs THROUGH. A box of one cell stops before the lane at the bottom
+        // of its row, so that lane is clear; a box that carries on into the next row covers it.
+        std::unordered_set<u64> crossed;
         for (usize i = 0; i < graph_.nodes.size(); ++i) {
             if (!node_shown_[i]) continue;
             const std::pair<f32, f32> at = place_of(i);
-            filled.insert(cell_key(static_cast<i32>(std::lround(at.first)),
-                                   static_cast<i32>(std::lround(at.second))));
+            const i32 cx = static_cast<i32>(std::lround(at.first));
+            const i32 cy = static_cast<i32>(std::lround(at.second));
+            const u32 deep = (i < node_tall_.size()) ? std::max(1u, node_tall_[i]) : 1u;
+            const u32 across = (i < node_wide_.size()) ? std::max(1u, node_wide_[i]) : 1u;
+            for (u32 c = 0; c < across; ++c) {
+                for (u32 k = 0; k < deep; ++k) {
+                    filled.insert(cell_key(cx + static_cast<i32>(c), cy + static_cast<i32>(k)));
+                    if (k + 1 < deep) {
+                        crossed.insert(cell_key(cx + static_cast<i32>(c), cy + static_cast<i32>(k)));
+                    }
+                }
+            }
         }
 
         struct Run {
@@ -2933,6 +3027,25 @@ void Shell::draw_visual_view(const Rect& page) {
             for (i32 c = fx + 1; run.straight && c < tx; ++c) {
                 if (filled.count(cell_key(c, fy)) != 0) run.straight = false;
             }
+        };
+        // And the lane it runs along, if it needs one: the nearest to the middle of its two ends
+        // that no open box runs through. Outwards a row at a time, because a lane one row further
+        // is a wire that bends a little more and still never crosses anything.
+        const auto clear_lane = [&](i32 want, i32 from_x, i32 to_x) {
+            const i32 low = std::min(from_x, to_x);
+            const i32 high = std::max(from_x, to_x);
+            for (i32 step = 0; step < 24; ++step) {
+                for (i32 side = 0; side < 2; ++side) {
+                    const i32 lane = want + (side == 0 ? step : -step);
+                    bool clear = true;
+                    for (i32 c = low; c <= high && clear; ++c) {
+                        if (crossed.count(cell_key(c, lane)) != 0) clear = false;
+                    }
+                    if (clear) return lane;
+                    if (step == 0) break;
+                }
+            }
+            return want;
         };
         std::vector<Run> runs;
         for (usize i = 0; i < graph_.nodes.size(); ++i) {
@@ -2964,11 +3077,13 @@ void Shell::draw_visual_view(const Rect& page) {
                 const i32 fy = static_cast<i32>(std::lround(from_at.second));
                 const i32 tx = static_cast<i32>(std::lround(into_at.first));
                 const i32 ty = static_cast<i32>(std::lround(into_at.second));
-                route(run, fx, fy, tx);
+                route(run, fx + static_cast<i32>(node_wide_[input]) - 1, fy, tx);
                 // The lane nearest the middle of the two ends, so a wire that has to detour does
                 // it by as little as the grid allows.
-                run.lane = static_cast<i32>(std::lround((static_cast<f32>(fy) +
-                                                         static_cast<f32>(ty)) * 0.5f));
+                run.lane = clear_lane(
+                    static_cast<i32>(std::lround((static_cast<f32>(fy) + static_cast<f32>(ty)) *
+                                                 0.5f)),
+                    fx, tx);
                 runs.push_back(run);
             }
         }
@@ -2996,9 +3111,9 @@ void Shell::draw_visual_view(const Rect& page) {
                 const i32 fx = static_cast<i32>(std::lround(from_at.first));
                 const i32 fy = static_cast<i32>(std::lround(from_at.second));
                 const i32 tx = static_cast<i32>(std::lround(doc_x_));
-                route(run, fx, fy, tx);
-                run.lane = static_cast<i32>(
-                    std::lround((static_cast<f32>(fy) + doc_y_) * 0.5f));
+                route(run, fx + static_cast<i32>(node_wide_[node]) - 1, fy, tx);
+                run.lane = clear_lane(
+                    static_cast<i32>(std::lround((static_cast<f32>(fy) + doc_y_) * 0.5f)), fx, tx);
                 runs.push_back(run);
             }
         }
@@ -3190,12 +3305,32 @@ void Shell::draw_visual_view(const Rect& page) {
         // And a mark on the right for a box that has numbers to change, at the detail size only: a
         // way in is rare and worth saying at every size, a number is on nearly every box and a mark
         // on nearly every box is a texture rather than a fact.
+        //
+        // Except on a box that OFFERS a list of named properties — a material, a variation — where
+        // the mark is a control: it opens the box where it stands and the sliders are inside it.
+        // Asked for directly: *these material nodes should show their settings inside their actual
+        // node instead of in another settings window so you can directly tweak them from there.*
+        const bool offers_properties = !clip_properties_of(node.head).empty();
         const bool has_numbers = !node.numbers.empty();
         f32 mark_right = box.x1 - metrics.px(3.0f);
-        if (detail && has_numbers) {
-            ui_.draw().icon(Rect{mark_right - cell * 0.85f, box.y0 + metrics.px(2.0f), mark_right,
-                                 box.y0 + metrics.px(2.0f) + cell * 0.85f},
-                            Icon::Settings, chosen ? 0.85f : 0.45f);
+        if (offers_properties || (detail && has_numbers)) {
+            const Rect at{mark_right - cell * 0.85f, box.y0 + metrics.px(2.0f), mark_right,
+                          box.y0 + metrics.px(2.0f) + cell * 0.85f};
+            const bool over_mark =
+                offers_properties && at.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
+            ui_.draw().icon(at, Icon::Settings,
+                            over_mark ? 1.0f : (chosen || node_is_open(static_cast<u32>(i))
+                                                    ? 0.85f
+                                                    : 0.45f));
+            if (over_mark && ui_.pressed_in(at)) {
+                hit_a_node = true;
+                const bool was = node_is_open(static_cast<u32>(i));
+                ui_.draw().pop_clip();
+                ui_.draw().pop_clip();
+                open_node(static_cast<u32>(i), !was);
+                ui_.sound().say(was ? Cue::Close : Cue::Open);
+                return;
+            }
             mark_right -= cell * 0.85f + metrics.px(2.0f);
         }
 
@@ -3230,6 +3365,32 @@ void Shell::draw_visual_view(const Rect& page) {
             }
         }
         ui_.draw().pop_clip();
+
+        // --- what it is made of, inside itself ------------------------------------------------
+        //
+        // A line under the name and then one slider a row, in the box rather than in a panel
+        // somewhere else. It is the same code the panel on the left runs (`draw_property_rows`),
+        // given a different rectangle — so a property changed here and a property changed there
+        // write the same bytes into the same line.
+        if (node_is_open(static_cast<u32>(i)) && box.height() > node_h + metrics.px(2.0f)) {
+            usize rows = 0;
+            for (const ClipProperty& offer : clip_properties_of(node.head)) rows += offer.parts;
+            const Rect body{box.x0 + metrics.px(3.0f), box.y0 + node_h,
+                            box.x1 - metrics.px(3.0f), box.y1 - metrics.px(2.0f)};
+            ui_.draw().ink(Rect{box.x0, box.y0 + node_h - metrics.px(1.0f), box.x1,
+                                box.y0 + node_h},
+                           0.25f);
+            if (rows > 0 && body.height() > metrics.px(6.0f)) {
+                const f32 each = body.height() / static_cast<f32>(rows);
+                ui_.draw().push_clip(body);
+                draw_property_rows(node, body, body, each,
+                                   hash_combine(id_of("node.inside"), i));
+                ui_.draw().pop_clip();
+            }
+            // The body holds the pointer: a press on a slider is not a press on the box, or every
+            // drag of a value would pick the whole node up and carry it away.
+            if (body.holds(ui_.pointer_x(), ui_.pointer_y())) hit_a_node = true;
+        }
 
         // --- the tabs a wire is made from -----------------------------------------------------
         if (ports) {
@@ -3329,7 +3490,8 @@ void Shell::draw_visual_view(const Rect& page) {
                     caret_moved_ = true;
                     view_ = 0;
                     ui_.sound().say(Cue::Open);
-                } else if (node.statement) {
+                } else if (node.statement &&
+                           ui_.pointer_y() <= box.y0 + node_h) {
                     // A statement can be picked up and put somewhere. A sub-expression cannot: it
                     // is drawn where whatever uses it puts it, and a position written on its line
                     // would be a second answer to a question its parent has already answered.
@@ -3592,7 +3754,7 @@ std::string Shell::make_part(u32 kind, const std::string& name) {
                  "\n# What this is made of. Every one of these can be left out and takes its\n"
                  "# usual value; what is written here is what makes it look like something.\n"
                  "material " + stem +
-                 " rgb=170,166,158 rough=200 metal=0 emit=0 ior=0 opacity=255\n");
+                 " rgb=170,166,158 rough=200 metal=0 emit=0 ior=1 opacity=255\n");
     {
         std::ofstream out(at, std::ios::binary | std::ios::trunc);
         if (!out) return "could not make " + file + " beside this document";
@@ -3877,6 +4039,96 @@ std::string Shell::shown_name(const std::filesystem::path& path) const {
 // `23-shell-and-libraries.md` §5c: *every node parameter is a slider by §3, with the same
 // double-click-to-type and the same lack of a cap. A node's parameters are a parameters window:
 // they open on the left while its node is selected, which is why the two families exist.*
+// One property of one node as a slider, wherever it is drawn.
+//
+// The panel on the left and a box opened on the canvas are the same rows in two places, so they
+// are the same code in one place. `area` is where the rows start and how wide they are; anything
+// falling outside `clip_to` is skipped rather than drawn, which is what makes a scrolled panel and
+// a box scrolled off the edge of the graph cost the same as each other: nothing.
+void Shell::draw_property_rows(const ClipNode& node, const Rect& area, const Rect& clip_to,
+                              f32 row_height, u64 salt) {
+    const Metrics& metrics = ui_.metrics();
+    const std::vector<ClipProperty>& offers = clip_properties_of(node.head);
+    const Rect inner = area;
+    const Rect& list = clip_to;
+    f32 y = area.y0;
+    usize row_at = 0;
+    for (const ClipProperty& offer : offers) {
+        for (u32 part = 0; part < offer.parts; ++part) {
+            const Rect row{inner.x0, y, inner.x1, y + std::min(row_height, metrics.row())};
+            y += row_height;
+            const usize mine = row_at++;
+            if (row.y1 < list.y0 || row.y0 > list.y1) continue;
+
+            // What the document says about this one, if it says anything.
+            const ClipNumber* written = nullptr;
+            for (const ClipNumber& number : node.numbers) {
+                if (number.key == offer.key && number.index == part) written = &number;
+            }
+
+            std::string label = offer.key;
+            if (offer.parts == 3) {
+                static const char* kChannel[3]{" red", " green", " blue"};
+                label += kChannel[part];
+            } else if (offer.parts > 1) {
+                label += " " + std::to_string(part + 1);
+            }
+            // Both of these outlive the call because they are named locals: a `string_view`
+            // onto a temporary is the bug this panel has already had once.
+            const std::string tooltip =
+                written != nullptr
+                    ? (offer.about + ".  Written as " + written->text + " on line " +
+                       std::to_string(written->line))
+                    : (offer.about + ".  Not written: it takes " +
+                       spell_clip_number(offer.fallback,
+                                         offer.decimals > 0 ? "0.00" : "0") +
+                       " until it is");
+            Number about;
+            about.label = label;
+            about.tooltip = tooltip;
+            about.low = offer.low;
+            about.high = offer.high;
+            about.step = std::pow(10.0, -static_cast<f64>(offer.decimals));
+            about.decimals = static_cast<i32>(offer.decimals);
+
+            f64 value = (written != nullptr) ? written->value : offer.fallback;
+            const f64 was = value;
+            if (!ui_.number(hash_combine(salt, mine), row, about, value) || value == was) {
+                continue;
+            }
+            if (written != nullptr) {
+                // The bytes of one number, exactly as every other slider in this panel does.
+                if (write_clip_number(lines_, *written, spell_clip_number(value, written->text))) {
+                    dirty_ = true;
+                    graph_stale_ = true;
+                    reparse_soon();
+                }
+                continue;
+            }
+            // Not written, so the key goes in — with every part of it, because `rgb=124` is
+            // not a colour and a key half written is a key the reader cannot use.
+            const std::string spelling = offer.decimals > 0 ? "0.00" : "0";
+            std::string text;
+            for (u32 other = 0; other < offer.parts; ++other) {
+                const ClipNumber* had = nullptr;
+                for (const ClipNumber& number : node.numbers) {
+                    if (number.key == offer.key && number.index == other) had = &number;
+                }
+                const f64 each = (other == part) ? value
+                                                 : (had != nullptr ? had->value
+                                                                   : offer.fallback);
+                if (other > 0) text += ",";
+                text += spell_clip_number(each, had != nullptr ? had->text : spelling);
+            }
+            if (write_clip_key(lines_, node, offer.key, text)) {
+                dirty_ = true;
+                graph_stale_ = true;
+                reparse_soon();
+            }
+        }
+    }
+}
+
 void Shell::draw_node_parameters(const Rect& rect) {
     const Metrics& metrics = ui_.metrics();
     if (chosen_index_ >= graph_.nodes.size()) return;
@@ -3940,9 +4192,20 @@ void Shell::draw_node_parameters(const Rect& rect) {
         if (input < graph_.nodes.size()) made_of.push_back(input);
     }
 
+    // --- everything this KIND of statement can be given ---------------------------------------
+    //
+    // A shape has the numbers it has and no others, so for a shape this is empty and the panel
+    // lists what is written, as it always did. A material is the other case: the document writes
+    // three of a dozen and the rest take their usual value silently, so a panel that lists what is
+    // written is a panel that says a material has three properties. Reported directly.
+    const std::vector<ClipProperty>& offers = clip_properties_of(node.head);
+    usize offered_rows = 0;
+    for (const ClipProperty& offer : offers) offered_rows += offer.parts;
+
     const Rect list{column.box.x0, column.y, column.box.x1, column.box.y1};
     const f32 row_height = metrics.row() + metrics.px(4.0f);
-    const f32 rows = static_cast<f32>(node.numbers.size() + node.words.size() + made_of.size() + 2);
+    const f32 rows = static_cast<f32>((offers.empty() ? node.numbers.size() : offered_rows) +
+                                      node.words.size() + made_of.size() + 2);
     const Rect inner = ui_.begin_scroll(id_of("node.scroll"), list, rows * row_height);
     f32 y = inner.y0;
 
@@ -3952,7 +4215,12 @@ void Shell::draw_node_parameters(const Rect& rect) {
         if (number.key.empty()) ++positional_count;
     }
 
-    for (usize i = 0; i < node.numbers.size(); ++i) {
+    if (!offers.empty()) {
+        draw_property_rows(node, Rect{inner.x0, y, inner.x1, inner.y1}, list, row_height,
+                           id_of("node.panel"));
+        y += static_cast<f32>(offered_rows) * row_height;
+    }
+    for (usize i = 0; offers.empty() && i < node.numbers.size(); ++i) {
         const ClipNumber& number = node.numbers[i];
         const Rect row{inner.x0, y, inner.x1, y + metrics.row()};
         y += row_height;

@@ -394,6 +394,26 @@ detail:
   graph, the material graph and the clip graph are the same editor with different nodes in the
   palette — the player learns it once.
 
+#### A material is a list of properties, and it opens where it stands (D786, D787, D788)
+
+A node's panel listed the numbers that are **written**. For a shape that is complete — a `box` has
+six and there are no others. For a material it is a lie by omission: the document writes three of a
+dozen and the rest take their usual value silently.
+
+So a head can declare what it **offers**, and `material` offers eleven: `rgb`, `rough`, `metal`,
+`emit`, `opacity`, `ior`, `translucent`, `absorb`, `lacquer`, `sheen`, `brush`. Every one was
+already read by the clip parser and none of them were on a screen. A property the document writes is
+the number the document wrote, edited byte for byte; one it does not is its usual value, and moving
+its slider writes the key in.
+
+**And a box that offers properties opens where it stands.** The mark on its right is a control: the
+sliders appear inside the box rather than in a panel somewhere else. An open box is several cells
+tall and two across, and the layout reserves the whole rectangle — so the no-overlap promise holds
+for a rectangle as it did for a cell, and a lane an open box runs through is not a lane. It is the
+same code the left-hand panel runs, given a different rectangle.
+
+Open is view state: it does not go in the file.
+
 #### A document is made of documents (D783, D784)
 
 The graph's right-click menu opens on **a clip** and **a material**, above the words of the

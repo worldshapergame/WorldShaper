@@ -15556,3 +15556,35 @@ Unmoved. **841 test cases, 21,248,604 assertions.**
 `--editor-part FILE` puts a document inside the open one exactly as the menu does, and
 `--editor-new-part clip:porch` makes one and puts it in. A world is a document made of documents and
 there was no way to build one without a hand on the mouse (D460).
+
+## D786–D788 — a material is a list of properties, and it opens where it stands
+
+*The last of the fourteen, and the one with the longest reach: **"materials shouldn't just be
+material properties which btw it lacks a ton of them it should be more like IOR, metallic emissive
+etc materials should be themselves a bunch of nodes that show on another node visual or script
+editor... but these material nodes should show their settings inside their actual node instead of in
+another settings window so you can directly tweak them from there."***
+
+*Two of those three are done here. The third — a material driven by position, so the player can pick
+one up and paint with it — is the reframe the message itself says *we can adapt later*, and it is in
+`22-rewrite-handover.md` §5 as the next thing rather than half-built here.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D786 | **A statement can declare what it OFFERS, and a material declares eleven things** | user | The panel listed the numbers that are WRITTEN. For a shape that is right and complete — a `box` has six and there are no others. For a material it is a lie by omission: the document writes three of a dozen and the rest take their usual value silently, so a panel that lists what is written says a material has three properties. `rgb`, `rough`, `metal`, `emit`, `opacity`, `ior`, `translucent`, `absorb`, `lacquer`, `sheen` and `brush` were **every one of them already read by `forge/clip_script.cpp`** and not one of them was on a screen anywhere. Now the head declares its table and the panel lists all of it: a property the document writes is the number the document wrote, and one it does not is its usual value with a slider that writes the key in the first time it is moved. **The ranges are the record's own** — a `VisualRecord` keeps most of these in a byte, so 0 to 255 is the whole of what can be said and a slider running further would be one lying about what the file can hold |
+| D787 | **A box that offers properties opens where it stands** | user | *Instead of in another settings window so you can directly tweak them from there.* The mark on the right of a material box is a control now: it opens the box in place, and the sliders are inside it. It is right for exactly the nodes it was asked for and no others — a shape's numbers are six positions that mean nothing without their labels, and a material's are a list of named properties, which is a thing you read down rather than a thing you look up. An open box is **several cells tall and two across**, and the layout reserves every cell of that rectangle, so D780's promise holds for a rectangle rather than for one cell; the wires learned the matching rule, that a lane an open box runs through is not a lane. Open is view state and does not go in the file (D769). And it is the **same code** the panel on the left runs, given a different rectangle, so a property changed here and a property changed there write the same bytes into the same line |
+| D788 | **One key is written, and no other byte of the line moves** | correction | `write_clip_key` is D746's promise for a key that is not there yet. It finds where the statement ends and its comment begins — because a key written after a `#` is a key written into a comment, and **the `#@` marker that carries the layout is one of those**, so the naive version would have put `metal=180` inside the position and lost the box. A key already present is replaced in place; one that is not goes in at the end of the statement. A key of several parts is written **whole**, because `rgb=124` is not a colour and a key half written is a key the reader cannot use |
+
+### What it costs, measured
+
+| what is on screen | mean ms | worst |
+|---|---|---|
+| the editor, **visual**, over `clips/facility/ballroom.clip` | 0.219 | 0.224 |
+| a material box **open**, all fifteen rows drawn inside it | 0.167 | 0.173 |
+
+Against the `shell` pass's 0.6 ms budget, and identical to the arm before this change on the first
+row. Fifteen sliders is fifteen sliders wherever they are drawn.
+
+**843 test cases, 21,248,638 assertions.** `--editor-open NAME` opens a box from a scripted run,
+because an open box is a different picture, a different layout and several more controls, and a
+state nothing automated can reach is a state nothing automated ever checks (D460).

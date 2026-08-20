@@ -1499,6 +1499,80 @@ std::string clip_node_template(const std::string& head) {
     return found->second;
 }
 
+const std::vector<ClipProperty>& clip_properties_of(const std::string& head) {
+    // The material's whole surface, in the order a person thinks about one: what colour it is, how
+    // it takes light, and then the two that only glass and metal care about. Every one of these was
+    // already read by `forge/clip_script.cpp` and none of them were offered anywhere.
+    //
+    // The ranges are the ranges the RECORD holds, not invented ones: a `VisualRecord` keeps most of
+    // these in a byte, so 0 to 255 is the whole of what can be said and a slider that ran further
+    // would be a slider lying about what the file can hold. `ior` is the exception — it is written
+    // as a refractive index and stored as the offset from vacuum — so it is spelled the way the
+    // physics is and converted on the way in.
+    static const std::vector<ClipProperty> kMaterial = {
+        {"rgb", 3, 170.0, 0.0, 255.0, 0, "What colour it is, as red, green and blue"},
+        {"rough", 1, 200.0, 0.0, 255.0, 0, "0 is a mirror, 255 is chalk"},
+        {"metal", 1, 0.0, 0.0, 255.0, 0, "How much it reflects its own colour rather than white"},
+        {"emit", 1, 0.0, 0.0, 255.0, 0, "How much light it gives off by itself"},
+        {"opacity", 1, 255.0, 0.0, 255.0, 0, "255 is solid, below that light passes through"},
+        {"ior", 1, 1.0, 1.0, 3.0, 2, "Refractive index: 1 no bending, 1.33 water, 1.5 glass"},
+        {"translucent", 1, 0.0, 0.0, 255.0, 0, "How far light spreads inside it before coming back"},
+        {"absorb", 3, 0.0, 0.0, 255.0, 0, "What a thick piece takes out of the light, per metre"},
+        {"lacquer", 1, 0.0, 0.0, 15.0, 0, "A clear coat over the top of it"},
+        {"sheen", 1, 0.0, 0.0, 15.0, 0, "The soft edge cloth and dust have"},
+        {"brush", 1, 0.0, 0.0, 3.0, 0, "Brushed along a world axis: 0 none, 1 x, 2 y, 3 z"},
+    };
+    static const std::vector<ClipProperty> kVariation = {
+        {"colour", 1, 0.04, 0.0, 1.0, 2, "How far each voxel's colour wanders from the material"},
+        {"rough", 1, 0.05, 0.0, 1.0, 2, "And how far its roughness does"},
+        {"seed", 1, 1.0, 0.0, 64.0, 0, "Which set of wanderings, so two clips can differ"},
+    };
+    static const std::vector<ClipProperty> kNone;
+    if (head == "material") return kMaterial;
+    if (head == "variation") return kVariation;
+    return kNone;
+}
+
+bool write_clip_key(std::vector<std::string>& lines, const ClipNode& node, const std::string& key,
+                    const std::string& value) {
+    if (node.line == 0 || node.line > lines.size()) return false;
+    std::string& line = lines[node.line - 1];
+
+    // Where the statement ends and its comment begins, because a key written after a `#` is a key
+    // written into a comment — and the `#@` marker that carries the layout is one of those.
+    usize code = line.size();
+    bool in_string = false;
+    for (usize i = 0; i < line.size(); ++i) {
+        if (line[i] == '"') in_string = !in_string;
+        if (line[i] == '#' && !in_string) {
+            code = i;
+            break;
+        }
+    }
+
+    // Already there: replace what it holds and nothing else on the line.
+    const std::string wanted = key + "=";
+    usize at = 0;
+    while (at + wanted.size() <= code) {
+        const usize found = line.find(wanted, at);
+        if (found == std::string::npos || found >= code) break;
+        const bool own_word = found == 0 || line[found - 1] == ' ' || line[found - 1] == '\t';
+        if (own_word) {
+            usize end = found + wanted.size();
+            while (end < code && line[end] != ' ' && line[end] != '\t') ++end;
+            line = line.substr(0, found + wanted.size()) + value + line.substr(end);
+            return true;
+        }
+        at = found + 1;
+    }
+
+    // Not there: at the end of the statement, before whatever comment follows it.
+    usize tail = code;
+    while (tail > 0 && (line[tail - 1] == ' ' || line[tail - 1] == '\t')) --tail;
+    line = line.substr(0, tail) + " " + key + "=" + value + line.substr(tail);
+    return true;
+}
+
 const std::vector<ClipPaletteGroup>& clip_palette() {
     // Grouped, because the vocabulary is eighty words and a list of eighty is a list nobody reads.
     // These are `20-clip-forge.md` §2's own groupings, and **everything the language has is in one

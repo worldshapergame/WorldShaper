@@ -260,6 +260,28 @@ author's own bytes with everything else in the file left alone, which is the rou
 `23-shell-and-libraries.md` §5c states and the reason the reader records a line and a column for
 every number, every name and every brace.
 
+## What a material can be given
+
+Every one of these is read by `forge/clip_script.cpp` and offered by the editor, whether or not the
+document writes it (D786). Left out, each takes the value in the last column.
+
+| key | what it is | when it is not written |
+|---|---|---|
+| `rgb=r,g,b` | what colour it is | 170,170,170 |
+| `rough=` | 0 is a mirror, 255 is chalk | 200 |
+| `metal=` | how much it reflects its own colour rather than white | 0 |
+| `emit=` | how much light it gives off by itself | 0 |
+| `opacity=` | 255 is solid; below that light passes through | 255 |
+| `ior=` | refractive index: 1 no bending, 1.33 water, 1.5 glass | 1 |
+| `translucent=` | how far light spreads inside it before coming back | 0 |
+| `absorb=r,g,b` | what a thick piece takes out of the light, per metre | 0,0,0 |
+| `lacquer=` | a clear coat over the top, 0–15 | 0 |
+| `sheen=` | the soft edge cloth and dust have, 0–15 | 0 |
+| `brush=` | brushed along a world axis: 0 none, 1 x, 2 y, 3 z | 0 |
+
+A **`.wsmat`** file is a clip document holding one or more of these and nothing else. It is spliced
+into a clip by `include` like any other part, which is why one editor and one language cover both.
+
 ## A note on what a clip file may begin with
 
 A **UTF-8 byte-order mark** at the head of the file is skipped. Every Windows text editor writes one

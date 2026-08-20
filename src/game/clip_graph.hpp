@@ -298,6 +298,40 @@ std::string disconnect_clip_node(std::vector<std::string>& lines, const ClipGrap
                                  u32 which);
 
 // A new statement, from the palette. `made` comes back holding the name it was given.
+// --- what a statement can be given, whether or not the document gives it ------------------------
+//
+// A node's panel showed the numbers that are WRITTEN, which is right for a shape — a `box` has six
+// and there are no others — and wrong for a material, where the document writes three of a dozen
+// and the rest take their usual value silently. Reported directly: *materials shouldn't just be
+// material properties which btw it lacks a ton of them, it should be more like IOR, metallic,
+// emissive.* They were all there in the language and none of them were on the screen.
+//
+// So a head can declare what it offers, and the panel lists all of it: a property the document
+// writes is the number the document wrote, and one it does not is its usual value with a slider on
+// it that writes the key in the first time it is moved.
+struct ClipProperty {
+    std::string key;
+    u32 parts = 1;        // `rgb` is three numbers under one key
+    f64 fallback = 0.0;   // what the reader uses when the document is silent
+    f64 low = 0.0;
+    f64 high = 1.0;
+    u32 decimals = 0;
+    std::string about;    // one line, for the tooltip
+};
+
+// Empty for a head that has no such table — which is most of them, and means "list what is
+// written", exactly as before.
+const std::vector<ClipProperty>& clip_properties_of(const std::string& head);
+
+// Writes `key=value` into a statement, replacing whatever that key held or adding it at the end of
+// the statement's first line. Returns true when the document changed.
+//
+// Narrower than it looks, and deliberately: it touches one key and leaves every other byte of the
+// line — the comments, the `#@` marker, the author's own spacing — exactly where it was, which is
+// the same promise `write_clip_number` makes about one number (D746).
+bool write_clip_key(std::vector<std::string>& lines, const ClipNode& node, const std::string& key,
+                    const std::string& value);
+
 // `include "some.clip"`, written in at the top with everything else the document reads from
 // elsewhere — and with the same `#@` marker, so a part dropped on the canvas stays where it was
 // dropped.

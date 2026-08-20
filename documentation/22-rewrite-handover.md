@@ -626,18 +626,58 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### THE EDITOR, 2026-08-20 — D743–D771. Read this first, then the wave below it
+#### THE EDITOR, 2026-08-21 — D772–D788. Read this first
+
+**One message from playing, fourteen items, and two of them were losing work.** Everything below is
+in the build.
+
+| what changed | | how to look at it |
+|---|---|---|
+| **the document already open is a FILE, not a path** (D772) | delete a world while it is open, make another, choose it: same path, so nothing reloaded and the DEAD world was on the screen — and saving wrote it back over the live one | — |
+| **who made a file cannot be typed over** (D774), and a selection across the line is refused too | D447 said so and the editor put the whole file on screen and took every key | — |
+| **the script view chooses text** (D777): drag, double-click a word, triple-click a line, shift with any movement key, ctrl-A, and ctrl-C/X/V through the SYSTEM clipboard | there was no selection at all, so nothing for a copy to take | — |
+| **a document saved is the document opened** (D779, D785) — the trailing newline and a byte-order mark both survive | `getline` cannot tell `a\nb\n` from `a\nb`; every save took the last byte off | — |
+| **one box, one cell** (D780) — a drag snaps as it moves and lands where nothing is standing | two boxes could sit on top of each other and nothing said otherwise | `Shell::boxes_overlapping()`, nought always |
+| **a wire turns only in the channels and lanes** (D781), so it cannot cross a box | it was three straight segments; a wire from column one to column six ran flat through everything between | — |
+| **the document has a box and every answer wires into it** (D782) | reported with a photograph: seven statements in a column with not one wire between them | — |
+| **a clip and a material are the first two entries in the graph's menu** (D783), and a part off a shelf is COPIED beside the document | an include resolves beside the file and then in the game's clips and nowhere else | `--editor-part FILE`, `--editor-new-part clip:porch` |
+| **a material offers all eleven of its properties** (D786) and **opens where it stands** (D787) | every one was read by the parser and none were on a screen | `--editor-open NAME` |
+
+**If the visual view needs work again, start at `Shell::lay_out_graph`.** It decides what is shown
+(the answers, or a box and its parts), how many cells each box covers, and where; `opened_` is which
+boxes are open and is view state that deliberately does NOT go in the file. The wire router is the
+block at the top of `Shell::draw_visual_view` and its whole correctness argument is one sentence: a
+box fills the top-left of its cells, so the channel down the right of a column and the lane along
+the bottom of a row have no box in them, and a wire only ever turns in those.
+
+#### The next thing, and it needs a decision
+
+**A material that a player can pick up and paint with.** The message that asked for the property list
+also said materials *will not just be usable for clips but the player ingame will be able to select a
+material and paint with it or place different shapes with his tools with it so that has something to
+do with how materials use positions* — and then, in the same breath, *this reframes the entire way
+all clips use materials which we can adapt later*.
+
+So it was deliberately not half-built. What exists now is the shape of it: a `.wsmat` is a document
+in the same language, it opens in the same editor, it is spliced into a clip by `include`, and every
+property it can carry is on the screen with a slider on it. What it does not have is a property
+**driven by position** — `rgb` that reads an `fbm`, `rough` that reads a `distance` — which is what
+would make a material a graph rather than a row of constants, and which is also what the tool
+palette would have to carry into the world. That is a language change and a renderer change
+together, and it is the next thing to decide rather than the next thing to type.
+
+#### THE EDITOR, 2026-08-20 — D743–D771
 
 **Four passes, and the fourth is the one that made the visual view readable.** D768–D771: the legend
 goes, and **a document shows its ANSWERS and folds the rest away** — a box is on screen when nothing
 uses it, or when something that uses it is on screen and open. `clips/sampler.clip` opens as eight
-boxes rather than fifty. Every box says what it offers: a ▸ fold, a ▶ door into another file, and the
-three sliders where there are numbers; going through a door remembers where you came from and the
-header grows a ↑ to get back.
+boxes rather than fifty. Every box says what it offers, and going somewhere remembers where you came
+from so the header grows a ↑ to get back.
 
-**If the visual view ever needs work again, start there**: `Shell::lay_out_graph` decides what is
-shown, and `open_nodes_` is the fold. It is view state and deliberately NOT in the file — a `#@`
-position is authored and travels with the document, a fold is where somebody happens to be looking.
+**Superseded in part by D775, above**: the ▸ fold and the ▶ door became ONE mark meaning *there is
+something inside this*, and pressing it shows that box and its parts one level down rather than
+cascading everything under it. The fold's own state went with it; `opened_` in `Shell` now means
+which boxes are drawn with their properties inside them (D787), which is a different thing.
 
 **Three passes before that.** The third came back from playing the second and is D761–D767: a box round several
 nodes with duplicate and take-out on it, the pan moved to the middle button, the palette grown to

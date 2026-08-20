@@ -1301,6 +1301,8 @@ struct Options {
     // document inside this one, off a shelf or made fresh. A world IS a document made of documents
     // — every one the game ships is — and until the graph grew a way to say so there was no way to
     // build one without a hand on the mouse.
+    // `--editor-open NAME`: open that box where it stands, with its properties inside it.
+    std::string editor_open;
     std::string editor_part;
     std::string editor_new_part;
     // `--editor-enter NAME`: go into the `include` of that name, exactly as pressing its door mark
@@ -1424,6 +1426,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         if (i + 1 < argc) options.editor_node = argv[++i];
     } else if (arg == "--editor-add") {
         if (i + 1 < argc) options.editor_add = argv[++i];
+    } else if (arg == "--editor-open") {
+        if (i + 1 < argc) options.editor_open = argv[++i];
     } else if (arg == "--editor-part") {
         if (i + 1 < argc) options.editor_part = argv[++i];
     } else if (arg == "--editor-new-part") {
@@ -2231,6 +2235,7 @@ void print_help() {
         "  --target-fps N        frame rate to hold (default: the monitor's refresh rate)\n"
         "  --quality N           pin the quality level 0-7 instead of deciding it\n"
         "  --no-auto-quality     leave quality where it is and never adjust it\n"
+        "  --editor-open NAME    open that box where it stands, properties inside it\n"
         "  --editor-part FILE    put that document inside the open one, copied beside it\n"
         "  --editor-new-part K:N make a new clip or material called N and put it in\n"
         "  --benchmark           measure this machine again and save the result\n"
@@ -14081,6 +14086,10 @@ int run_windowed(const Options& options) {
                                          : options.editor_new_part.substr(colon + 1);
             const std::string why = shell.new_part(kind, name);
             if (!why.empty()) WS_LOG_WARN("shell", "--editor-new-part: {}", why);
+        }
+        if (!options.editor_open.empty() && !shell.open_node_named(options.editor_open)) {
+            WS_LOG_WARN("shell", "--editor-open: '{}' is not a box with properties to open",
+                        options.editor_open);
         }
         if (!options.editor_node.empty() && !shell.choose_node(options.editor_node)) {
             WS_LOG_WARN("shell", "'{}' does not name anything in '{}'", options.editor_node,

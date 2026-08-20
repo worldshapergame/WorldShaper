@@ -961,3 +961,68 @@ TEST_CASE("a whole document can be put inside another one") {
     CHECK_FALSE(add_clip_include(lines, graph, "por\"ch.clip", 4.0f, 0.0f).empty());
     CHECK_FALSE(add_clip_include(lines, graph, "", 4.0f, 0.0f).empty());
 }
+
+TEST_CASE("a material offers every property it can take, and one of them can be written in") {
+    // Reported directly: *materials shouldn't just be material properties which btw it lacks a ton
+    // of them, it should be more like IOR, metallic, emissive.* Every one of those was in the
+    // language already; a panel that lists what is WRITTEN is a panel that says a material has as
+    // many properties as the author happened to type.
+    const std::vector<ClipProperty>& offers = clip_properties_of("material");
+    CHECK(offers.size() > 8);
+    const auto has = [&](const char* key) {
+        for (const ClipProperty& offer : offers) {
+            if (offer.key == key) return true;
+        }
+        return false;
+    };
+    CHECK(has("rgb"));
+    CHECK(has("rough"));
+    CHECK(has("metal"));
+    CHECK(has("emit"));
+    CHECK(has("ior"));
+    CHECK(has("opacity"));
+    CHECK(has("absorb"));
+    // A shape has the numbers it has and no others, so it offers nothing and the panel lists what
+    // is written, exactly as it always did.
+    CHECK(clip_properties_of("box").empty());
+
+    std::vector<std::string> lines =
+        lines_of("material stone rgb=124,120,112 rough=210   #@ 1.0 2.0\nsolid nothing\n");
+    ClipGraph graph = read_clip_graph(lines);
+    const ClipNode* stone = named(graph, "stone");
+    REQUIRE(stone != nullptr);
+
+    // A key that is not there goes in at the end of the STATEMENT, before the comment that carries
+    // the layout -- a key written after a `#` is a key written into a comment.
+    REQUIRE(write_clip_key(lines, *stone, "metal", "180"));
+    CHECK(lines[0].find("metal=180") < lines[0].find("#@"));
+    graph = read_clip_graph(lines);
+    stone = named(graph, "stone");
+    REQUIRE(stone != nullptr);
+    CHECK(stone->placed);
+    CHECK(stone->at_x == doctest::Approx(1.0));
+    REQUIRE(stone->number("metal") != nullptr);
+    CHECK(stone->number("metal")->value == doctest::Approx(180.0));
+
+    // A key that IS there is replaced, and nothing else on the line moves.
+    REQUIRE(write_clip_key(lines, *stone, "rough", "40"));
+    CHECK(lines[0].find("rough=40") != std::string::npos);
+    CHECK(lines[0].find("rough=210") == std::string::npos);
+    CHECK(lines[0].find("rgb=124,120,112") != std::string::npos);
+    CHECK(count_of(lines[0], "#@") == 1);
+
+    // And a key of several parts is written whole, because `rgb=124` is not a colour.
+    REQUIRE(write_clip_key(lines, *stone, "absorb", "1,2,3"));
+    graph = read_clip_graph(lines);
+    stone = named(graph, "stone");
+    REQUIRE(stone != nullptr);
+    u32 parts = 0;
+    f64 last = 0.0;
+    for (const ClipNumber& number : stone->numbers) {
+        if (number.key != "absorb") continue;
+        ++parts;
+        last = number.value;
+    }
+    CHECK(parts == 3);
+    CHECK(last == doctest::Approx(3.0));
+}

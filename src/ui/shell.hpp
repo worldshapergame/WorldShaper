@@ -241,6 +241,11 @@ public:
     std::string add_part(const std::filesystem::path& from);
     std::string new_part(std::string_view kind, std::string_view name);
 
+    // `--editor-open NAME`: open that box where it stands, showing its properties inside itself.
+    // A box that is open is a different picture, a different layout and several more controls, and
+    // a state nothing automated can reach is a state nothing automated ever checks (D460).
+    bool open_node_named(std::string_view name);
+
     // How many boxes on the graph stand where another one already is. **Always nought**, and it is
     // a promise rather than a tidy-up: every box is on a whole cell, and a cell holds one. Asked
     // directly rather than by looking at a picture, because a picture is what a person has to check
@@ -326,6 +331,33 @@ private:
     // Where every box sits, worked out once when the document is re-read. See the cpp for why the
     // row is the part worth choosing well.
     void lay_out_graph();
+    // --- a box that is opened where it stands --------------------------------------------------
+    //
+    // *These material nodes should show their settings inside their actual node instead of in
+    // another settings window so you can directly tweak them from there.* Reported directly, and it
+    // is right for exactly the nodes it was asked for: a shape's numbers are six positions that
+    // mean nothing without their labels, and a material's are a list of named properties, which is
+    // a thing you read down rather than a thing you look up.
+    //
+    // Open is VIEW state and does not go in the file — D769's rule, unchanged: a `#@` position is
+    // authored and travels with the document, and whether a panel happens to be open is the class
+    // of thing a scroll offset is.
+    std::vector<std::string> opened_;
+    // How many cells tall each shown box is. One, unless it is open — and the layout reserves every
+    // cell it covers, so a tall box cannot land on anything and nothing can land on it.
+    std::vector<u32> node_tall_;
+    // And how many across. An open box is two cells wide: a property row is a name and a number
+    // side by side, and at one cell `translucent` and its value came out on top of one another.
+    std::vector<u32> node_wide_;
+    bool node_is_open(u32 index) const;
+    void open_node(u32 index, bool open);
+    u32 cells_tall(u32 index) const;
+    u32 cells_wide(u32 index) const;
+    // One property of one node as a slider, wherever it is drawn. The panel on the left and the box
+    // on the canvas are the same rows in two places, so they are the same code in one place.
+    void draw_property_rows(const ClipNode& node, const Rect& area, const Rect& clip_to,
+                            f32 row_height, u64 salt);
+
     // Where the box that stands for the FILE sits, and whether there is one.
     //
     // Outside anything, every box on the canvas is a statement nothing else uses (D769) — and a

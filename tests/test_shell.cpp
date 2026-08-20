@@ -473,3 +473,34 @@ TEST_CASE("a clip written by a Windows editor opens, and keeps its byte order ma
     shell.frame(with_ctrl(Key::S), 1280, 800, 0.3);
     CHECK(file_text(clip) == marked);
 }
+
+TEST_CASE("a material box opens where it stands and nothing lands on top of it") {
+    // *These material nodes should show their settings inside their actual node instead of in
+    // another settings window.* An open box is several cells tall and two across, so the whole of
+    // the no-overlap promise has to hold for a rectangle of cells rather than for one.
+    Scratch scratch("shell-open-box");
+    const std::filesystem::path mat = write_file(
+        scratch.root / "materials" / "brass.wsmat",
+        "material brass rgb=190,150,60 rough=90\n"
+        "material iron rgb=90,90,95 rough=200\n"
+        "material glass rgb=230,240,255 rough=8 opacity=40\n");
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(mat);
+    REQUIRE(shell.open_editor_view("visual"));
+    quiet_frame(shell, 0.0);
+    CHECK(shell.boxes_overlapping() == 0);
+
+    REQUIRE(shell.open_node_named("brass"));
+    quiet_frame(shell, 0.1);
+    CHECK(shell.boxes_overlapping() == 0);
+
+    REQUIRE(shell.open_node_named("iron"));
+    REQUIRE(shell.open_node_named("glass"));
+    quiet_frame(shell, 0.2);
+    CHECK(shell.boxes_overlapping() == 0);
+
+    // A box with no list of properties has nothing to open.
+    CHECK_FALSE(shell.open_node_named("nothing of that name"));
+}
