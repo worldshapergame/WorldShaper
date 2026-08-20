@@ -288,14 +288,26 @@ void FieldSampler::destroy() {
         // is thirty-two times the WORST cell of every thirty-two, and the share of that which is
         // real work is the utilisation. D681 called this divergence and could only infer it from
         // two cameras costing 23x for 2x the visits; this counts it.
-        // The one comparison that is like for like: ONE evaluation of the clip's own root, at the
-        // ladder's own cell centres, on the card and on the CPU. Everything else in this file
-        // divides one arm's number by the other arm's points.
+        // The one comparison that is like for like in its POINTS: one evaluation of the clip's own
+        // root, at the ladder's own cell centres, on the card and on the CPU. Everything else in
+        // this file divides one arm's number by the other arm's points.
+        //
+        // **AND THE RATIO IS NOT EXTRA WORK, which is the half worth saying out loud.** The two
+        // counters count different things and neither is wrong: `Field::eval` increments once per
+        // CALL, so a node is one; this shader increments once per TURN of the stack machine, and a
+        // node takes as many turns as it has answers to receive — a union of four children is five,
+        // and a one-child op was two until the six pure point transforms were fused. So the ratio
+        // is TURNS A NODE, a property of writing a recursion as a loop, and reading it as "the card
+        // walks 1.75x the tree" is the mistake D681 made three times with the refusal stamp: an
+        // instrument that names a suspect is worse than one that says nothing.
+        //
+        // What it is good for is watching that ratio MOVE. Anything that makes the machine take
+        // fewer turns for the same nodes shows up here and nowhere else.
         if (mirror_cells_ > 0) {
             WS_LOG_INFO("clip",
                         "the card AGAINST the CPU on the SAME points: one evaluation of the root "
-                        "walks {:.0f} nodes on the card and {:.0f} in `Field::eval` — the card "
-                        "walks {:.2f}x",
+                        "is {:.0f} TURNS of the card's machine over {:.0f} nodes in `Field::eval` "
+                        "— {:.2f} turns a node, which is the machine's shape and not extra work",
                         static_cast<f64>(root_visits_) / static_cast<f64>(visited_cells_),
                         static_cast<f64>(mirror_visits_) / static_cast<f64>(mirror_cells_),
                         (mirror_visits_ > 0)
@@ -502,9 +514,10 @@ bool FieldSampler::upload(const forge::SamplePlan& plan, u32 bounds_node, bool h
 // `--sample-cost`'s 5.1x — *a penalty measured over the wrong nodes is not a penalty* — and it is
 // just as true of a walk length.
 //
-// So this walks the first box of the run, cell for cell, at the very coordinates
+// So this walks the first sixteen boxes of the run, cell for cell, at the very coordinates
 // `sample_field.comp` computes, and counts what `Field::eval` visits. One evaluation of the root
-// per cell in both arms, so the two numbers are the same number.
+// per cell in both arms, so the two numbers are over the same points — see the line that prints
+// them for what the RATIO is and is not.
 void FieldSampler::mirror_the_walk(const GpuSampleBoxRecord& box) {
     if (plan_ == nullptr || !plan_->ok() || plan_->field == nullptr) return;
     const forge::Field& field = *plan_->field;
