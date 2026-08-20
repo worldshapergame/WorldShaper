@@ -392,6 +392,35 @@ selected, which is why the two families exist. A value that is **not** a number 
 `axis=y` is a word and `where=grain` is a name — and where it names something the document bound,
 the row carries a press that goes and looks at it.
 
+#### A document shows its answers, not all of itself (D769)
+
+A clip is fifty boxes and a world's manifest is a hundred and thirty, and a docked panel is a
+quarter of a screen. No amount of laying out makes those agree; what makes them agree is not drawing
+all of it.
+
+**A box is on screen when nothing uses it — the document's own answers — or when something that uses
+it is on screen and OPEN.** So `clips/sampler.clip` opens as eight boxes: its metre, its bounds, the
+one parameter nothing reads, the one material nothing paints with, four coats and the solid. Opening
+a coat shows the material and the pattern it reads; opening the solid shows what it is a union of.
+It is §5d's own rule about a settings panel, one panel along — *a panel that shows every control it
+has at once is a panel a player reads rather than uses.*
+
+Which boxes are open is **view state and is not written into the file**. A `#@` position is authored
+and travels with the document (D756); a fold is where somebody happens to be looking, which is the
+class of thing a scroll offset is.
+
+**A box says what it offers** (D770), and all three drawings are ones the interface already uses:
+
+| | |
+|---|---|
+| ▸ / ▾ | it is made of something, and this opens it — the same two drawings a settings section folds with |
+| ▶ | it is a **door**: an `include`, which leads into another file. Drawn at every size, because which boxes are doors is what decides where to look, and pressable |
+| the three sliders | it has numbers to change. At the detail size only: a door is rare and worth a mark always, a number is on nearly every box and a mark on nearly every box is a texture rather than a fact |
+
+Going through a door remembers where you came from, and the header grows a **↑** — only when there
+is somewhere to go, because a control that is always there and does nothing most of the time is
+furniture (D486). A door you can only walk one way through is a trapdoor.
+
 #### One colour scheme for both views (D755)
 
 `14-ui-style.md` grants two of its five permitted colours to the same three rotations of the
@@ -404,8 +433,11 @@ the same thing, and making them mean the same thing is what turns two schemes in
 | **value** | `fbm`, `sine`, `checker`, and every number | a wire carrying an amount |
 | **material** | `material`, `paint`, `weather` | a wire carrying a material |
 
-The legend over the graph names all three, so it explains the script as well. **What takes no hue is
-as much of the decision**: the braces and the equals signs, because they are grammar rather than a
+**There is no legend over the graph** (D768). There was one — three swatches and three words — and a
+colour nobody can look up is a colour that means nothing, so it was right; it was also a row of the
+panel spent on a sentence read once, which is the first constraint in `14-ui-style.md`. The three are
+learned from the script view, where the word and its colour are the same object, and from this table.
+**What takes no hue is as much of the decision**: the braces and the equals signs, because they are grammar rather than a
 kind of thing; a comment, because it is not the document's meaning; and **a name**, because it is
 the one thing on the line the author chose and the ordinary inverted ink is the strongest mark this
 interface has.
@@ -415,10 +447,11 @@ interface has.
 - **Zoom and pan.** The wheel zooms about the pointer; a drag with the MIDDLE button moves the
   picture (D762 — the left one is what a box-select needs, and a canvas cannot answer one gesture
   with two things).
-  A document **opens readable rather than complete** (D760): fitting a fifty-box clip into a docked
-  panel is 38%, which is a size at which every name is a smudge, so it opens at no less than 80% —
-  centred when it fits, at the left when it does not, because the left is what everything else is
-  made of.
+  A document **opens whole wherever whole is legible at all** (D771, reversing D760): at a third of
+  full size a name is still set at `small_text`, which is the size the loading screen letters itself
+  at, and what is lost is the second line rather than the word. Centred when it fits, at the left
+  when it does not, because the left is what everything else is made of. With the fold above in
+  front of it, most documents now fit at full size.
 - **Drag a box to move it, and where it ends up is written into the document** (D756) as a `#@ x y`
   comment on its own line — inert to the parser and carried by every copy, so a clip you send
   somebody opens laid out the way you left it. §4's rule is that nothing in the game may keep state

@@ -626,9 +626,20 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### THE EDITOR, 2026-08-20 — D743–D767. Read this first, then the wave below it
+#### THE EDITOR, 2026-08-20 — D743–D771. Read this first, then the wave below it
 
-**Three passes.** The third came back from playing the second and is D761–D767: a box round several
+**Four passes, and the fourth is the one that made the visual view readable.** D768–D771: the legend
+goes, and **a document shows its ANSWERS and folds the rest away** — a box is on screen when nothing
+uses it, or when something that uses it is on screen and open. `clips/sampler.clip` opens as eight
+boxes rather than fifty. Every box says what it offers: a ▸ fold, a ▶ door into another file, and the
+three sliders where there are numbers; going through a door remembers where you came from and the
+header grows a ↑ to get back.
+
+**If the visual view ever needs work again, start there**: `Shell::lay_out_graph` decides what is
+shown, and `open_nodes_` is the fold. It is view state and deliberately NOT in the file — a `#@`
+position is authored and travels with the document, a fold is where somebody happens to be looking.
+
+**Three passes before that.** The third came back from playing the second and is D761–D767: a box round several
 nodes with duplicate and take-out on it, the pan moved to the middle button, the palette grown to
 the whole vocabulary, one spelling of a path — and **a fault in `clip_script.cpp` that had been
 there for fifteen months**, which the palette found on its first press: an explicit empty `{ }` was

@@ -231,6 +231,16 @@ public:
     // and, with a list, the only way it can photograph a choice of several, which is the one state
     // a dragged box exists to produce.
     bool choose_node(std::string_view names);
+    // `--editor-enter NAME`: go into the `include` of that name, exactly as pressing its door mark
+    // does. The way in and the way back out are a whole state of this tab — the header grows a
+    // control, and the document under it is a different one — and a state nothing automated can
+    // reach is a state nothing automated ever checks (D460).
+    std::string enter_node(std::string_view name);
+    // Back out of whatever was entered, one step. What the header's control does.
+    void leave_document();
+    // How deep in this document is, which is what the back control is drawn from.
+    usize came_from() const { return came_from_.size(); }
+
     // `--editor-add box`: put a new node in the open document, by the same path the palette takes.
     // One path rather than two, so that what a scripted run photographs is what a press does — and
     // so the whole of "the visual view CHANGES the document" is reachable without a hand on the
@@ -301,6 +311,12 @@ private:
     // Where every box sits, worked out once when the document is re-read. See the cpp for why the
     // row is the part worth choosing well.
     void lay_out_graph();
+    // Whether this one's own parts are showing, and the press that changes it.
+    bool is_open(u32 index) const;
+    void set_open(u32 index, bool open);
+    // Open whatever it takes for this one to be on screen — everything that uses it, up to an
+    // answer. What choosing a node by name has to do before the node can be looked at.
+    void reveal(u32 index);
     // The editor is given room the first time it is opened. See the cpp for why once and why wider.
     void give_editor_room();
     // Everything the graph can do, at the pointer: the palette, and what one node can be told.
@@ -420,6 +436,13 @@ private:
     // and nothing pops up: the editor says which file is waiting, and opens it the moment this one
     // is saved.
     std::filesystem::path waiting_;
+    // The documents this one was entered FROM, innermost last.
+    //
+    // Double-clicking an `include` goes into that file, which is what a world is for — twenty lines
+    // naming the pieces it is assembled out of. Before this there was no way back out of one except
+    // finding it again on the shelf, which is not a way out of anything: a door you can only walk
+    // one way through is a trapdoor.
+    std::vector<std::filesystem::path> came_from_;
 
     // The same document as a graph, which is what the visual view draws. Re-read when the text
     // changes and not otherwise.
@@ -443,6 +466,23 @@ private:
     // Where each of the selected node's sliders may travel, worked out once when it is selected. A
     // range recomputed from the value every frame is a handle that never leaves the middle.
     std::vector<std::pair<f64, f64>> node_range_;
+    // --- what is on screen, which is most of what makes a graph readable ---------------------
+    //
+    // A clip is a hundred and thirty boxes and a panel is a quarter of a screen, and no amount of
+    // laying out makes those two numbers agree. So a document does not show all of itself: it shows
+    // its ANSWERS — the statements nothing else uses — and everything under one of them appears
+    // when that one is opened. A fold, exactly as a settings panel is a fold (D485), and for the
+    // same reason: *a panel that shows every control it has at once is a panel a player reads
+    // rather than uses.*
+    //
+    // Which are open is view state and lives here rather than in the file. A `#@` position is
+    // AUTHORED and travels with the document (D756); a fold is where somebody happens to be
+    // looking, which is the same class of thing as a scroll offset.
+    std::vector<std::string> open_nodes_;
+    std::vector<bool> node_shown_;
+    std::vector<bool> node_open_;
+    std::vector<std::vector<u32>> used_by_;
+
     // Where every box sits, in cells, in step with `graph_.nodes`. Recomputed only when the
     // document is re-read, because it is a sort per column and this is asked sixty times a second.
     std::vector<f32> graph_x_;
@@ -485,6 +525,8 @@ private:
 
     std::string document() const;
     void open_document(const std::filesystem::path& raw);
+    // Go INTO a document, remembering the one being left so there is a way back.
+    void enter_document(const std::filesystem::path& path);
     void save_document();
     void edit_keys(const InputState& input);
     // Ask for the verdict again. Not at once: see `reparse` in the cpp for why a parse on every

@@ -15417,3 +15417,39 @@ box against cell: 68324 boxes settled solid and 47943 empty over 2567288 cells; 
 `--editor-node` takes a comma-separated list now. A choice of SEVERAL changes the drawing and the
 whole of the menu, and without a way to ask for one no photograph ever shows it — which is
 `14-ui-style.md`'s own rule about the tool previews, and the reason `--title-shot` exists at all.
+
+## D768–D771 — a document shows its answers, not all of itself
+
+*Three messages while the last change was being written up, all about the same thing: **"remove the
+legend as its just clutter"**, **"add a button to get out of inside nodes when you enter a node and
+simbolize in some ways nodes you can get inside of and nodes that have settings"**, **"were also
+missing the 'solid' and 'all' nodes"**, and then the one that named the real problem — **"you should
+figure out a way so that not so many nodes are shown at the same time, maybe a better structure
+system or ordering, so that it looks cleaner and less cluttered"**.*
+
+*The last of those is the answer to the third. `solid` and `all` were not missing; they were the
+right-hand end of a fifty-box picture that did not fit in a quarter-screen panel, and no amount of
+laying out makes fifty boxes and that panel agree. What makes them agree is not drawing fifty.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D768 | **There is no legend** | user | Three swatches and three words along the top of the graph, saying which colour meant a shape, a value and a material. It was right that a colour nobody can look up is a colour that means nothing; it was also a row of the panel spent on a sentence a player reads once, which is the first constraint in `14-ui-style.md` broken in the ordinary way — *as little of everything as possible while staying legible*. What it cost is stated rather than waved away: the three are now learned from the script view, where the word and its colour are the same object, and from `23-shell-and-libraries.md` §5c, which is the one place they are written down |
+| D769 | **A document shows its ANSWERS and folds the rest away** | user | The change this whole pass turns on. A node is drawn when nothing uses it — the `solid`, the coats, the settings, anything nobody reads — or when something that uses it is drawn and OPEN. So `clips/sampler.clip` opens as **eight boxes** rather than fifty: its metre, its bounds, the one parameter nothing reads, the one material nothing paints with, four coats and the solid. Opening a coat shows the material and the pattern it reads; opening the solid shows what it is a union of, and so on down. It is D485's own rule, one panel along: *a panel that shows every control it has at once is a panel a player reads rather than uses.* **Which are open is view state and does NOT go in the file** — a `#@` position is authored and travels with the document (D756), a fold is where somebody happens to be looking, which is the class of thing a scroll offset is. And the columns are re-derived over what is SHOWN, so a closed box stands at the left rather than leaving a gap where its parts would have been |
+| D770 | **A box says what it offers: a fold, a door, and a mark for numbers** | user | Three things a box can be, and none of them were said. **A fold** — ▸ and ▾, the two drawings a settings section already folds with, because it is the same gesture and a player who has opened one has learned this one. **A door** — the ▶ that means *enter this* on a shelf row, on the `include` nodes that lead into another file, drawn at every size because which boxes are doors is what a player needs before deciding where to look, and pressable, so the affordance and the way to use it are one object. **And the three sliders** on a box that has numbers, at the detail size only: a door is rare and therefore worth a mark at every size, a number is on nearly every box and a mark on nearly every box is a texture rather than a fact. Beside them, **the way back out**: going through a door remembers where you came from and the header grows a ↑, because a door you can only walk one way through is a trapdoor. Only when there is one, because a control that is always there and does nothing most of the time is furniture (D486) |
+| D771 | **A document opens whole, and the drawing gives the name the icon's room when the box is small** | correction | **D760 reversed.** It opened at no less than 80% on the reasoning that fitting fifty boxes into a docked panel makes every name a smudge. It does not: at a third of full size a name is still set at `small_text`, which is the size the loading screen letters itself at, and what is lost is the second line rather than the word. What the 80% floor actually cost was the right-hand end of every document — reported as `solid` and `all` being *missing*, which is what an off-screen thing is from a chair. With D769's fold in front of it this matters far less, because most documents now fit at full size; it still decides what a big one does. And below the detail size the box drops its ICON and gives the room to the name: a fifth of a narrow box spent saying *this is a shape* is a fifth not spent saying which shape, and `port` and `porti` are the same word to a reader where `portico` is not |
+
+### What it costs
+
+Unchanged, and that is worth saying rather than claiming a saving: 0.060 / 0.216 / 0.286 ms for
+nothing open, the visual view and the script view, both rounds, against the `shell` pass's 0.6 ms
+budget — the same figures as before the fold. Off-screen boxes were already being culled by
+`DrawList::add`, so the fold buys nothing on the card. **What it buys is that a player can read the
+picture**, which is not a number this project has an instrument for and is the whole reason the
+change was asked for.
+
+### And one instrument
+
+`--editor-enter NAME` goes through a door as pressing its mark does. The way in, the document under
+it and the way back out are a whole state of this tab — a different file, and a control in the
+header that is not there otherwise — and a state nothing automated can reach is a state nothing
+automated ever checks (D460).

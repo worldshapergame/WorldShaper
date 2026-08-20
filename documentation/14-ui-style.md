@@ -208,6 +208,22 @@ survive being written down.
 
 ---
 
+## Folds, and the drawings that say a thing can be opened
+
+`Collapsed` and `Expanded` — the two triangles — mean *this is made of something and this opens it*,
+in a settings panel (`23-shell-and-libraries.md` §5d) and in the editor's graph (D770). One gesture,
+one pair of drawings, learned once.
+
+Beside them in the graph, two more, both already meaning what they are used for: **`Play`** is *enter
+this* on a shelf row and is *this box is a door into another file* on a node, and **`Settings`** —
+the three sliders — is *there are numbers here*. A drawing that already means something is worth
+more than a new one that means the same thing, which is the whole argument for having a vocabulary
+at all rather than a picture per place.
+
+**A mark that is on nearly everything is a texture rather than a fact.** The door is rare and is
+drawn at every size; the sliders are on most boxes and are drawn only once a box is big enough to
+have been zoomed into deliberately.
+
 ## The caret
 
 **One caret, everywhere text is typed, and it pulses** (D758). A name being renamed, a number being

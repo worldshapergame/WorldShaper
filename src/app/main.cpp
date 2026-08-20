@@ -1297,6 +1297,9 @@ struct Options {
     // view can now CHANGE a document, and a change nothing automated can make is a change nothing
     // automated can check.
     std::string editor_add;
+    // `--editor-enter NAME`: go into the `include` of that name, exactly as pressing its door mark
+    // does — so the way in, the document under it and the way back out are all photographable.
+    std::string editor_enter;
     // And which node is chosen in it, by the name the document bound — or several, separated by
     // commas. It is the only way a run with no hand on the mouse can put a node's parameters on the
     // left, and the only way it can photograph a choice of several.
@@ -1415,6 +1418,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         if (i + 1 < argc) options.editor_node = argv[++i];
     } else if (arg == "--editor-add") {
         if (i + 1 < argc) options.editor_add = argv[++i];
+    } else if (arg == "--editor-enter") {
+        if (i + 1 < argc) options.editor_enter = argv[++i];
     } else if (arg == "--logo-seed") {
         options.logo_seed = static_cast<u32>(next_number(options.logo_seed));
     } else if (arg == "--logo-change") {
@@ -14042,6 +14047,10 @@ int run_windowed(const Options& options) {
         shell.open_editor(std::filesystem::path(options.open_editor));
         if (!options.editor_view.empty() && !shell.open_editor_view(options.editor_view)) {
             WS_LOG_WARN("shell", "there is no editor view called '{}'", options.editor_view);
+        }
+        if (!options.editor_enter.empty()) {
+            const std::string why = shell.enter_node(options.editor_enter);
+            if (!why.empty()) WS_LOG_WARN("shell", "--editor-enter: {}", why);
         }
         if (!options.editor_add.empty()) {
             const std::string why = shell.add_node(options.editor_add);

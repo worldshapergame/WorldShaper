@@ -1692,19 +1692,34 @@ namespace {
 
 // How big a node's own square of the layout is, in interface pixels before the zoom. A node is
 // drawn inside it with room to spare, and the room is where the wires run.
-constexpr f32 kCellWide = 124.0f;
-constexpr f32 kCellTall = 40.0f;
+constexpr f32 kCellWide = 106.0f;
+constexpr f32 kCellTall = 38.0f;
 constexpr f32 kNodeWide = 0.80f;   // of a cell
 constexpr f32 kNodeTall = 0.62f;
 constexpr f32 kZoomLeast = 0.30f;
 constexpr f32 kZoomMost = 2.40f;
 // Below this the words on a node are not words any more, so the node draws its name and nothing
 // else. That is what stops a hundred-node document being a hundred smudges.
+// Below this a box is its drawing and its name and nothing else — which at a whole document's worth
+// of boxes is what there is room for, and is still enough to read the SHAPE of the clip. The second
+// line and the settings mark come back on the way in.
 constexpr f32 kZoomForDetail = 0.62f;
-constexpr f32 kZoomForPorts = 0.50f;
-// The smallest a document is allowed to OPEN at. Smaller than this is a picture of how many boxes
-// there are rather than of what they say, and getting there is one turn of the wheel.
-constexpr f32 kZoomOpen = 0.80f;
+// The tabs a wire is made from are small, and a small target is a target nobody hits. You zoom in
+// to join two things up, which is the one job that needs the pointer to be accurate.
+constexpr f32 kZoomForPorts = 0.55f;
+// The smallest a document is allowed to OPEN at.
+//
+// **This is D760 reversed, and it is worth saying so.** That decision opened a document at no less
+// than 80% on the reasoning that fitting fifty boxes into a docked panel makes every name a smudge.
+// It does not: at a third of full size a name is still set at `small_text`, which is the size the
+// loading screen letters itself at, and what a player loses is the second line rather than the
+// word. What the 80% floor actually cost was the RIGHT-HAND END of every document — the `solid`,
+// which is the whole answer of a clip — off the side of the panel and reported as those nodes being
+// missing, which is what an off-screen thing is from a chair.
+//
+// So a document opens whole wherever whole is legible at all, and the wheel is for looking closer
+// rather than for finding out what is there.
+constexpr f32 kZoomOpen = 0.32f;
 
 // A node's drawing. The icon is the control and the label is the fallback (14-ui-style.md), which
 // here means: what kind of thing this is has to be legible before the name is read.
@@ -1769,9 +1784,6 @@ Icon icon_for_file(const std::filesystem::path& path) {
     return Icon::Editor;
 }
 
-// What the three colours mean, in the words the legend uses. One list, and both views read it.
-constexpr std::string_view kTintNames[3]{"shape", "value", "material"};
-
 }  // namespace
 
 void Shell::open_editor(const std::filesystem::path& path) {
@@ -1792,6 +1804,19 @@ bool Shell::open_editor_view(std::string_view which) {
         return true;
     }
     return false;
+}
+
+std::string Shell::enter_node(std::string_view name) {
+    if (editing_.empty()) return "nothing is open";
+    refresh_graph();
+    for (const ClipNode& node : graph_.nodes) {
+        if (node.target.empty() || node.name != name) continue;
+        const std::filesystem::path went = follow_include(node.target);
+        if (went.empty()) return "there is no '" + node.target + "' beside this";
+        enter_document(went);
+        return {};
+    }
+    return std::string(name) + " is not a door in this document";
 }
 
 std::string Shell::add_node(std::string_view head) {
@@ -1825,7 +1850,10 @@ bool Shell::choose_node(std::string_view names) {
         const std::string_view one =
             names.substr(at, (comma == std::string_view::npos) ? std::string_view::npos : comma - at);
         for (usize i = 0; i < graph_.nodes.size(); ++i) {
-            if (graph_.nodes[i].name == one) want.push_back(static_cast<u32>(i));
+            if (graph_.nodes[i].name == one) {
+            reveal(static_cast<u32>(i));
+            want.push_back(static_cast<u32>(i));
+        }
         }
         if (comma == std::string_view::npos) break;
         at = comma + 1;
@@ -1968,31 +1996,127 @@ bool Shell::a_node_is_selected() const {
 // This sorts each column by where its neighbours sit and repeats, which is the ordinary barycentre
 // heuristic — six passes, alternating direction, because that is where it stops improving on the
 // documents in this repository.
+bool Shell::is_open(u32 index) const {
+    return index < node_open_.size() && node_open_[index];
+}
+
+void Shell::set_open(u32 index, bool open) {
+    if (index >= graph_.nodes.size()) return;
+    const std::string key = ClipGraph::key_of(graph_.nodes[index]);
+    const auto at = std::find(open_nodes_.begin(), open_nodes_.end(), key);
+    if (open && at == open_nodes_.end()) open_nodes_.push_back(key);
+    if (!open && at != open_nodes_.end()) open_nodes_.erase(at);
+    lay_out_graph();
+}
+
+void Shell::reveal(u32 index) {
+    if (index >= graph_.nodes.size()) return;
+    // Up through everything that uses it, so a node chosen by name is a node on the screen. Bounded
+    // by the node count, because a document being typed into can name itself in a ring.
+    std::vector<u32> front{index};
+    std::vector<bool> seen(graph_.nodes.size(), false);
+    bool changed = false;
+    while (!front.empty()) {
+        const u32 at = front.back();
+        front.pop_back();
+        if (at >= seen.size() || seen[at]) continue;
+        seen[at] = true;
+        if (at >= used_by_.size()) continue;
+        for (u32 user : used_by_[at]) {
+            const std::string key = ClipGraph::key_of(graph_.nodes[user]);
+            if (std::find(open_nodes_.begin(), open_nodes_.end(), key) == open_nodes_.end()) {
+                open_nodes_.push_back(key);
+                changed = true;
+            }
+            front.push_back(user);
+        }
+    }
+    if (changed) lay_out_graph();
+}
+
 void Shell::lay_out_graph() {
     const usize count = graph_.nodes.size();
     graph_x_.assign(count, 0.0f);
     graph_y_.assign(count, 0.0f);
+    node_shown_.assign(count, false);
+    node_open_.assign(count, false);
+    used_by_.assign(count, {});
     graph_wide_ = 0.0f;
     graph_tall_ = 0.0f;
     if (count == 0) return;
 
+    // Who is made of whom, the other way round. Both the fold and the sort going right to left
+    // need it, so it is worked out once and kept.
+    for (usize i = 0; i < count; ++i) {
+        for (u32 input : graph_.nodes[i].inputs) {
+            if (input < count) used_by_[input].push_back(static_cast<u32>(i));
+        }
+    }
+    for (usize i = 0; i < count; ++i) {
+        const std::string key = ClipGraph::key_of(graph_.nodes[i]);
+        node_open_[i] = std::find(open_nodes_.begin(), open_nodes_.end(), key) != open_nodes_.end();
+    }
+
+    // --- what is on screen ---------------------------------------------------------------------
+    //
+    // A node is drawn when nothing uses it — those are the document's own answers, the `solid`, the
+    // coats, the settings — or when something that uses it is itself drawn AND open. Everything
+    // else is under a fold, which is what stops a hundred-and-thirty-box document being a hundred
+    // and thirty boxes.
+    //
+    // Iterated to a fixed point rather than walked once, because a node can be used from two places
+    // and only one of them need be open for it to be on screen.
+    for (usize i = 0; i < count; ++i) node_shown_[i] = used_by_[i].empty();
+    for (usize round = 0; round < count && round < 64; ++round) {
+        bool moved = false;
+        for (usize i = 0; i < count; ++i) {
+            if (node_shown_[i]) continue;
+            for (u32 user : used_by_[i]) {
+                if (node_shown_[user] && node_open_[user]) {
+                    node_shown_[i] = true;
+                    moved = true;
+                    break;
+                }
+            }
+        }
+        if (!moved) break;
+    }
+
+    // How far a SHOWN node is from a shown leaf, which is not what the document's own depth says
+    // once things are folded away: a closed node stands at the left because nothing it is made of
+    // is there to stand left of it.
+    std::vector<u32> depth(count, 0);
+    for (usize round = 0; round < count && round < 64; ++round) {
+        bool moved = false;
+        for (usize i = 0; i < count; ++i) {
+            if (!node_shown_[i]) continue;
+            u32 want = 0;
+            for (u32 input : graph_.nodes[i].inputs) {
+                if (input < count && node_shown_[input]) want = std::max(want, depth[input] + 1);
+            }
+            if (want > depth[i]) {
+                depth[i] = want;
+                moved = true;
+            }
+        }
+        if (!moved) break;
+    }
+
     u32 columns = 1;
-    for (const ClipNode& node : graph_.nodes) columns = std::max(columns, node.depth + 1);
+    for (usize i = 0; i < count; ++i) {
+        if (node_shown_[i]) columns = std::max(columns, depth[i] + 1);
+    }
     std::vector<std::vector<u32>> column(columns);
-    for (usize i = 0; i < count; ++i) column[graph_.nodes[i].depth].push_back(static_cast<u32>(i));
+    for (usize i = 0; i < count; ++i) {
+        if (node_shown_[i]) column[depth[i]].push_back(static_cast<u32>(i));
+    }
 
     std::vector<f32> row(count, 0.0f);
     for (const std::vector<u32>& in : column) {
         for (usize k = 0; k < in.size(); ++k) row[in[k]] = static_cast<f32>(k);
     }
 
-    // Who is made of whom, the other way round, which the sort going right to left needs.
-    std::vector<std::vector<u32>> used_by(count);
-    for (usize i = 0; i < count; ++i) {
-        for (u32 input : graph_.nodes[i].inputs) {
-            if (input < count) used_by[input].push_back(static_cast<u32>(i));
-        }
-    }
+    const std::vector<std::vector<u32>>& used_by = used_by_;
 
     const auto settle = [&](std::vector<u32>& in, const std::vector<std::vector<u32>>& toward) {
         std::vector<std::pair<f32, u32>> want;
@@ -2020,8 +2144,9 @@ void Shell::lay_out_graph() {
 
     std::vector<std::vector<u32>> inputs_of(count);
     for (usize i = 0; i < count; ++i) {
+        if (!node_shown_[i]) continue;
         for (u32 input : graph_.nodes[i].inputs) {
-            if (input < count) inputs_of[i].push_back(input);
+            if (input < count && node_shown_[input]) inputs_of[i].push_back(input);
         }
     }
     for (u32 pass = 0; pass < 6; ++pass) {
@@ -2060,6 +2185,7 @@ void Shell::lay_out_graph() {
     }
 
     for (usize i = 0; i < count; ++i) {
+        if (!node_shown_[i]) continue;
         // And what the author dragged wins over all of it. It is in the document, so it survives
         // the file being sent to somebody else (D756).
         if (graph_.nodes[i].placed) {
@@ -2107,14 +2233,27 @@ void Shell::draw_editor_tab(const Rect& rect) {
     {
         const Rect bar = column.next();
         const f32 cell = metrics.icon();
+        f32 left = bar.x0;
+        // The way back out, and only when there is one. A control that is always there and does
+        // nothing most of the time is furniture (D486) — and this one says, by being there at all,
+        // that you are inside something.
+        if (!came_from_.empty()) {
+            const Rect back{left, bar.y0, left + metrics.row(), bar.y1};
+            const std::string whence = "Back to " + shown_name(came_from_.back());
+            if (ui_.icon_button(id_of("editor.back"), back, Icon::Up, whence)) {
+                leave_document();
+                return;
+            }
+            left = back.x1 + metrics.px(2.0f);
+        }
         // The drawing is the FILE's kind and not the shelf's. They are usually the same and the one
         // time they are not is the one that matters: a clip opened while the worlds shelf is
         // showing had a globe beside its name, which says the wrong thing about the wrong file.
-        ui_.draw().icon(Rect{bar.x0, bar.mid_y() - cell * 0.5f, bar.x0 + cell,
+        ui_.draw().icon(Rect{left, bar.mid_y() - cell * 0.5f, left + cell,
                              bar.mid_y() + cell * 0.5f},
                         icon_for_file(editing_));
         const Rect save{bar.x1 - metrics.row(), bar.y0, bar.x1, bar.y1};
-        const Rect name{bar.x0 + cell + metrics.px(5.0f), bar.y0, save.x0 - metrics.px(4.0f),
+        const Rect name{left + cell + metrics.px(5.0f), bar.y0, save.x0 - metrics.px(4.0f),
                         bar.y1};
         ui_.draw().push_clip(name);
         ui_.label(name, shown_name(editing_) + (dirty_ ? " *" : ""), Align::Left, kBold);
@@ -2387,39 +2526,16 @@ void Shell::document_changed(const std::string& why) {
 void Shell::draw_visual_view(const Rect& page) {
     const Metrics& metrics = ui_.metrics();
 
-    // --- the legend, which is what makes the colours mean something ---------------------------
-    //
-    // Three swatches and three words. The alternative is a player learning by elimination what
-    // green means, and `14-ui-style.md`'s whole argument for having any colour at all is that
-    // several unlike things are on screen and telling them apart is the task — which is only true
-    // if it is possible to find out which is which.
-    const Rect legend{page.x0, page.y0, page.x1, page.y0 + metrics.px(13.0f)};
-    {
-        f32 x = legend.x0;
-        for (u32 which = 0; which < 3; ++which) {
-            const f32 dot = metrics.px(6.0f);
-            ui_.draw().hue(Rect{x, legend.mid_y() - dot * 0.5f, x + dot, legend.mid_y() + dot * 0.5f},
-                           tint_rgb(ui_.accent(), which));
-            x += dot + metrics.px(3.0f);
-            const f32 wide = DrawList::measure(kTintNames[which], metrics.small_text());
-            ui_.draw().text(x, legend.mid_y() - DrawList::cap_height(metrics.small_text()) * 0.5f,
-                            kTintNames[which], metrics.small_text(), kPlain, Align::Left, 0.6f);
-            x += wide + metrics.px(9.0f);
-        }
-        // The zoom, when it is not one — and, while a document is small enough that a player is
-        // probably building it rather than reading it, the one sentence that says how.
-        const f32 top = legend.mid_y() - DrawList::cap_height(metrics.small_text()) * 0.5f;
-        if (graph_.nodes.size() <= 6) {
-            ui_.draw().text(legend.x1, top, "right-click to add", metrics.small_text(), kPlain,
-                            Align::Right, 0.45f);
-        } else if (graph_zoom_ != 1.0f) {
-            char how[16];
-            std::snprintf(how, sizeof(how), "%.0f%%", static_cast<f64>(graph_zoom_) * 100.0);
-            ui_.draw().text(legend.x1, top, how, metrics.small_text(), kPlain, Align::Right, 0.45f);
-        }
-    }
+    // **There is no legend.** There was one — three swatches and three words along the top — and it
+    // was right that a colour nobody can look up is a colour that means nothing. It was also a row
+    // of the panel spent on a sentence a player reads once, which is the first constraint in
+    // `14-ui-style.md` broken in the ordinary way: *as little of everything as possible while
+    // staying legible*. Asked for directly, and what it costs is stated rather than waved away —
+    // the three colours are now learned from the script view, where the word and its colour are the
+    // same thing, and from `23-shell-and-libraries.md` §5c, which is the one place they are written
+    // down.
+    const Rect canvas{page.x0, page.y0, page.x1, page.y1};
 
-    const Rect canvas{page.x0, legend.y1 + metrics.px(2.0f), page.x1, page.y1};
     if (graph_.nodes.empty()) {
         ui_.label(Rect{canvas.x0, canvas.y0, canvas.x1, canvas.y0 + metrics.row()},
                   "nothing here yet - right-click to add something", Align::Left, kPlain, 0.55f);
@@ -2536,17 +2652,27 @@ void Shell::draw_visual_view(const Rect& page) {
     // --- the wires, first, so the boxes sit over them -----------------------------------------
     const f32 thin = std::max(1.0f, metrics.scale * graph_zoom_);
     for (usize i = 0; i < graph_.nodes.size(); ++i) {
+        if (!node_shown_[i]) continue;
         const ClipNode& node = graph_.nodes[i];
         const Rect into = box_of(i);
         for (usize k = 0; k < node.inputs.size(); ++k) {
             const u32 input = node.inputs[k];
-            if (input >= graph_.nodes.size()) continue;
+            if (input >= graph_.nodes.size() || !node_shown_[input]) continue;
             const Rect from = box_of(input);
             if (std::max(from.x1, into.x1) < canvas.x0) continue;
             if (std::min(from.x0, into.x0) > canvas.x1) continue;
             const u32 rgb = tint_rgb(ui_.accent(), clip_carries_tint(graph_.nodes[input].carries));
             const f32 y0 = from.mid_y();
-            const f32 y1 = in_port(into, k, node.inputs.size()).y0 + metrics.px(4.0f);
+            usize shown_before = 0;
+            usize shown_all = 0;
+            for (usize other = 0; other < node.inputs.size(); ++other) {
+                if (node.inputs[other] >= graph_.nodes.size() || !node_shown_[node.inputs[other]]) {
+                    continue;
+                }
+                if (other < k) ++shown_before;
+                ++shown_all;
+            }
+            const f32 y1 = in_port(into, shown_before, shown_all).y0 + metrics.px(4.0f);
             const f32 mid = std::min(from.x1 + cell_w * 0.10f, into.x0 - metrics.px(3.0f));
             ui_.draw().hue(
                 Rect{from.x1, y0 - thin * 0.5f, std::max(mid, from.x1), y0 + thin * 0.5f}, rgb);
@@ -2577,6 +2703,7 @@ void Shell::draw_visual_view(const Rect& page) {
     u32 dropped_on = ClipGraph::kNone;
 
     for (usize i = 0; i < graph_.nodes.size(); ++i) {
+        if (!node_shown_[i]) continue;
         const ClipNode& node = graph_.nodes[i];
         const Rect box = box_of(i);
         if (box.y1 < canvas.y0 || box.y0 > canvas.y1 || box.x1 < canvas.x0 ||
@@ -2601,14 +2728,99 @@ void Shell::draw_visual_view(const Rect& page) {
 
         ui_.draw().push_clip(box);
         const f32 cell = std::min(metrics.icon() * 0.8f, node_h * 0.55f);
-        ui_.draw().icon(Rect{box.x0 + metrics.px(3.0f), box.y0 + metrics.px(2.0f),
-                             box.x0 + metrics.px(3.0f) + cell, box.y0 + metrics.px(2.0f) + cell},
-                        icon_of(node));
+
+        // --- the fold, which is what makes a document a shape rather than a wall ------------
+        //
+        // A box that is made of something can be opened, and a triangle says so — the same two
+        // drawings a settings section folds with, because it is the same gesture and a player who
+        // has opened one has learned this one. Everything under a closed box is not drawn at all,
+        // which is the whole of how a hundred-and-thirty-box document fits in a docked panel.
+        f32 name_left = box.x0 + metrics.px(3.0f);
+        bool has_parts = false;
+        for (u32 input : node.inputs) {
+            if (input < graph_.nodes.size()) has_parts = true;
+        }
+        if (has_parts) {
+            const f32 fold_wide = std::min(cell, node_h * 0.8f);
+            const Rect fold{name_left, box.mid_y() - fold_wide * 0.5f, name_left + fold_wide,
+                            box.mid_y() + fold_wide * 0.5f};
+            const bool over_fold = fold.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
+            ui_.draw().icon(fold, is_open(static_cast<u32>(i)) ? Icon::Expanded : Icon::Collapsed,
+                            over_fold ? 1.0f : 0.65f);
+            if (over_fold && ui_.pressed_in(fold)) {
+                hit_a_node = true;
+                ui_.draw().pop_clip();
+                ui_.draw().pop_clip();
+                set_open(static_cast<u32>(i), !is_open(static_cast<u32>(i)));
+                ui_.sound().say(is_open(static_cast<u32>(i)) ? Cue::Open : Cue::Close);
+                return;
+            }
+            name_left = fold.x1 + metrics.px(2.0f);
+        }
+        // The drawing goes when the box is small, and the name takes the room back. A fifth of a
+        // narrow box spent saying *this is a shape* is a fifth not spent saying WHICH shape, and at
+        // a whole document's worth of boxes the name is the only thing that tells one from another
+        // — `port` and `porti` are the same word to a reader and `portico` is not.
+        if (detail) {
+            ui_.draw().icon(Rect{name_left, box.y0 + metrics.px(2.0f), name_left + cell,
+                                 box.y0 + metrics.px(2.0f) + cell},
+                            icon_of(node));
+            name_left += cell + metrics.px(3.0f);
+        }
+
+        // --- what this one OFFERS, in the corner --------------------------------------------
+        //
+        // Two things a box can be, and neither was said anywhere: some of them can be gone INTO —
+        // an `include` is a door onto the file it names — and some of them have numbers to change.
+        // A player had to double-click everything to find out which. Asked for directly.
+        //
+        // The drawings are the ones that already mean those things elsewhere in this interface: the
+        // play mark is *enter this world* on a shelf row, and the three sliders are *settings*. The
+        // enter mark is also a PRESS, so the affordance and the way to use it are the same object
+        // rather than a hint about a gesture.
+        // The enter mark is drawn at EVERY size, because which boxes are doors is the one thing a
+        // player needs to know before deciding where to look — and a document opens small enough
+        // to see all of it, which is exactly when the question is asked. The settings mark waits
+        // for the detail size, because a box you can read the numbers of is a box you have zoomed
+        // into anyway.
+        const bool can_enter = !node.target.empty();
+        const bool has_numbers = !node.numbers.empty();
+        f32 mark_right = box.x1 - metrics.px(3.0f);
+        if (can_enter) {
+            const Rect at{mark_right - cell * 0.85f, box.y0 + metrics.px(2.0f), mark_right,
+                          box.y0 + metrics.px(2.0f) + cell * 0.85f};
+            const bool over_mark = at.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
+            ui_.draw().icon(at, Icon::Play, over_mark ? 1.0f : 0.7f);
+            if (over_mark && ui_.pressed_in(at)) {
+                hit_a_node = true;
+                const std::filesystem::path went = follow_include(node.target);
+                ui_.draw().pop_clip();
+                ui_.draw().pop_clip();
+                if (went.empty()) {
+                    say("there is no '" + node.target + "' beside this or in the game's clips", 3.0);
+                    ui_.sound().say(Cue::Refuse);
+                    return;
+                }
+                enter_document(went);
+                ui_.sound().say(Cue::Open);
+                return;
+            }
+            mark_right = at.x0 - metrics.px(2.0f);
+        }
+        if (detail && has_numbers) {
+            ui_.draw().icon(Rect{mark_right - cell * 0.85f, box.y0 + metrics.px(2.0f), mark_right,
+                                 box.y0 + metrics.px(2.0f) + cell * 0.85f},
+                            Icon::Settings, chosen ? 0.85f : 0.45f);
+            mark_right -= cell * 0.85f + metrics.px(2.0f);
+        }
+
         const f32 title = std::max(metrics.small_text(), metrics.text() * graph_zoom_);
         const std::string first = node.name.empty() ? node.head : node.name;
-        ui_.draw().text(box.x0 + cell + metrics.px(6.0f),
+        ui_.draw().push_clip(Rect{box.x0, box.y0, mark_right, box.y1});
+        ui_.draw().text(name_left,
                         box.y0 + (detail ? metrics.px(3.0f) : (node_h - title * kGlyphCap) * 0.5f),
                         first, title, node.name.empty() ? kPlain : kBold, Align::Left);
+        ui_.draw().pop_clip();
 
         if (detail) {
             // What it IS on the left and what its numbers are on the right, with room reserved for
@@ -2644,8 +2856,15 @@ void Shell::draw_visual_view(const Rect& page) {
                 hit_a_node = true;
                 ui_.sound().say(Cue::Step);
             }
+            usize shown_inputs = 0;
+            for (u32 input : node.inputs) {
+                if (input < graph_.nodes.size() && node_shown_[input]) ++shown_inputs;
+            }
+            usize drawn = 0;
             for (usize k = 0; k < node.inputs.size(); ++k) {
-                const Rect in = in_port(box, k, node.inputs.size());
+                if (node.inputs[k] >= graph_.nodes.size() || !node_shown_[node.inputs[k]]) continue;
+                const Rect in = in_port(box, drawn, shown_inputs);
+                ++drawn;
                 const u32 from_rgb =
                     (node.inputs[k] < graph_.nodes.size())
                         ? tint_rgb(ui_.accent(),
@@ -2712,7 +2931,7 @@ void Shell::draw_visual_view(const Rect& page) {
                         ui_.sound().say(Cue::Refuse);
                     } else {
                         ui_.draw().pop_clip();
-                        open_editor(went);
+                        enter_document(went);
                         ui_.sound().say(Cue::Open);
                         return;
                     }
@@ -2799,6 +3018,7 @@ void Shell::draw_visual_view(const Rect& page) {
     if (may_band && ui_.band(id_of("editor.graph.band"), canvas, band, band_done)) {
         std::vector<u32> inside;
         for (usize i = 0; i < graph_.nodes.size(); ++i) {
+            if (!node_shown_[i]) continue;
             const Rect box = box_of(i);
             if (box.x1 < band.x0 || box.x0 > band.x1 || box.y1 < band.y0 || box.y0 > band.y1) {
                 continue;
@@ -3147,6 +3367,7 @@ void Shell::draw_node_parameters(const Rect& rect) {
             if (ui_.icon_button(id_of("node.follow", w), go, Icon::Up, "Look at what this names")) {
                 for (usize other = 0; other < graph_.nodes.size(); ++other) {
                     if (graph_.nodes[other].name == word.text) {
+                        reveal(static_cast<u32>(other));
                         choose(static_cast<u32>(other));
                         break;
                     }
@@ -3181,6 +3402,7 @@ void Shell::draw_node_parameters(const Rect& rect) {
             }
             const Rect go{row.x1 - metrics.row(), row.y0, row.x1, row.y1};
             if (ui_.icon_button(id_of("node.part", m), go, Icon::Up, "Look at this one")) {
+                reveal(made_of[m]);
                 choose(made_of[m]);
                 break;
             }
@@ -3239,6 +3461,10 @@ void Shell::open_document(const std::filesystem::path& raw) {
     caret_since_ = seconds_;
     caret_moved_ = true;
     script_pan_x_ = 0.0f;
+    // Where you came from is about a JOURNEY, and opening a file off the shelf is not one. Anything
+    // that means "go deeper" restores this after the call — see `enter_document`.
+    came_from_.clear();
+    open_nodes_.clear();
     graph_stale_ = true;
     chosen_node_.clear();
     chosen_index_ = ClipGraph::kNone;
@@ -3254,6 +3480,36 @@ void Shell::open_document(const std::filesystem::path& raw) {
     palette_group_ = -1;
     ui_.set_scroll(id_of("editor.scroll"), 0.0f);
     reparse();
+}
+
+// Into a document, and back out of it.
+//
+// `open_document` is the way in from the shelf and forgets where you were, which is right: choosing
+// a different file is not going deeper into anything. `enter_document` is the way in through an
+// `include`, and it remembers — so a world's twenty pieces are twenty doors with a way back through
+// each of them rather than twenty one-way trips.
+void Shell::enter_document(const std::filesystem::path& path) {
+    const std::filesystem::path from = editing_;
+    std::vector<std::filesystem::path> trail = came_from_;
+    open_document(path);
+    if (!from.empty() && from != editing_) trail.push_back(from);
+    came_from_ = trail;
+}
+
+void Shell::leave_document() {
+    if (came_from_.empty()) return;
+    if (dirty_) {
+        // Nothing is thrown away without being asked about, here as everywhere else in this tab.
+        say("save this first -- the tick, at the top", 3.0);
+        ui_.sound().say(Cue::Refuse);
+        return;
+    }
+    std::vector<std::filesystem::path> trail = came_from_;
+    const std::filesystem::path back = trail.back();
+    trail.pop_back();
+    open_document(back);
+    came_from_ = trail;
+    ui_.sound().say(Cue::Close);
 }
 
 // The parse, and the ONE place it happens, so the two views cannot be showing different verdicts.
