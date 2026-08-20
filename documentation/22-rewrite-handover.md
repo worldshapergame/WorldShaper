@@ -652,6 +652,28 @@ actually have:**
    400 ms. That is what `--bake-world` and the shipped `.world` are for, and it is the only
    mechanism in the engine that produces the number today.
 
+#### LANDED, 2026-08-20: the four agents came to 1.58x, and three findings outlast it
+
+All four merged, each built, tested and gated on its own before the next was touched. **D724** is the
+block evaluator and **D725** is the other three and what they came to together. The headline, on
+identical work — 324,902 shape evaluations to the unit in every arm — is **1.58x on the sampler's
+shape cost and 1.44x on its wall clock**, and on the ladder **1.16x the nodes and 1.71x the world per
+second**.
+
+The three findings worth more than the number:
+
+- **A box settled SOLID in bulk does not agree with its own cells asked one at a time** — 220 voxels
+  of 1,430,104 — and **both answers pass the brute-force reference**, so the suite cannot see it.
+  Which is right is open. It is why the descent batches LEVELS rather than cells.
+- **The walk is short of instruction throughput, not of cache**, which is the opposite of what D722
+  read into 15.5 ns a visit. `f32` cull boxes are sound and 2.5% SLOWER; prefetching is worth
+  nothing; what was worth something was 73.7 million `cos`/`sin` calls on constants.
+- **`--box-probe`'s ns-a-visit cannot gate a change under about ten per cent** — 23.07 against 15.88
+  ns on bit-identical work. Use a fixed-work arm that prints its own evaluation count.
+
+**The control arms, all one binary:** `--sample-block-cells 0`, `--no-field-turns`,
+`--no-field-cull-boxes`, `--no-full-load-authored`, `--no-full-load`, `--no-coarse-paste`.
+
 #### IN FLIGHT, 2026-08-20: four agents at the one lever D722 says is left
 
 **The user asked for the speed-up, was told what twelve measured levers came to, and said "ok do

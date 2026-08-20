@@ -13495,3 +13495,147 @@ because `field.cpp` belonged to another piece of work at the same moment.
 | D724 | **Seven distance functions copied; the line is 3,210 leaves of 3,287** | decision | Each checked point-for-point against its original |
 | D724 | **A stray process gave 6.08x and 0.65x for the same code** | trap | Third time in one day; the benchmark takes the minimum of nine interleaved rounds now |
 | D724 | **Moving `sd_*` to a header is what takes it further** | — | The remaining leaves would batch without a copy |
+
+---
+
+## D725 — Four agents on the sampler: 1.58x on the shape, and three of the findings are worth more than the speed
+
+**2026-08-20.** D724 landed `Field::eval_block` at 1.78x. This is the other three of the wave, what
+they came to together, and the three things they found on the way that outlast the numbers.
+
+### What it comes to, on identical work
+
+The instrument is the whole estate pasted coarse (`--clip-coarse 32`), which does **exactly the same
+work in every arm** — 324,902 shape evaluations, 163,146 paint, 68,242 voxels asked, 539,443 settled
+in bulk, identical to the unit in all six runs. That is what makes the comparison a comparison.
+
+| arm | shape core-ms | sample wall |
+|---|---|---|
+| everything off (the tree before this wave) | 4,067 / 4,265 / 4,112 | 2,373 / 2,394 / 2,404 ms |
+| everything on | **2,589 / 2,658 / 2,586** | **1,660 / 1,667 / 1,665 ms** |
+
+**1.58x on the sampler's shape cost, 1.44x on its wall clock**, three alternating rounds, no reading
+of one group within reach of the other.
+
+And on the ladder — the estate's own full-resolution load, sixty seconds, twice each arm:
+
+| | nodes built | solid voxels |
+|---|---|---|
+| before | 41,084 / 40,916 | 1,825,421 / 1,806,604 |
+| after | **47,436 / 47,692** | **3,078,855 / 3,138,814** |
+
+**1.16x the nodes and 1.71x the world per second.** The two differ because a node's productiveness
+is not uniform and the arms are at different points of the same march at the cut, which is what a
+sixty-second slice of an unbounded job measures; the fixed-work figure above is the one to quote.
+
+### The descent asks the field a LEVEL at a time — 618 walks a node become 3.23
+
+The brief was to stop descending at a small box and ask `eval_block` about all its cells at once. The
+agent built exactly that, measured it, and **refused to ship it, because it builds a different
+world**:
+
+| block cut | evals a node | `clips/sampler.clip` |
+|---|---|---|
+| control | 638.0 | 1,430,104 · `d0d5f84c685be847` |
+| 8 cells | 639.8 | 1,430,104 · `d0d5f84c685be847` |
+| 64 cells | 582.3 | **1,429,884 · `74ccef4afa2d94b6`** |
+| 512 cells | 581.0 | **1,429,596 · `f165ca95fb5886b7`** |
+
+**A box that settles SOLID in bulk does not agree with its own cells asked one at a time.** It keeps
+a fringe of matter — 220 voxels of 1,430,104 at a four-voxel box, 508 at eight — that the per-cell
+rule does not. This is pre-existing, it is D613's question one size along, and **both answers pass
+`tests/test_sample.cpp`'s brute-force reference**, so the suite cannot see it. Every world in every
+cache and every gate here is the descent's answer. Which of the two is *right* is open.
+
+So the sweep batches the **levels** instead: the rest of the descent runs breadth-first, every box at
+one level going to `eval_block` in one call. Boxes at a level are independent, so this changes the
+order the field is asked in and nothing else — same points, same roots, same comparisons, same world,
+and it is gated as such at cuts of 8, 64 and 512. `SampleResult::block_calls` is the counter that
+says what it bought: **618 walks of the field a node become 3.23**, for the same 638 evaluations.
+`--sample-block-cells 0` is the control arm.
+
+### One field-node visit: 73.7 million transcendental calls on constants
+
+**D722 read 15.5 ns a visit as memory-bound and that reading was wrong.** The agent that went after
+it measured a per-op visit histogram over 387,079,321 visits of the estate — union 25.2%, box 14.2%,
+translate 8.1%, difference 6.8%, intersection 5.7%, displace 5.3%, **rotate 3.17%** — and a rotate
+computed **six `cos`/`sin` calls at every visit** on three angles baked in at parse time.
+12,277,513 visits × 6 = **73.7 million transcendental calls the clip already knew the answers to.**
+Worked out once at `build_bounds` instead: **1.7%**.
+
+The union's child boxes copied into one contiguous run per parent instead of read out of `bounds_` at
+four unrelated node ids: **0.3%**. `Node` reordered so the twenty bytes every visit reads are
+contiguous, 96 → 88 bytes: **0.5%**. Together **2.96%**.
+
+**And the two that were worth nothing are the finding.** The cull boxes in `f32`, rounded outwards so
+a corner can only ever land outside the true box — sound, half the bytes, **2.5% SLOWER**, measured
+twice in two different layouts, the second built specifically to kill the extra-dependent-load
+theory. Prefetching a union's four children before the box tests — cannot change an answer —
+**3,308 core-ms against 3,280 without it**, deleted. **This walk is short of instruction throughput,
+not of cache**, and D676's "f32 is enough for the field" is about precision and does not imply f32 is
+cheaper anywhere a widening sits on a hot path.
+
+### The world cache is a journal, and banking no longer rewrites the world
+
+Version 7: a 64-byte header and a journal of segments. A first save lays down `[Full][Directory]`;
+every save after appends `[Increment][Directory]` holding only the chunks whose encoded bytes moved,
+the leaf blocks whose hash moved, and the metadata if its hash moved. Measured on the estate at
+metre 32, 293 chunks and 576 M solid voxels:
+
+| save | bytes | ms | chunks written |
+|---|---|---|---|
+| cold, whole | 10,459,027 | 73 | 293 of 293 |
+| resumed, appended | 3,602,312 | 65 | **8 of 293** |
+| resumed again | 3,126,906 | 65 | **8 of 293** |
+
+And on a quiet harness at metre 8: a whole write 7,824,855 bytes, **a save with nothing changed 0
+bytes in 16 ms**, and one node sharpened 153,295 bytes — one chunk of 28 and one leaf block of 688.
+
+**The durability trap, and it took a second pass.** The first version wrote `state = running` into
+the header *before* the append, so for the length of the write the file said "refuse me" — and what
+it was refusing was the good world underneath, which no reader could then reach. **A crash in a tenth
+of a second lost the entire cache**, which is exactly what banking exists to prevent, and the
+argument for it was that a reader cannot both refuse a torn file and read the state under it.
+
+It can. **The header is the commit record and it is written last.** An append writes its segments
+past everything the old header claims, then one 64-byte write moves `journal_bytes` over them. Bytes
+past the committed length were never claimed, so ignoring them is not leniency. A machine stopped at
+each of the three moments of an append reads back **the world it had before**, byte for byte, and
+that is three tests built from the real bytes of two real writes. What is still refused is a file
+*shorter* than its header committed to, a journal that does not frame to the committed end, and a
+header failing its own hash.
+
+**And the field it claimed was not the one it named.** The first version reused D701's fourth field
+for "a write is in progress". D701's `running`/`done` lives in `tools/bake_world.ps1`'s own JSON
+stamp and says whether the bake LOOP finished — a fact about how complete the WORLD is, which is what
+`-RequireWhole` gates on. Nothing in `tools/` reads the `.world` header at all. Two different
+questions, and the claim was withdrawn.
+
+### Three things about measuring, which the wave produced by accident
+
+- **`--box-probe`'s ns-a-visit cannot gate a change under about ten per cent.** Two runs probing the
+  *identical* leaf set — 4,007,113 visits over 4,699 evaluations, to the visit — read **23.07 and
+  15.88 ns**. A fixed-work instrument that prints its own evaluation count is 0.5% repeatable and is
+  the arm field work should use.
+- **A worktree is not an isolated machine.** Every agent was told to kill a stale `WorldShaper.exe`,
+  which on a shared machine kills every other agent's run. Two of four reported it; one lost about a
+  third of its runs outright. A run killed at second forty of sixty looks exactly like a crash —
+  truncated output, exit 255, no dump. **Agents may build in parallel and must not measure in
+  parallel**, and that is in CLAUDE.md now.
+- **`$args` is an automatic variable in a PowerShell function.** A measurement script whose helper
+  took `$args` as a parameter silently swallowed it, and the game launched **with no flags at all**
+  and sat on the title screen. Five runs recorded as "killed by another agent" were runs of a game
+  with no arguments.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D725 | **1.58x on the sampler's shape cost, 1.44x wall** | measurement | Identical work in every arm — 324,902 evaluations to the unit — three alternating rounds |
+| D725 | **618 walks of the field a node become 3.23** | build | The descent runs breadth-first below its cut; same points, same comparisons, same world |
+| D725 | **A box settled SOLID in bulk disagrees with its own cells** | fault | 220 voxels of 1,430,104 at a four-voxel box; both answers pass the brute-force reference, so the suite cannot see it |
+| D725 | **73.7 million `cos`/`sin` calls on constants** | fault | Rotates are 3.17% of 387 M visits and each did six; worked out once, worth 1.7% |
+| D725 | **f32 cull boxes are sound and 2.5% SLOWER; prefetch is nothing** | fault | The walk is short of instruction throughput, not of cache — the opposite of D722's reading |
+| D725 | **A bank of the estate writes 8 chunks of 293, not 293** | build | 10.5 MB whole, 3.6 MB appended, 0 bytes when nothing changed |
+| D725 | **The header is the commit record and is written last** | trap | Marking `running` first meant a crash in a tenth of a second lost the whole cache |
+| D725 | **D701's fourth field was never the cache header's** | honesty | It is the bake script's own stamp; the claim was withdrawn |
+| D725 | **`--box-probe`'s ns-a-visit cannot gate under 10%** | instrument | 23.07 against 15.88 ns on bit-identical work; use a fixed-work arm |
+| D725 | **Agents may build in parallel and must not MEASURE in parallel** | trap | They kill each other's processes, and a killed run looks like a crash |
