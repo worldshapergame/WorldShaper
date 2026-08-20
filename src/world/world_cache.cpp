@@ -155,7 +155,7 @@ void write_brick_raw(std::vector<u8>& out, const Brick& brick) {
         out.push_back(static_cast<u8>(value >> 16));
         out.push_back(static_cast<u8>(value >> 24));
     };
-    const u8 edited = (kEditTracking && brick.edited()) ? kBrickEditedBit : u8{0};
+    const u8 edited = (edit_tracking() && brick.edited()) ? kBrickEditedBit : u8{0};
 
     if (brick.uniform()) {
         out.push_back(static_cast<u8>(0u | edited));
@@ -937,7 +937,7 @@ u32 write_chunk_bricks(std::vector<u8>& out, const Chunk& chunk) {
 u32 write_chunk_erased(std::vector<u8>& out, const Chunk& chunk) {
     const usize count_at = out.size();
     put_pod(out, static_cast<u32>(0));
-    if (!kEditTracking || chunk.erased_bricks() == 0) return 0;
+    if (!edit_tracking() || chunk.erased_bricks() == 0) return 0;
 
     const u32 axis = static_cast<u32>(kChunkBricks);
     u32 count = 0;
@@ -1486,7 +1486,7 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
                         // chunk itself knows this slot was emptied by a person, whether or not any
                         // box was named and whether or not the clip agrees about it today. The
                         // early-out below would drop it, so it is asked for here.
-                        const bool erased = kEditTracking && chunk != nullptr &&
+                        const bool erased = edit_tracking() && chunk != nullptr &&
                                             chunk->erased_bricks() != 0 &&
                                             chunk->brick_erased(bx, by, bz);
                         if (!mine_live && !theirs_live && reaching.empty() && !erased) continue;
@@ -1513,7 +1513,7 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
                             // — and comes back as whatever the clip says the day the clip moves,
                             // with no record a person ever chose it. The brick knows; ask it, so
                             // guarantee no longer depends on a writer having been handed the boxes.
-                            const bool owned = kEditTracking && mine->edited();
+                            const bool owned = edit_tracking() && mine->edited();
                             if (!named && !owned && theirs_live &&
                                 bricks_identical(*mine, *theirs)) {
                                 ++kept_bricks;   // the clip's own answer; not written at all
@@ -2363,7 +2363,7 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
                 // the clip puts matter where the saved world has none, or because a named edit box
                 // reached it. So the slot comes back knowing a person emptied it, which is what
                 // stops the next re-sample filling the doorway back in.
-                if (kEditTracking) job.chunk->mark_brick_erased(bx, by, bz);
+                if (edit_tracking()) job.chunk->mark_brick_erased(bx, by, bz);
             }
             usize at = 0;
             for (u32 b = 0; b < job.bricks; ++b) {
@@ -2376,7 +2376,7 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
                 // Read before `at` moves, and asked of the FILE rather than of the brick: the flag
                 // has to go in through `brick_for_write`, because the chunk is what keeps the count
                 // and a flag set behind its back is a second index nobody maintains.
-                const WriteOrigin origin = (kEditTracking && brick_was_edited(job.data + at))
+                const WriteOrigin origin = (edit_tracking() && brick_was_edited(job.data + at))
                                                ? WriteOrigin::Edit
                                                : WriteOrigin::Field;
                 at += read_brick_raw(job.data + at, job.size - at,

@@ -82,7 +82,7 @@ bool Chunk::brick_erased(u32 bx, u32 by, u32 bz) const {
 }
 
 void Chunk::set_erased(u32 bx, u32 by, u32 bz, bool value) {
-    if (!kEditTracking) return;
+    if (!edit_tracking()) return;
     if (erased_.empty()) {
         if (!value) return;   // nothing to clear, and no reason to pay four kilobytes to say so
         erased_.assign(kErasedWords, 0ull);
@@ -108,7 +108,7 @@ void Chunk::mark_brick_erased(u32 bx, u32 by, u32 bz) {
     // to a caller getting the order right. A live brick's claim is recorded on the brick.
     if (brick(bx, by, bz) != nullptr) {
         Brick& b = brick_for_write(bx, by, bz);
-        if (kEditTracking && !b.edited()) {
+        if (edit_tracking() && !b.edited()) {
             b.set_edited(true);
             ++edited_bricks_;
         }
@@ -229,7 +229,7 @@ Brick& Chunk::brick_for_write(u32 bx, u32 by, u32 bz, WriteOrigin origin) {
     // overlap outright, which it could not if the two were allowed to describe the same slot.
     // It errs towards claiming: a brick the field wrote into a hole a person cut comes back marked
     // as theirs, which costs storage. The other way round costs the hole.
-    if (kEditTracking && (origin == WriteOrigin::Edit || brick_erased(bx, by, bz))) {
+    if (edit_tracking() && (origin == WriteOrigin::Edit || brick_erased(bx, by, bz))) {
         if (!bricks_[index].edited()) {
             bricks_[index].set_edited(true);
             ++edited_bricks_;
@@ -268,7 +268,7 @@ bool Chunk::set(u32 x, u32 y, u32 z, VoxelTypeId type, WriteOrigin origin) {
         // about its result. A swing that met air inside a brick they built still says the brick is
         // theirs. And marked before the write, because a write that takes the last voxel unlinks
         // the brick and it is the flag that turns into the erased bit.
-        if (kEditTracking && origin == WriteOrigin::Edit && !bricks_[index].edited()) {
+        if (edit_tracking() && origin == WriteOrigin::Edit && !bricks_[index].edited()) {
             bricks_[index].set_edited(true);
             ++edited_bricks_;
             set_erased(bx, by, bz, false);

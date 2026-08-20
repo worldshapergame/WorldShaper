@@ -706,7 +706,7 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
                         // `any_edits()` is checked first and is nearly always false: it is one
                         // comparison for a chunk of 32,768 brick slots, so an unedited world pays
                         // nothing for this at all.
-                        if (kEditTracking && chunk.any_edits() &&
+                        if (edit_tracking() && chunk.any_edits() &&
                             chunk.brick_edited(static_cast<u32>(bx), static_cast<u32>(by),
                                                static_cast<u32>(bz))) {
                             continue;

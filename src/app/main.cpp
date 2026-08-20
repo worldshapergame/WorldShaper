@@ -141,6 +141,12 @@ struct Options {
     // allocated, which is `NodePool::world_has` telling the render tree the world holds matter it
     // does not. This turns the drop off and restores that, lumps and all.
     bool no_paste_drop = false;
+    // R12d's control arm. A brick records WHO wrote it -- the sampler or a person -- and the
+    // re-sample refuses a brick a person edited. This restores what every build before it did:
+    // nothing is marked, and the field overwrites whatever it lands on. In a running session that
+    // is repaired by the op replay after every paste; **across a reload it is not**, and the carve
+    // comes back as stone. See `world/write_mask.hpp`.
+    bool no_edit_tracking = false;
     // The control arm for the batch being sampled one node per worker rather than one node at a
     // time. R11a proved a single node gains nothing from the job system; the batch does.
     bool no_batch_parallel = false;
@@ -1485,6 +1491,9 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         options.no_paste_pool = true;
     } else if (arg == "--no-paste-drop") {
         options.no_paste_drop = true;
+    } else if (arg == "--no-edit-tracking") {
+        options.no_edit_tracking = true;
+        ws::set_edit_tracking(false);
     } else if (arg == "--no-batch-parallel") {
         options.no_batch_parallel = true;
     } else if (arg == "--stipple-from-world") {
@@ -2175,6 +2184,9 @@ void print_help() {
         "                        chunk it emptied in the world. D620's control arm: every one of\n"
         "                        those is a cube the renderer draws over geometry that is not\n"
         "                        there and the chisel's aim cannot find\n"
+        "  --no-edit-tracking    a brick stops recording whether a person wrote it, and the\n"
+        "                        re-sample overwrites one they carved. R12d control arm: the\n"
+        "                        op replay hides it in a running session and a reload does not\n"
         "  --sample-cost         what ONE NODE costs to sample, per level, and whether a node\n"
         "                        sampled alone is the same voxels as that node inside a bigger\n"
         "                        box. Headless; the facility unless --clip-file says otherwise.\n"

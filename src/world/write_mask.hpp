@@ -56,6 +56,13 @@ enum class WriteOrigin : u8 {
 //
 // It is a constant rather than a `#define` so both arms COMPILE in both settings — a dead branch
 // that has not been through the compiler is not a control arm, it is a guess.
-inline constexpr bool kEditTracking = true;
+// R12d's control arm, and it is RUNTIME rather than `constexpr` so that both arms live in one
+// binary -- which is the rule, and which a compile-time constant cannot satisfy. `--no-edit-tracking`
+// clears it: nothing is marked and the field overwrites whatever it lands on, which is what every
+// build before R12d did. In a running session the op replay after every paste hides that; across a
+// reload it does not, and the carve comes back as stone.
+inline bool g_edit_tracking = true;
+inline bool edit_tracking() { return g_edit_tracking; }
+inline void set_edit_tracking(bool on) { g_edit_tracking = on; }
 
 }  // namespace ws

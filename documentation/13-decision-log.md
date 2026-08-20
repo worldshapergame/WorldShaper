@@ -14892,3 +14892,109 @@ Gate: `1429596 / efeb39a93c369a2d / shape d41424c8236d15ac` unmoved. **763 of 76
 | D738 | **A quota to fix that bought nothing — 790 either way** | measurement | Kept for the argument, not the figure |
 | D738 | **No photograph of a lamp blinking out** | honesty | A still frame is the same picture in both arms; what changes is what exists when the camera moves |
 | D738 | **The first A/B carved two different worlds and was discarded** | trap | The carve target depends on what the ladder had pasted by that frame |
+
+---
+
+## D739 — R12d: a brick knows whose work it holds, and the re-sample stops overwriting a carving
+
+**2026-08-20.** R12's idea is that if the card can derive the base world from the field, the CPU need
+only store **the difference a person made to it**. R12d is the bookkeeping that makes that a question
+anyone can ask, and it turned up a live data-loss fault on the way.
+
+### The fault is real, and `write_mask.hpp` was not guarding it
+
+`PasteMode::Replace` maps to `WriteMask::All` with `clears = true`, so the field wins per voxel. What
+repairs that today is **not** the mask: `pump_refinement` replays the entire op log immediately after
+every paste, re-cutting every edit. That works while the ops are in memory and **stops working the
+moment a world is reloaded**, because a resumed run has the carvings and not the ops that made them.
+
+Measured, through the shipped `apply_op` → `write_world_cache` → `read_world_cache` → `capture_clip`
+→ `paste_clip`, with **no edit boxes named** so the flag is the only thing carrying it:
+
+| | tracking on | tracking off |
+|---|---|---|
+| air in the carve after save + reload | 768 | 768 |
+| air in the carve after the **re-sample** | **768** | **0** |
+| world shape hash after the re-sample | `3f77f3f3e9d58390` | `db0eaf86d12e2c8c` |
+
+The save and the reload keep the carve in both arms — that part R11f already did. **It is the
+re-sample that destroys it**, and all 768 carved voxels come back as stone.
+
+### The mistake the suite caught, and it is the interesting one
+
+Marking every `apply_op` as `Edit` claimed **1,204 bricks of 1,204** in a world nobody had touched.
+`apply_op` is not only the player's path — it is also how terrain is created (`MatterReason::
+Generation`) and how a world is deserialised (`Load`). **A fully claimed world is a world with
+nothing left to derive**, which is R12's payoff deleted in one line, and it is silent: every voxel
+right, every hash agreeing, only the file size saying anything. The origin now comes from the op's
+own `reason`, a field every peer already replays.
+
+`WriteOrigin::Field` is the default at every write entry point, so every writer that existed before
+keeps its behaviour and the edit path opts in by naming itself. That direction is deliberate:
+**under-claiming loses a carving and shows up immediately; over-claiming leaves nothing derivable and
+is silent for ever.**
+
+### The half a flag on a brick cannot carry
+
+The commonest edit there is: a carve takes the last voxel, the brick is unlinked — it must be,
+D348/D620 — and the hole becomes indistinguishable from untouched sky. So a chunk also keeps a
+lazily allocated bitset of slots a person **emptied**. 4 KB per chunk that has one, nothing for a
+world nobody has carved. The invariant is that a slot is *either* a live brick with a flag *or* a bit
+in the erased set, never both, and `validate()` re-derives both counts from the tree it just walked —
+including a flag set through `Brick::set_edited` behind the chunk's back, which is a test.
+
+The flag is not in `content_hash`, `shape_hash`, `operator==` or `bytes()`, and sits in the padding
+after `form_`, so `sizeof(Brick)` does not move. Content operations deliberately leave it alone: a
+player who carves a niche and fills it back in still owns that brick.
+
+### The brief was wrong about where the call sites are, and that is worth recording
+
+It said the edit call sites are in `main.cpp`. **They are not.** Every edit in the game reaches the
+world through `apply_op` — chisel, undo and redo all go through `EditHistory`, and the ladder's replay
+is `apply_ops` — and `main.cpp` contains no direct world write at all. So the feature is not
+half-built for want of a call site: `src/world/op.cpp` and one 18-line guard in `src/game/clip.cpp`
+are where it lives.
+
+### Cache version 7 → 8, not smuggled
+
+A bit in each brick's tag byte and a per-chunk list of erased slots inside the chunk record's hashed
+range, so an incremental save cannot call a carve "unchanged". Read compatibility was not available
+in either direction: `0x80 | 2` is not a tag version 7 knows, so it would refuse the brick and lose
+the chunk.
+
+**A side effect worth knowing about**: R11f's *documented* data-loss case is now closed. A brick a
+person carved and refilled with the clip's own stone agrees with the clip today and used to be left
+out unless a box was named. The brick knows now, so the writer no longer has to be handed the boxes,
+and the one test that asserted the old loss is updated with the reason.
+
+### What is owed, said plainly
+
+- **There is no route in the shipped binary to save an edited world and load it back.** `main.cpp`
+  refuses outright — *"AN EDITED WORLD IS NEVER CACHED"* — because the clip cache is keyed on the
+  clip, and `--clip-plus-edits` writes `<cache>.edits`, which nothing loads. The gate above is
+  therefore in-process, through the shipped reader, writer and paste. The mechanism is proved; **the
+  game's save path for it does not exist yet.**
+- **A carve through a brick slot that does not exist yet records nothing.** Carving open sky must stay
+  free, or flying with the tool down allocates a brick and a bitmap per step. So a swing through air
+  the ladder has not sampled leaves no claim, and if the clip later grows a buttress there it fills
+  the space. That is R11f's second data-loss case, covered today by `refine_presampled_` and by named
+  edit boxes, and it is the one hole left in the bookkeeping.
+- **Unedited bricks are NOT dropped from storage**, deliberately. The payoff needs
+  `--derive-in-marcher` viable — 30× slower today, D699 — plus its missing half, that the first cold
+  frame cannot be derived from inside the marcher. Until a derivable brick can actually be rebuilt on
+  demand, dropping one is losing it.
+
+Gate: `1429596 / efeb39a93c369a2d / shape d41424c8236d15ac` unmoved — bookkeeping is not geometry.
+**776 of 776 tests**, from 763.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D739 | **The re-sample destroys a carving across a reload** | fault | 768 carved voxels come back as stone; the op replay hides it only while the ops are in memory |
+| D739 | **Marking every `apply_op` claimed 1,204 bricks of 1,204** | trap | `apply_op` is also Generation and Load; a fully claimed world is R12's payoff deleted, silently |
+| D739 | **`Field` is the default and the edit path opts in** | decision | Under-claiming loses a carving and shows immediately; over-claiming is silent for ever |
+| D739 | **A chunk keeps a bitset of slots a person EMPTIED** | build | The commonest edit unlinks the brick, and the hole is then indistinguishable from untouched sky |
+| D739 | **The edit call sites are not in `main.cpp`** | decision | Every edit reaches the world through `apply_op`; `main.cpp` writes no voxel directly |
+| D739 | **Cache 7 → 8, no read compatibility available** | decision | `0x80 | 2` is not a tag version 7 knows; it would refuse the brick and lose the chunk |
+| D739 | **R11f's documented data-loss case closes as a side effect** | measurement | A carved-and-refilled brick agrees with the clip and used to be dropped unless a box was named |
+| D739 | **The game cannot save an edited world and load it back** | honesty | The gate is in-process through the shipped reader and writer; the save path does not exist |
+| D739 | **A carve through an unallocated slot records nothing** | honesty | Carving open sky must stay free; the one hole left in the bookkeeping |
