@@ -109,6 +109,41 @@ uint ws_mask_or_visits(uint mask) {
     return mask | (ws_field_refused != 0u ? (0x80000000u | (ws_field_refused_op << 8u)) : 0u);
 }
 
+// How many times THIS CELL asked the field anything, which is the factor `ws_field_visits` divides
+// out of the walk and which nothing in this file counted.
+//
+// The cost of a cell is (evaluations) x (nodes an evaluation walks) x (what a step costs), and the
+// three are fixed by completely different things: the phase machine below decides the first, the
+// clip's expression the second, and the stack and the divergence the third. A timing knows none of
+// them apart. `ws_field_visits` has counted the middle one since D677 and the outer one has been
+// ASSUMED to be "about two" ever since — which is the shape of assumption D722 caught being wrong
+// in both of its factors.
+//
+// It rides out in `out_types` under `--gpu-visits`, where the type is already nonsense: that run
+// is not building a world and the word is free. No buffer, no second dispatch.
+uint ws_field_evals;
+
+// How many nodes the FIRST ask — the shape at the cell's own centre, PH_SOLID — walked.
+//
+// It is the one question the CPU asks in the same words at the same point, so it is the only one
+// of a cell's asks that can be set beside `Field::eval` directly. The rest are the rescue's six
+// offsets and a handful of paint tests against tiny roots, and a mean over all of them is a number
+// about nothing. `FieldSampler::mirror_the_walk` is the other end of this.
+uint ws_field_root_visits;
+
+// ...and the type, or the two counts this cell owes the instrument. See `ws_field_evals`. No
+// `field_eval` in it, so it is not one of the seventeen copies the header is about.
+//
+// Two numbers in one word because the run has two spare words and needs three. The root walk is
+// bounded by WS_FIELD_TURNS, which is 2^20, so it fits in twenty-one bits; the ask count is
+// bounded by the phase machine's own guard of 16 + 2*rule_count, which on the heaviest clip here
+// is 1,272 and fits in eleven. Both are CLAMPED rather than left to wrap, because a counter that
+// wraps reports a small number and small is what "fine" looks like.
+uint ws_type_or_evals(uint type) {
+    if ((field_push.flags & WS_FIELD_FLAG_COUNT_VISITS) == 0u) return type;
+    return min(ws_field_root_visits, 0x1FFFFFu) | (min(ws_field_evals, 0x7FFu) << 21u);
+}
+
 // One of the six central-difference offsets, as `sub` counts 0..5: axis `sub >> 1`, plus first.
 vec3 ws_offset(uint sub, float h) {
     return ws_with_axis(vec3(0.0), sub >> 1u, ((sub & 1u) == 0u) ? h : -h);
@@ -116,23 +151,24 @@ vec3 ws_offset(uint sub, float h) {
 
 // How far a point is from a rule's box, squared. Nought inside it, and nought for the infinite box,
 // which is what a rule whose place could not be bounded carries.
+// ...and no `infinite()` short cut here either, for the reason written over `ws_box_away_sq`. The
+// CPU's own `away_from` in sample.cpp carries the same note, and these two are its mirror: a
+// weathering zone bounded in y and open in x answered "nought" to every point in the clip.
 float rule_box_away_sq(uint rule, vec3 p) {
-    const float lx = paint_rules.items[rule].lo[0];
-    if (lx <= -1.0e29 || paint_rules.items[rule].hi[0] >= 1.0e29) return 0.0;
-    const vec3 lo = vec3(lx, paint_rules.items[rule].lo[1], paint_rules.items[rule].lo[2]);
+    const vec3 lo = vec3(paint_rules.items[rule].lo[0], paint_rules.items[rule].lo[1],
+                         paint_rules.items[rule].lo[2]);
     const vec3 hi = vec3(paint_rules.items[rule].hi[0], paint_rules.items[rule].hi[1],
                          paint_rules.items[rule].hi[2]);
-    const vec3 d = max(max(lo - p, p - hi), vec3(0.0));
+    const vec3 d = min(max(max(lo - p, p - hi), vec3(0.0)), vec3(1.0e18));
     return dot(d, d);
 }
 
 float piece_away_sq(uint piece, vec3 p) {
-    const float lx = rule_pieces.items[piece].lo[0];
-    if (lx <= -1.0e29 || rule_pieces.items[piece].hi[0] >= 1.0e29) return 0.0;
-    const vec3 lo = vec3(lx, rule_pieces.items[piece].lo[1], rule_pieces.items[piece].lo[2]);
+    const vec3 lo = vec3(rule_pieces.items[piece].lo[0], rule_pieces.items[piece].lo[1],
+                         rule_pieces.items[piece].lo[2]);
     const vec3 hi = vec3(rule_pieces.items[piece].hi[0], rule_pieces.items[piece].hi[1],
                          rule_pieces.items[piece].hi[2]);
-    const vec3 d = max(max(lo - p, p - hi), vec3(0.0));
+    const vec3 d = min(max(max(lo - p, p - hi), vec3(0.0)), vec3(1.0e18));
     return dot(d, d);
 }
 
@@ -158,6 +194,8 @@ bool rule_could_apply(uint rule, vec3 p) {
 
 void main() {
     ws_field_visits = 0u;
+    ws_field_evals = 0u;
+    ws_field_root_visits = 0u;
     ws_field_refused = 0u;
     ws_field_refused_op = 0u;
     const uint gid = gl_GlobalInvocationID.x;
@@ -213,6 +251,9 @@ void main() {
         }
 
         // ---- THE ONE CALL. See the header before adding a second ------------------------------
+        // What the count stood at going in, so PH_SOLID can bank its own walk and nothing else's.
+        if (phase == PH_SOLID) ws_field_root_visits = ws_field_visits;
+        ++ws_field_evals;
         const float v = field_eval(ask_node, ask_at);
         // A REFUSAL IS NOT A VALUE, and this line used to say it was.
         //
@@ -233,12 +274,15 @@ void main() {
             // clear, which is a different thing from a cell inside the clip and empty — that one
             // says "stamping should clear whatever is there".
             if (v > 0.0) {
-                out_types.items[gid] = 0u;
+                out_types.items[gid] = ws_type_or_evals(0u);
                 out_inside.items[gid] = ws_mask_or_visits(0u);
                 return;
             }
             phase = PH_SOLID;
         } else if (phase == PH_SOLID) {
+            // The root walk, banked before anything else adds to the count. See
+            // `ws_field_root_visits`; PH_BOUNDS is the only ask that can have run before this one.
+            ws_field_root_visits = ws_field_visits - ws_field_root_visits;
             dc = v;
             if (dc <= 0.0) {
                 phase = PH_RULE;                       // solid; go and paint it
@@ -247,7 +291,7 @@ void main() {
                 phase = PH_GRAD;                       // outside, but near enough to be a thin feature
                 sub = 0u;
             } else {
-                out_types.items[gid] = 0u;             // outside, and nothing here to lose
+                out_types.items[gid] = ws_type_or_evals(0u);             // outside, and nothing here to lose
                 out_inside.items[gid] = ws_mask_or_visits(inside);
                 return;
             }
@@ -265,7 +309,7 @@ void main() {
             if (sub >= 6u) {
                 const float len = length(away);
                 if (len < 1.0e-12) {
-                    out_types.items[gid] = 0u;         // no direction; there is nothing to rescue
+                    out_types.items[gid] = ws_type_or_evals(0u);         // no direction; there is nothing to rescue
                     out_inside.items[gid] = ws_mask_or_visits(inside);
                     return;
                 }
@@ -278,7 +322,7 @@ void main() {
             // Nothing solid that way means the field was near zero here for some other reason and
             // there is no feature to rescue.
             if (v > 0.0) {
-                out_types.items[gid] = 0u;
+                out_types.items[gid] = ws_type_or_evals(0u);
                 out_inside.items[gid] = ws_mask_or_visits(inside);
                 return;
             }
@@ -290,7 +334,7 @@ void main() {
             // cell is kept: a mullion half a voxel wide covers no centre, so without this it is not
             // thinned but deleted outright.
             if (v <= 0.0) {
-                out_types.items[gid] = 0u;
+                out_types.items[gid] = ws_type_or_evals(0u);
                 out_inside.items[gid] = ws_mask_or_visits(inside);
                 return;
             }
@@ -345,6 +389,6 @@ void main() {
     // notice than a wrong colour.
     if (type == 0u && field_push.rule_count > 0u) type = field_push.first_type;
 
-    out_types.items[gid] = type;
+    out_types.items[gid] = ws_type_or_evals(type);
     out_inside.items[gid] = ws_mask_or_visits(inside);
 }

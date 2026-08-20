@@ -401,13 +401,33 @@ vec3 ws_stretched(vec3 p, float sx, float sy, float sz) {
 
 // How far a point is from a node's own box, squared, for the union cull. Zero inside it, and zero
 // for the infinite box, which is what a node whose extent could not be worked out carries.
+// **NO `infinite()` SHORT CUT, and its absence is the point rather than an oversight.**
+//
+// This read `if (lo[0] <= -1e29 || hi[0] >= 1e29) return 0.0;` — the same short cut D722 pulled out
+// of `squared_distance_to` on the CPU, left standing here because nothing about it is wrong enough
+// to show. It asks about the **X axis only**, and a box may be unbounded on one axis and bounded on
+// another: a ground plane is `y <= 0` and nothing else, and four of the estate's roofs are slanted
+// half spaces. Every one of those answered "distance nought" to a point forty metres above it, and
+// nought is what a cull cannot reject on.
+//
+// It never produced a wrong voxel, which is why it survived D691's whole pass over this file: the
+// card's answers were right and only its WALK was long. Measured on `clips/facility.clip`, one
+// evaluation of the root at the ladder's own cell centres — the same points in both arms —
+// **1,518 nodes on the card against 866 in `Field::eval`, 1.75x.**
+//
+// The arithmetic needs no special case, exactly as the CPU's comment says. `max(-1e30 - p, 0)` is
+// nought on an unbounded axis by construction. The `min` is the one thing f32 needs that f64 does
+// not: a degenerate box whose low is above its high gives a leg of 1e30, and 1e30 squared overflows
+// a float to infinity — which would then sort PAST the `3.0e38` key the union's network gives an
+// empty slot and hand the walk a child index of a node that has fewer children than that. Clamped
+// at 1e18 the leg still dwarfs any distance in a clip, so every cull decision is the one the CPU
+// makes, and nothing overflows.
 float ws_box_away_sq(uint at, vec3 p) {
-    const float lx = field_nodes.items[at].lo[0];
-    if (lx <= -1.0e29 || field_nodes.items[at].hi[0] >= 1.0e29) return 0.0;
-    const vec3 lo = vec3(lx, field_nodes.items[at].lo[1], field_nodes.items[at].lo[2]);
+    const vec3 lo = vec3(field_nodes.items[at].lo[0], field_nodes.items[at].lo[1],
+                         field_nodes.items[at].lo[2]);
     const vec3 hi = vec3(field_nodes.items[at].hi[0], field_nodes.items[at].hi[1],
                          field_nodes.items[at].hi[2]);
-    const vec3 d = max(max(lo - p, p - hi), vec3(0.0));
+    const vec3 d = min(max(max(lo - p, p - hi), vec3(0.0)), vec3(1.0e18));
     return dot(d, d);
 }
 
@@ -433,8 +453,13 @@ float ws_box_away_sq(uint at, vec3 p) {
 // # The layout
 //
 //   bits 0..7    the child count, 0..4. What this whole word used to be.
-//   bit  8       this node's own box is finite — `Field::Aabb::infinite()` said no.
-//   bits 9..12   one per child, in slot order: that CHILD's box is finite.
+//   bit  8       this node's own box bounds it on at least one AXIS.
+//   bits 9..12   one per child, in slot order: that CHILD's box bounds it on at least one axis.
+//
+// "On at least one axis" and not "finite", and the difference is a measured 1.75x. See
+// `says_nothing` in field_gpu.cpp: these bits used to be `Field::Aabb::infinite()`, which asks
+// about x alone, so a ground plane bounded in y arrived here as "no box" and `ws_child_away_sq`
+// answered nought for it without reading anything.
 //   bit  13      this node has more than one child and at least one of them is bounded, so
 //                ordering them by box distance can put a different one first.
 //

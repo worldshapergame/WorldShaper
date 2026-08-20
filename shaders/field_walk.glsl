@@ -382,6 +382,42 @@ uint ws_walk_order(uint axes, uint k) {
         continue;        \
     }
 
+// ...AND THE WAY SIDEWAYS, which is neither, and which the ops that only move a POINT want.
+//
+// `translate`, `rotate`, `mirror`, `polar repeat`, `twist` and `bend` all do the same three
+// things: work out where to ask, ask the one child, and hand back exactly what it said. Written as
+// a push they cost two turns of this loop and a whole frame — one turn to go down and one to come
+// back up and return `ret` unchanged — and on a building made of `translate { assembly }` that is
+// a great many of both. D725 counted the estate's op mix on the CPU: **translate is 8.1% of every
+// node visit and rotate 3.17%**, and on the card each of those is two visits where one would do.
+//
+// So they become the frame instead of pushing under it: the same frame is pointed at the child and
+// given the new point, and the loop goes round. It is a tail call, and the reason it is sound is
+// that there is nothing to do on the way out — the whole of `WS_FINISH(ret)` is `ret = ret`.
+//
+// **Only `node` and `p` are written, and that is the half worth checking.** A frame arrives from
+// `WS_PUSH` with `step`, `acc`, `axes`, `neighbours` and `scale` already at the values a fresh
+// frame wants, and none of the six ops below writes any of them — they are the ops whose entire
+// body is "move the point". So the frame is still pristine for whatever it becomes, and this
+// writes four words where a push writes eight. Add an op here that touches `step` and that stops
+// being true, which is why the list is spelt out rather than inferred from the child count.
+//
+// The depth saved matters as much as the turn: `WS_FIELD_STACK` is sized by how deep the estate
+// reaches, and what makes it deep is exactly this — "each building is `part_x = translate {
+// x_assembly }`, so every painted shape carries a translated twin".
+#define WS_BECOME(child_index, where)                                   \
+    {                                                                   \
+        const uint ws_child = (child_index);                            \
+        if (ws_child >= node_count) {                                   \
+            ws_field_refused_op = 130u;                                 \
+            ws_field_refused = 1u;                                      \
+            return WS_FIELD_REFUSED;                                    \
+        }                                                               \
+        stack[fi].node = ws_child;                                      \
+        stack[fi].p = (where);                                          \
+        continue;                                                       \
+    }
+
 float field_eval(uint root, vec3 p) {
     const uint node_count = field_nodes.items.length();
     if (root >= node_count) {
@@ -530,28 +566,20 @@ float field_eval(uint root, vec3 p) {
             }
 
             case WS_OP_TRANSLATE: {
-                if (step == 0u) {
-                    stack[fi].step = 1u;
-                    WS_PUSH(WS_CHILD(0), fp - vec3(WS_A(0), WS_A(1), WS_A(2)));
-                }
-                WS_FINISH(ret);
+                WS_BECOME(WS_CHILD(0), fp - vec3(WS_A(0), WS_A(1), WS_A(2)));
             }
 
             case WS_OP_ROTATE: {
-                if (step == 0u) {
-                    stack[fi].step = 1u;
-                    // Applied backwards, because moving the shape one way is asking about the point
-                    // the other. Euler xyz, in turns, because a quarter is a rounder thing to type.
-                    const float cx = cos(-WS_A(0) * WS_TAU), sx = sin(-WS_A(0) * WS_TAU);
-                    const float cy = cos(-WS_A(1) * WS_TAU), sy = sin(-WS_A(1) * WS_TAU);
-                    const float cz = cos(-WS_A(2) * WS_TAU), sz = sin(-WS_A(2) * WS_TAU);
-                    vec3 q = fp;
-                    q = vec3(q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx);
-                    q = vec3(q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy);
-                    q = vec3(q.x * cz - q.y * sz, q.x * sz + q.y * cz, q.z);
-                    WS_PUSH(WS_CHILD(0), q);
-                }
-                WS_FINISH(ret);
+                // Applied backwards, because moving the shape one way is asking about the point
+                // the other. Euler xyz, in turns, because a quarter is a rounder thing to type.
+                const float cx = cos(-WS_A(0) * WS_TAU), sx = sin(-WS_A(0) * WS_TAU);
+                const float cy = cos(-WS_A(1) * WS_TAU), sy = sin(-WS_A(1) * WS_TAU);
+                const float cz = cos(-WS_A(2) * WS_TAU), sz = sin(-WS_A(2) * WS_TAU);
+                vec3 q = fp;
+                q = vec3(q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx);
+                q = vec3(q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy);
+                q = vec3(q.x * cz - q.y * sz, q.x * sz + q.y * cz, q.z);
+                WS_BECOME(WS_CHILD(0), q);
             }
 
             case WS_OP_SCALE: {
@@ -571,17 +599,12 @@ float field_eval(uint root, vec3 p) {
             }
 
             case WS_OP_MIRROR: {
-                if (step == 0u) {
-                    stack[fi].step = 1u;
-                    const uint axis = uint(WS_A(0));
-                    WS_PUSH(WS_CHILD(0), ws_with_axis(fp, axis, abs(ws_axis_of(fp, axis))));
-                }
-                WS_FINISH(ret);
+                const uint axis = uint(WS_A(0));
+                WS_BECOME(WS_CHILD(0), ws_with_axis(fp, axis, abs(ws_axis_of(fp, axis))));
             }
 
             case WS_OP_POLAR_REPEAT: {
-                if (step == 0u) {
-                    stack[fi].step = 1u;
+                {
                     const uint count = max(1u, uint(WS_A(0)));
                     const uint axis = uint(WS_A(1));
                     uint u = 0u, v = 0u;
@@ -602,17 +625,15 @@ float field_eval(uint root, vec3 p) {
                     vec3 q = fp;
                     q = ws_with_axis(q, u, cos(angle) * r);
                     q = ws_with_axis(q, v, sin(angle) * r);
-                    WS_PUSH(WS_CHILD(0), q);
+                    WS_BECOME(WS_CHILD(0), q);
                 }
-                WS_FINISH(ret);
             }
 
             case WS_OP_TWIST:
             case WS_OP_BEND: {
                 // One block, because the two differ only in which coordinate drives the angle: a
                 // twist turns about its axis by how far ALONG it you are, a bend by how far ACROSS.
-                if (step == 0u) {
-                    stack[fi].step = 1u;
+                {
                     const uint axis = uint(WS_A(1));
                     uint u = 0u, v = 0u;
                     ws_other_axes(axis, u, v);
@@ -624,9 +645,8 @@ float field_eval(uint root, vec3 p) {
                     vec3 q = fp;
                     q = ws_with_axis(q, u, x * c - y * sn);
                     q = ws_with_axis(q, v, x * sn + y * c);
-                    WS_PUSH(WS_CHILD(0), q);
+                    WS_BECOME(WS_CHILD(0), q);
                 }
-                WS_FINISH(ret);
             }
 
             // ---- one child, the ANSWER changed on the way out -----------------------------
@@ -1004,6 +1024,7 @@ float field_eval(uint root, vec3 p) {
 #undef WS_A
 #undef WS_CHILD
 #undef WS_PUSH
+#undef WS_BECOME
 #undef WS_FINISH
 #undef WS_CX
 #undef WS_WALK_AWAY

@@ -56,22 +56,42 @@ void write_box(f32* lo, f32* hi, const forge::Field::Aabb& box) {
 // version of that idea at 45x for a byte-identical building. Every bit below is a `bounds_of` call
 // the walk would otherwise make a hundred million times.
 //
-// `infinite()` is the same test the shader's `ws_box_away_sq` makes on the narrowed box (`<= -1e29`
-// or `>= 1e29`), and narrowing f64 to f32 cannot move a value across either threshold — 1e30 stays
-// 1e30 and a real building's metres stay metres — so the two agree by construction rather than by
-// arithmetic luck.
+// The threshold is the same one the shader reads on the narrowed box (`<= -1e29` or `>= 1e29`), and
+// narrowing f64 to f32 cannot move a value across either — 1e30 stays 1e30 and a real building's
+// metres stay metres — so the two agree by construction rather than by arithmetic luck. What is NOT
+// the same is `Aabb::infinite()`, which this used to call; see `says_nothing` directly below.
+
+// A box that says NOTHING — unbounded on every axis, so no point can ever be outside it.
+//
+// **This is not `Aabb::infinite()`, and using that here was the host half of the same fault
+// `ws_box_away_sq` carried.** `infinite()` asks about the X AXIS ONLY (field.hpp:757), which is the
+// question D722 found `away_from` short-cutting on and removed: a ground plane is `y <= 0` and
+// nothing else, and it is a perfectly good bound on y. Reading it as "no box" made the walk hand
+// the shader a cleared `kNodeChild0` bit, and `ws_child_away_sq` then answers nought for that child
+// without looking — so the cull could not fire even once the shader's own arithmetic was fixed.
+//
+// The bit has to mean exactly "`ws_box_away_sq` might answer more than nought", which is "bounded
+// on at least one axis". Then the fast path and the slow path agree by construction rather than by
+// luck, which is what the bit is for.
+bool says_nothing(const forge::Field::Aabb& box) {
+    const bool x = box.low.x <= -1e29 || box.high.x >= 1e29;
+    const bool y = box.low.y <= -1e29 || box.high.y >= 1e29;
+    const bool z = box.low.z <= -1e29 || box.high.z >= 1e29;
+    return x && y && z;
+}
+
 u32 pack_cull_word(const forge::Field& field, u32 at) {
     const forge::Node& n = field.node(at);
     const u32 children = n.children;
     u32 word = children & kNodeCountMask;
-    if (!field.bounds_of(at).infinite()) word |= kNodeBounded;
+    if (!says_nothing(field.bounds_of(at))) word |= kNodeBounded;
 
     u32 bounded_children = 0;
     const u32 slots = (children < 4u) ? children : 4u;
     for (u32 c = 0; c < slots; ++c) {
         const u32 child = n.child[c];
         if (child >= field.size()) continue;
-        if (field.bounds_of(child).infinite()) continue;
+        if (says_nothing(field.bounds_of(child))) continue;
         word |= kNodeChild0 << c;
         ++bounded_children;
     }
@@ -228,6 +248,73 @@ void FieldSampler::destroy() {
                     "accelerator was {}",
                     answered_cells_, refused_, accelerate_ ? "ON" : "OFF (--no-field-accel)");
     }
+    // ...and the DUTY CYCLE, which is the number that says whether the shader is the problem.
+    //
+    // Every figure this class has ever printed is per dispatch, and a per-dispatch figure cannot
+    // tell a card that is slow from a card that is idle. The three spans here can: `gpu` over
+    // `span` is the share of the run the card was executing, and everything between `gpu` and
+    // `busy` is the host — recording, the fence poll landing on a frame boundary, and the readback.
+    if (dispatches_ > 0) {
+        const f64 span = duty_span_ms();
+        WS_LOG_INFO("clip",
+                    "the card's DUTY: {} dispatches, {} cells, {:.0f} ms of GPU and {:.0f} ms "
+                    "submit-to-collect over a {:.0f} ms span — the card was computing {:.1f}% of "
+                    "it, and {:.3f} ms of GPU a dispatch over {} cells each ({:.3f} us a cell); "
+                    "the WORST dispatch was {:.1f} ms against a ~2000 ms watchdog",
+                    dispatches_, cells_dispatched_, gpu_ms_total_, duty_busy_ms(), span,
+                    (span > 0.0) ? 100.0 * gpu_ms_total_ / span : 0.0,
+                    gpu_ms_total_ / static_cast<f64>(dispatches_),
+                    cells_dispatched_ / dispatches_,
+                    (cells_dispatched_ > 0)
+                        ? 1000.0 * gpu_ms_total_ / static_cast<f64>(cells_dispatched_)
+                        : 0.0,
+                    worst_gpu_ms_);
+    }
+    // The cost model's three factors, together, on the run that asked for them. Printed here rather
+    // than at the settle line in main.cpp, because a run cut short by `--max-seconds` never reaches
+    // that line — which is every measured run there has ever been.
+    if (count_visits_ && visited_cells_ > 0) {
+        const f64 cells = static_cast<f64>(visited_cells_);
+        WS_LOG_INFO("clip",
+                    "the card's WALK: {} cells asked the field {} times ({:.2f} evaluations a "
+                    "cell) and walked {} nodes — {:.0f} a cell, {:.0f} an evaluation, against a "
+                    "field of {} nodes",
+                    visited_cells_, evals_, static_cast<f64>(evals_) / cells, visits_,
+                    static_cast<f64>(visits_) / cells,
+                    (evals_ > 0) ? static_cast<f64>(visits_) / static_cast<f64>(evals_) : 0.0,
+                    node_count_);
+        // ...and what the warp actually spent, which is the only one of these numbers that is a
+        // cost. See `lane_slots_`: a warp runs until its slowest lane is done, so the card's bill
+        // is thirty-two times the WORST cell of every thirty-two, and the share of that which is
+        // real work is the utilisation. D681 called this divergence and could only infer it from
+        // two cameras costing 23x for 2x the visits; this counts it.
+        // The one comparison that is like for like: ONE evaluation of the clip's own root, at the
+        // ladder's own cell centres, on the card and on the CPU. Everything else in this file
+        // divides one arm's number by the other arm's points.
+        if (mirror_cells_ > 0) {
+            WS_LOG_INFO("clip",
+                        "the card AGAINST the CPU on the SAME points: one evaluation of the root "
+                        "walks {:.0f} nodes on the card and {:.0f} in `Field::eval` — the card "
+                        "walks {:.2f}x",
+                        static_cast<f64>(root_visits_) / static_cast<f64>(visited_cells_),
+                        static_cast<f64>(mirror_visits_) / static_cast<f64>(mirror_cells_),
+                        (mirror_visits_ > 0)
+                            ? (static_cast<f64>(root_visits_) / static_cast<f64>(visited_cells_)) /
+                                  (static_cast<f64>(mirror_visits_) /
+                                   static_cast<f64>(mirror_cells_))
+                            : 0.0);
+        }
+        WS_LOG_INFO("clip",
+                    "the card's WARPS: {} lane-slots spent to do {} visits — the lanes were "
+                    "USEFUL {:.1f}% of the time, and the worst cell of a warp walks {:.1f}x what "
+                    "the mean one does",
+                    lane_slots_, visits_,
+                    (lane_slots_ > 0) ? 100.0 * static_cast<f64>(visits_) /
+                                            static_cast<f64>(lane_slots_)
+                                      : 0.0,
+                    (visits_ > 0) ? static_cast<f64>(lane_slots_) / static_cast<f64>(visits_)
+                                  : 0.0);
+    }
     const VkDevice device = device_->handle();
     if (in_flight_ > 0) vkWaitForFences(device, 1, &fence_, VK_TRUE, ~0ull);
     pipeline_.destroy();
@@ -375,6 +462,7 @@ bool FieldSampler::upload(const forge::SamplePlan& plan, u32 bounds_node, bool h
         return false;
     }
 
+    plan_ = &plan;   // only ever read by `mirror_the_walk`, which only runs under --gpu-visits
     root_ = plan.root;
     bounds_ = bounds_node;
     has_bounds_ = has_bounds ? 1u : 0u;
@@ -404,11 +492,48 @@ bool FieldSampler::upload(const forge::SamplePlan& plan, u32 bounds_node, bool h
     return true;
 }
 
+// The SAME question, asked of `Field::eval`, at the SAME points — which is the only way to compare
+// two walks.
+//
+// `--box-probe` already reports what one CPU evaluation walks and it reports it over the wrong
+// points: its evaluations are the descent's box centres across a whole ancestor, most of them
+// metres from any surface where a union's cull rejects nearly everything. The ladder's cells are
+// all within one voxel of a surface, where it rejects far less. D722 wrote that trap down about
+// `--sample-cost`'s 5.1x — *a penalty measured over the wrong nodes is not a penalty* — and it is
+// just as true of a walk length.
+//
+// So this walks the first box of the run, cell for cell, at the very coordinates
+// `sample_field.comp` computes, and counts what `Field::eval` visits. One evaluation of the root
+// per cell in both arms, so the two numbers are the same number.
+void FieldSampler::mirror_the_walk(const GpuSampleBoxRecord& box) {
+    if (plan_ == nullptr || !plan_->ok() || plan_->field == nullptr) return;
+    const forge::Field& field = *plan_->field;
+    forge::reset_field_visits();
+    for (u32 cell = 0; cell < kNodeCells; ++cell) {
+        const i32 within[3] = {static_cast<i32>(cell & 7u), static_cast<i32>((cell >> 3u) & 7u),
+                               static_cast<i32>((cell >> 6u) & 7u)};
+        const forge::Vec3 p{(static_cast<f64>(box.lo[0] + within[0]) + 0.5) * box.voxel,
+                            (static_cast<f64>(box.lo[1] + within[1]) + 0.5) * box.voxel,
+                            (static_cast<f64>(box.lo[2] + within[2]) + 0.5) * box.voxel};
+        (void)field.eval(root_, p);
+    }
+    mirror_visits_ += forge::field_visits();
+    mirror_cells_ += kNodeCells;
+    // Let the borrowed plan go the moment it has been asked enough. `SamplePlan::field` points into
+    // the refinement script, which `stop_refine_worker` can pull out from under it, and a pointer
+    // kept for a whole run to be used in its first second is a pointer waiting to dangle.
+    if (mirror_cells_ >= 16ull * kNodeCells) plan_ = nullptr;
+}
+
 bool FieldSampler::submit(const std::vector<GpuSampleBoxRecord>& boxes) {
     if (!valid() || node_count_ == 0 || in_flight_ > 0) return false;
     if (boxes.empty() || boxes.size() > kMaxBoxes) return false;
 
+    // Sixteen nodes of the run, and only under `--gpu-visits`, which is not building a world.
+    if (count_visits_ && mirror_cells_ < 16ull * kNodeCells) mirror_the_walk(boxes.front());
+
     submit_began_ns_ = now_ns();
+    if (first_submit_ns_ == 0) first_submit_ns_ = submit_began_ns_;
     std::memcpy(boxes_.mapped, boxes.data(), boxes.size() * sizeof(GpuSampleBoxRecord));
 
     const u32 count = static_cast<u32>(boxes.size());
@@ -488,7 +613,15 @@ bool FieldSampler::ready() {
     const u32* out_type = reinterpret_cast<const u32*>(base);
     const u32* out_inside = reinterpret_cast<const u32*>(base + readback_.size / 2);
     for (u32 i = 0; i < cells; ++i) {
-        types_[i] = static_cast<VoxelTypeId>(out_type[i]);
+        // AIR under `--gpu-visits`, and it has to be said rather than left to the cast.
+        //
+        // In that mode the type word is not a type, it is two counters (see `ws_type_or_evals`),
+        // and `VoxelTypeId` is narrower than the word — so the cast handed the paste a material id
+        // out of the top of the range, which indexes a palette that does not have one. It is an
+        // ACCESS VIOLATION about two thirds of the way into a run, in a mode that is not building a
+        // world and whose voxels nobody looks at. Trap 21's shape: an instrument's bookkeeping
+        // riding in a field somebody else owns.
+        types_[i] = count_visits_ ? VoxelTypeId{0} : static_cast<VoxelTypeId>(out_type[i]);
         // The top bit is a REFUSAL and not part of the mask: the walk ran out of stack or out of
         // turns for that cell, and the shader has no way to assert. Counted rather than dropped --
         // a refusal that reads as "air" is a hole in a wall that nothing anywhere reports.
@@ -501,7 +634,35 @@ bool FieldSampler::ready() {
             if (refused_op_ == 0xFFFFFFFFu) refused_op_ = (word >> 8u) & 0xFFu;
         }
         inside_[i] = static_cast<u8>((word & 1u) != 0);
-        if (count_visits_) visits_ += word;
+        if (count_visits_) {
+            visits_ += word;
+            // ...and how many EVALUATIONS those visits were spread over, which is the factor that
+            // turns a visit count into a cost model. The type word carries it under
+            // `--gpu-visits`; see `ws_field_evals` in sample_field.comp.
+            // Two counts in the one spare word: the root walk in the low twenty-one bits and the
+            // number of asks in the top eleven. See `ws_type_or_evals`.
+            root_visits_ += out_type[i] & 0x1FFFFFu;
+            evals_ += out_type[i] >> 21u;
+            // THE LANE SLOTS, and this is the number every figure in this file was missing.
+            //
+            // `ws_field_visits` is incremented by each LANE that is still walking, so it counts
+            // work done and is blind to work not done. A warp of thirty-two lanes runs one loop
+            // for all of them, and it runs until the LAST one finishes — so a warp holding one
+            // cell that walks 40,000 nodes and thirty-one that walk 400 costs the card 40,000
+            // turns and reports 52,400 visits. The counter says the card was 100% busy and it was:
+            // busy holding thirty-one idle lanes against a barrier that is the warp itself.
+            //
+            // The mapping is exact and needs no shader change to read. `local_size_x` is 64 and
+            // `gid` is the flat invocation index, so an aligned run of thirty-two consecutive
+            // entries of this buffer IS a warp on any card whose subgroup is 32 — which is every
+            // NVIDIA card. The maximum of that run is how many turns the warp took; thirty-two
+            // times it is how many lane-slots the card spent on them.
+            warp_peak_ = (word > warp_peak_) ? word : warp_peak_;
+            if ((i % 32u) == 31u || i + 1 == cells) {
+                lane_slots_ += static_cast<u64>(warp_peak_) * 32ull;
+                warp_peak_ = 0;
+            }
+        }
     }
 
     last_gpu_ms_ = 0.0;
@@ -513,7 +674,16 @@ bool FieldSampler::ready() {
             last_gpu_ms_ = static_cast<f64>(stamps[1] - stamps[0]) * period * 1.0e-6;
         }
     }
-    last_host_ms_ = ns_to_ms(now_ns() - submit_began_ns_);
+    const u64 ready_at = now_ns();
+    last_host_ms_ = ns_to_ms(ready_at - submit_began_ns_);
+    // The duty cycle's three spans. See `duty_gpu_ms` in the header for why a per-dispatch time
+    // cannot answer the question this does.
+    ++dispatches_;
+    cells_dispatched_ += cells;
+    gpu_ms_total_ += last_gpu_ms_;
+    if (last_gpu_ms_ > worst_gpu_ms_) worst_gpu_ms_ = last_gpu_ms_;
+    busy_ns_total_ += ready_at - submit_began_ns_;
+    last_ready_ns_ = ready_at;
     answered_cells_ += cells;
     if (count_visits_) visited_cells_ += cells;
     delivered_ = count;

@@ -146,6 +146,31 @@ public:
     // the watchdog at all; 32 is about 220 ms of the worst camera measured. Batch size was separately
     // measured not to affect throughput (64 and 256 both give 0.457 ms a node), so this costs
     // nothing and is pure headroom.
+    //
+    // **IT IS STILL 32, and both halves of the paragraph above are now measured rather than
+    // reasoned about — one of them was right for the wrong reason and the other was wrong.**
+    //
+    // *"32 is about 220 ms of the worst camera measured"* is optimistic by three times. `--gpu-
+    // visits`' duty line reports the WORST dispatch of a run, and on `clips/facility.clip`, cold,
+    // the ladder's own nodes: **579, 655 and 658 ms at 32 boxes** over three runs. So the margin
+    // against a two-second watchdog is about 3x, not 16x, and that is on the card this was
+    // developed on. The sweep, same command, same clip:
+    //
+    //   | boxes | ms of GPU a dispatch | us a cell | WORST dispatch |
+    //   |    32 |  46.8 | 2.857 |   579 ms |
+    //   |    64 |  92.4 | 2.819 |   711 ms |
+    //   |   128 | 189.0 | 2.884 |  1040 ms |
+    //   |   256 | 423.6 | 3.233 |  1950 ms |
+    //
+    // *"batch size does not affect throughput"* is confirmed and is now a much stronger statement
+    // than the run that produced it could make: **an eightfold bigger dispatch — 16,384
+    // invocations to 131,022, which is 512 warps against 4,096 on a card with 1,728 warp slots —
+    // moves the cost of a cell by nothing at all.** So the card is already at whatever ceiling it
+    // has at 32 boxes, there is no idle machine to fill, and every box past that is watchdog
+    // margin spent for nothing. 256 came within 50 ms of losing the device.
+    //
+    // The other half of the same finding is in `duty_gpu_ms`: the card is COMPUTING 93% of the
+    // wall clock at 32 boxes. Neither the cap nor the round trip is what makes this slow.
     static constexpr u32 kSafeBoxes = 32;
 
     // Record and submit. `boxes` must be at most kMaxBoxes. Returns false if a batch is already in
@@ -165,6 +190,37 @@ public:
     // ladder reports this where it used to report the worker's own clock, so the two arms of
     // `--cpu-sample` are the same number measured the same way.
     f64 last_gpu_ms() const { return last_gpu_ms_; }
+
+    // THE DUTY CYCLE, and it is the number this class was missing.
+    //
+    // `last_gpu_ms()` says what a dispatch cost and says nothing at all about what the card did
+    // for the rest of the second. Those are different questions and only the second one explains a
+    // throughput: a sampler whose dispatches are 40 ms each and which submits one of them every
+    // 120 ms is running at a third of the card whatever the shader does, and no per-dispatch
+    // figure anywhere in this file would say so.
+    //
+    // Three spans, all in nanoseconds and all measured on the host clock round the same events:
+    //
+    //   `span`  — first submit to last collection. The wall clock the card was available for.
+    //   `busy`  — submit to the moment `ready()` first saw the fence signalled, summed. That is
+    //             an OVER-statement of what the card was executing, because the poll is once a
+    //             frame; the timestamp sum below is the under-statement, and the truth is between.
+    //   `gpu`   — the timestamps round the dispatch, summed. What the card actually executed.
+    //
+    // `gpu / span` is the share of the run the card was computing. Trap 17: a cost that tracks
+    // nothing about its own output is a wait, and the question to ask of a wait is who else is
+    // running.
+    f64 duty_gpu_ms() const { return gpu_ms_total_; }
+    f64 duty_busy_ms() const { return ns_to_ms_(busy_ns_total_); }
+    f64 duty_span_ms() const {
+        return (last_ready_ns_ > first_submit_ns_) ? ns_to_ms_(last_ready_ns_ - first_submit_ns_)
+                                                   : 0.0;
+    }
+    u64 dispatches() const { return dispatches_; }
+    // The WORST dispatch of the run, which is the only figure the watchdog argument may be made
+    // from. A mean says nothing about a device reset: the reset is caused by the one submission
+    // that ran long, and on this clip the enclosed camera is fifteen times the outdoor one.
+    f64 worst_gpu_ms() const { return worst_gpu_ms_; }
     // ...and how long the host spent recording and reading back, which is the part that is NOT
     // free and the part a hundredfold can hide behind.
     f64 last_host_ms() const { return last_host_ms_; }
@@ -204,6 +260,11 @@ public:
     // The op the first refusal was standing on, or 128 for depth. ~0 when nothing has refused.
     u32 refused_op() const { return refused_op_; }
     u64 visits() const { return visits_; }
+    // Field evaluations a cell asked for, over the same cells `visits()` counted. The outer factor
+    // of the cost model: (evaluations) x (visits an evaluation) x (what a step costs), and until
+    // this existed the first of the three was a guess of "about two" nobody had counted. D722 is
+    // exactly that fault on the CPU side, where both published factors turned out wrong.
+    u64 evals() const { return evals_; }
     u64 visited_cells() const { return visited_cells_; }
     // Every cell the card was ever asked for, refusals included. The denominator `refused()` needs:
     // "nought refusals" is only a statement about anything if something says how many were asked,
@@ -242,6 +303,17 @@ private:
     std::vector<u8> inside_;
     std::string why_not_;
 
+    // The plan the field on the card came from, kept ONLY so that `--gpu-visits` can ask the CPU
+    // the same question at the same points. Never read on a run that is building a world.
+    //
+    // It is a borrowed pointer and that is safe for exactly one reason: `upload` is handed
+    // `Application::refine_plan_`, which outlives the sampler, and this is used only between a
+    // `submit` and its `ready` on the same frame.
+    const forge::SamplePlan* plan_ = nullptr;
+    void mirror_the_walk(const GpuSampleBoxRecord& box);
+    u64 mirror_cells_ = 0;
+    u64 mirror_visits_ = 0;
+
     u32 node_count_ = 0;
     u32 rule_count_ = 0;
     u32 root_ = 0;
@@ -256,6 +328,10 @@ private:
     u32 bounded_nodes_ = 0;
     u32 sortable_unions_ = 0;
     u64 visits_ = 0;
+    u64 evals_ = 0;
+    u64 root_visits_ = 0;
+    u64 lane_slots_ = 0;
+    u32 warp_peak_ = 0;
     u64 refused_ = 0;
     u64 answered_cells_ = 0;
     u32 refused_op_ = 0xFFFFFFFFu;
@@ -263,6 +339,15 @@ private:
     f64 last_gpu_ms_ = 0.0;
     f64 last_host_ms_ = 0.0;
     u64 submit_began_ns_ = 0;
+
+    static f64 ns_to_ms_(u64 ns) { return static_cast<f64>(ns) * 1.0e-6; }
+    u64 dispatches_ = 0;
+    u64 cells_dispatched_ = 0;
+    f64 gpu_ms_total_ = 0.0;
+    f64 worst_gpu_ms_ = 0.0;
+    u64 busy_ns_total_ = 0;
+    u64 first_submit_ns_ = 0;
+    u64 last_ready_ns_ = 0;
 
     static constexpr u32 kNodeCells = 512;      // forge::kNodeVoxels cubed
     static constexpr u64 kMaxNodes = 262144;    // the estate's field is 3,744; this is room to grow
