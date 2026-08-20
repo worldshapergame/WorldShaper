@@ -87,11 +87,18 @@ constexpr u32 kSegmentDirectory = 2u;
 // every increment and leave the bank exactly as expensive as it was.
 //
 // What makes a block work is that the leaf list is stable by index: the ladder replaces the node
-// it split with its first child and appends the other seven, so a save touches the block holding
-// the split and the block at the end, and nothing in between. A thousand leaves to a block is
-// eighty kilobytes of restatement for one sharpened node, which is small enough not to matter and
-// large enough that the per-block hash costs nothing to keep.
-constexpr u32 kRegionsPerBlock = 1024u;
+// it split with its first child and appends the other seven, so a sharpened node moves the block it
+// sits in and the block at the end, and nothing in between.
+//
+// SIXTY-FOUR, and the size is chosen against the case that actually happens rather than against one
+// sharpened node. A bank is two minutes of ladder, which is hundreds of nodes picked by rank —
+// scattered right through the list, not clustered. So the cost is roughly "one block per node
+// refined", and the block size is what that multiplies: at a thousand leaves a block, a bank that
+// refined a thousand nodes would restate the estate's whole fifty-megabyte leaf list; at
+// sixty-four it restates about five kilobytes each and stops well short of it. What small blocks
+// cost is the directory — one hash per block, an eighth of a byte per leaf — and sixteen bytes of
+// framing per block in the increment, both of which are nothing.
+constexpr u32 kRegionsPerBlock = 64u;
 
 // When the journal is rewritten whole rather than appended to.
 //
@@ -233,6 +240,14 @@ struct Cursor {
         at += bytes;
         return p;
     }
+
+    // Could there be `count` things of `each` bytes left? Asked before any of the reserves below,
+    // because a count is a number out of a file and `reserve` believes it: a corrupt four-byte
+    // field is a request for sixteen gigabytes, and `bad allocation` from inside a cache read is a
+    // crash rather than the cache miss it ought to be.
+    bool room_for(u64 count, usize each) const {
+        return at <= size && count <= static_cast<u64>((size - at) / each);
+    }
 };
 
 // Every part of a payload is preceded by its own length, so a reader that wants to SKIP a part —
@@ -280,6 +295,30 @@ struct CacheHeader {
 // header. Sixty-four bytes is one sector on every disk anybody runs this on and a torn write of it
 // is not supposed to be possible — but "not supposed to be possible" is how a cache ends up
 // pointing a reader at a journal length that was never written, and the cure is eight bytes.
+// A hash over a run of bytes, eight at a time.
+//
+// `core/hash.hpp`'s `hash_bytes` is FNV-1a and reads one byte per multiply, which is the right
+// shape for a mod name and the wrong one here: this is asked of every chunk of the world on every
+// save, and at a byte a multiply the estate's three hundred megabytes would cost more than the
+// write it is deciding about. Eight bytes a step through the same mixing function the rest of this
+// repository uses. It is not compared against anything outside this file, so it is free to change
+// whenever the version does.
+u64 hash_span(const u8* data, usize size) {
+    u64 value = hash_mix(static_cast<u64>(size));
+    usize at = 0;
+    for (; at + sizeof(u64) <= size; at += sizeof(u64)) {
+        u64 word = 0;
+        std::memcpy(&word, data + at, sizeof(word));
+        value = hash_combine(value, word);
+    }
+    if (at < size) {
+        u64 word = 0;
+        std::memcpy(&word, data + at, size - at);
+        value = hash_combine(value, word);
+    }
+    return value;
+}
+
 u64 header_check(const CacheHeader& head) {
     u64 value = hash_mix(kMagic);
     value = hash_combine(value, kVersion);
@@ -368,7 +407,7 @@ void write_directory(std::vector<u8>& out, const CacheDirectory& dir) {
 
 bool read_directory(Cursor& in, CacheDirectory& out) {
     const u32 chunks = in.pod<u32>();
-    if (!in.ok) return false;
+    if (!in.ok || !in.room_for(chunks, 32)) return false;
     out.chunks.resize(chunks);
     for (u32 i = 0; i < chunks && in.ok; ++i) {
         out.chunks[i].x = in.pod<i64>();
@@ -379,7 +418,7 @@ bool read_directory(Cursor& in, CacheDirectory& out) {
     if (!in.ok) return false;
     out.regions = in.pod<u32>();
     const u32 blocks = in.pod<u32>();
-    if (!in.ok) return false;
+    if (!in.ok || !in.room_for(blocks, sizeof(u64))) return false;
     out.region_blocks.resize(blocks);
     for (u32 i = 0; i < blocks && in.ok; ++i) out.region_blocks[i] = in.pod<u64>();
     out.meta_hash = in.pod<u64>();
@@ -740,7 +779,7 @@ bool read_meta_block(Cursor& in, const WorldCache& cache, MetaIn& out) {
     if (!in.ok) return false;
 
     const u32 visual_count = in.pod<u32>();
-    if (!in.ok) return false;
+    if (!in.ok || !in.room_for(visual_count, sizeof(VisualRecord))) return false;
     out.visuals.resize(visual_count);
     {
         const u8* p = in.take(visual_count * sizeof(VisualRecord));
@@ -749,7 +788,7 @@ bool read_meta_block(Cursor& in, const WorldCache& cache, MetaIn& out) {
     }
 
     const u32 behaviour_count = in.pod<u32>();
-    if (!in.ok) return false;
+    if (!in.ok || !in.room_for(behaviour_count, 8 + kFastTagWords * 8 + 8)) return false;
     out.behaviours.assign(behaviour_count, BehaviourRecord{});
     for (BehaviourRecord& record : out.behaviours) {
         record.material = in.pod<u32>();
@@ -771,7 +810,7 @@ bool read_meta_block(Cursor& in, const WorldCache& cache, MetaIn& out) {
     }
 
     const u32 type_count = in.pod<u32>();
-    if (!in.ok) return false;
+    if (!in.ok || !in.room_for(type_count, sizeof(VoxelType))) return false;
     out.types.resize(type_count);
     {
         const u8* p = in.take(type_count * sizeof(VoxelType));
@@ -780,7 +819,7 @@ bool read_meta_block(Cursor& in, const WorldCache& cache, MetaIn& out) {
     }
 
     const u32 material_count = in.pod<u32>();
-    if (!in.ok) return false;
+    if (!in.ok || !in.room_for(material_count, 4)) return false;
     out.materials.clear();
     out.materials.reserve(material_count);
     for (u32 i = 0; i < material_count && in.ok; ++i) out.materials.push_back(in.pod<u32>());
@@ -788,7 +827,7 @@ bool read_meta_block(Cursor& in, const WorldCache& cache, MetaIn& out) {
 
     out.stipple_taken = in.pod<u8>() != 0u;
     const u32 stipple_count = in.pod<u32>();
-    if (!in.ok) return false;
+    if (!in.ok || !in.room_for(stipple_count, 5)) return false;
     out.stipple.clear();
     out.stipple.reserve(stipple_count);
     for (u32 i = 0; i < stipple_count && in.ok; ++i) {
@@ -800,7 +839,7 @@ bool read_meta_block(Cursor& in, const WorldCache& cache, MetaIn& out) {
     if (!in.ok) return false;
 
     const u32 emitter_chunks = in.pod<u32>();
-    if (!in.ok) return false;
+    if (!in.ok || !in.room_for(emitter_chunks, 28)) return false;
     out.emitters.clear();
     out.emitters.reserve(emitter_chunks);
     for (u32 i = 0; i < emitter_chunks && in.ok; ++i) {
@@ -809,7 +848,7 @@ bool read_meta_block(Cursor& in, const WorldCache& cache, MetaIn& out) {
         chunk.chunk_y = in.pod<i64>();
         chunk.chunk_z = in.pod<i64>();
         const u32 cell_count = in.pod<u32>();
-        if (!in.ok) return false;
+        if (!in.ok || !in.room_for(cell_count, sizeof(EmissiveCell))) return false;
         chunk.cells.reserve(cell_count);
         for (u32 c = 0; c < cell_count && in.ok; ++c) chunk.cells.push_back(in.pod<EmissiveCell>());
         out.emitters.push_back(std::move(chunk));
@@ -817,7 +856,7 @@ bool read_meta_block(Cursor& in, const WorldCache& cache, MetaIn& out) {
     if (!in.ok) return false;
 
     const u32 ledger_count = in.pod<u32>();
-    if (!in.ok) return false;
+    if (!in.ok || !in.room_for(ledger_count, 12)) return false;
     out.ledger.clear();
     out.ledger.reserve(ledger_count);
     for (u32 i = 0; i < ledger_count && in.ok; ++i) {
@@ -891,7 +930,7 @@ ChunkPlan write_changed_chunks(std::vector<u8>& out, const World& world,
         const usize bricks_at = out.size();
         const u32 bricks = write_chunk_bricks(out, *chunk);
         std::memcpy(out.data() + count_at, &bricks, sizeof(bricks));
-        const u64 hash = hash_bytes(out.data() + bricks_at, out.size() - bricks_at);
+        const u64 hash = hash_span(out.data() + bricks_at, out.size() - bricks_at);
         plan.directory.push_back(DirectoryChunk{coord.x, coord.y, coord.z, hash});
 
         const auto found = before.find(coord);
@@ -1092,7 +1131,7 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
     std::vector<u8> meta;
     meta.reserve(1u << 16);
     write_meta_block(meta, cache);
-    const u64 meta_hash = hash_bytes(meta.data(), meta.size());
+    const u64 meta_hash = hash_span(meta.data(), meta.size());
     const std::vector<u64> blocks = region_block_hashes(cache.regions);
 
     // Can this be an append? Only a whole-world file that this build wrote, that was finished, and
@@ -1668,12 +1707,17 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
     std::unordered_map<ChunkCoord, ChunkSrc, ChunkCoordHash> live;
     std::vector<ChunkCoord> emptied;
 
+    // Refused rather than believed: the count is four bytes out of a file, and the block vectors
+    // below are sized from it. A leaf is 81 bytes and the base segment carries every one of them,
+    // so a list that could not fit in the file is not a list.
     const auto set_region_count = [&](u32 count) {
+        if (static_cast<u64>(count) * 81 > blob.size()) return false;
         region_count = count;
         const u32 want = region_blocks_for(count);
         block_at.resize(want, nullptr);
         block_size.resize(want, 0);
         block_len.resize(want, 0);
+        return true;
     };
 
     // Walking one chunk's bricks to find where the record ends, without decoding any of them.
@@ -1715,7 +1759,7 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
                 Cursor r{regions, bytes, 0, true};
                 const u32 count = r.pod<u32>();
                 if (!r.ok) return false;
-                set_region_count(count);
+                if (!set_region_count(count)) return false;
                 for (u32 block = 0; block < static_cast<u32>(block_at.size()); ++block) {
                     const u32 from = block * kRegionsPerBlock;
                     const u32 to = std::min<u32>(from + kRegionsPerBlock, count);
@@ -1734,7 +1778,7 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
                 Cursor e{edits, bytes, 0, true};
                 cache.edits_named = e.pod<u8>() != 0u;
                 const u32 boxes = e.pod<u32>();
-                if (!e.ok) return false;
+                if (!e.ok || !e.room_for(boxes, 48)) return false;
                 cache.edited.clear();
                 cache.edited.reserve(boxes);
                 for (u32 i = 0; i < boxes && e.ok; ++i) {
@@ -1750,7 +1794,7 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
             {
                 Cursor f{fingerprint, bytes, 0, true};
                 const u32 count = f.pod<u32>();
-                if (!f.ok) return false;
+                if (!f.ok || !f.room_for(count, 32)) return false;
                 expect.resize(count);
                 expect_hash.resize(count);
                 for (u32 i = 0; i < count && f.ok; ++i) {
@@ -1786,7 +1830,7 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
             Cursor r{regions, bytes, 0, true};
             const u32 count = r.pod<u32>();
             if (!r.ok) return false;
-            set_region_count(count);
+            if (!set_region_count(count)) return false;
             for (u32 index = 0; index < static_cast<u32>(block_at.size()); ++index) {
                 const u32 from = index * kRegionsPerBlock;
                 const u32 to = std::min<u32>(from + kRegionsPerBlock, count);
@@ -1803,7 +1847,7 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
             const u32 count = r.pod<u32>();
             const u32 moved = r.pod<u32>();
             if (!r.ok) return false;
-            set_region_count(count);
+            if (!set_region_count(count)) return false;
             for (u32 i = 0; i < moved; ++i) {
                 const u32 index = r.pod<u32>();
                 const u32 length = r.pod<u32>();

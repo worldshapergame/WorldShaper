@@ -651,19 +651,19 @@ TEST_CASE("sharpening one leaf rewrites one block of the ladder") {
     Side wrote;
     populate(wrote);
     WorldCache out = wrote.handle();
-    out.regions = many_regions(4000, 1000);   // four blocks of a thousand
+    out.regions = many_regions(4000, 1000);   // sixty-three blocks of sixty-four
     WorldCacheWritten first;
     REQUIRE(write_world_cache(file.path, key, out, &first));
-    CHECK(first.region_blocks_total == 4);
-    CHECK(first.region_blocks_written == 4);
+    CHECK(first.region_blocks_total == 63);
+    CHECK(first.region_blocks_written == 63);
 
-    // One leaf, in the middle of the second block, comes good.
+    // One leaf, a long way into the list, comes good.
     out.regions[1500].done = true;
     out.regions[1500].applied_per_metre = 32;
     WorldCacheWritten second;
     REQUIRE(write_world_cache(file.path, key, out, &second));
     CHECK(second.incremental);
-    CHECK(second.region_blocks_total == 4);
+    CHECK(second.region_blocks_total == 63);
     CHECK(second.region_blocks_written == 1);
     CHECK(second.chunks_written == 0);
 
