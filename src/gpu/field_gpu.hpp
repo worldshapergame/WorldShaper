@@ -32,6 +32,8 @@
 // answers when the card is done, and nothing waits inside a frame.
 
 #include <filesystem>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "forge/sample.hpp"
@@ -254,6 +256,45 @@ public:
     // `ws_field_visits` in shaders/field_types.glsl.
     void set_count_visits(bool on) { count_visits_ = on; }
     bool counting_visits() const { return count_visits_; }
+
+    // THE DIVERGENCE INSTRUMENT, and the reason it is an environment variable rather than a flag.
+    //
+    // D727 named specialising the shader per clip as the lever, on the reasoning that every lane
+    // pays for every other lane's opcode in a switch over sixty-seven ops. **That reasoning has a
+    // hole**: taking ops out of the switch shrinks the instruction stream and does nothing about
+    // divergence among the ops that remain. If a warp's lanes are spread over fifteen ops at a
+    // turn, the warp runs fifteen branches whichever shader it is running.
+    //
+    // So this counts, at every turn of the walk, how many DISTINCT ops the active lanes of the warp
+    // are standing on — with a subgroup ballot, on the ladder's own nodes, on a real clip. See the
+    // block above `ws_distinct_ops` in shaders/field_types.glsl.
+    //
+    // `WS_GPU_DIVERGE=1` in the environment, and not a command-line flag, because the flag would
+    // have to be parsed in `src/app/main.cpp` and this instrument is not the ladder's business:
+    // the run it belongs to builds a world of nonsense and exists to answer one question about the
+    // shader. **Pair it with `--refine-batch 1`.** The ballot loop makes a dispatch several times
+    // dearer, the worst dispatch on the facility is already 510 ms of a two-second watchdog, and a
+    // lost device in an instrument run is the same lost device as anywhere else.
+    bool diverging() const { return diverge_; }
+
+    // R12d — the pipeline this clip's op set was compiled for, and what it cost.
+    //
+    // **OFF unless `WS_GPU_SPECIALISE=1`, and the reason is in `create`.** It was built, gated and
+    // measured at 1.00x on the clip this engine ships, against a control built with the change
+    // absent from the tree. The two arms live in one build and read the same buffers and the same
+    // boxes, so they cannot differ by anything but which pipeline was bound (D407) — and D683's
+    // trap is why the arm that decided it was the tree without the change rather than the flag
+    // turned off, because both flag arms are inside the diff.
+    bool specialised() const { return active_ != VK_NULL_HANDLE; }
+    u32 clip_ops() const { return clip_ops_; }
+    // Milliseconds `vkCreateComputePipelines` took for the last specialised pipeline built, and how
+    // many were built against how many times one was asked for. Opening the same clip twice must
+    // compile once, and this is the number that says whether it did — 721 ms on the facility the
+    // first time a machine sees that op set and 1 ms after, and `built` stays at 1 for `asked` 1
+    // because `main.cpp`'s `field_card_tried_` uploads a field once per world.
+    f64 last_compile_ms() const { return last_compile_ms_; }
+    u32 pipelines_built() const { return pipelines_built_; }
+    u32 pipelines_asked() const { return pipelines_asked_; }
     // Cells the card could not answer for at all. Nought is the only acceptable number: a refusal
     // is not a wrong voxel, it is a voxel nobody computed, and it must never read as air.
     u64 refused() const { return refused_; }
@@ -279,6 +320,11 @@ private:
     bool build_layout();
     void write_descriptors();
     bool upload_device_buffer(GpuBuffer& target, const void* data, u64 bytes, const char* name);
+    // R12d — the pipeline for one op set, out of the cache or freshly compiled. VK_NULL_HANDLE
+    // means "use the general one", which is what every failure here falls back to: a clip that
+    // could not be specialised must still be sampled.
+    VkPipeline pipeline_for(const std::vector<bool>& ops, bool measure);
+    void drop_specialised();
 
     Device* device_ = nullptr;
     ComputePipeline pipeline_;
@@ -325,6 +371,45 @@ private:
     bool rescue_ = true;
     bool accelerate_ = true;
     bool count_visits_ = false;
+    bool diverge_ = false;
+    // The divergence run's totals. `div_ops_` and `div_active_` are sums over LANE-turns, so each
+    // turn is weighted by how many lanes were in it — which is the weighting that prices a warp,
+    // since a turn with two lanes left in it is not where the card spends anything. `div_warp_turns_`
+    // is the unweighted count of warp-turns, taken as the maximum of each aligned run of 32 lanes'
+    // turn counts: D727's mapping, and the same one `lane_slots_` above uses.
+    f64 div_ops_ = 0.0;
+    f64 div_nodes_ = 0.0;
+    u64 div_turns_ = 0;
+    u64 div_warp_turns_ = 0;
+    u64 div_warps_ = 0;
+    u64 div_hist_[7]{};
+    f64 div_warp_ops_ = 0.0;
+    u64 div_warp_lane_turns_ = 0;
+    u32 div_warp_peak_ = 0;
+    // How many of the sixty-seven ops this clip's field can reach, from every root the shader is
+    // handed — the solid, the bounds shape and every paint rule's test.
+    u32 clip_ops_ = 0;
+    std::string clip_op_names_;
+
+    // R12d — the specialised pipelines, one per distinct op set, keyed on the set itself.
+    //
+    // **Keyed on the SET and not on the clip**, which is what makes opening the same clip twice
+    // compile once and also makes two clips with the same ops share a pipeline. The key is the
+    // 67-bit set written out as characters, because that is a key nobody can get subtly wrong: a
+    // hash would collide silently, and a silent collision here is a clip running another clip's
+    // shader, which is a different building rather than an error.
+    bool specialise_ = true;
+    std::filesystem::path spirv_path_;
+    std::unordered_map<std::string, VkPipeline> specialised_;
+    VkPipeline active_ = VK_NULL_HANDLE;
+    std::vector<bool> clip_ops_used_;
+    // What the base pipeline's reload counter stood at when the cache was filled. A hot reload
+    // recompiles the .spv, and a specialised pipeline built from the old one would then be the
+    // shader the file no longer says — the fault trap 11 is about, one level along.
+    u64 reload_seen_ = 0;
+    f64 last_compile_ms_ = 0.0;
+    u32 pipelines_built_ = 0;
+    u32 pipelines_asked_ = 0;
     u32 bounded_nodes_ = 0;
     u32 sortable_unions_ = 0;
     u64 visits_ = 0;

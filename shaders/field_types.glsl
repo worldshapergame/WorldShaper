@@ -226,6 +226,211 @@ layout(push_constant) uniform FieldPush {
 // taken before R12c was measured in. See the fold-op case in field_walk.glsl.
 #define WS_FIELD_FLAG_NO_ACCEL 4u
 
+
+// ---------------------------------------------------------------------------------------------
+// THE DIVERGENCE INSTRUMENT, and the hole in D727 it exists to close.
+//
+// D727 concluded that the card is at parity per node visit with ten scalar cores — 813 million
+// visits a second against 645 million, about 14,000 lane-cycles a visit against a core's seventy —
+// and named the cause as **every lane paying for every other lane's opcode** in a switch over
+// sixty-seven ops. From that it named the lever: specialise the shader to the ops one clip uses.
+//
+// **That inference has a hole and it decides whether the lever is worth pulling.** Taking ops out
+// of the switch shrinks the INSTRUCTION STREAM. It does not remove divergence among the ops that
+// remain: if the thirty-two lanes of a warp are standing on fifteen different ops at one turn, the
+// warp executes fifteen branches whether the shader knows about twenty ops or sixty-seven, and the
+// specialisation buys instruction cache and very little else.
+//
+// So this counts the thing the argument is actually about: **how many distinct ops the ACTIVE lanes
+// of one warp are spread over, at each turn of the walk.** Two lanes on the same op cost the warp
+// one branch between them; two lanes on different ops cost two.
+//
+// It is measured with a ballot rather than inferred, and the measurement is of the real estate —
+// the ladder's own nodes on a real clip, at the turn where the switch is about to be entered.
+//
+// **And it counts distinct NODES beside distinct ops, because the two answers point at completely
+// different repairs and a divergence figure alone cannot tell them apart.** A turn reads an 80-byte
+// record out of a buffer indexed at random; if the lanes of a warp stand on one node the load is a
+// broadcast and the walk is control flow, and if they stand on thirty the same turn is thirty cache
+// lines and the walk is memory. Distinct ops can never exceed distinct nodes, so the pair also
+// says how much of the op agreement is lanes genuinely walking together and how much is different
+// nodes that merely share an op.
+//
+// **What a ballot can and cannot see.** `subgroupBallot(true)` reports the lanes that are executing
+// this instruction together, which is the warp's mask at this point and exactly the set that shares
+// the branch. It cannot see lanes that have already left the loop, which is correct — a lane that
+// has finished is not paying for anybody's opcode. It also tends to FORCE reconvergence where the
+// hardware might otherwise let lanes drift, so the figure is the number for a warp that is as
+// converged as it can be, which is the favourable case for the specialising argument rather than
+// the harsh one.
+// ---------------------------------------------------------------------------------------------
+#ifdef WS_FIELD_MEASURE_DIVERGENCE
+// Per-lane accumulators, over the turns THIS lane took. All the active lanes of a warp see the same
+// two numbers at a given turn, so summing them over lanes on the host weights each turn by how many
+// lanes were actually in it — which is the weighting that matters, since a turn with two lanes left
+// in it is not what the card is spending its time on.
+uint ws_div_ops;
+uint ws_div_nodes;
+
+// How many distinct values of `what` the active lanes of this warp hold, and how many lanes those
+// are.
+//
+// The loop is the standard one: take the lowest lane still unaccounted for, broadcast its value,
+// strike out every lane that agrees, and count. It runs once per distinct value, so a converged
+// warp costs one turn of it and a fully scattered one costs thirty-two — the instrument is cheap
+// exactly where the answer is "cheap" and dear where the answer is "dear", which is the right way
+// round for a run that must not reach the driver's watchdog.
+//
+// `subgroupBroadcast`'s lane may be dynamically uniform rather than a compile-time constant from
+// SPIR-V 1.5 onwards, and the build targets vulkan1.3, so `subgroupBallotFindLSB` is a legal
+// source for it and no shuffle capability is needed.
+uint ws_distinct(uint what, out uint lanes) {
+    uvec4 pending = subgroupBallot(true);
+    lanes = subgroupBallotBitCount(pending);
+    uint distinct = 0u;
+    for (uint k = 0u; k < 32u; ++k) {
+        if (subgroupBallotBitCount(pending) == 0u) break;
+        const uint lane = subgroupBallotFindLSB(pending);
+        const uint value = subgroupBroadcast(what, lane);
+        pending &= ~subgroupBallot(what == value);
+        ++distinct;
+    }
+    return distinct;
+}
+#endif   // WS_FIELD_MEASURE_DIVERGENCE
+
+// ---------------------------------------------------------------------------------------------
+// R12d - THE SHADER, SPECIALISED TO THE CLIP IN FRONT OF IT.
+//
+// One Vulkan specialisation constant per op, `constant_id` being the op's own number, and the host
+// sets each from the ops the clip's field can actually reach. The driver folds the constant and
+// deletes the case, so the walk a clip runs is a walk with the sixty-seven-way switch narrowed to
+// the ops that clip contains -- no runtime shader compiler, no generated GLSL, no new dependency,
+// and one pipeline per distinct op set.
+//
+// **Defaulting to `true` is what makes this safe.** A pipeline created with no specialisation info
+// at all -- which is what `ComputePipeline` does, and what every hot reload and every other caller
+// gets -- is byte for byte the shader that was there before. Specialisation can only ever REMOVE,
+// and a set that wrongly says an op is absent is a wrong building rather than a slow one, which is
+// why `reachable_ops` in field_gpu.cpp walks from EVERY root the shader is handed and not just from
+// the solid.
+//
+// **The op number is never written twice.** `WS_USES(WS_OP_TORUS)` expands through the define above
+// to `ws_uses_8u`, so the guard on a case is derived from the same `#define` the case label is. The
+// two-level macro is what makes the argument expand before the paste.
+//
+// # What the measurement says this can and cannot buy, so nobody re-derives it
+//
+// D727 named this lever on the reasoning that every lane pays for every other lane's opcode. The
+// ballot in `ws_distinct` measured what that is worth: **a warp's 31.1 active lanes stand on 4.03
+// DISTINCT ops at a turn, and no warp in 23,024 averaged above ten.** So the warp already runs about
+// four op bodies a turn and this cannot make it run fewer -- what it removes is the ops NO lane is
+// on, which is instruction stream and instruction cache and not divergence.
+//
+// And how much of that there is, is a fact about the clip rather than about the shader:
+// **`clips/facility.clip` reaches 49 of the 67 ops**, from 629 roots. So on the clip this engine
+// ships, specialising deletes eighteen cases of sixty-seven and nothing else. A clip with a small
+// expression is where this has room: `sampler.clip` reaches 17 and `mirror_hall.clip` 5.
+//
+// # And it was built anyway, and measured, and it is 1.00x
+//
+// **`WS_GPU_SPECIALISE=1` in the environment, OFF by default.** Over the SAME 1,089 dispatches and
+// 17,842,176 cells in every arm — the ladder's order is deterministic, so the two arms are over the
+// same nodes and not over whatever each reached before its deadline:
+//
+//   specialised to 49 ops   3.503, 3.450, 3.507 µs a cell
+//   the change ABSENT       3.471, 3.497, 3.462 µs a cell
+//
+// So the lever D727 named is worth nothing on the clip that ships, and the ballot above says why
+// before the timing does. It stays here, gated and instrumented, because the argument still has a
+// clip-shaped hole in it: nobody has yet measured a heavy clip with a SMALL op set, and the two
+// small-op clips here finish their whole run in 38 ms and 9 ms of card, which is not a measurement.
+// ---------------------------------------------------------------------------------------------
+#ifdef WS_FIELD_SPECIALISE
+#define WS_USES(op) WS_USES_(op)
+#define WS_USES_(op) ws_uses_##op
+// WS_GPU_DIVERGE=1 in the environment. A specialisation constant and not a push-constant bit,
+// because the instrument's ballot loop is code the SHIPPED pipeline must not carry: a uniform branch
+// still costs registers and instruction space, and the thing being measured after this change is
+// exactly instruction space. It defaults to false, so the base pipeline -- the one `ComputePipeline`
+// builds with no specialisation info at all, and the one every hot reload gets -- has no instrument
+// in it whatever.
+layout(constant_id = 67) const bool ws_measure_divergence = false;
+layout(constant_id = 0) const bool ws_uses_0u = true;   // constant
+layout(constant_id = 1) const bool ws_uses_1u = true;   // parameter
+layout(constant_id = 2) const bool ws_uses_2u = true;   // coordinate
+layout(constant_id = 3) const bool ws_uses_3u = true;   // radius
+layout(constant_id = 4) const bool ws_uses_4u = true;   // sphere
+layout(constant_id = 5) const bool ws_uses_5u = true;   // box
+layout(constant_id = 6) const bool ws_uses_6u = true;   // cylinder
+layout(constant_id = 7) const bool ws_uses_7u = true;   // capsule
+layout(constant_id = 8) const bool ws_uses_8u = true;   // torus
+layout(constant_id = 9) const bool ws_uses_9u = true;   // arc
+layout(constant_id = 10) const bool ws_uses_10u = true;   // cone
+layout(constant_id = 11) const bool ws_uses_11u = true;   // plane
+layout(constant_id = 12) const bool ws_uses_12u = true;   // ellipsoid
+layout(constant_id = 13) const bool ws_uses_13u = true;   // prism
+layout(constant_id = 14) const bool ws_uses_14u = true;   // platonic
+layout(constant_id = 15) const bool ws_uses_15u = true;   // wedge
+layout(constant_id = 16) const bool ws_uses_16u = true;   // stairs
+layout(constant_id = 17) const bool ws_uses_17u = true;   // revolve
+layout(constant_id = 18) const bool ws_uses_18u = true;   // spiral
+layout(constant_id = 19) const bool ws_uses_19u = true;   // union
+layout(constant_id = 20) const bool ws_uses_20u = true;   // intersection
+layout(constant_id = 21) const bool ws_uses_21u = true;   // difference
+layout(constant_id = 22) const bool ws_uses_22u = true;   // smooth_union
+layout(constant_id = 23) const bool ws_uses_23u = true;   // smooth_difference
+layout(constant_id = 24) const bool ws_uses_24u = true;   // smooth_intersection
+layout(constant_id = 25) const bool ws_uses_25u = true;   // chamfer_union
+layout(constant_id = 26) const bool ws_uses_26u = true;   // chamfer_difference
+layout(constant_id = 27) const bool ws_uses_27u = true;   // chamfer_intersection
+layout(constant_id = 28) const bool ws_uses_28u = true;   // translate
+layout(constant_id = 29) const bool ws_uses_29u = true;   // rotate
+layout(constant_id = 30) const bool ws_uses_30u = true;   // scale
+layout(constant_id = 31) const bool ws_uses_31u = true;   // mirror
+layout(constant_id = 32) const bool ws_uses_32u = true;   // repeat
+layout(constant_id = 33) const bool ws_uses_33u = true;   // polar_repeat
+layout(constant_id = 34) const bool ws_uses_34u = true;   // scatter
+layout(constant_id = 35) const bool ws_uses_35u = true;   // shell
+layout(constant_id = 36) const bool ws_uses_36u = true;   // round
+layout(constant_id = 37) const bool ws_uses_37u = true;   // offset
+layout(constant_id = 38) const bool ws_uses_38u = true;   // displace
+layout(constant_id = 39) const bool ws_uses_39u = true;   // twist
+layout(constant_id = 40) const bool ws_uses_40u = true;   // bend
+layout(constant_id = 41) const bool ws_uses_41u = true;   // sine
+layout(constant_id = 42) const bool ws_uses_42u = true;   // waves
+layout(constant_id = 43) const bool ws_uses_43u = true;   // noise
+layout(constant_id = 44) const bool ws_uses_44u = true;   // fbm
+layout(constant_id = 45) const bool ws_uses_45u = true;   // ridged
+layout(constant_id = 46) const bool ws_uses_46u = true;   // rasp
+layout(constant_id = 47) const bool ws_uses_47u = true;   // cells
+layout(constant_id = 48) const bool ws_uses_48u = true;   // cell_edge
+layout(constant_id = 49) const bool ws_uses_49u = true;   // curvature
+layout(constant_id = 50) const bool ws_uses_50u = true;   // occlusion
+layout(constant_id = 51) const bool ws_uses_51u = true;   // facing
+layout(constant_id = 52) const bool ws_uses_52u = true;   // checker
+layout(constant_id = 53) const bool ws_uses_53u = true;   // stripes
+layout(constant_id = 54) const bool ws_uses_54u = true;   // bricks
+layout(constant_id = 55) const bool ws_uses_55u = true;   // add
+layout(constant_id = 56) const bool ws_uses_56u = true;   // multiply
+layout(constant_id = 57) const bool ws_uses_57u = true;   // min
+layout(constant_id = 58) const bool ws_uses_58u = true;   // max
+layout(constant_id = 59) const bool ws_uses_59u = true;   // blend
+layout(constant_id = 60) const bool ws_uses_60u = true;   // remap
+layout(constant_id = 61) const bool ws_uses_61u = true;   // abs
+layout(constant_id = 62) const bool ws_uses_62u = true;   // negate
+layout(constant_id = 63) const bool ws_uses_63u = true;   // step
+layout(constant_id = 64) const bool ws_uses_64u = true;   // smoothstep
+layout(constant_id = 65) const bool ws_uses_65u = true;   // clamp
+layout(constant_id = 66) const bool ws_uses_66u = true;   // power
+#else
+// node.glsl includes the walk as well, and five more shaders build on that. None of them wants
+// sixty-seven specialisation constants in its SPIR-V for the sake of a switch it never narrows, so
+// only the translation unit that asks for it gets them and everybody else compiles the whole walk.
+#define WS_USES(op) true
+const bool ws_measure_divergence = false;
+#endif   // WS_FIELD_SPECIALISE
+
 // How many nodes the walk has stepped through for this cell, when WS_FIELD_FLAG_COUNT_VISITS is on.
 //
 // An INSTRUMENT and not a feature, and it exists because the first attempt to make this shader

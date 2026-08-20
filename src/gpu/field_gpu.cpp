@@ -1,5 +1,6 @@
 #include "gpu/field_gpu.hpp"
 
+#include <cstdlib>
 #include <cstring>
 
 #include "core/log.hpp"
@@ -24,6 +25,15 @@ static_assert(sizeof(FieldPush) == 32, "must match FieldPush in field_types.glsl
 constexpr u32 kFlagNoRescue = 1u;
 constexpr u32 kFlagCountVisits = 2u;
 constexpr u32 kFlagNoAccel = 4u;   // WS_FIELD_FLAG_NO_ACCEL, --no-field-accel
+
+// R12d — the specialisation constants the shader declares, one per op plus the instrument.
+//
+// `constant_id` IS the op's own number, which is why the shader's guard on a case can be written
+// `WS_USES(WS_OP_TORUS)` and nothing anywhere writes 8 twice. `kSpecDivergence` is one past the
+// last op, and `WS_OP_COUNT` is what the shader calls that number.
+constexpr u32 kSpecOps = static_cast<u32>(forge::Op::Power) + 1u;
+constexpr u32 kSpecDivergence = kSpecOps;
+constexpr u32 kSpecCount = kSpecOps + 1u;
 
 // Half a cell's diagonal, in voxels: the furthest a surface can be from a cell's centre and still
 // pass through that cell, and therefore the reach of the thin-feature rescue.
@@ -103,9 +113,150 @@ u32 pack_cull_word(const forge::Field& field, u32 at) {
     return word;
 }
 
+// Which of the sixty-seven ops this clip can actually reach, walked from every root the shader is
+// ever handed.
+//
+// **The roots are the plural and that is the whole trap.** `sample_field.comp` asks about
+// `field_push.root`, about `field_push.bounds` — the shape saying which cells are part of the clip
+// — and about `paint_rules.items[r].test` for every rule that survives its box, which on the
+// facility is six hundred and twenty-eight separate little expressions. A set collected from the
+// solid alone would be missing every op the weathering is written in, and a shader specialised
+// against it would answer a rule's test with whatever a missing case falls through to. That is not
+// a slow shader, it is a different building.
+std::vector<bool> reachable_ops(const forge::Field& field, const std::vector<u32>& roots) {
+    std::vector<bool> ops(static_cast<usize>(forge::Op::Power) + 1u, false);
+    const u32 count = static_cast<u32>(field.size());
+    std::vector<bool> seen(count, false);
+    std::vector<u32> stack;
+    for (const u32 root : roots) {
+        if (root >= count || seen[root]) continue;
+        stack.push_back(root);
+        seen[root] = true;
+        while (!stack.empty()) {
+            const u32 at = stack.back();
+            stack.pop_back();
+            const forge::Node& n = field.node(at);
+            const usize op = static_cast<usize>(n.op);
+            if (op < ops.size()) ops[op] = true;
+            const u32 slots = (n.children < 4u) ? n.children : 4u;
+            for (u32 c = 0; c < slots; ++c) {
+                const u32 child = n.child[c];
+                if (child >= count || seen[child]) continue;
+                seen[child] = true;
+                stack.push_back(child);
+            }
+        }
+    }
+    return ops;
+}
+
+// Which bucket a warp's mean distinct-op count falls in. Bucketed rather than averaged because the
+// decision this measurement is for is a threshold — "two or three" is one build and "ten or more"
+// is a different one — and a mean over a bimodal population would land between the two answers and
+// name neither.
+u32 divergence_bucket(f64 mean) {
+    if (mean < 1.5) return 0;
+    if (mean < 2.5) return 1;
+    if (mean < 3.5) return 2;
+    if (mean < 6.0) return 3;
+    if (mean < 10.0) return 4;
+    if (mean < 16.0) return 5;
+    return 6;
+}
+
 }  // namespace
 
 FieldSampler::~FieldSampler() { destroy(); }
+
+void FieldSampler::drop_specialised() {
+    if (device_ == nullptr) return;
+    for (auto& entry : specialised_) {
+        if (entry.second != VK_NULL_HANDLE) vkDestroyPipeline(device_->handle(), entry.second, nullptr);
+    }
+    specialised_.clear();
+    active_ = VK_NULL_HANDLE;
+}
+
+// R12d — one pipeline per distinct op set, compiled from the SAME SPIR-V the general pipeline uses.
+//
+// There is no runtime shader compiler here and no generated GLSL. `sample_field.comp.spv` declares
+// sixty-seven `layout(constant_id = N) const bool` guards defaulting to true; this hands the driver
+// a `VkSpecializationInfo` saying which are false, and the driver folds them and deletes the cases.
+// The cost is one `vkCreateComputePipelines` per clip, and it is measured rather than assumed --
+// see the line it logs.
+//
+// **Every failure path returns VK_NULL_HANDLE and the caller falls back to the general pipeline.**
+// A clip that could not be specialised must still be sampled; a clip that is sampled by the wrong
+// shader must not exist.
+VkPipeline FieldSampler::pipeline_for(const std::vector<bool>& ops, bool measure) {
+    if (!valid() || ops.size() != kSpecOps) return VK_NULL_HANDLE;
+    if (!specialise_ && !measure) return VK_NULL_HANDLE;
+    ++pipelines_asked_;
+
+    // **The divergence run must measure the shader that SHIPS.** With specialisation off — which is
+    // the default — a pipeline is still needed for the instrument, and it has to be the general
+    // sixty-seven-op one; measuring divergence in a narrowed switch would be a number about a
+    // shader nobody runs, and it is the number the whole decision rests on.
+    const std::vector<bool> use = specialise_ ? ops : std::vector<bool>(kSpecOps, true);
+
+    // The set itself as the key. Not a hash: a hash collision here is one clip running another
+    // clip's shader, which is a different building and no error anywhere.
+    std::string key(kSpecCount, '0');
+    for (usize i = 0; i < use.size(); ++i) key[i] = use[i] ? '1' : '0';
+    key[kSpecDivergence] = measure ? '1' : '0';
+    const auto found = specialised_.find(key);
+    if (found != specialised_.end()) return found->second;
+
+    // Read the SPIR-V afresh rather than keeping a copy: this runs once per clip, and a copy kept
+    // across a hot reload is the stale-`.spv` fault (trap 11) with a longer fuse.
+    const std::vector<u32> spirv = read_spirv(spirv_path_);
+    if (spirv.empty()) return VK_NULL_HANDLE;
+    const VkDevice device = device_->handle();
+    VkShaderModule module = create_shader_module(device, spirv);
+    if (module == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+
+    std::vector<VkBool32> values(kSpecCount, VK_FALSE);
+    std::vector<VkSpecializationMapEntry> entries(kSpecCount);
+    for (u32 i = 0; i < kSpecCount; ++i) {
+        values[i] = (i < kSpecOps) ? (use[i] ? VK_TRUE : VK_FALSE)
+                                   : (measure ? VK_TRUE : VK_FALSE);
+        entries[i].constantID = i;
+        entries[i].offset = i * static_cast<u32>(sizeof(VkBool32));
+        entries[i].size = sizeof(VkBool32);
+    }
+    VkSpecializationInfo spec{};
+    spec.mapEntryCount = kSpecCount;
+    spec.pMapEntries = entries.data();
+    spec.dataSize = values.size() * sizeof(VkBool32);
+    spec.pData = values.data();
+
+    VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = module;
+    stage.pName = "main";
+    stage.pSpecializationInfo = &spec;
+
+    VkComputePipelineCreateInfo info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    info.stage = stage;
+    info.layout = pipeline_.layout();
+
+    const u64 began = now_ns();
+    VkPipeline built = VK_NULL_HANDLE;
+    const VkResult result =
+        vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &built);
+    last_compile_ms_ = ns_to_ms(now_ns() - began);
+    vkDestroyShaderModule(device, module, nullptr);
+    if (result != VK_SUCCESS || built == VK_NULL_HANDLE) {
+        WS_LOG_WARN("clip",
+                    "the clip's own pipeline would not build ({}); the card samples with the "
+                    "general shader instead",
+                    static_cast<i32>(result));
+        return VK_NULL_HANDLE;
+    }
+    ++pipelines_built_;
+    specialised_.emplace(key, built);
+    return built;
+}
 
 bool FieldSampler::build_layout() {
     const VkDevice device = device_->handle();
@@ -162,6 +313,43 @@ void FieldSampler::write_descriptors() {
 bool FieldSampler::create(Device& device, const std::filesystem::path& source_dir,
                           const std::filesystem::path& spirv_dir) {
     device_ = &device;
+
+    // The divergence instrument, SAID out loud when it is on. A run measuring divergence builds a
+    // world of nonsense and is several times slower than one that is not, and a mode nobody
+    // announced is a mode somebody will take a timing beside.
+    const char* diverge = std::getenv("WS_GPU_DIVERGE");
+    diverge_ = diverge != nullptr && diverge[0] != '\0' && diverge[0] != '0';
+    // R12d SHIPS OFF, and the reason is the measurement rather than caution.
+    //
+    // Specialised against `clips/facility.clip`, over the SAME 1,089 dispatches and 17.8 M cells in
+    // both arms: **3.503, 3.450 and 3.507 µs a cell against a control built with the change absent
+    // from the tree at 3.471, 3.497 and 3.462. 1.00x.** It is not slower and it is not faster; the
+    // eighteen cases it deletes are cases no lane was standing on, and the ballot says why — a warp
+    // holds 31.1 lanes over 4.03 distinct ops, so it already runs about four op bodies a turn and a
+    // narrower switch cannot make it run fewer.
+    //
+    // What it does cost is a `vkCreateComputePipelines` at world open: **721 ms on the facility the
+    // first time on a machine and 1 ms every time after**, out of the driver's own on-disk cache.
+    // That is small against a ninety-second load and it is 17% of `mirror_hall.clip`'s whole run,
+    // and a cost with no measured gain against it is not a trade-off (09-performance-budgets.md).
+    //
+    // So it is here, gated, with its instrument, for the next person who has a clip where the switch
+    // really is most of the shader — `mirror_hall.clip` reaches 5 of the 67 ops — and it is off
+    // until somebody measures that clip and finds a number.
+    const char* wanted = std::getenv("WS_GPU_SPECIALISE");
+    specialise_ = wanted != nullptr && wanted[0] != '\0' && wanted[0] != '0';
+    if (specialise_) {
+        WS_LOG_WARN("clip",
+                    "WS_GPU_SPECIALISE is set: each clip gets a pipeline compiled for its own op "
+                    "set. Measured at 1.00x on clips/facility.clip, so this is an experiment and "
+                    "not the shipped path");
+    }
+    if (diverge_) {
+        WS_LOG_WARN("clip",
+                    "WS_GPU_DIVERGE is set: the card counts how many DISTINCT ops the lanes of a "
+                    "warp are spread over and builds NO WORLD. Pair it with --refine-batch 1; the "
+                    "ballot loop makes a dispatch several times dearer and the watchdog is 2 s.");
+    }
 
     if (!build_layout()) {
         why_not_ = "the descriptor layout would not build";
@@ -224,11 +412,13 @@ bool FieldSampler::create(Device& device, const std::filesystem::path& source_di
         timestamps_ = VK_NULL_HANDLE;   // not fatal; the host clock still reports
     }
 
-    if (!pipeline_.create(device, source_dir / "sample_field.comp",
-                          spirv_dir / "sample_field.comp.spv", set_layout_, sizeof(FieldPush))) {
+    spirv_path_ = spirv_dir / "sample_field.comp.spv";
+    if (!pipeline_.create(device, source_dir / "sample_field.comp", spirv_path_, set_layout_,
+                          sizeof(FieldPush))) {
         why_not_ = "sample_field.comp would not build: " + pipeline_.last_error();
         return false;
     }
+    reload_seen_ = pipeline_.reload_count();
     return true;
 }
 
@@ -269,6 +459,33 @@ void FieldSampler::destroy() {
                         ? 1000.0 * gpu_ms_total_ / static_cast<f64>(cells_dispatched_)
                         : 0.0,
                     worst_gpu_ms_);
+    }
+    // THE DIVERGENCE, which is the number that decides whether specialising the shader per clip is
+    // worth building. See the block above `ws_distinct_ops` in shaders/field_types.glsl.
+    if (diverge_ && div_turns_ > 0) {
+        const f64 turns = static_cast<f64>(div_turns_);
+        const f64 distinct = div_ops_ / turns;
+        const f64 nodes = div_nodes_ / turns;
+        // The active-lane count, taken the way D727 takes it rather than from a second ballot: an
+        // aligned run of 32 entries is a warp, the maximum of the run is the warp's turns, and the
+        // sum of the run is the lane-turns in them. Their ratio is how full the warp was.
+        const f64 lanes = (div_warp_turns_ > 0)
+                              ? turns / static_cast<f64>(div_warp_turns_)
+                              : 0.0;
+        WS_LOG_INFO("clip",
+                    "the card's DIVERGENCE: {} lane-turns in {} warp-turns over {} warps -- a warp "
+                    "carries {:.1f} of 32 lanes at a turn and they stand on {:.2f} DISTINCT ops "
+                    "over {:.2f} DISTINCT nodes, so {:.2f} lanes share each branch and {:.2f} "
+                    "share each 80-byte record; the clip can reach {} of {} ops at all",
+                    div_turns_, div_warp_turns_, div_warps_, lanes, distinct, nodes,
+                    (distinct > 0.0) ? lanes / distinct : 0.0,
+                    (nodes > 0.0) ? lanes / nodes : 0.0, clip_ops_,
+                    static_cast<u32>(forge::Op::Power) + 1u);
+        WS_LOG_INFO("clip",
+                    "...and the warps by their mean distinct ops: [1] {}, [2] {}, [3] {}, [4-5] "
+                    "{}, [6-9] {}, [10-15] {}, [16+] {} — of {} warps",
+                    div_hist_[0], div_hist_[1], div_hist_[2], div_hist_[3], div_hist_[4],
+                    div_hist_[5], div_hist_[6], div_warps_);
     }
     // The cost model's three factors, together, on the run that asked for them. Printed here rather
     // than at the settle line in main.cpp, because a run cut short by `--max-seconds` never reaches
@@ -329,6 +546,7 @@ void FieldSampler::destroy() {
     }
     const VkDevice device = device_->handle();
     if (in_flight_ > 0) vkWaitForFences(device, 1, &fence_, VK_TRUE, ~0ull);
+    drop_specialised();
     pipeline_.destroy();
     if (timestamps_ != VK_NULL_HANDLE) vkDestroyQueryPool(device, timestamps_, nullptr);
     if (fence_ != VK_NULL_HANDLE) vkDestroyFence(device, fence_, nullptr);
@@ -350,6 +568,7 @@ void FieldSampler::destroy() {
     set_ = VK_NULL_HANDLE;
     node_count_ = 0;
     in_flight_ = 0;
+    clip_ops_used_.clear();
     device_ = nullptr;
 }
 
@@ -391,6 +610,11 @@ bool FieldSampler::upload_device_buffer(GpuBuffer& target, const void* data, u64
 
 bool FieldSampler::upload(const forge::SamplePlan& plan, u32 bounds_node, bool has_bounds) {
     node_count_ = 0;
+    // Back to the general shader until this clip's own set has been worked out. A pipeline left
+    // over from the PREVIOUS clip is the worst outcome available here: it runs, it is fast, and it
+    // is missing whichever ops the new clip added.
+    active_ = VK_NULL_HANDLE;
+    clip_ops_used_.clear();
     if (!valid() || !plan.ok()) {
         why_not_ = "no pipeline, or no plan";
         return false;
@@ -494,6 +718,42 @@ bool FieldSampler::upload(const forge::SamplePlan& plan, u32 bounds_node, bool h
     // nodes a cell WALKS — a quarter of the walk, which is the denominator that decides the cost.
     // A clip where this share falls is a clip whose walk got longer, and the log is the only place
     // that would show it.
+    // WHICH OPS THIS CLIP CAN REACH, from every root the shader is ever handed — the solid, the
+    // bounds shape, and every paint rule's test. The set a specialised pipeline is keyed on, and
+    // worth printing whether or not one is built: it is the size of the switch the walk could be,
+    // against the sixty-seven it is, and nothing else in the log says it.
+    {
+        std::vector<u32> roots;
+        roots.push_back(plan.root);
+        if (has_bounds) roots.push_back(bounds_node);
+        for (const forge::PaintRule& rule : plan.widened) roots.push_back(rule.test);
+        clip_ops_used_ = reachable_ops(field, roots);
+        clip_ops_ = 0;
+        clip_op_names_.clear();
+        for (usize op = 0; op < clip_ops_used_.size(); ++op) {
+            if (!clip_ops_used_[op]) continue;
+            ++clip_ops_;
+            if (!clip_op_names_.empty()) clip_op_names_ += ' ';
+            clip_op_names_ += forge::op_name(static_cast<forge::Op>(op));
+        }
+        WS_LOG_INFO("clip", "the clip reaches {} of {} ops from {} roots: {}", clip_ops_, kSpecOps,
+                    roots.size(), clip_op_names_);
+
+        // ...and the pipeline compiled for exactly that set. Said out loud with its cost, because
+        // "opening the same clip twice compiles once" is a claim and `pipelines_built_` against
+        // `pipelines_asked_` is the only thing that can support it.
+        const u32 built_before = pipelines_built_;
+        active_ = pipeline_for(clip_ops_used_, diverge_);
+        if (active_ != VK_NULL_HANDLE && specialise_) {
+            const bool fresh = pipelines_built_ > built_before;
+            WS_LOG_INFO("clip",
+                        "the card's shader is SPECIALISED to this clip: {} of {} ops kept, {} "
+                        "deleted, {} in {:.0f} ms; {} pipelines built for {} asked",
+                        clip_ops_, kSpecOps, kSpecOps - clip_ops_,
+                        fresh ? "COMPILED" : "out of the cache",
+                        fresh ? last_compile_ms_ : 0.0, pipelines_built_, pipelines_asked_);
+        }
+    }
     WS_LOG_INFO("clip",
                 "field accelerator: {} of {} nodes carry a box ({:.1f}%), {} unions worth sorting",
                 bounded_nodes_, node_count_,
@@ -562,7 +822,18 @@ bool FieldSampler::submit(const std::vector<GpuSampleBoxRecord>& boxes) {
         vkCmdWriteTimestamp(cmd_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestamps_, 0);
     }
 
-    vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_.pipeline());
+    // R12d — the pipeline compiled for THIS clip's op set, or the general one when there is none.
+    // Rebuilt rather than reused when the source has been hot-reloaded under it: the specialised
+    // pipeline came out of a `.spv` that is no longer the one on disk, and a shader edit that
+    // silently did not take is trap 11 wearing a pipeline cache.
+    if (pipeline_.reload_count() != reload_seen_) {
+        drop_specialised();
+        reload_seen_ = pipeline_.reload_count();
+        active_ = clip_ops_used_.empty() ? VK_NULL_HANDLE
+                                         : pipeline_for(clip_ops_used_, diverge_);
+    }
+    vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      (active_ != VK_NULL_HANDLE) ? active_ : pipeline_.pipeline());
     vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_.layout(), 0, 1, &set_,
                             0, nullptr);
     FieldPush push{};
@@ -634,12 +905,43 @@ bool FieldSampler::ready() {
         // ACCESS VIOLATION about two thirds of the way into a run, in a mode that is not building a
         // world and whose voxels nobody looks at. Trap 21's shape: an instrument's bookkeeping
         // riding in a field somebody else owns.
-        types_[i] = count_visits_ ? VoxelTypeId{0} : static_cast<VoxelTypeId>(out_type[i]);
+        types_[i] = (count_visits_ || diverge_) ? VoxelTypeId{0}
+                                                : static_cast<VoxelTypeId>(out_type[i]);
         // The top bit is a REFUSAL and not part of the mask: the walk ran out of stack or out of
         // turns for that cell, and the shader has no way to assert. Counted rather than dropped --
         // a refusal that reads as "air" is a hole in a wall that nothing anywhere reports.
         const u32 word = out_inside[i];
-        if ((word & 0x80000000u) != 0 && !count_visits_) {
+        if (diverge_) {
+            // Three numbers a lane: its own turn count in this word, and the two averages packed
+            // into the type word as ten-bit fixed point. Multiplying each average back by that
+            // lane's turns recovers the SUM over its turns, so the totals below are over
+            // lane-turns and every turn is weighted by how many lanes were in it.
+            const u32 turns = word;
+            const u32 packed = out_type[i];
+            const f64 ops = static_cast<f64>(packed & 0xFFFFu) / 1024.0 * static_cast<f64>(turns);
+            const f64 nodes = static_cast<f64>(packed >> 16u) / 1024.0 * static_cast<f64>(turns);
+            div_ops_ += ops;
+            div_nodes_ += nodes;
+            div_turns_ += turns;
+            div_warp_ops_ += ops;
+            div_warp_lane_turns_ += turns;
+            if (turns > div_warp_peak_) div_warp_peak_ = turns;
+            // An aligned run of thirty-two entries IS a warp — `local_size_x` is 64 and `gid` is
+            // the flat invocation index — so the maximum of the run is how many turns the warp
+            // took and the sum is how many lane-turns were in them.
+            if ((i % 32u) == 31u || i + 1 == cells) {
+                div_warp_turns_ += div_warp_peak_;
+                if (div_warp_lane_turns_ > 0) {
+                    ++div_warps_;
+                    ++div_hist_[divergence_bucket(div_warp_ops_ /
+                                                  static_cast<f64>(div_warp_lane_turns_))];
+                }
+                div_warp_peak_ = 0;
+                div_warp_ops_ = 0.0;
+                div_warp_lane_turns_ = 0;
+            }
+        }
+        if ((word & 0x80000000u) != 0 && !count_visits_ && !diverge_) {
             ++refused_;
             // WHICH op the walk was standing on, or 128 for running out of stack. Kept as the
             // FIRST one seen rather than a histogram: a refusal is a fault to be fixed, not a

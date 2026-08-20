@@ -66,6 +66,15 @@
 // on the host, over the block this hands back. R11b measured why the second cannot move: 29 of 297
 // nodes come out different when the pass runs on the node rather than on the box around it.
 #extension GL_GOOGLE_include_directive : require
+// The divergence instrument, and it is switched on HERE and nowhere else on purpose.
+//
+// `field_walk.glsl` is included by `node.glsl` as well, which five more shaders build on, and none
+// of them wants a subgroup capability declared in its SPIR-V for the sake of a measurement this
+// file asks for. So the ballot code is `#ifdef`-ed out of the walk and only this translation unit
+// defines the macro and requires the extension. See the block above `ws_distinct_ops`.
+#define WS_FIELD_MEASURE_DIVERGENCE 1
+#define WS_FIELD_SPECIALISE 1
+#extension GL_KHR_shader_subgroup_ballot : require
 
 layout(local_size_x = 64) in;
 
@@ -91,7 +100,14 @@ layout(local_size_x = 64) in;
 // builds a world whose mask is nonsense and is not trying to build one: it is measuring how many
 // nodes a cell walks, which is the half of the cost no clock can separate out.
 uint ws_mask_or_visits(uint mask) {
-    if ((field_push.flags & WS_FIELD_FLAG_COUNT_VISITS) != 0u) return ws_field_visits;
+    // The divergence run carries this lane's TURN COUNT here, which is the denominator both of its
+    // averages need and is the same number `--gpu-visits` reports. The host also reads it a second
+    // way: an aligned run of thirty-two of these entries is a warp, so the maximum of the run is
+    // how many turns the WARP took and the sum is how many lane-turns were in them. D727's own
+    // mapping, reused rather than re-derived.
+    if (ws_measure_divergence || (field_push.flags & WS_FIELD_FLAG_COUNT_VISITS) != 0u) {
+        return ws_field_visits;
+    }
     // The top bit says this cell could not be answered for -- the walk ran out of stack or out of
     // turns. It rides on the mask because a refusal has to reach the host somehow, and the host
     // counts it and says so; a cell that quietly took the "air" branch after a refusal would be a
@@ -140,6 +156,23 @@ uint ws_field_root_visits;
 // is 1,272 and fits in eleven. Both are CLAMPED rather than left to wrap, because a counter that
 // wraps reports a small number and small is what "fine" looks like.
 uint ws_type_or_evals(uint type) {
+#ifdef WS_FIELD_MEASURE_DIVERGENCE
+    // The divergence run's two averages, as sixteen-bit fixed point with ten fractional bits.
+    //
+    // AVERAGES rather than sums, because there are two spare words a cell and this run needs three
+    // numbers and the third one — the turn count — is the one the host has other uses for. Both of
+    // these are bounded by the subgroup size, so 32 x 1024 = 32,768 fits a half word with room, and
+    // the host multiplies each back by that lane's turns to recover a sum whose error is under a
+    // thousandth. Worked in float rather than in fixed point on the way in: `ws_div_ops` reaches
+    // thirty-two times the turn count, and a cell that walks a million turns would overflow a
+    // 32-bit multiply by 1024 and report a small number, which is what "fine" looks like.
+    if (ws_measure_divergence) {
+        const float turns = float(max(ws_field_visits, 1u));
+        const uint ops = min(uint(1024.0 * float(ws_div_ops) / turns + 0.5), 0xFFFFu);
+        const uint nodes = min(uint(1024.0 * float(ws_div_nodes) / turns + 0.5), 0xFFFFu);
+        return ops | (nodes << 16u);
+    }
+#endif
     if ((field_push.flags & WS_FIELD_FLAG_COUNT_VISITS) == 0u) return type;
     return min(ws_field_root_visits, 0x1FFFFFu) | (min(ws_field_evals, 0x7FFu) << 21u);
 }
@@ -198,6 +231,10 @@ void main() {
     ws_field_root_visits = 0u;
     ws_field_refused = 0u;
     ws_field_refused_op = 0u;
+#ifdef WS_FIELD_MEASURE_DIVERGENCE
+    ws_div_ops = 0u;
+    ws_div_nodes = 0u;
+#endif
     const uint gid = gl_GlobalInvocationID.x;
     const uint box = gid / WS_NODE_CELLS;
     if (box >= field_push.box_count) return;
