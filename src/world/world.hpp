@@ -98,6 +98,10 @@ public:
 
     u64 chunk_hash(const ChunkCoord& coord) const;   // 0 for a chunk that does not exist
     u64 content_hash() const;
+    // What the world is SHAPED like, with nothing about what it is made of. See
+    // `Brick::shape_hash`: this is the half that can be compared between two runs that interned
+    // their type tables in different orders, which is every pair of resumed runs.
+    u64 shape_hash() const;
     WorldStats stats() const;
     bool validate() const;
 

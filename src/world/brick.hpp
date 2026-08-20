@@ -94,6 +94,20 @@ public:
     void assign(const VoxelTypeId in[kBrickVoxels]);
 
     void occupancy(u64 out[kBrickWords]) const;
+
+    // WHICH CELLS HOLD MATTER, and nothing about what the matter is.
+    //
+    // `content_hash` hashes the `VoxelTypeId` of every cell, and a type id is only meaningful
+    // against the table it was interned into: two worlds that look identical hash differently if
+    // their tables were built in a different order. That is exactly what a resumed run does —
+    // it re-samples every leaf that was not already at the clip's own detail (see
+    // `resume_refinement`) and interns the variation records afresh — so `content_hash` drifts on
+    // every launch while the building does not change at all.
+    //
+    // This is the half that CAN be compared across runs: solid or not, cell by cell. If two worlds
+    // agree here and differ on `content_hash`, the difference is in the naming and not in the
+    // shape, and that is a very different report from "the world changed".
+    u64 shape_hash() const;
     u32 solid_count() const;
 
     Form form() const { return form_; }

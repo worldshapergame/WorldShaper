@@ -5628,9 +5628,10 @@ bool Application::build_the_whole_world() {
     if (finished) {
         WS_LOG_INFO("load",
                     "the whole world is at full resolution in {:.0f} ms: {} chunks, {} solid "
-                    "voxels, content {:016x} -- and it is in the cache, so the next launch of this "
-                    "clip reads it back instead",
-                    spent, now.chunks, now.solid_voxels, world_.content_hash());
+                    "voxels, content {:016x}, shape {:016x} -- and it is in the cache, so the next "
+                    "launch of this clip reads it back instead",
+                    spent, now.chunks, now.solid_voxels, world_.content_hash(),
+                    world_.shape_hash());
         return true;
     }
     // NOT saved here, and that is the button's whole point: a press means the player wants to be
@@ -12652,9 +12653,16 @@ int Application::play(const Options& options) {
                     ? std::string("no ladder, the world is at the detail the clip asked for")
                     : std::to_string(refine_regions_.size() - unrefined) + " of " +
                           std::to_string(refine_regions_.size()) + " nodes sharpened";
-            WS_LOG_INFO("frame", "scene: {} chunks, {} solid voxels, {}, content {:016x}",
+            // BOTH HASHES, because they answer different questions and only one of them survives
+            // a resumed run. `content` hashes the type id of every cell and a type id means
+            // nothing outside the table it was interned into; `shape` hashes which cells hold
+            // matter and nothing else. Two runs that agree on `shape` and differ on `content` have
+            // built the same building and named its materials differently, which is a completely
+            // different report from "the world changed". See `Brick::shape_hash`.
+            WS_LOG_INFO("frame",
+                        "scene: {} chunks, {} solid voxels, {}, content {:016x}, shape {:016x}",
                         measured_world.chunks, measured_world.solid_voxels, sharpness,
-                        world_.content_hash());
+                        world_.content_hash(), world_.shape_hash());
 
             // R11e's gate, COUNTED. The middle number is the one the rule is judged on and it must
             // be nought; the first two are what makes a nought mean something, because a counter

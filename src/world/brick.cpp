@@ -505,6 +505,16 @@ u64 Brick::content_hash() const {
     return h;
 }
 
+u64 Brick::shape_hash() const {
+    // The occupancy, and not one bit about what fills it. See the declaration for why the pair of
+    // hashes exists: this one survives a run that re-interns its type table and the other does not.
+    u64 words[kBrickWords];
+    occupancy(words);
+    u64 h = 0x9E3779B9ull;
+    for (u32 i = 0; i < kBrickWords; ++i) h = hash_combine(h, words[i]);
+    return h;
+}
+
 bool Brick::operator==(const Brick& other) const {
     // Compares contents, not encoding: two bricks holding the same voxels are equal even
     // if one is uniform and the other has a palette. That is the property the save

@@ -66,6 +66,18 @@ u64 World::content_hash() const {
     return total;
 }
 
+u64 World::shape_hash() const {
+    // Order-independent for the same reason `content_hash` is, and keyed identically, so the two
+    // are answering about the same chunks in the same way and differ in one thing only.
+    u64 total = 0;
+    for (const auto& [coord, chunk] : chunks_) {
+        if (chunk.empty()) continue;
+        total += hash_combine(hash_cell(coord.x, coord.y, coord.z, 0, 0x57484C44ull),
+                              chunk.shape_hash());
+    }
+    return total;
+}
+
 WorldStats World::stats() const {
     WorldStats out;
     for (const auto& [coord, chunk] : chunks_) {

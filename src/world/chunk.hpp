@@ -78,6 +78,9 @@ public:
     // It walks every voxel, so it is for reconciliation and tests — never for per-frame
     // change detection. Use revision() for that.
     u64 content_hash() const;
+    // The same walk over the same bricks, asking only which cells hold matter. See
+    // `Brick::shape_hash`.
+    u64 shape_hash() const;
 
     // Bumped on every mutation. Streaming compares this to decide whether a resident
     // chunk is stale, which has to be O(1): calling content_hash() once per visible chunk

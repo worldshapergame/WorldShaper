@@ -282,6 +282,24 @@ u64 Chunk::content_hash() const {
     return h;
 }
 
+u64 Chunk::shape_hash() const {
+    // Deliberately the same walk, the same order and the same keying as `content_hash` above, so
+    // that the two answer about exactly the same set of bricks and a difference between them is
+    // never a difference in what was looked at.
+    u64 h = 0x243F6A88ull;
+    for (u32 bz = 0; bz < kBricksPerAxis; ++bz) {
+        for (u32 by = 0; by < kBricksPerAxis; ++by) {
+            for (u32 bx = 0; bx < kBricksPerAxis; ++bx) {
+                const Brick* b = brick(bx, by, bz);
+                if (b == nullptr || b->empty()) continue;
+                h = hash_combine(h, (bx << 10) | (by << 5) | bz);
+                h = hash_combine(h, b->shape_hash());
+            }
+        }
+    }
+    return h;
+}
+
 bool Chunk::validate() const {
     std::vector<u8> node_seen(nodes_.size(), 0);
     std::vector<u8> brick_seen(bricks_.size(), 0);
