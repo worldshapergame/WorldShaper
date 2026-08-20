@@ -165,7 +165,29 @@ struct Options {
     // looked -- `baseline.ps1` already copes, because it pairs rows by view and never compares
     // across cameras (D633). And the loading bar, which is the whole point: it does not go with
     // this flag alone, which is why `stipple_at_coarse` above moved in the same change.
-    bool no_coarse_paste = true;
+    // OFF AGAIN as of 2026-08-20, and the reason is the other half of the same sentence D673 read
+    // only one half of. See D722.
+    //
+    // D673 took the coarse paste out because it was 3.7 s of a 17.1 s load "for a world nobody was
+    // looking at", and it was right about the facility. Then the estate arrived — seven buildings
+    // over a hundred and six metres — and the ladder builds outward from where you stand at about
+    // five metres a minute. Sixty seconds of it finishes the world for **5.2 m of a 106 m clip**.
+    // So what "nobody was looking at" now means is the entire estate, and what the player reported
+    // is exactly that: *"nodes load so slow if you click enter prematurely that the world is mostly
+    // empty"*.
+    //
+    // The coarse paste is the only mechanism in the engine that puts the WHOLE clip in the world at
+    // once, and it is cheap at a coarse grain. Measured on the estate, cold, this machine:
+    //
+    //     metre 1  (1 m voxels)    3.77 s   833,781,760 solid voxels   14 MB
+    //     metre 2  (0.5 m voxels)  7.60 s   576,933,888 solid voxels   10 MB
+    //     metre 4  (0.25 m voxels) 22.70 s  511,984,640 solid voxels   10 MB
+    //
+    // Ten megabytes, because a brick filled with one material is a palette entry and a mask — the
+    // count and the bytes are not the same question and it is the count that looks alarming.
+    //
+    // `--no-coarse-paste` is the control arm and is what shipped between D673 and here.
+    bool no_coarse_paste = false;
     // ---- the way in, before the load has finished (R11i, D712) ----------------------------
     //
     // `--enter-now` presses the loading screen's button the moment it appears, which is what makes
@@ -220,6 +242,33 @@ struct Options {
     //
     // The two are the same pass with one term changed, so the arm is a flag rather than a mode.
     bool full_load_authored = false;
+    // ---- what a node costs asked ALONE against asked inside its ancestor's box -------------
+    //
+    // The one number the whole "sample in boxes instead of node by node" question turns on, and
+    // the reason it needs a mode of its own is that `--sample-cost` already answers it for the
+    // WRONG NODES. That tool picks nodes with matter from across the whole clip, which on the
+    // estate means the deep interior -- D688 measured a cell under the podium at 372 ms against a
+    // typical 1.8 -- and it reports 111 ms a node where the ladder's own batches measure 6.2. The
+    // ladder samples the SHELL near the camera and nothing else, so a penalty measured over the
+    // interior says nothing about it.
+    //
+    // So this asks the question of the nodes the ladder is actually about to sample, in the middle
+    // of a real load, and prints both arms of it. N is how many levels up the box goes: 1 is the
+    // parent (8 leaves), 2 the grandparent (64), 3 the great-grandparent (512).
+    u32 box_probe = 0;
+    // THE CEILING, and it is a measurement rather than a mode anybody should play in.
+    //
+    // `--slack-ceiling` throws away the plan's slack -- prune_slack to nought, the parts machinery
+    // off -- so the descent settles boxes on the raw distance with no allowance at all. **The world
+    // it builds may be WRONG**: slack is what a displaced surface can hide, and a descent that
+    // allows for none of it can settle a box empty over matter that is really there.
+    //
+    // It exists because the estate's plan reports `1000000000000000019884624838656 m` of slack and
+    // one part with no bounding box, which turns the whole descent off -- every box in the clip
+    // crawls to every single voxel. Before building the machinery that fixes that, the question
+    // worth answering is what fixing it would BUY, and this answers it in one run: the same load
+    // with the descent working, against the same load with it off.
+    bool slack_ceiling = false;
     // The control arm for the edit pre-sample's own emptiness test: sample every node the
     // ladder would not refuse, which is what R11h shipped and what a player reported as a
     // lag spike proportional to the size of the edit.
@@ -546,7 +595,17 @@ struct Options {
     // doors come back solid white, and the second-storey window surrounds lose their profile. That
     // is not a fault to be fixed, it is what sampling below the size of a feature MEANS, and the
     // answer is to start above it.
-    u32 clip_coarse = 4;
+    // SIXTEEN, so the up-front build is at 0.5 m voxels. See Options::no_coarse_paste for the
+    // three grains measured and what each costs.
+    //
+    // Four — metre 8, 12.5 cm voxels — is what this was, and on the estate it is minutes rather
+    // than seconds: the cost goes as the cube of the grain, so each step finer is eight times the
+    // work. Sixteen puts the whole hundred-and-six-metre estate in the world in seven and a half
+    // seconds at a grain where a doorway is four voxels and a column is two, which is a building
+    // rather than a heap of blocks — and the ladder sharpens whatever the player looks at from
+    // there. `--clip-coarse N` is the dial and it is the one number that decides how long a cold
+    // launch takes.
+    u32 clip_coarse = 16;
     i32 clip_metre = 0;                     // override the file's resolution, for quick previews
 
     // R2b's second half, and R8b's child source. Both off, both with a control arm that is the
@@ -1271,6 +1330,10 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
     } else if (arg == "--no-full-load") {
         options.full_load = false;
         options.full_load_asked = false;
+    } else if (arg == "--slack-ceiling") {
+        options.slack_ceiling = true;
+    } else if (arg == "--box-probe") {
+        options.box_probe = static_cast<u32>(next_number(2));
     } else if (arg == "--full-load-authored") {
         // The whole world at the clip's OWN detail rather than at the detail distance justifies.
         // Implies the pass, because it is a description of the pass. See Options::full_load_authored.
@@ -2803,6 +2866,20 @@ private:
         std::vector<RefineJob> jobs;
         f64 sample_ms = 0.0;
         u64 asked = 0;
+        // WHERE THE SAMPLER'S TIME WENT, summed over the batch, and it is here because without it
+        // `sampled 168 ms` is a number with no next question.
+        //
+        // The two evaluation counts and the two core-times separate the only three things a node
+        // sample can be spent on: asking the shape where the surface is, asking the paint what the
+        // surface is made of, and everything that is neither -- the descent's own book-keeping, the
+        // clip allocation, the despeckle. A batch whose shape and paint core-times add to a
+        // fraction of `sample_ms x workers` is a batch that is not field-bound at all, and that is
+        // a different fix from a faster field.
+        u64 shape_evaluations = 0;
+        u64 paint_evaluations = 0;
+        u64 shape_ns = 0;    // core-nanoseconds, summed across the workers
+        u64 paint_ns = 0;
+        u64 settled = 0;     // voxels decided in bulk, never asked about
     };
 
     // The sampler is a PERSISTENT thread with a queue, not a thread per batch.
@@ -2987,7 +3064,13 @@ private:
     // settles in a few thousand frames, so reaching this means something is actively unsettling
     // it, which an edit does.
     static constexpr u64 kSettleGiveUp = 30000;
-    f64 refine_sample_ms_ = 0.0;   // the background half, which the paste timing never saw
+    f64 refine_sample_ms_ = 0.0;
+    // The last batch's breakdown, for the line that prints it. See RefineDelivery.
+    u64 refine_bulk_settled_ = 0;
+    u64 refine_shape_evals_ = 0;
+    u64 refine_paint_evals_ = 0;
+    u64 refine_shape_ns_ = 0;
+    u64 refine_paint_ns_ = 0;   // the background half, which the paste timing never saw
     u64 refine_asked_ = 0;
     // Where a LOAD's seconds actually go, accumulated over the whole run and printed at the settle
     // line. The batch line times one batch and a batch is a few tens of milliseconds; what nobody
@@ -3034,6 +3117,12 @@ private:
     // go. See `build_the_whole_world` for why the bar is a distance and not a node count.
     f64 frontier_of_the_build() const;
     f64 furthest_corner_of_the_clip() const;
+    // See Options::box_probe. Asks the same volume both ways, on the ladder's own next nodes.
+    void probe_the_box_cost(u32 levels_up);
+    // See Options::slack_ceiling. Throws the plan's slack away, so the descent settles on the raw
+    // distance and the load runs at the speed a working parts decomposition would give it. The
+    // world it builds may be wrong; the number it produces is the ceiling.
+    void apply_slack_ceiling();
 
     // Refine EVERYTHING, whether this camera can see it or not.
     //
@@ -3084,6 +3173,7 @@ private:
     // size and `pump_refinement` frees it on the first frame that has nothing outstanding, which
     // is a second or so into play and costs one comparison a frame until then.
     bool refine_pool_oversized_ = false;
+    bool probed_ = false;   // --box-probe fires once a run
 
     // ---- R11e and R11h: who is allowed to cause a sample, and what an edit does about it -------
     //
@@ -4167,6 +4257,17 @@ void Application::refine_worker() {
         }
         batch.asked = 0;
         for (u64 n : asked_by) batch.asked += n;
+        // The breakdown, from the results themselves. See RefineDelivery for what it is for.
+        batch.shape_evaluations = batch.paint_evaluations = 0;
+        batch.shape_ns = batch.paint_ns = batch.settled = 0;
+        for (const RefineJob& job : batch.jobs) {
+            if (job.result == nullptr) continue;
+            batch.shape_evaluations += job.result->shape_evaluations;
+            batch.paint_evaluations += job.result->paint_evaluations;
+            batch.shape_ns += job.result->shape_ns;
+            batch.paint_ns += job.result->paint_ns;
+            batch.settled += job.result->voxels_settled;
+        }
         batch.sample_ms = ns_to_ms(now_ns() - began);
 
         {
@@ -4990,6 +5091,237 @@ f64 Application::frontier_of_the_build() const {
     return (nearest < 0.0) ? furthest_corner_of_the_clip() : nearest;
 }
 
+// WHY THE LADDER SAMPLES NODES THAT TURN OUT TO BE EMPTY, asked of the nodes it is about to sample.
+//
+// See Options::box_probe. Two questions, both answered against the same set of leaves and both
+// against GROUND TRUTH -- the sample itself -- rather than against each other.
+//
+// **One: is a box cheaper than its own nodes?** `--sample-cost` says 5.1x and that figure does not
+// transfer, because it prices nodes taken from across the whole clip and on the estate that means
+// the deep interior, where a cell is two orders of magnitude dearer than the shell the ladder walks
+// (D688). Asked here of the ladder's own next leaves, the answer is about 1.0x.
+//
+// **Two: what does the emptiness gate actually refuse?** `box_may_hold_matter` reads the
+// UNDISPLACED shape and has to allow `slack` for what displacement could move -- so a leaf anywhere
+// within `radius + slack` of a surface is enlisted, sampled in full, and comes back air. This counts
+// how many of those there are and what two tighter gates would do about them, including how often
+// each would be WRONG, which is the only number that decides whether either is usable.
+void Application::probe_the_box_cost(u32 levels_up) {
+    if (refine_script_ == nullptr || refine_regions_.empty() || !refine_plan_.ok()) return;
+    const u32 up = (levels_up < 1) ? 1u : ((levels_up > 4) ? 4u : levels_up);
+
+    // The nearest node not yet built, which is the next one the picker would choose.
+    const f64 cx = camera_.metres_x();
+    const f64 cy = camera_.metres_y();
+    const f64 cz = camera_.metres_z();
+    usize pick = refine_regions_.size();
+    f64 pick_away = 0.0;
+    for (usize i = 0; i < refine_regions_.size(); ++i) {
+        const RefineNode& box = refine_regions_[i];
+        if (box.done) continue;
+        if (box.key.level != refine_finest_level()) continue;
+        const f64 dx = std::max({box.low.x - cx, 0.0, cx - box.high.x});
+        const f64 dy = std::max({box.low.y - cy, 0.0, cy - box.high.y});
+        const f64 dz = std::max({box.low.z - cz, 0.0, cz - box.high.z});
+        const f64 away = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (pick == refine_regions_.size() || away < pick_away) {
+            pick = i;
+            pick_away = away;
+        }
+    }
+    if (pick == refine_regions_.size()) {
+        WS_LOG_INFO("probe", "--box-probe: no unbuilt leaf to ask about");
+        return;
+    }
+
+    // What the current gate is made of, because every number below is a consequence of it.
+    const f64 leaf_across = static_cast<f64>(forge::kNodeVoxels) /
+                            static_cast<f64>(refine_resolution(refine_finest_level()));
+    WS_LOG_INFO("probe",
+                "--box-probe: the plan allows {:.4f} m of slack to settle a box, {:.4f} m of "
+                "displacement everywhere, {} parts it can tell apart; a leaf is {:.4f} m across "
+                "with a radius of {:.4f} m",
+                refine_plan_.prune_slack, refine_plan_.amplitude,
+                refine_plan_.parts_usable ? refine_plan_.part_slack.size() : usize{0},
+                leaf_across, std::sqrt(3.0) * 0.5 * leaf_across);
+
+    // WHAT THE PLAN ACTUALLY HOLDS, read from the plan rather than re-derived.
+    //
+    // This used to walk `union_children` again and box each part with `bounds_of`, and it reported
+    // six parts with no box after a change that had already given them one -- because the plan
+    // boxes parts with `containing_bounds_of` and the probe did not. An instrument that recomputes
+    // its subject is an instrument that can disagree with it, which is trap 4 wearing a diagnostic
+    // as a disguise. `part_box` and `part_slack` below are the very arrays `slack_here` scans.
+    {
+        usize unbounded_box = 0;
+        usize unbounded_slack = 0;
+        f64 worst_bounded = 0.0;
+        for (usize i = 0; i < refine_plan_.part_slack.size(); ++i) {
+            const forge::Field::Aabb& box = refine_plan_.part_box[i];
+            const f64 part = refine_plan_.part_slack[i];
+            // Unbounded on ALL THREE axes, which is the question `slack_here` asks by way of
+            // `away_from`: a part unbounded on one axis is still far away across the other two,
+            // and one unbounded on all three is near everything in the clip.
+            const bool everywhere = box.low.x <= -1e29 && box.high.x >= 1e29 &&
+                                    box.low.y <= -1e29 && box.high.y >= 1e29 &&
+                                    box.low.z <= -1e29 && box.high.z >= 1e29;
+            if (everywhere) ++unbounded_box;
+            if (part >= forge::Field::kInfiniteSlack) ++unbounded_slack;
+            else worst_bounded = std::max(worst_bounded, part);
+            if (!everywhere) continue;
+            WS_LOG_INFO("probe",
+                        "--box-probe a part with NO BOX AT ALL: slack {} -- every box in the clip "
+                        "is charged this",
+                        (part >= forge::Field::kInfiniteSlack) ? std::string("UNBOUNDED")
+                                                               : std::to_string(part));
+        }
+        WS_LOG_INFO("probe",
+                    "--box-probe the plan carries {} parts with any slack; {} of them have no box "
+                    "at all and {} have slack nobody can bound. The worst bounded slack is {:.4f} m",
+                    refine_plan_.part_slack.size(), unbounded_box, unbounded_slack, worst_bounded);
+        // ...and WHICH ops those boxless parts are, boxed exactly the way the plan boxes them so
+        // the two cannot disagree. A part with no box at all is charged to every box in the clip,
+        // so naming it is naming the thing that decides how fast the whole building samples.
+        if (unbounded_box > 0) {
+            std::vector<forge::Field::Part> parts;
+            refine_plan_.field->union_children(refine_plan_.prune_root, parts);
+            for (const forge::Field::Part& piece : parts) {
+                const forge::Field::Aabb box = refine_plan_.field->moved_box(
+                    piece, refine_plan_.field->containing_bounds_of(piece.node));
+                if (!(box.low.x <= -1e29 && box.high.x >= 1e29 && box.low.y <= -1e29 &&
+                      box.high.y >= 1e29 && box.low.z <= -1e29 && box.high.z >= 1e29)) {
+                    continue;
+                }
+                const f64 inner = refine_plan_.field->metric_slack(piece.node);
+                if (inner < forge::Field::kInfiniteSlack && inner + piece.extra <= 0.0) continue;
+                const forge::Node& raw = refine_plan_.field->node(piece.node);
+                WS_LOG_INFO("probe",
+                            "--box-probe   ...and it is a {} under {} rigid motions, a = "
+                            "{:.6f},{:.6f},{:.6f},{:.6f}",
+                            forge::op_name(refine_plan_.field->op_at(piece.node)), piece.motions,
+                            raw.a[0], raw.a[1], raw.a[2], raw.a[3]);
+            }
+        }
+    }
+
+    const NodeKey leaf = refine_regions_[pick].key;
+    const NodeKey ancestor{leaf.x >> up, leaf.y >> up, leaf.z >> up, leaf.level + up};
+    const forge::NodeBox big = forge::node_box(ancestor);
+    const i32 fine = refine_resolution(leaf.level);
+
+    // ---- arm one: the ancestor's whole box, in one call, at the leaf's own resolution ----
+    forge::SampleSettings one = refine_script_->settings;
+    one.low = big.low;
+    one.high = big.high;
+    one.voxels_per_metre = fine;
+    forge::reset_field_visits();
+    const u64 box_began = now_ns();
+    const forge::SampleResult whole = forge::sample(refine_plan_, one, nullptr, {});
+    const f64 box_ms = ns_to_ms(now_ns() - box_began);
+    const u64 box_visits = forge::field_visits();
+    // WHAT ONE EVALUATION ACTUALLY WALKS, which every cost figure in this project has until now
+    // divided a time by rather than measured. Both halves from the same run, so the nanoseconds a
+    // visit costs is arithmetic over two measurements instead of one measurement and one
+    // assumption.
+    {
+        const u64 evals = whole.shape_evaluations + whole.paint_evaluations;
+        WS_LOG_INFO("probe",
+                    "--box-probe one evaluation: {} field-node visits over {} evaluations = "
+                    "{:.0f} nodes an evaluation, {:.0f} ns an evaluation, {:.2f} ns a visit",
+                    box_visits, evals,
+                    (evals > 0) ? static_cast<f64>(box_visits) / static_cast<f64>(evals) : 0.0,
+                    (evals > 0) ? box_ms * 1e6 / static_cast<f64>(evals) : 0.0,
+                    (box_visits > 0) ? box_ms * 1e6 / static_cast<f64>(box_visits) : 0.0);
+    }
+    u64 box_solid = 0;
+    for (VoxelTypeId type : whole.clip.voxels) {
+        if (type != kAir) ++box_solid;
+    }
+
+    // ---- arm two: every leaf inside it, one at a time, with both gates and the truth ----
+    const i64 span = i64{1} << up;
+    u64 asked = 0;            // leaves the current gate lets through
+    u64 refused = 0;          // leaves it refuses
+    u64 with_matter = 0;      // leaves that actually came back with matter
+    u64 wasted_ms_count = 0;  // leaves let through that came back empty
+    f64 alone_ms = 0.0;
+    f64 wasted_ms = 0.0;
+    u64 alone_evals = 0;
+    // The two tighter gates, both one evaluation of the REAL root at the box centre, differing
+    // only in how much margin they keep. `tight` keeps exactly what a leaf voxel could still
+    // rescue; `safe` keeps a whole leaf on top of that.
+    u64 tight_refused = 0, tight_wrong = 0;
+    u64 safe_refused = 0, safe_wrong = 0;
+    for (i64 dz = 0; dz < span; ++dz) {
+        for (i64 dy = 0; dy < span; ++dy) {
+            for (i64 dx = 0; dx < span; ++dx) {
+                const NodeKey child{(ancestor.x << up) + dx, (ancestor.y << up) + dy,
+                                    (ancestor.z << up) + dz, leaf.level};
+                const forge::NodeBox small = forge::node_box(child);
+                if (!forge::box_may_hold_matter(refine_plan_, small.low, small.high,
+                                                refine_authored_)) {
+                    ++refused;
+                    continue;
+                }
+                forge::SampleSettings each = refine_script_->settings;
+                each.low = small.low;
+                each.high = small.high;
+                each.voxels_per_metre = fine;
+                const u64 at = now_ns();
+                const forge::SampleResult got = forge::sample(refine_plan_, each, nullptr, {});
+                const f64 took = ns_to_ms(now_ns() - at);
+                alone_ms += took;
+                alone_evals += got.shape_evaluations + got.paint_evaluations;
+                ++asked;
+                bool any = false;
+                for (VoxelTypeId type : got.clip.voxels) {
+                    if (type != kAir) { any = true; break; }
+                }
+                if (any) {
+                    ++with_matter;
+                } else {
+                    ++wasted_ms_count;
+                    wasted_ms += took;
+                }
+
+                // The proposed gates, against the truth this leaf just produced.
+                const forge::Vec3 middle{(small.low.x + small.high.x) * 0.5,
+                                         (small.low.y + small.high.y) * 0.5,
+                                         (small.low.z + small.high.z) * 0.5};
+                const f64 half = (small.high.x - small.low.x) * 0.5;
+                const f64 radius = std::sqrt(3.0) * half;
+                const f64 voxel = 1.0 / static_cast<f64>(fine);
+                const f64 real = refine_plan_.field->eval(refine_plan_.root, middle);
+                if (real > radius + voxel) {
+                    ++tight_refused;
+                    if (any) ++tight_wrong;
+                }
+                if (real > radius + voxel + 2.0 * half) {
+                    ++safe_refused;
+                    if (any) ++safe_wrong;
+                }
+            }
+        }
+    }
+
+    const f64 penalty = (box_ms > 0.0) ? (alone_ms / box_ms) : 0.0;
+    WS_LOG_INFO("probe",
+                "--box-probe {} levels up, {:.1f} m out: ONE CALL over {:.2f} m at metre {} = "
+                "{:.1f} ms ({} shape + {} paint evals, {} of {} cells solid). NODE BY NODE = "
+                "{:.1f} ms, {} evals, over {} leaves of {} ({} refused by the gate). **{:.2f}x**",
+                up, pick_away, big.high.x - big.low.x, fine, box_ms, whole.shape_evaluations,
+                whole.paint_evaluations, box_solid, whole.clip.voxels.size(), alone_ms,
+                alone_evals, asked, span * span * span, refused, penalty);
+    WS_LOG_INFO("probe",
+                "--box-probe the gate: {} leaves enlisted, {} came back with matter and {} came "
+                "back EMPTY -- {:.1f} ms of {:.1f} spent on nothing ({:.0f}%). A real-root centre "
+                "test would refuse {} of them and would be wrong about {}; with a leaf of margin, "
+                "{} refused and {} wrong",
+                asked, with_matter, wasted_ms_count, wasted_ms, alone_ms,
+                (alone_ms > 0.0) ? 100.0 * wasted_ms / alone_ms : 0.0, tight_refused, tight_wrong,
+                safe_refused, safe_wrong);
+}
+
 // THE WHOLE WORLD, BEFORE THE PLAYER IS PUT IN IT. See Options::full_load.
 //
 // Everything the ladder does in a frame, done here instead, with the loading screen in front of it
@@ -5105,6 +5437,13 @@ bool Application::build_the_whole_world() {
             break;
         }
 
+        // The probe, once, after the ladder has been running long enough that the nodes it is
+        // about to sample are the ones a real load is spending itself on. See Options::box_probe.
+        if (options_.box_probe > 0 && !probed_ && at - began > 20000000000ull) {
+            probed_ = true;
+            probe_the_box_cost(options_.box_probe);
+        }
+
         // What is built, and how much world there is, once a second.
         //
         // Not every iteration, and the reason is arithmetic rather than taste: this loop turns
@@ -5177,6 +5516,11 @@ void Application::deliver_refinement(RefineDelivery delivered) {
     const u64 began = now_ns();
     refine_sample_ms_ = delivered.sample_ms;
     refine_asked_ = delivered.asked;
+    refine_bulk_settled_ = delivered.settled;
+    refine_shape_evals_ = delivered.shape_evaluations;
+    refine_paint_evals_ = delivered.paint_evaluations;
+    refine_shape_ns_ = delivered.shape_ns;
+    refine_paint_ns_ = delivered.paint_ns;
 
     std::vector<RefineJob> finished;
     finished.swap(delivered.jobs);
@@ -5313,10 +5657,13 @@ void Application::deliver_refinement(RefineDelivery delivered) {
     }
     WS_LOG_INFO("clip",
                 "batch: {} nodes at metre {}-{}, {:.1f}-{:.1f} m out, sampled {:.0f} ms ({} voxels "
-                "asked), pasted {:.0f} ms (paste {:.0f} + replay {:.0f}), {} bricks, {} emptied "
+                "asked, {} settled; shape {} evals in {:.0f} core-ms, paint {} evals in {:.0f} "
+                "core-ms), pasted {:.0f} ms (paste {:.0f} + replay {:.0f}), {} bricks, {} emptied "
                 "({} chunks), {} nodes left",
                 finished.size(), coarsest, finest_seen, finished.empty() ? 0.0 : nearest, furthest,
-                refine_sample_ms_, refine_asked_, ns_to_ms(now_ns() - began), paste_ms, replay_ms,
+                refine_sample_ms_, refine_asked_, refine_bulk_settled_, refine_shape_evals_,
+                ns_to_ms(refine_shape_ns_), refine_paint_evals_, ns_to_ms(refine_paint_ns_),
+                ns_to_ms(now_ns() - began), paste_ms, replay_ms,
                 bricks, bricks_emptied, chunks_emptied, left);
     // The running total, because the count that matters is not how many one batch emptied but how
     // many are STANDING. One is a rate and the other is the number of lumps.
@@ -5828,6 +6175,20 @@ bool Application::refine_node_of(const NodeKey& key, RefineNode& out) const {
 
 // Eight children in the parent's place. The list is the ladder's whole state, so this is the only
 // thing that ever adds to it.
+void Application::apply_slack_ceiling() {
+    if (!options_.slack_ceiling) return;
+    refine_plan_.prune_slack = 0.0;
+    refine_plan_.slack = 0.0;
+    refine_plan_.amplitude = 0.0;
+    refine_plan_.parts_usable = false;
+    refine_plan_.part_box.clear();
+    refine_plan_.part_slack.clear();
+    WS_LOG_WARN("clip",
+                "--slack-ceiling: the plan's slack is thrown away, so the descent settles boxes on "
+                "the raw distance. THE WORLD THIS BUILDS MAY BE WRONG -- it is a measurement of "
+                "what a working parts decomposition would be worth, and nothing else");
+}
+
 void Application::log_the_plan(const char* what) const {
     const forge::SamplePlan& plan = refine_plan_;
     // The share is the point of the line, not the count. Twelve unbounded rules of twelve is a clip
@@ -6535,6 +6896,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
     refine_script_ = std::make_unique<forge::Script>(std::move(script));
     refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
                                       refine_script_->paint);
+    apply_slack_ceiling();
     log_the_plan("resumed");
     field_card_tried_ = false;   // R12: a new plan is a new field to put on the card
     field_marcher_tried_ = false;   // R12c: ...and a new field for the marcher to derive from
@@ -7290,6 +7652,7 @@ void Application::build_world() {
                 refine_script_ = std::make_unique<forge::Script>(std::move(script));
                 refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
                                                   refine_script_->paint);
+                apply_slack_ceiling();
                 log_the_plan("the ladder");
                 // R12: a new plan is a new field to put on the card.
                 field_card_tried_ = false;
@@ -7349,8 +7712,16 @@ void Application::build_world() {
             WS_LOG_INFO("tool", "palette: {} materials from the clip", materials_.size());
             log_starting_material();
             const WorldStats clip_stats = world_.stats();
-            WS_LOG_INFO("world", "'{}' built in {:.0f} ms: {} chunks, {} solid voxels", path,
-                        ns_to_ms(now_ns() - start), clip_stats.chunks, clip_stats.solid_voxels);
+            // WITH WHAT IT COSTS IN MEMORY, because a coarse whole-world paste is measured in
+            // hundreds of millions of voxels and "is that gigabytes" is the first question anybody
+            // asks of it. A brick filled with one material is a palette entry and a mask, so the
+            // count and the bytes are not the same question and the count alone answers neither.
+            WS_LOG_INFO("world",
+                        "'{}' built in {:.0f} ms: {} chunks, {} bricks, {} solid voxels, {} MB "
+                        "({:.3f} bytes a solid voxel)",
+                        path, ns_to_ms(now_ns() - start), clip_stats.chunks, clip_stats.bricks,
+                        clip_stats.solid_voxels, clip_stats.bytes / (1024 * 1024),
+                        clip_stats.bytes_per_solid_voxel());
 
             // Kept, so the next run does not do any of that again ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â but NOT while it is still
             // arriving. A coarse build is a stage on the way to the real world, and writing it here

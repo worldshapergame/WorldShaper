@@ -525,7 +525,9 @@ constexpr f64 kHalfCellDiagonal = 0.8660254;
 
 // How far a point is from a box, zero inside it.
 f64 away_from(const Field::Aabb& box, Vec3 p) {
-    if (box.infinite()) return 0.0;
+    // No `infinite()` short cut. See `squared_distance_to` in field.cpp for why: a box may be
+    // unbounded on one axis and bounded on another, and the arithmetic below already answers
+    // nought on the unbounded ones.
     const f64 dx = std::max(std::max(box.low.x - p.x, p.x - box.high.x), 0.0);
     const f64 dy = std::max(std::max(box.low.y - p.y, p.y - box.high.y), 0.0);
     const f64 dz = std::max(std::max(box.low.z - p.z, p.z - box.high.z), 0.0);
@@ -1053,9 +1055,13 @@ SamplePlan plan_sample(const Field& field, u32 root, const std::vector<PaintRule
                         // The same containment question as the zone's own box above, one level
                         // down, so a zone whose pieces the plain bounds refuse does not lose them
                         // all to the one piece that was scaled.
-                        Field::Aabb box = rule_bounds_used()
-                                              ? field.containing_bounds_of(part.node)
-                                              : field.bounds_of(part.node);
+                        // Moved out of the part's own space, because `union_children` now takes
+                        // a shape apart through its translates and rotates as well as its unions
+                        // (D722) -- so a piece's box is where it was AUTHORED and every question
+                        // asked of it is where the sample is.
+                        Field::Aabb box = field.moved_box(
+                            part, rule_bounds_used() ? field.containing_bounds_of(part.node)
+                                                     : field.bounds_of(part.node));
                         if (box.infinite()) {   // one unbounded piece and the zone is the box again
                             rule_piece.resize(first);
                             piece_volume = -1.0;
@@ -1152,7 +1158,15 @@ SamplePlan plan_sample(const Field& field, u32 root, const std::vector<PaintRule
             if (part_slack <= 0.0) continue;
             // Grown by what the peeled displacement can move it, so the box still contains the
             // shape after the displacement it is now being charged for.
-            Field::Aabb box = field.bounds_of(part);
+            // `containing_bounds_of` and not `bounds_of`, and the difference is a real one here.
+            //
+            // This box answers ONE question: is the sample box near enough to this part to have to
+            // allow for what the part can move? That is containment. `bounds_of` refuses to bound
+            // anything whose reported distance would then mislead a cull -- a non-uniform scale
+            // above all -- and refusing means `everywhere()`, which makes the part near every box
+            // in the clip and charges the whole building its slack. Nothing here reads the part's
+            // distance, so nothing here needs that promise.
+            Field::Aabb box = field.moved_box(piece, field.containing_bounds_of(part));
             if (!box.infinite() && piece.extra > 0.0) {
                 const f64 by = piece.extra * 0.5;
                 box.low = Vec3{box.low.x - by, box.low.y - by, box.low.z - by};

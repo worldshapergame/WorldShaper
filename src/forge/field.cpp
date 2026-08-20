@@ -101,7 +101,13 @@ Vec3 stretched(Vec3 p, f64 sx, f64 sy, f64 sz) {
 // here uncalled: MSVC does not diagnose an unused function in an anonymous namespace and GCC does,
 // which is why it survived to be found by the first build off Windows.
 f64 squared_distance_to(const Field::Aabb& box, Vec3 p) {
-    if (box.infinite()) return 0.0;
+    // NO `infinite()` SHORT CUT, and its absence is the point rather than an oversight.
+    //
+    // `Aabb::infinite()` asks about the X AXIS ONLY, and a box may now be unbounded on one axis
+    // and bounded on another -- a ground plane is `y <= 0` and nothing else (see build_bounds).
+    // Short-cutting on it threw those away and answered "distance nought" for a point forty metres
+    // above the ground. The arithmetic below needs no special case: `max(-1e30 - p, p - 1e30, 0)`
+    // is nought on an unbounded axis by construction, which is exactly the right answer.
     const f64 dx = std::max(std::max(box.low.x - p.x, p.x - box.high.x), 0.0);
     const f64 dy = std::max(std::max(box.low.y - p.y, p.y - box.high.y), 0.0);
     const f64 dz = std::max(std::max(box.low.z - p.z, p.z - box.high.z), 0.0);
@@ -1098,7 +1104,26 @@ u32 Field::power(u32 child, f64 exponent) {
 
 // --- evaluation ---------------------------------------------------------------------------
 
+// HOW MANY NODES ONE EVALUATION ACTUALLY WALKS, per thread, for the instruments.
+//
+// Every figure this project has about the cost of a cell is a time divided by an assumed visit
+// count -- D683's "8,231 node visits at about 3.5 ns", D691's "2,876 nodes a cell against 8,273" --
+// and the two disagree by 3x about the same building. A time is measurable and a visit count was
+// not, so the ratio between them was always somebody's arithmetic.
+//
+// A plain thread-local increment: no atomic, no lock, and it is read by one thread about its own
+// work.
+//
+// **Its cost was measured rather than assumed, because it sits in the hottest function in the
+// engine.** Matched sixty-second arms on the cold estate, one build with the increment and one
+// without: **41,439 nodes against 41,695**, which is 0.6% and is inside the run-to-run spread the
+// same pair of runs shows on the content hash. So it ships.
+thread_local u64 g_field_visits = 0;
+u64 field_visits() { return g_field_visits; }
+void reset_field_visits() { g_field_visits = 0; }
+
 f64 Field::eval(u32 at, Vec3 p) const {
+    ++g_field_visits;
     if (at >= nodes_.size()) return 1e30;
     const Node& n = nodes_[at];
     const f64* a = n.a;
@@ -2114,6 +2139,46 @@ void Field::build_bounds() {
         const f64* a = n.a;
         Aabb box = everywhere();
         switch (n.op) {
+            // A HALF SPACE IS NOT A BOX, and per axis it does not have to be.
+            //
+            // A plane is solid where `n . p <= d`, so with an axis-aligned unit normal it is
+            // bounded on exactly one side of one axis and unbounded on the other five. That is a
+            // perfectly good `Aabb` -- `squared_distance_to` and `away_from` are per-axis and a
+            // 1e30 on an axis costs them nothing -- and leaving it at `everywhere()` was expensive
+            // twice over. The cull could never skip the ground, so every evaluation forty metres up
+            // in a campanile walked into it; and the ground is the part a site's displacement is
+            // charged to, so with no box the whole estate was charged the lawn's allowance. D722:
+            // four planes with no box were what kept the descent switched off over the entire
+            // building after the parts decomposition itself was fixed.
+            //
+            // Only for a unit normal along an axis. A slanted plane's half space genuinely is not a
+            // box, and a normal that is not unit length is not a distance at all -- the cull's own
+            // condition, that a point `away` outside the box answers at least `away`, is exactly
+            // what a unit normal gives and what a scaled one does not.
+            case Op::Plane: {
+                const Vec3 normal{a[0], a[1], a[2]};
+                const f64 length = std::sqrt(normal.x * normal.x + normal.y * normal.y +
+                                             normal.z * normal.z);
+                if (std::abs(length - 1.0) > 1e-9) break;
+                u32 axis = 3;
+                f64 sign = 0.0;
+                for (u32 k = 0; k < 3; ++k) {
+                    if (std::abs(std::abs(axis_of(normal, k)) - 1.0) < 1e-12) {
+                        axis = k;
+                        sign = axis_of(normal, k);
+                        break;
+                    }
+                }
+                if (axis > 2) break;
+                Aabb half = everywhere();
+                if (sign > 0.0) {
+                    half.high = with_axis(half.high, axis, a[3]);
+                } else {
+                    half.low = with_axis(half.low, axis, -a[3]);
+                }
+                box = half;
+                break;
+            }
             case Op::Sphere: box = around({a[0], a[1], a[2]}, {a[3], a[3], a[3]}); break;
             case Op::Box: box = around({a[0], a[1], a[2]}, {a[3], a[4], a[5]}); break;
             case Op::Ellipsoid: box = around({a[0], a[1], a[2]}, {a[3], a[4], a[5]}); break;
@@ -2269,16 +2334,7 @@ void Field::build_bounds() {
             case Op::ChamferDifference:
             case Op::SmoothDifference: box = bounds_of(n.child[0]); break;
 
-            case Op::Translate: {
-                Aabb child = bounds_of(n.child[0]);
-                if (!child.infinite()) {
-                    const Vec3 by{a[0], a[1], a[2]};
-                    child.low = child.low + by;
-                    child.high = child.high + by;
-                }
-                box = child;
-                break;
-            }
+            case Op::Translate: box = box_through(static_cast<u32>(i), bounds_of(n.child[0])); break;
             // Turning a bounded shape leaves it bounded, and this is where the facility's time
             // went.
             //
@@ -2296,30 +2352,18 @@ void Field::build_bounds() {
             //
             // The direction matters and is easy to get backwards, so `bounds contain a rotated
             // shape` in tests/test_field.cpp samples the surface and checks it is inside.
-            case Op::Rotate: {
-                Aabb child = bounds_of(n.child[0]);
-                if (child.infinite()) { box = everywhere(); break; }
-                // `eval` turns the POINT by the negated angles, so the shape itself turns by the
-                // positive ones — and the inverse of that composition is these three applied in
-                // the opposite order.
-                const f64 cx = std::cos(a[0] * kTau), sx = std::sin(a[0] * kTau);
-                const f64 cy = std::cos(a[1] * kTau), sy = std::sin(a[1] * kTau);
-                const f64 cz = std::cos(a[2] * kTau), sz = std::sin(a[2] * kTau);
-                Vec3 lo{1e30, 1e30, 1e30};
-                Vec3 hi{-1e30, -1e30, -1e30};
-                for (u32 corner = 0; corner < 8; ++corner) {
-                    Vec3 q{(corner & 1u) ? child.high.x : child.low.x,
-                           (corner & 2u) ? child.high.y : child.low.y,
-                           (corner & 4u) ? child.high.z : child.low.z};
-                    q = {q.x * cz - q.y * sz, q.x * sz + q.y * cz, q.z};
-                    q = {q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy};
-                    q = {q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx};
-                    lo = {std::min(lo.x, q.x), std::min(lo.y, q.y), std::min(lo.z, q.z)};
-                    hi = {std::max(hi.x, q.x), std::max(hi.y, q.y), std::max(hi.z, q.z)};
-                }
-                box = Aabb{lo, hi};
-                break;
-            }
+            // Turning a bounded shape leaves it bounded, and this is where the facility's time
+            // went. Leaving it unbounded was the single most expensive thing in the building: there
+            // are a hundred and eighty-three rotations in the facility, an unbounded child makes
+            // its parent union unbounded and that one's parent too, so a colonnade turned to face a
+            // courtyard took the box off everything above it all the way to the site. Thirty-eight
+            // per cent of the field carried no box, and a node with no box is a node no cull can
+            // skip.
+            //
+            // The arithmetic is `box_through`'s, which `union_children` reads as well; the
+            // direction is easy to get backwards and `bounds contain a rotated shape` in
+            // tests/test_field.cpp samples the surface and checks it is inside.
+            case Op::Rotate: box = box_through(static_cast<u32>(i), bounds_of(n.child[0])); break;
 
             // Scaling is the same argument with one condition on it, and the condition is not
             // about where the shape is — it is about what the node REPORTS.
@@ -2336,20 +2380,7 @@ void Field::build_bounds() {
             // left alone. `the boxes round a revolve, a spiral and a scaled shape cull nothing
             // they should keep` in tests/test_field.cpp is what says so: it takes every answer
             // before the boxes exist and demands the same ones after, and it caught this.
-            case Op::Scale: {
-                Aabb child = bounds_of(n.child[0]);
-                if (child.infinite()) { box = everywhere(); break; }
-                const Vec3 s{a[0] != 0.0 ? a[0] : 1.0, a[1] != 0.0 ? a[1] : 1.0,
-                             a[2] != 0.0 ? a[2] : 1.0};
-                const f64 least = std::min(std::abs(s.x), std::min(std::abs(s.y), std::abs(s.z)));
-                const f64 most = std::max(std::abs(s.x), std::max(std::abs(s.y), std::abs(s.z)));
-                if (most - least > 1e-12) { box = everywhere(); break; }
-                const Vec3 one{child.low.x * s.x, child.low.y * s.y, child.low.z * s.z};
-                const Vec3 two{child.high.x * s.x, child.high.y * s.y, child.high.z * s.z};
-                box = Aabb{{std::min(one.x, two.x), std::min(one.y, two.y), std::min(one.z, two.z)},
-                           {std::max(one.x, two.x), std::max(one.y, two.y), std::max(one.z, two.z)}};
-                break;
-            }
+            case Op::Scale: box = box_through(static_cast<u32>(i), bounds_of(n.child[0])); break;
 
             // A shell reaches out as far as it reaches in; rounding and offsetting move the
             // surface by a known amount. What is left unbounded — twisting, bending — is left that
@@ -2369,15 +2400,7 @@ void Field::build_bounds() {
                     break;
                 }
                 if (n.op == Op::Mirror) {
-                    // Folding about the plane means the shape also exists at the mirrored
-                    // coordinate, so the box is the union of the two.
-                    const u32 axis = static_cast<u32>(a[0]);
-                    const f64 low = axis_of(child.low, axis);
-                    const f64 high = axis_of(child.high, axis);
-                    const f64 reach = std::max(std::abs(low), std::abs(high));
-                    child.low = with_axis(child.low, axis, -reach);
-                    child.high = with_axis(child.high, axis, reach);
-                    box = child;
+                    box = box_through(static_cast<u32>(i), child);
                     break;
                 }
                 bool unlimited = false;
@@ -2846,6 +2869,101 @@ u32 Field::undisplaced(u32 at, f64& amplitude) const {
     return node;
 }
 
+// A child's box, moved by ONE transform node above it.
+//
+// This is the arithmetic `bounds_of` has always done for these four ops, lifted out so that it has
+// one implementation rather than two. It has two callers now: `bounds_of` itself, and
+// `union_children`, which takes a shape apart THROUGH its transforms and so has to move each part's
+// box out into the space the sample asks its questions in.
+//
+// The direction is the one that is easy to get backwards, and `bounds contain a rotated shape` in
+// tests/test_field.cpp is what says it is right: `eval` moves the POINT by the inverse, so the
+// SHAPE moves by the positive transform, which is what this applies.
+Field::Aabb Field::box_through(u32 node, Aabb child) const {
+    if (node >= nodes_.size() || child.infinite()) return child;
+    const Node& n = nodes_[node];
+    const f64* a = n.a;
+    switch (n.op) {
+        case Op::Translate: {
+            const Vec3 by{a[0], a[1], a[2]};
+            child.low = child.low + by;
+            child.high = child.high + by;
+            return child;
+        }
+        // A rotation moves the box's eight corners and the box round WHERE THEY LAND contains the
+        // shape. Looser than the shape's own extent — a long thin thing turned forty-five degrees
+        // gets a box half again as wide as it needs — and exact enough for the only thing a box is
+        // for, which is knowing when not to look.
+        case Op::Rotate: {
+            const f64 cx = std::cos(a[0] * kTau), sx = std::sin(a[0] * kTau);
+            const f64 cy = std::cos(a[1] * kTau), sy = std::sin(a[1] * kTau);
+            const f64 cz = std::cos(a[2] * kTau), sz = std::sin(a[2] * kTau);
+            Vec3 lo{1e30, 1e30, 1e30};
+            Vec3 hi{-1e30, -1e30, -1e30};
+            for (u32 corner = 0; corner < 8; ++corner) {
+                Vec3 q{(corner & 1u) ? child.high.x : child.low.x,
+                       (corner & 2u) ? child.high.y : child.low.y,
+                       (corner & 4u) ? child.high.z : child.low.z};
+                q = {q.x * cz - q.y * sz, q.x * sz + q.y * cz, q.z};
+                q = {q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy};
+                q = {q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx};
+                lo = {std::min(lo.x, q.x), std::min(lo.y, q.y), std::min(lo.z, q.z)};
+                hi = {std::max(hi.x, q.x), std::max(hi.y, q.y), std::max(hi.z, q.z)};
+            }
+            return Aabb{lo, hi};
+        }
+        // A box is not only a claim that the shape is inside it. Every cull that reads one also
+        // assumes a point `away` outside it gets an answer of at least `away`, and a NON-UNIFORM
+        // scale breaks that: it evaluates at `p / s` and multiplies by the smallest factor, so a
+        // shape stretched twice along x reports half the true distance out there. Only a uniform
+        // scale is bounded; the rest go to everywhere.
+        case Op::Scale: {
+            const Vec3 s{a[0] != 0.0 ? a[0] : 1.0, a[1] != 0.0 ? a[1] : 1.0,
+                         a[2] != 0.0 ? a[2] : 1.0};
+            const f64 least = std::min(std::abs(s.x), std::min(std::abs(s.y), std::abs(s.z)));
+            const f64 most = std::max(std::abs(s.x), std::max(std::abs(s.y), std::abs(s.z)));
+            if (most - least > 1e-12) return everywhere();
+            const Vec3 one{child.low.x * s.x, child.low.y * s.y, child.low.z * s.z};
+            const Vec3 two{child.high.x * s.x, child.high.y * s.y, child.high.z * s.z};
+            return Aabb{{std::min(one.x, two.x), std::min(one.y, two.y), std::min(one.z, two.z)},
+                        {std::max(one.x, two.x), std::max(one.y, two.y), std::max(one.z, two.z)}};
+        }
+        // Folding about the plane means the shape also exists at the mirrored coordinate, so the
+        // box is the union of the two.
+        case Op::Mirror: {
+            const u32 axis = static_cast<u32>(a[0]);
+            const f64 low = axis_of(child.low, axis);
+            const f64 high = axis_of(child.high, axis);
+            const f64 reach = std::max(std::abs(low), std::abs(high));
+            child.low = with_axis(child.low, axis, -reach);
+            child.high = with_axis(child.high, axis, reach);
+            return child;
+        }
+        default: return child;
+    }
+}
+
+// A part's box, moved out of its own space and into the one the sample asks its questions in.
+//
+// See `Part::through`. A part flattened out from under two translates and a rotate has its own box
+// in the space it was authored in, and every comparison a plan makes -- is this sample box near
+// that part, does this rule's zone reach this cell -- is in the sample's space.
+//
+// **BACKWARDS, and it has to be.** `union_children` records the motions as it descends, so
+// `through[0]` is the OUTERMOST and the last recorded is the one nearest the part. A shape under
+// `T1 { T2 { part } }` sits at `T1(T2(part))`, so T2 moves it first. The other way round is a box
+// in the wrong PLACE, and that is the dangerous direction: `slack_here` would hand a box less
+// allowance than it needs, the box would settle on it, and matter that is really there would
+// quietly not be built. Invisible on the estate until a rotation is in the chain, because
+// translations commute -- and the estate's own root is one.
+Field::Aabb Field::moved_box(const Part& part, Aabb box) const {
+    for (u32 i = part.motions; i-- > 0;) box = box_through(part.through[i], box);
+    // ...and clipped to wherever the part can matter at all. See `Part::limit`: a cutter's box is
+    // the box it cuts into, and outside that its slack is nobody's problem. The overlap is here
+    // rather than at the callers so that a caller cannot get a part's box without its limit.
+    return overlapped(box, part.limit);
+}
+
 void Field::union_children(u32 at, std::vector<Part>& out) const {
     out.clear();
     if (at >= nodes_.size()) return;
@@ -2857,8 +2975,16 @@ void Field::union_children(u32 at, std::vector<Part>& out) const {
     // the building, so a box anywhere in the building counts as near the ground and is charged
     // the ground's displacement. Which is how a five-centimetre allowance meant for a lawn ended
     // up deciding how fast every wall in the building sampled.
+    // FOUR THOUSAND rather than two hundred and fifty-six.
+    //
+    // The cap is there so a shape nobody can take apart does not take for ever trying; it is not a
+    // budget on how finely a building may be described. The facility alone flattens to two hundred
+    // and seventeen parts and the estate is seven buildings, so at 256 the estate stopped part way
+    // and dumped the rest in whole -- and a whole part is a part with the worst slack in everything
+    // under it. What the list costs downstream is nothing: `plan_sample` keeps only the parts with
+    // any slack at all, which for the facility is three of two hundred and seventeen.
     std::vector<Part> pending{Part{at, 0.0}};
-    while (!pending.empty() && out.size() < 256) {
+    while (!pending.empty() && out.size() < 4096) {
         const Part here = pending.back();
         pending.pop_back();
         const u32 node = here.node;
@@ -2873,7 +2999,10 @@ void Field::union_children(u32 at, std::vector<Part>& out) const {
             if (moves < 1e29) {
                 // Twice, because a reading may be that far out and the point being asked about
                 // may be that far in — the same doubling every skip in this file allows for.
-                pending.push_back(Part{n.child[0], here.extra + moves * 2.0});
+                Part below = here;
+                below.node = n.child[0];
+                below.extra = here.extra + moves * 2.0;
+                pending.push_back(below);
                 continue;
             }
             // A displacement nobody can bound stays whole; metric_slack will say so too.
@@ -2902,11 +3031,66 @@ void Field::union_children(u32 at, std::vector<Part>& out) const {
         // its own slack instead of two smaller ones. Nobody chamfers a manifest.
         const bool flatten = n.op == Op::Union || n.op == Op::SmoothUnion ||
                              n.op == Op::Difference || n.op == Op::SmoothDifference;
+
+        // ...AND THROUGH A RIGID MOTION, which is D722 and is worth more than everything above it.
+        //
+        // A manifest is `translate { union { ... } }` about as often as it is a bare union -- a
+        // building is placed on a site -- and this function stopped dead at the translate. The
+        // estate's whole shape came apart into **ONE part**: unbounded slack, no bounding box, and
+        // therefore every box in the clip charged the worst allowance in the building and every
+        // sample walking every single voxel. The descent, which is the mechanism that took the
+        // facility from sixty million shape evaluations to four, was OFF for the entire estate, and
+        // the number that said so read `1 parts` and looked like a fact about the building.
+        //
+        // A translate, a rotate and a mirror all preserve distance exactly, so a part under one
+        // keeps its own slack unchanged -- `metric_slack` already returns the child's for all three
+        // -- and its box simply moves, which is what `Part::through` and `moved_box` are for. A
+        // SCALE does not come in here even though `bounds_of` can move its box: it multiplies
+        // distances, so a displacement amplitude carried up from under it would be charged at the
+        // wrong size, and being wrong about slack is how matter goes missing.
+        const bool rigid = n.op == Op::Translate || n.op == Op::Rotate || n.op == Op::Mirror;
+        if (rigid && n.children >= 1 && here.motions < 4) {
+            Part below = here;
+            below.node = n.child[0];
+            below.through[below.motions++] = node;
+            pending.push_back(below);
+            continue;
+        }
+
         if (!flatten) {
             out.push_back(here);
             continue;
         }
-        for (u32 i = 0; i < n.children; ++i) pending.push_back(Part{n.child[i], here.extra});
+
+        // A CUTTER CAN ONLY REMOVE WHERE THE THING IT CUTS IS, and until this the sampler did not
+        // know it.
+        //
+        // `difference` is the first child minus the rest, so children after the first only take
+        // matter away — and they can only take it away inside the first child. That means their
+        // slack is the first child's box's problem and nothing outside it. The estate's roofs are
+        // trimmed by SLANTED PLANES, and a half space with a tilted normal has no bounding box at
+        // all: four of them, with 0.372 m of the site's own displacement carried down to them,
+        // were charged to every box in seven buildings and by themselves kept the descent switched
+        // off over the whole estate after everything else about the decomposition was fixed.
+        //
+        // `bounds_of` first because it is an array lookup, and `containing_bounds_of` only when
+        // that has nothing — a walk per difference node over a field of eighteen thousand would be
+        // seconds of planning, and the plain box answers for nearly all of them.
+        Aabb cut = everywhere();
+        const bool subtracts = n.op == Op::Difference || n.op == Op::SmoothDifference;
+        if (subtracts && n.children > 1) {
+            cut = bounds_of(n.child[0]);
+            if (cut.infinite()) cut = containing_bounds_of(n.child[0]);
+            // Into the root's space while the motions above it are still known. `Part::limit` is
+            // kept there so that nesting one cutter inside another is an overlap of two boxes.
+            for (u32 i = here.motions; i-- > 0;) cut = box_through(here.through[i], cut);
+        }
+        for (u32 i = 0; i < n.children; ++i) {
+            Part child = here;
+            child.node = n.child[i];
+            if (subtracts && i > 0) child.limit = overlapped(child.limit, cut);
+            pending.push_back(child);
+        }
     }
     // Too wide to finish taking apart. What is left goes in whole.
     //

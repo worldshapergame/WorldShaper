@@ -52,6 +52,12 @@
 namespace ws {
 namespace forge {
 
+// How many field nodes this thread has walked. See the definition in field.cpp: every cost figure
+// in this project divides a measured time by an ASSUMED visit count, and the two published
+// assumptions differ by 3x about the same building.
+u64 field_visits();
+void reset_field_visits();
+
 struct Vec3 {
     f64 x = 0.0;
     f64 y = 0.0;
@@ -653,11 +659,6 @@ public:
     // building is "near a displaced thing" and is charged nine centimetres of slack for a hedge
     // it is thirty metres from. Distributed, the hedges are their own small boxes and the
     // building pays nothing for them.
-    struct Part {
-        u32 node = 0;
-        f64 extra = 0.0;
-    };
-    void union_children(u32 at, std::vector<Part>& out) const;
 
     // A box each node is known to be contained in, so a union can skip the children that cannot
     // possibly be the nearest thing.
@@ -679,6 +680,42 @@ public:
         bool infinite() const { return low.x <= -1e29 || high.x >= 1e29; }
     };
     Aabb bounds_of(u32 node) const;
+    // A child's box moved by ONE transform node above it. The arithmetic `bounds_of` does for
+    // translate, rotate, scale and mirror, in one place because `union_children` needs it too.
+    Aabb box_through(u32 node, Aabb child) const;
+    struct Part {
+        u32 node = 0;
+        f64 extra = 0.0;
+        // The rigid motions between the shape's root and this part, OUTERMOST first -- they are
+        // recorded on the way down, so index nought is the one nearest the root. `moved_box`
+        // applies them backwards for that reason; see the note there.
+        //
+        // A part is now flattened out from under a translate, a rotate or a mirror as well as out
+        // of a union -- see `union_children`, and D722 for what one un-flattened translate at the
+        // root of the estate cost. So the part's own box is in the space it was AUTHORED in, and
+        // every question a plan asks of it is in the space the sample asks in. `moved_box` is the
+        // one way across, and a caller that forgets it compares a box with a box somewhere else.
+        //
+        // Four, because four nested rigid motions is more than any authored shape has and a fifth
+        // simply stops the flattening: the node goes in whole, which is what happened to all of
+        // them before this existed and is never wrong, only coarser.
+        u32 through[4]{};
+        u32 motions = 0;
+        // Where this part can matter AT ALL, in the root's own space. Everywhere unless something
+        // above it says otherwise, and the only thing that does is a `difference`.
+        //
+        // The children after the first of a difference only REMOVE, and they can only remove where
+        // the first child is -- so a cutter's slack is the problem of the box it cuts into and of
+        // nothing outside it. Four slanted planes trimming roofs are what this is for on the
+        // estate: a half space with a tilted normal has no box of its own, so before this it was
+        // charged to every box in seven buildings and by itself kept the descent switched off over
+        // the whole clip. D722.
+        Aabb limit;
+    };
+    void union_children(u32 at, std::vector<Part>& out) const;
+    // A part's box, moved out of its own space into the sample's and clipped to wherever the part
+    // can matter at all. See `Part::through` and `Part::limit`.
+    Aabb moved_box(const Part& part, Aabb box) const;
 
     // The box a shape is INSIDE, for a reader that wants containment and nothing else.
     //
@@ -780,6 +817,10 @@ public:
     bool mirror_covers(u32 at, Op* missing = nullptr) const;
 
     usize size() const { return nodes_.size(); }
+    // What kind of node this is, by name, for the instruments. The evaluator never asks -- it
+    // switches on the op directly -- and this exists because a diagnostic that can only say "one
+    // part, unbounded" cannot say WHICH part, and that is the whole of the next question.
+    Op op_at(u32 at) const { return (at < nodes_.size()) ? nodes_[at].op : Op::Constant; }
     const Node& node(u32 index) const { return nodes_[index]; }
 
     // How well the field can cull, which is what decides what ONE evaluation costs.
