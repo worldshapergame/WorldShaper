@@ -621,6 +621,28 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### IN FLIGHT, 2026-08-20: four agents at the one lever D722 says is left
+
+**The user asked for the speed-up, was told what twelve measured levers came to, and said "ok do
+it".** Four went out at once, each in its own worktree, each owning files nobody else is in. If this
+session did not finish, this is who owns what and how to judge each one.
+
+| the files it owns | what it was told to build | how to judge it |
+|---|---|---|
+| `src/forge/field_block.cpp`, `tests/test_field_block.cpp` | **`Field::eval_block` for real** — one traversal of the expression carrying all the points, replacing a stub that is one `eval` per point | its own test says every op agrees with `eval` **exactly**, and it reports the ratio of 512 `eval`s to one `eval_block` of 512 |
+| `src/forge/sample.cpp` | the descent asks for a **whole box of points at once** below a size it measures rather than picks | shape evaluations a node, currently ~640 for 512 cells, and both arms hashing identically |
+| `src/forge/field.cpp`, `src/forge/field.hpp` | the **data one node visit touches** — children's boxes beside the parent, smaller hot data, walk order | **nanoseconds a visit**, which `--box-probe 1` prints and which the control puts at 15.5 |
+| `src/world/world_cache.*`, `src/world/serialize.*` | **incremental world saves**, so banking a big world does not rewrite it | bytes and milliseconds for a whole write against an unchanged one, and an interrupted write still refused (D701) |
+
+**`Field::eval_block` was landed first as a stub — one `eval` per point — on purpose.** It is correct
+by construction, so its bit-for-bit promise is true while the traversal underneath it is replaced,
+and everything else could be written and gated against a real API. The replacement is then a change
+with a control arm rather than a second path with nothing to compare against.
+
+**The gate every one of them is held to** is `clips/sampler.clip` cold building content
+`d0d5f84c685be847` at 1,430,104 solid voxels, with `ws_tests` at 733 of 733. Nothing merges on the
+strength of compiling.
+
 #### THE NEWEST THING, 2026-08-20 (second): the whole world is in it in 7.7 s, and 100x is not there
 
 **Asked for and marked critical:** *"we need to speed up node loading and world loading
