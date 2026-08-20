@@ -621,6 +621,42 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### THE NEWEST THING, 2026-08-20 (second): the whole world is in it in 7.7 s, and 100x is not there
+
+**Asked for and marked critical:** *"we need to speed up node loading and world loading
+drammatically up to 100x ... it takes too much time to launch a world and nodes load so slow if you
+click enter prematurely that the world is mostly empty"*. **D722** is the whole entry and it is the
+one to read before touching the sampler.
+
+- **The cost model this project reasoned from was wrong in both factors.** `forge::field_visits()`
+  counts them now: **632 field-node visits an evaluation at 15.5 ns**, against D683's assumed 8,231
+  at 3.5. Thirteen times fewer visits, four times dearer each. The visits were never the problem;
+  the per-visit cost is, and it is memory rather than arithmetic.
+- **A leaf node costs ~640 evaluations to fill 512 cells** — the descent settles no box inside one,
+  so it costs more than evaluating every cell would.
+- **Five more levers measured and none is it**: box sampling **1.00x**, the card **0.80x**, the union
+  accelerator **1.06x**, a tighter emptiness gate **~1%**, and throwing ALL the slack away — the
+  ceiling on any decomposition fix — **1.15x**. With D683's seven that is **twelve, none over 1.3x**.
+  **Do not spend a thirteenth session on a 1.02x.**
+- **`--sample-cost`'s 5.1x penalty does not transfer to the ladder.** It prices nodes from across the
+  whole clip and on the estate that means the deep interior: 111 ms a node where the ladder's own are
+  6.2. Use `--box-probe`, which asks the same volume both ways on the ladder's own next leaves.
+- **A real bug, fixed**: `union_children` would not flatten through a `translate`, and the estate's
+  manifest is one — so its whole shape came apart into **ONE part** with unbounded slack and no box,
+  and the descent was switched off over seven buildings. 1 part → 4,107. Worth 1.03x, which the
+  ceiling above says is all it could ever have been; it is in because an unbounded part box is
+  unsound as well as slow.
+- **What answers the complaint is the coarse paste, and it is back on at metre 2.** The whole 106 m
+  estate is in the world in **7.7 s and 10 MB**. `--clip-coarse N` is the dial: metre 1 is 3.8 s,
+  metre 4 is 22.7 s. `--no-coarse-paste` is what shipped between D673 and here.
+- **The one lever left with a large multiple in it is a BLOCK evaluator** — one traversal carrying
+  all 512 cells of a node with the arithmetic vectorised, so 640 traversals become one. Roughly 20x
+  on the numbers above, and a rewrite of the hottest code in the engine rather than a flag.
+
+New instruments, and they are the durable half: `forge::field_visits()` (cost measured at 0.6% and
+it ships), **`--box-probe N`**, **`--slack-ceiling`**, and the batch line now says where the
+sampler's time went.
+
 #### THE NEWEST THING, 2026-08-20: a world is FINISHED before you are put in it
 
 **Asked for directly and it is shipped:** *"make the worlds launch first by loading the entire world

@@ -13167,3 +13167,164 @@ budget on how much building there is.
 | D721 | **The bar is a DISTANCE, not a node count** | trap | `done/total` read 95% at 684,544 of 719,359 with the list still growing; the frontier over the reach cannot grow underneath itself |
 | D721 | **Cold estate: 15 min → 78.6 M voxels, 634,496 nodes, not finished** | measurement | Banked seven times; `clips/sampler.clip` finishes the same pass in 487 ms |
 | D721 | **A resumed world's hash changes every launch, in both arms** | honesty | Seen while measuring this, not caused by it — and trap 8 gates on that hash |
+
+---
+
+## D722 — Twelve levers, the cost model was wrong in both factors, and the whole estate is in the world in 7.7 seconds
+
+**2026-08-20, asked for and marked critical:** *"we need to speed up node loading and world loading
+drammatically up to 100x because right now it takes too much time to launch a world and nodes load
+so slow if you click enter prematurely that the world is mostly empty"*.
+
+Two complaints, and they turn out to have two different answers. The second one has a good answer
+and this entry ends with it. The first one does not, and the honest position is written down here
+with the numbers rather than argued about again in six months.
+
+### The cost model this project has been reasoning from was wrong in both factors
+
+Every figure in this log about what a cell costs is a measured time divided by an **assumed** visit
+count. D683: *"about 8,231 node visits at about 3.5 ns a visit — roughly 29 µs a cell"*. D691 says
+2,876. The two disagree by 3x about the same building, and neither was measured.
+
+`forge::field_visits()` counts them. Measured, estate, the ladder's own nodes, in the middle of a
+real load:
+
+| | assumed | **measured** |
+|---|---|---|
+| field-node visits an evaluation | 8,231 | **632** |
+| nanoseconds a visit | 3.5 | **15.5** |
+| an evaluation | 29 µs | **9.8 µs** |
+
+**Thirteen times fewer visits, four times dearer each.** The visits are not the problem and never
+were; the per-visit cost is. 15.5 ns is about fifty cycles to index a node, switch on its op, do a
+handful of flops and recurse — which is not compute, it is memory. A `Node` is 88 bytes and
+`bounds_` is a second 48-bytes-a-node array beside it, both indexed randomly, and a union visit
+touches one of the first and four of the second.
+
+Its cost was measured rather than assumed, because it sits in the hottest function in the engine:
+matched sixty-second arms, one build with the increment and one without, **41,439 nodes against
+41,695** — 0.6%, inside the run-to-run spread. So it ships.
+
+### And a node costs 640 evaluations to fill 512 cells
+
+The other half nobody had. Per batch of 128 leaf nodes, from the batch line, which now reports it:
+
+- **65,536 voxels asked, 65,536 cells** — the descent comes all the way down to a single voxel for
+  every cell of every ladder node and settles no box in bulk;
+- **~640 shape evaluations a node**, against 512 cells. A full octree from 8³ to singles is 585
+  boxes, so the descent is doing **more work than evaluating every cell would**;
+- **shape 791 core-ms, paint 4** — 99% of the sampler is the shape.
+
+### Five more levers, measured, and none of them is it
+
+| lever | worth | how it was measured |
+|---|---|---|
+| sampling a node's whole ancestor box instead of its nodes | **1.00x** | `--box-probe 1/2/3`, on the ladder's own next leaves, both arms in one run |
+| the card sampler | **0.80x** | `--gpu-sample`, matched 60 s cold |
+| the union accelerator over wide unions | **1.06x** | `--accelerate-from 8`, matched 60 s cold |
+| the emptiness gate refusing more | **~1%** | `--box-probe`: with the slack fixed, 1% of the time goes on leaves that come back empty |
+| **throwing the plan's slack away entirely** | **1.15x on nodes** | `--slack-ceiling`, which is the CEILING on everything the parts decomposition could ever buy |
+
+`--sample-cost` says node-by-node is **5.1x** the cost of one box call and that figure does not
+transfer: it prices nodes taken from across the whole clip, and on the estate that means the deep
+interior, where a cell is two orders of magnitude dearer than the shell the ladder walks (D688). Its
+111 ms a node is the ladder's 6.2. **A penalty measured over the wrong nodes is not a penalty.**
+
+That is **twelve levers now** across this log — seven in D683's table, five here — and the best of
+all of them is 1.3x. **100x is not reachable by scheduling, batching, boxing, culling or slack.** The
+only thing left with a large multiple in it is making one evaluation cheaper, and the shape of that
+is a block evaluator: one traversal carrying all 512 cells of a node with the arithmetic vectorised,
+so 640 traversals become one. On the numbers above that is worth somewhere around 20x, and it is a
+rewrite of the hottest code in the engine rather than a flag.
+
+### The bug: the estate's whole shape came apart into ONE part
+
+`Field::union_children` flattens a shape into parts so that a box of the descent is charged only for
+the slack of the parts it is actually near. It flattens through unions and differences. **It did not
+flatten through a transform, and the estate's manifest is `translate { ... }`.**
+
+So the decomposition stopped at the very first node. One part: **slack unbounded, and no bounding
+box at all** — which makes it near every box in the clip, which charges every box in seven buildings
+an unbounded allowance, which means **no box in the estate could ever settle** and every sample
+crawled to every single voxel. The descent — the mechanism that took the facility from sixty million
+shape evaluations to four — was switched off over the entire estate, and the number that said so
+read `1 parts` and looked like a fact about the building. Exactly the shape of the fault
+`union_children`'s own comment already describes twice, arriving through a third door.
+
+Fixed, and it took four things rather than one:
+
+1. **Flatten through translate, rotate and mirror.** All three preserve distance exactly, so a part
+   under one keeps its own slack and its box simply moves. `Part::through` records them and
+   `moved_box` applies them — **backwards**, because they are recorded on the way down and a shape
+   under `T1 { T2 { part } }` is moved by T2 first. Getting that the wrong way round puts a part's
+   box in the wrong PLACE, which hands a box less allowance than it needs and quietly loses matter;
+   it is invisible until a rotation is in the chain, because translations commute and the estate's
+   own root is one. A scale is deliberately not flattened: it multiplies distances, so a
+   displacement carried up from under it would be charged at the wrong size.
+2. **A cutter is bounded by what it cuts.** The children after the first of a `difference` only
+   remove, and only where the first child is. The estate's roofs are trimmed by **slanted planes**,
+   and a half space with a tilted normal has no box of its own — four of them, each carrying 0.372 m
+   of the site's displacement, were charged to every box in the clip and by themselves kept the
+   descent off after everything else was fixed.
+3. **A plane with an axis-aligned unit normal gets its half space.** A box may be unbounded on one
+   axis and bounded on another; `away_from` and `squared_distance_to` short-cut on `infinite()`,
+   which asks about the X AXIS ONLY, and answered "distance nought" for a point forty metres above
+   the ground. The arithmetic needs no special case — a 1e30 on an axis costs it nothing — so the
+   short cut is gone.
+4. **Part boxes come from `containing_bounds_of`.** The question a part box answers is containment;
+   `bounds_of` refuses to bound a non-uniform scale because the DISTANCE it reports would mislead a
+   cull, and nothing here reads a distance.
+
+**Estate: 1 part with no box → 4,107 parts, 0 with no box.** Gated: `clips/sampler.clip` cold builds
+`d0d5f84c685be847` at 1,430,104 solid voxels before and after, to the voxel.
+
+**And it is worth 1.03x**, because the ceiling above says it could never have been worth more than
+1.15x. It is in because an unbounded part box is unsound as well as slow — it is the direction that
+costs time, but the same machinery read backwards is the direction that loses matter.
+
+### What actually answers the complaint: the whole world, up front, at a coarse grain
+
+D673 took the up-front coarse build out because it was 3.7 s of a 17.1 s load *"for a world nobody
+was looking at"*, and it was right about the facility. **Then the estate arrived — seven buildings
+over a hundred and six metres — and the ladder builds outward from where you stand at about five
+metres a minute.** Sixty seconds of it finishes the world for **5.2 m of a 106 m clip**. So "a world
+nobody was looking at" now means the entire estate, and the player's own words are *"nodes load so
+slow if you click enter prematurely that the world is mostly empty"*.
+
+The coarse paste is the only mechanism in the engine that puts the WHOLE clip in the world at once.
+Measured, estate, cold, this machine:
+
+| grain | ready at | solid voxels | memory |
+|---|---|---|---|
+| **metre 1** (1 m voxels) | **3.77 s** | 833,781,760 | **14 MB** |
+| **metre 2** (0.5 m voxels) | **7.60 s** | 576,933,888 | **10 MB** |
+| **metre 4** (0.25 m voxels) | **22.70 s** | 511,984,640 | **10 MB** |
+
+**Ten megabytes**, because a brick filled with one material is a palette entry and a mask — the
+count and the bytes are not the same question and it is the count that looks alarming. And every one
+of these is faster than D686 measured the same thing: metre 4 was **129.8 s** there and is 22.7 here,
+**5.9x**, which is D700's rule bounds and D705's field compiler landing in between.
+
+**Shipped at metre 2**: `no_coarse_paste` false and `clip_coarse` 16. A doorway is four voxels and a
+column is two, which is a building rather than a heap of blocks, and the ladder sharpens whatever
+the player looks at from there. `--clip-coarse N` is the dial and it is the one number that decides
+what a cold launch costs.
+
+**So the load a player sees goes from "the whole world, never" to "the whole world, 7.7 seconds".**
+That is not a 100x on the sampler and this entry does not pretend it is. It is the difference
+between entering a world and entering an empty one.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D722 | **632 visits an evaluation at 15.5 ns, not 8,231 at 3.5** | measurement | The first time either factor was counted rather than assumed; both published models were wrong |
+| D722 | **A node costs 640 evaluations to fill 512 cells** | measurement | The descent settles no box in a leaf node, so it costs more than evaluating every cell |
+| D722 | **The estate's whole shape decomposed into ONE part** | fault | `union_children` would not flatten a `translate`, so the descent was off over seven buildings |
+| D722 | **`moved_box` must apply the motions BACKWARDS** | trap | Recorded on the way down; the wrong order is a box in the wrong place, which loses matter rather than time |
+| D722 | **A cutter is bounded by what it cuts** | decision | Four slanted roof planes with no box of their own were charged to every box in the clip |
+| D722 | **`infinite()` asks about the X axis only** | trap | So `away_from` short-cutting on it threw away every per-axis box |
+| D722 | **Box sampling is 1.00x, the card 0.80x, the accelerator 1.06x** | measurement | `--box-probe`, `--gpu-sample`, `--accelerate-from`, all matched arms |
+| D722 | **Throwing ALL the slack away is 1.15x — the ceiling** | measurement | `--slack-ceiling`; it is what any decomposition fix could ever have been worth |
+| D722 | **`--sample-cost`'s 5.1x does not transfer to the ladder** | trap | It prices the deep interior at 111 ms a node where the ladder's are 6.2 |
+| D722 | **Twelve levers measured; none over 1.3x** | honesty | 100x is not reachable by scheduling, batching, boxing, culling or slack |
+| D722 | **The whole estate is in the world in 7.7 s and 10 MB** | decision | The coarse paste is back on at metre 2; it is the only thing that answers the complaint |
+| D722 | **The one lever left is a BLOCK evaluator** | honesty | 640 traversals a node become one; worth roughly 20x on these numbers, and a rewrite rather than a flag |

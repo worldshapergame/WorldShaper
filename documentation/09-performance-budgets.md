@@ -146,10 +146,18 @@ Fixed-size pools sized at startup from detected memory. Zero runtime GPU allocat
 | Cold start to main menu | ≤ 3 s |
 | **`play now` offered** | **≤ 5 s (T0: ≤ 8 s)** — this is the "enter a world" budget, and it is now measured to the button rather than to the frame loop. See below |
 | Enter a world, by pressing it | ≤ 0.5 s from the press to the first frame |
-| Finish the whole world | **no budget: it is linear in how much clip there is** |
+| **The whole world present** | **≤ 10 s** — the coarse up-front build, measured at 7.7 s on the estate (D722) |
+| Finish the whole world at authored detail | **no budget: it is linear in how much clip there is** |
 | Join a session (click to playing) | ≤ 15 s |
 | **Save on every edit (answer K3)** | **0 ms main-thread stall** — append-only journal written on the IO thread |
 | World close / compaction | ≤ 2 s, backgrounded |
+
+**And "the whole world present" is a separate row because it is a separate promise.** From
+2026-08-20 the up-front coarse build is on again (D722): the whole clip goes into the world at
+0.5 m voxels before the ladder starts, which on the estate is 7.7 s and ten megabytes. That is the
+row a player feels as "the world is there". Taking it to the detail it was authored at is the ladder's
+own work and has no budget, because it is linear in how much building there is and nothing in the
+engine can shorten it — twelve levers are measured across D683 and D722 and the best is 1.3x.
 
 **Why "enter a world" is measured to the button now.** From 2026-08-20 a load does not end when a
 frame can be drawn; it ends when the ladder has taken every node of the clip to the detail it was
