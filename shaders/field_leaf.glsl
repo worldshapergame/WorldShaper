@@ -450,6 +450,19 @@ float wsl_sd_spiral(vec3 p, float start_r, float per_turn, float tube, float tur
 // The leaves themselves. `Field::eval`'s switch, in its own order.
 // ---------------------------------------------------------------------------------------------
 
+// A leaf the clip's op set says cannot occur, when R12d has specialised this pipeline.
+//
+// **It REFUSES rather than answering.** Guarding a case with a plain `break` would drop it through
+// to this file's `return 1.0e30`, which is a real answer -- `Field::eval`'s own reply to an op it
+// does not know -- and a specialisation set that wrongly omitted an op would then build a quietly
+// different building. `ws_field_refused` is counted by the host, printed with its denominator and
+// warned about by name, so the same mistake is a line in the log instead. D676's rule: "I could
+// not" and "the answer is nought" must never be the same reply.
+//
+// When nothing is specialised away `WS_USES` is the literal `true` and this whole guard compiles to
+// nothing, which is the state every other caller of this file is in.
+#define WS_LEAF_UNUSED(x) if (!WS_USES(x)) { ws_field_refused_op = op; ws_field_refused = 1u; break; }
+
 float field_leaf(uint at, vec3 p) {
     const uint op = field_nodes.items[at].op;
     // `const f64* a = n.a;`, so every case below reads as its C++ twin does. Eight scalar loads out
@@ -458,18 +471,18 @@ float field_leaf(uint at, vec3 p) {
     for (int i = 0; i < 8; ++i) a[i] = field_nodes.items[at].a[i];
 
     switch (op) {
-        case WS_OP_CONSTANT: return a[0];
-        case WS_OP_PARAMETER: {
+        case WS_OP_CONSTANT: WS_LEAF_UNUSED(WS_OP_CONSTANT) return a[0];
+        case WS_OP_PARAMETER: WS_LEAF_UNUSED(WS_OP_PARAMETER) {
             // A slot past the end of the table is nought, not an error: a field asked about a
             // parameter it does not have answers zero, and the CPU does the same.
             const uint slot = uint(a[0]);
             return (slot < uint(field_params.items.length())) ? field_params.items[slot] : 0.0;
         }
-        case WS_OP_COORDINATE: return ws_axis_of(p, uint(a[0]));
-        case WS_OP_RADIUS: return wsl_length(p - vec3(a[0], a[1], a[2]));
+        case WS_OP_COORDINATE: WS_LEAF_UNUSED(WS_OP_COORDINATE) return ws_axis_of(p, uint(a[0]));
+        case WS_OP_RADIUS: WS_LEAF_UNUSED(WS_OP_RADIUS) return wsl_length(p - vec3(a[0], a[1], a[2]));
 
-        case WS_OP_SPHERE: return wsl_length(p - vec3(a[0], a[1], a[2])) - a[3];
-        case WS_OP_BOX: {
+        case WS_OP_SPHERE: WS_LEAF_UNUSED(WS_OP_SPHERE) return wsl_length(p - vec3(a[0], a[1], a[2])) - a[3];
+        case WS_OP_BOX: WS_LEAF_UNUSED(WS_OP_BOX) {
             // The corner radius comes OFF the half extent on the way in and back off the answer on
             // the way out, which is what makes a rounded box a rounded box of the size asked for
             // rather than an inset one.
@@ -477,15 +490,15 @@ float field_leaf(uint at, vec3 p) {
                                        vec3(a[3] - a[6], a[4] - a[6], a[5] - a[6]));
             return d - a[6];
         }
-        case WS_OP_CYLINDER:
+        case WS_OP_CYLINDER: WS_LEAF_UNUSED(WS_OP_CYLINDER)
             return wsl_sd_cylinder(p - vec3(a[0], a[1], a[2]), a[3], a[4], uint(a[5]));
-        case WS_OP_CAPSULE:
+        case WS_OP_CAPSULE: WS_LEAF_UNUSED(WS_OP_CAPSULE)
             // The point is NOT offset here, and that is not an omission: a capsule is given its two
             // ends outright, so there is no centre to subtract.
             return wsl_sd_capsule(p, vec3(a[0], a[1], a[2]), vec3(a[3], a[4], a[5]), a[6]);
-        case WS_OP_TORUS:
+        case WS_OP_TORUS: WS_LEAF_UNUSED(WS_OP_TORUS)
             return wsl_sd_torus(p - vec3(a[0], a[1], a[2]), a[3], a[4], uint(a[5]));
-        case WS_OP_ARC: {
+        case WS_OP_ARC: WS_LEAF_UNUSED(WS_OP_ARC) {
             const vec3 q = p - vec3(a[0], a[1], a[2]);
             const uint axis = uint(a[5]);
             if (!wsl_is_partial_sweep(a[7])) return wsl_sd_torus(q, a[3], a[4], axis);
@@ -503,35 +516,35 @@ float field_leaf(uint at, vec3 p) {
             const float ex = a[3] * cos(turn), ey = a[3] * sin(turn);
             return wsl_hypot(wsl_hypot(x - ex, y - ey), ws_axis_of(q, axis)) - a[4];
         }
-        case WS_OP_CONE:
+        case WS_OP_CONE: WS_LEAF_UNUSED(WS_OP_CONE)
             return wsl_sd_cone(p - vec3(a[0], a[1], a[2]), a[3], a[4], uint(a[5]));
-        case WS_OP_PLANE: return wsl_dot(p, vec3(a[0], a[1], a[2])) - a[3];
-        case WS_OP_ELLIPSOID:
+        case WS_OP_PLANE: WS_LEAF_UNUSED(WS_OP_PLANE) return wsl_dot(p, vec3(a[0], a[1], a[2])) - a[3];
+        case WS_OP_ELLIPSOID: WS_LEAF_UNUSED(WS_OP_ELLIPSOID)
             return wsl_sd_ellipsoid(p - vec3(a[0], a[1], a[2]), vec3(a[3], a[4], a[5]));
-        case WS_OP_PRISM:
+        case WS_OP_PRISM: WS_LEAF_UNUSED(WS_OP_PRISM)
             return wsl_sd_prism(p - vec3(a[0], a[1], a[2]), a[3], a[4], uint(a[5]), uint(a[6]),
                                 a[7]);
-        case WS_OP_PLATONIC:
+        case WS_OP_PLATONIC: WS_LEAF_UNUSED(WS_OP_PLATONIC)
             return wsl_sd_platonic(p - vec3(a[0], a[1], a[2]), a[3], uint(a[4]));
-        case WS_OP_WEDGE:
+        case WS_OP_WEDGE: WS_LEAF_UNUSED(WS_OP_WEDGE)
             // a[6] is the RISE axis and a[7] the run, which is the order `sd_wedge` takes them in
             // and the opposite of the order they read in.
             return wsl_sd_wedge(p - vec3(a[0], a[1], a[2]), vec3(a[3], a[4], a[5]), uint(a[6]),
                                 uint(a[7]));
-        case WS_OP_STAIRS:
+        case WS_OP_STAIRS: WS_LEAF_UNUSED(WS_OP_STAIRS)
             // The two axes are fixed at the call site rather than stored — a flight runs along z
             // and rises along y — because a[6] and a[7] are already spent on the run and the rise.
             return wsl_sd_stairs(p - vec3(a[0], a[1], a[2]), vec3(a[3], a[4], a[5]), a[6], a[7],
                                  /*run*/ 2u, /*rise*/ 1u);
 
-        case WS_OP_SPIRAL:
+        case WS_OP_SPIRAL: WS_LEAF_UNUSED(WS_OP_SPIRAL)
             return wsl_sd_spiral(p - vec3(a[0], a[1], a[2]), a[3], a[4], a[5], a[6], uint(a[7]));
 
-        case WS_OP_SINE: {
+        case WS_OP_SINE: WS_LEAF_UNUSED(WS_OP_SINE) {
             const float period = (a[1] != 0.0) ? a[1] : 1.0;
             return sin(WS_TAU * (ws_axis_of(p, uint(a[0])) / period + a[2]));
         }
-        case WS_OP_WAVES: {
+        case WS_OP_WAVES: WS_LEAF_UNUSED(WS_OP_WAVES) {
             const uint axis = uint(a[0]);
             uint u = 0u, v = 0u;
             ws_other_axes(axis, u, v);
@@ -541,17 +554,17 @@ float field_leaf(uint at, vec3 p) {
             return sin(WS_TAU * (ws_axis_of(p, u) / pa + a[3])) *
                    sin(WS_TAU * (ws_axis_of(p, v) / pb + a[3]));
         }
-        case WS_OP_NOISE:
+        case WS_OP_NOISE: WS_LEAF_UNUSED(WS_OP_NOISE)
             return wsl_value_noise(ws_stretched(p, a[2], a[3], a[4]), a[0], uint(a[1]));
-        case WS_OP_FBM:
+        case WS_OP_FBM: WS_LEAF_UNUSED(WS_OP_FBM)
             return wsl_fbm_noise(ws_stretched(p, a[5], a[6], a[7]), a[0], uint(a[1]), a[2], a[3],
                                  uint(a[4]));
-        case WS_OP_RIDGED: {
+        case WS_OP_RIDGED: WS_LEAF_UNUSED(WS_OP_RIDGED) {
             const float v = wsl_fbm_noise(ws_stretched(p, a[5], a[6], a[7]), a[0], uint(a[1]),
                                           a[2], a[3], uint(a[4]));
             return 1.0 - 2.0 * abs(v);
         }
-        case WS_OP_RASP: {
+        case WS_OP_RASP: WS_LEAF_UNUSED(WS_OP_RASP) {
             // Ridges an order finer than the surface they sit on, which is what a filed or
             // scratched face looks like: many shallow parallel gouges rather than lumps. The three
             // octaves, the gain and the lacunarity are FIXED here rather than stored, because the
@@ -560,18 +573,18 @@ float field_leaf(uint at, vec3 p) {
                                           uint(a[2]));
             return -abs(v) * a[1];
         }
-        case WS_OP_CELLS: {
+        case WS_OP_CELLS: WS_LEAF_UNUSED(WS_OP_CELLS) {
             float nearest = 0.0, second = 0.0;
             wsl_cell_noise(ws_stretched(p, a[2], a[3], a[4]), a[0], uint(a[1]), nearest, second);
             return nearest;
         }
-        case WS_OP_CELL_EDGE: {
+        case WS_OP_CELL_EDGE: WS_LEAF_UNUSED(WS_OP_CELL_EDGE) {
             float nearest = 0.0, second = 0.0;
             wsl_cell_noise(ws_stretched(p, a[2], a[3], a[4]), a[0], uint(a[1]), nearest, second);
             return second - nearest;   // zero on a seam, growing towards a cell's middle
         }
 
-        case WS_OP_CHECKER: {
+        case WS_OP_CHECKER: WS_LEAF_UNUSED(WS_OP_CHECKER) {
             float sum = 0.0;
             for (uint axis = 0u; axis < 3u; ++axis) {
                 const float cell = a[axis];
@@ -582,13 +595,13 @@ float field_leaf(uint at, vec3 p) {
             // already non-negative — which is the only case where they can differ.
             return (mod(abs(sum), 2.0) < 1.0) ? -1.0 : 1.0;
         }
-        case WS_OP_STRIPES: {
+        case WS_OP_STRIPES: WS_LEAF_UNUSED(WS_OP_STRIPES) {
             const float period = (a[1] != 0.0) ? a[1] : 1.0;
             float t = ws_axis_of(p, uint(a[0])) / period;
             t -= floor(t);
             return (t < a[2]) ? -1.0 : 1.0;
         }
-        case WS_OP_BRICKS: {
+        case WS_OP_BRICKS: WS_LEAF_UNUSED(WS_OP_BRICKS) {
             // Running bond: every other course offset by half a brick, and the value is how deep
             // into the mortar this point is — negative on a brick face, positive in a joint. So it
             // can carve the joints or colour them without any further work.
@@ -617,5 +630,7 @@ float field_leaf(uint at, vec3 p) {
     // "a long way away" rather than "here". Unreachable while the walk only sends leaves down.
     return 1.0e30;
 }
+
+#undef WS_LEAF_UNUSED
 
 #endif   // WS_FIELD_LEAF_GLSL

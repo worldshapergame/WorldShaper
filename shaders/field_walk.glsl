@@ -253,26 +253,26 @@ bool ws_walk_is_leaf(uint op) {
 
 // What a one-child op does to its child's answer on the way out. `mirror_after`.
 float ws_walk_after(uint at, uint op, float v) {
-    if (op == WS_OP_SHELL) return abs(v) - field_nodes.items[at].a[0];
-    if (op == WS_OP_ROUND) return v - field_nodes.items[at].a[0];
-    if (op == WS_OP_OFFSET) return v + field_nodes.items[at].a[0];
-    if (op == WS_OP_NEGATE) return -v;
-    if (op == WS_OP_ABS) return abs(v);
-    if (op == WS_OP_STEP) return (v > field_nodes.items[at].a[0]) ? 1.0 : 0.0;
-    if (op == WS_OP_SMOOTHSTEP) {
+    if (WS_USES(WS_OP_SHELL) && op == WS_OP_SHELL) return abs(v) - field_nodes.items[at].a[0];
+    if (WS_USES(WS_OP_ROUND) && op == WS_OP_ROUND) return v - field_nodes.items[at].a[0];
+    if (WS_USES(WS_OP_OFFSET) && op == WS_OP_OFFSET) return v + field_nodes.items[at].a[0];
+    if (WS_USES(WS_OP_NEGATE) && op == WS_OP_NEGATE) return -v;
+    if (WS_USES(WS_OP_ABS) && op == WS_OP_ABS) return abs(v);
+    if (WS_USES(WS_OP_STEP) && op == WS_OP_STEP) return (v > field_nodes.items[at].a[0]) ? 1.0 : 0.0;
+    if (WS_USES(WS_OP_SMOOTHSTEP) && op == WS_OP_SMOOTHSTEP) {
         const float lo = field_nodes.items[at].a[0];
         const float span = field_nodes.items[at].a[1] - lo;
         if (span == 0.0) return (v > lo) ? 1.0 : 0.0;
         const float t = ws_walk_clamp((v - lo) / span, 0.0, 1.0);
         return t * t * (3.0 - 2.0 * t);
     }
-    if (op == WS_OP_CLAMP) {
+    if (WS_USES(WS_OP_CLAMP) && op == WS_OP_CLAMP) {
         return ws_walk_clamp(v, field_nodes.items[at].a[0], field_nodes.items[at].a[1]);
     }
-    if (op == WS_OP_POWER) {
+    if (WS_USES(WS_OP_POWER) && op == WS_OP_POWER) {
         return ((v < 0.0) ? -1.0 : 1.0) * pow(abs(v), field_nodes.items[at].a[0]);
     }
-    if (op == WS_OP_REMAP) {
+    if (WS_USES(WS_OP_REMAP) && op == WS_OP_REMAP) {
         const float lo = field_nodes.items[at].a[0];
         const float span = field_nodes.items[at].a[1] - lo;
         const float t = (span == 0.0) ? 0.0 : ws_walk_clamp((v - lo) / span, 0.0, 1.0);
@@ -285,17 +285,17 @@ float ws_walk_after(uint at, uint op, float v) {
 // ...and how a many-child op folds the next child into the answer so far. `mirror_fold`.
 float ws_walk_fold(uint at, uint op, float acc, float v) {
     const float k = field_nodes.items[at].a[0];   // the blend or the chamfer width
-    if (op == WS_OP_UNION || op == WS_OP_MIN) return min(acc, v);
-    if (op == WS_OP_INTERSECTION || op == WS_OP_MAX) return max(acc, v);
-    if (op == WS_OP_DIFFERENCE) return max(acc, -v);
-    if (op == WS_OP_SMOOTH_UNION) return ws_smooth_min(acc, v, k);
-    if (op == WS_OP_SMOOTH_INTERSECTION) return ws_smooth_max(acc, v, k);
-    if (op == WS_OP_SMOOTH_DIFFERENCE) return ws_smooth_max(acc, -v, k);
-    if (op == WS_OP_CHAMFER_UNION) return ws_chamfer_min(acc, v, k);
-    if (op == WS_OP_CHAMFER_INTERSECTION) return ws_chamfer_max(acc, v, k);
-    if (op == WS_OP_CHAMFER_DIFFERENCE) return ws_chamfer_max(acc, -v, k);
-    if (op == WS_OP_ADD) return acc + v;
-    if (op == WS_OP_MULTIPLY) return acc * v;
+    if ((WS_USES(WS_OP_UNION) && op == WS_OP_UNION) || (WS_USES(WS_OP_MIN) && op == WS_OP_MIN)) return min(acc, v);
+    if ((WS_USES(WS_OP_INTERSECTION) && op == WS_OP_INTERSECTION) || (WS_USES(WS_OP_MAX) && op == WS_OP_MAX)) return max(acc, v);
+    if (WS_USES(WS_OP_DIFFERENCE) && op == WS_OP_DIFFERENCE) return max(acc, -v);
+    if (WS_USES(WS_OP_SMOOTH_UNION) && op == WS_OP_SMOOTH_UNION) return ws_smooth_min(acc, v, k);
+    if (WS_USES(WS_OP_SMOOTH_INTERSECTION) && op == WS_OP_SMOOTH_INTERSECTION) return ws_smooth_max(acc, v, k);
+    if (WS_USES(WS_OP_SMOOTH_DIFFERENCE) && op == WS_OP_SMOOTH_DIFFERENCE) return ws_smooth_max(acc, -v, k);
+    if (WS_USES(WS_OP_CHAMFER_UNION) && op == WS_OP_CHAMFER_UNION) return ws_chamfer_min(acc, v, k);
+    if (WS_USES(WS_OP_CHAMFER_INTERSECTION) && op == WS_OP_CHAMFER_INTERSECTION) return ws_chamfer_max(acc, v, k);
+    if (WS_USES(WS_OP_CHAMFER_DIFFERENCE) && op == WS_OP_CHAMFER_DIFFERENCE) return ws_chamfer_max(acc, -v, k);
+    if (WS_USES(WS_OP_ADD) && op == WS_OP_ADD) return acc + v;
+    if (WS_USES(WS_OP_MULTIPLY) && op == WS_OP_MULTIPLY) return acc * v;
     return v;
 }
 
@@ -418,6 +418,13 @@ uint ws_walk_order(uint axes, uint k) {
         continue;                                                       \
     }
 
+// An op the clip's set says cannot occur, when R12d has specialised this pipeline. It REFUSES,
+// and the reason is the same as `WS_LEAF_UNUSED`'s: a `break` here would fall out of the switch
+// into the loop again with the frame untouched, which is a walk that runs to WS_FIELD_TURNS and
+// then blames the innocent frame under it. This is `default:`'s own body, and it names the op.
+// When nothing is specialised away the condition is a literal `true` and the guard disappears.
+#define WS_WALK_UNUSED(cond) if (!(cond)) { ws_field_refused_op = op; ws_field_refused = 1u; return WS_FIELD_REFUSED; }
+
 float field_eval(uint root, vec3 p) {
     const uint node_count = field_nodes.items.length();
     if (root >= node_count) {
@@ -471,6 +478,26 @@ float field_eval(uint root, vec3 p) {
         const uint fi = top - 1u;
         const uint ni = stack[fi].node;
         const uint op = field_nodes.items[ni].op;
+#ifdef WS_FIELD_MEASURE_DIVERGENCE
+        // HERE, and it has to be here: this is the turn at which the warp is about to enter the
+        // switch, so the spread of `op` across the lanes standing here IS the number of branches
+        // the warp will run. Anywhere later is inside one of them. See the block above
+        // `ws_distinct_ops` in field_types.glsl for what the number decides.
+        //
+        // The branch is on a SPECIALISATION constant that defaults to false, so the shipped pipeline
+        // has no instrument in it at all rather than a uniform branch round one — and what is being
+        // measured after R12d is exactly instruction space, so a branch left in would be the
+        // instrument changing the thing it is measuring.
+        //
+        // `ws_div_lanes` is written and not read: the active-lane count comes from the turn counts
+        // on the host, where an aligned run of 32 entries is a warp, and there are only two spare
+        // words a cell for three numbers.
+        if (ws_measure_divergence) {
+            uint ws_div_lanes = 0u;
+            ws_div_ops += ws_distinct(op, ws_div_lanes);
+            ws_div_nodes += ws_distinct(ni, ws_div_lanes);
+        }
+#endif
         const uint step = stack[fi].step;
         const vec3 fp = stack[fi].p;
         // The accelerator's word: the child count in its low byte and what the host worked out
@@ -490,7 +517,7 @@ float field_eval(uint root, vec3 p) {
 
         switch (op) {
             // ---- one child, the point changed on the way in -------------------------------
-            case WS_OP_REVOLVE: {
+            case WS_OP_REVOLVE: WS_WALK_UNUSED(WS_USES(WS_OP_REVOLVE)) {
                 // The point folded into the profile's half plane: how far it is from the axis, how
                 // far along the axis it is, and nothing else. That fold is exactly what revolving
                 // means, and it is why the answer is a real distance and not a bound — the nearest
@@ -565,11 +592,11 @@ float field_eval(uint root, vec3 p) {
                 WS_PUSH(WS_CHILD(0), ws_walk_profile_point(q, axis, u, r * cos(cap_turn)));
             }
 
-            case WS_OP_TRANSLATE: {
+            case WS_OP_TRANSLATE: WS_WALK_UNUSED(WS_USES(WS_OP_TRANSLATE)) {
                 WS_BECOME(WS_CHILD(0), fp - vec3(WS_A(0), WS_A(1), WS_A(2)));
             }
 
-            case WS_OP_ROTATE: {
+            case WS_OP_ROTATE: WS_WALK_UNUSED(WS_USES(WS_OP_ROTATE)) {
                 // Applied backwards, because moving the shape one way is asking about the point
                 // the other. Euler xyz, in turns, because a quarter is a rounder thing to type.
                 const float cx = cos(-WS_A(0) * WS_TAU), sx = sin(-WS_A(0) * WS_TAU);
@@ -582,7 +609,7 @@ float field_eval(uint root, vec3 p) {
                 WS_BECOME(WS_CHILD(0), q);
             }
 
-            case WS_OP_SCALE: {
+            case WS_OP_SCALE: WS_WALK_UNUSED(WS_USES(WS_OP_SCALE)) {
                 // A stored zero means one, so a node built before a factor existed reads unchanged.
                 const vec3 s = vec3((WS_A(0) != 0.0) ? WS_A(0) : 1.0,
                                     (WS_A(1) != 0.0) ? WS_A(1) : 1.0,
@@ -598,12 +625,12 @@ float field_eval(uint root, vec3 p) {
                 WS_FINISH(ret * smallest);
             }
 
-            case WS_OP_MIRROR: {
+            case WS_OP_MIRROR: WS_WALK_UNUSED(WS_USES(WS_OP_MIRROR)) {
                 const uint axis = uint(WS_A(0));
                 WS_BECOME(WS_CHILD(0), ws_with_axis(fp, axis, abs(ws_axis_of(fp, axis))));
             }
 
-            case WS_OP_POLAR_REPEAT: {
+            case WS_OP_POLAR_REPEAT: WS_WALK_UNUSED(WS_USES(WS_OP_POLAR_REPEAT)) {
                 {
                     const uint count = max(1u, uint(WS_A(0)));
                     const uint axis = uint(WS_A(1));
@@ -630,7 +657,7 @@ float field_eval(uint root, vec3 p) {
             }
 
             case WS_OP_TWIST:
-            case WS_OP_BEND: {
+            case WS_OP_BEND: WS_WALK_UNUSED(WS_USES(WS_OP_TWIST) || WS_USES(WS_OP_BEND)) {
                 // One block, because the two differ only in which coordinate drives the angle: a
                 // twist turns about its axis by how far ALONG it you are, a bend by how far ACROSS.
                 {
@@ -662,10 +689,10 @@ float field_eval(uint root, vec3 p) {
             case WS_OP_REMAP:
             case WS_OP_CURVATURE:
             case WS_OP_OCCLUSION:
-            case WS_OP_FACING: {
+            case WS_OP_FACING: WS_WALK_UNUSED(WS_USES(WS_OP_SHELL) || WS_USES(WS_OP_ROUND) || WS_USES(WS_OP_OFFSET) || WS_USES(WS_OP_NEGATE) || WS_USES(WS_OP_ABS) || WS_USES(WS_OP_STEP) || WS_USES(WS_OP_SMOOTHSTEP) || WS_USES(WS_OP_CLAMP) || WS_USES(WS_OP_POWER) || WS_USES(WS_OP_REMAP) || WS_USES(WS_OP_CURVATURE) || WS_USES(WS_OP_OCCLUSION) || WS_USES(WS_OP_FACING)) {
                 // The three re-entrant ones share this block deliberately: they differ from the
                 // rest only in how many times they ask and where, which is the step counter's job.
-                if (op == WS_OP_CURVATURE) {
+                if (WS_USES(WS_OP_CURVATURE) && op == WS_OP_CURVATURE) {
                     // The mean of the field around a point against the field at it. For a distance
                     // field that is its Laplacian, and the Laplacian of a distance field is
                     // curvature: outside a convex shape the neighbourhood is further away than the
@@ -686,7 +713,7 @@ float field_eval(uint root, vec3 p) {
                     stack[fi].step = step + 1u;
                     WS_PUSH(WS_CHILD(0), where);
                 }
-                if (op == WS_OP_OCCLUSION) {
+                if (WS_USES(WS_OP_OCCLUSION) && op == WS_OP_OCCLUSION) {
                     // How much of a small sphere around this point is solid. Fourteen FIXED
                     // directions rather than a random spray, because a weathering pattern that
                     // shimmers when the clip is re-sampled is not a pattern.
@@ -697,7 +724,7 @@ float field_eval(uint root, vec3 p) {
                     stack[fi].step = step + 1u;
                     WS_PUSH(WS_CHILD(0), where);
                 }
-                if (op == WS_OP_FACING) {
+                if (WS_USES(WS_OP_FACING) && op == WS_OP_FACING) {
                     const float reach = (WS_A(1) > 0.0) ? WS_A(1) : 0.02;
                     if (step > 0u) {
                         // +x -x +y -y +z -z, differenced in pairs exactly as `normal_at` does: the
@@ -727,7 +754,7 @@ float field_eval(uint root, vec3 p) {
             }
 
             // ---- two children at the same point --------------------------------------------
-            case WS_OP_DISPLACE: {
+            case WS_OP_DISPLACE: WS_WALK_UNUSED(WS_USES(WS_OP_DISPLACE)) {
                 if (step == 0u) {
                     stack[fi].step = 1u;
                     WS_PUSH(WS_CHILD(0), fp);
@@ -741,7 +768,7 @@ float field_eval(uint root, vec3 p) {
                 WS_FINISH(stack[fi].acc + WS_A(0) * ret);
             }
 
-            case WS_OP_BLEND: {
+            case WS_OP_BLEND: WS_WALK_UNUSED(WS_USES(WS_OP_BLEND)) {
                 if (step == 0u) {
                     stack[fi].step = 1u;
                     WS_PUSH(WS_CHILD(0), fp);
@@ -772,7 +799,7 @@ float field_eval(uint root, vec3 p) {
             case WS_OP_ADD:
             case WS_OP_MULTIPLY:
             case WS_OP_MIN:
-            case WS_OP_MAX: {
+            case WS_OP_MAX: WS_WALK_UNUSED(WS_USES(WS_OP_UNION) || WS_USES(WS_OP_INTERSECTION) || WS_USES(WS_OP_DIFFERENCE) || WS_USES(WS_OP_SMOOTH_UNION) || WS_USES(WS_OP_SMOOTH_INTERSECTION) || WS_USES(WS_OP_SMOOTH_DIFFERENCE) || WS_USES(WS_OP_CHAMFER_UNION) || WS_USES(WS_OP_CHAMFER_INTERSECTION) || WS_USES(WS_OP_CHAMFER_DIFFERENCE) || WS_USES(WS_OP_ADD) || WS_USES(WS_OP_MULTIPLY) || WS_USES(WS_OP_MIN) || WS_USES(WS_OP_MAX)) {
                 // R12's first speed step, and it is `Field::eval`'s cull rather than a new one.
                 // `--no-field-accel` takes every part of it off in one place.
                 const bool accel = (field_push.flags & WS_FIELD_FLAG_NO_ACCEL) == 0u;
@@ -790,7 +817,7 @@ float field_eval(uint root, vec3 p) {
                 // the LARGEST answer, so the child the point is furthest outside is exactly the one
                 // most likely to be it and there is nothing to reject; the smooth and chamfer folds
                 // depend on every child at once; `add` and `multiply` are arithmetic.
-                if (accel && op == WS_OP_UNION && step == 0u && (word & WS_NODE_CULLABLE) != 0u) {
+                if (accel && WS_USES(WS_OP_UNION) && op == WS_OP_UNION && step == 0u && (word & WS_NODE_CULLABLE) != 0u) {
                     vec4 ws_key = vec4(3.0e38);
                     uvec4 ws_slot = uvec4(0u, 1u, 2u, 3u);
                     // A slot past the count keeps its huge key and sorts to the end, where the walk
@@ -821,7 +848,7 @@ float field_eval(uint root, vec3 p) {
                     // stop in the same place or it is a different amount of work for the same
                     // answer — the kind of difference that only ever shows up as a timing. It is
                     // exact: zero times anything finite is zero, and nothing here has side effects.
-                    if (op == WS_OP_MULTIPLY && acc == 0.0) WS_FINISH(0.0);
+                    if (WS_USES(WS_OP_MULTIPLY) && op == WS_OP_MULTIPLY && acc == 0.0) WS_FINISH(0.0);
 
                     // The box cull, and it is where the time goes on a clip of any size. A union of
                     // thirty parts costs thirty evaluations at every point, and at all but a
@@ -837,7 +864,7 @@ float field_eval(uint root, vec3 p) {
                     // Getting it wrong is not loud. The sign never changes, so nothing appears or
                     // vanishes; the magnitude does, which moves the normals, which moves the paint
                     // rule that follows them. Four hundred voxels of moss in the wrong place (D644).
-                    if (op == WS_OP_UNION && (axes & WS_WALK_ORDERED) != 0u) {
+                    if (WS_USES(WS_OP_UNION) && op == WS_OP_UNION && (axes & WS_WALK_ORDERED) != 0u) {
                         // Sorted: the boxes are in ascending distance and `acc` only ever shrinks,
                         // so a child rejected here is a PROOF that every child after it is rejected
                         // too. `Field::eval` says `break` for exactly that reason, and reaching for
@@ -845,7 +872,7 @@ float field_eval(uint root, vec3 p) {
                         if (next >= nc) WS_FINISH(acc);
                         const float away = WS_WALK_AWAY(fi, next);
                         if (away > 0.0 && (acc < 0.0 || acc * acc <= away)) WS_FINISH(acc);
-                    } else if (op == WS_OP_UNION) {
+                    } else if (WS_USES(WS_OP_UNION) && op == WS_OP_UNION) {
                         // Unsorted — the control arm, and a union nothing could be sorted by. The
                         // scan may only SKIP, never stop: without the ordering a rejected child
                         // says nothing whatever about the next one.
@@ -856,7 +883,7 @@ float field_eval(uint root, vec3 p) {
                             if (!(away > 0.0 && (acc < 0.0 || acc * acc <= away))) break;
                             ++next;
                         }
-                    } else if (accel && op == WS_OP_DIFFERENCE) {
+                    } else if (accel && WS_USES(WS_OP_DIFFERENCE) && op == WS_OP_DIFFERENCE) {
                         // Carving with something the point is nowhere near. Outside that child's
                         // box its distance is at least `away`, so the term it contributes is at
                         // most −away, and if the running answer already beats that then the cut
@@ -884,7 +911,7 @@ float field_eval(uint root, vec3 p) {
             }
 
             // ---- the point folded into a cell, then the leaning neighbours ------------------
-            case WS_OP_REPEAT: {
+            case WS_OP_REPEAT: WS_WALK_UNUSED(WS_USES(WS_OP_REPEAT)) {
                 // The fold on its own answers "how far to the copy in THIS cell", which is not the
                 // same question as "how far to the nearest copy" whenever a copy sits off-centre in
                 // its cell — an overstatement, and the dangerous direction, because a sampler that
@@ -951,7 +978,7 @@ float field_eval(uint root, vec3 p) {
             // same way in its cell. A scatter's do not, so what is carried in `fold` and `lean` is
             // the INDEX and the point is rebuilt from it each time — which is also what makes this
             // frame need a `scale`, since the copy's own size has to survive the push and come back.
-            case WS_OP_SCATTER: {
+            case WS_OP_SCATTER: WS_WALK_UNUSED(WS_USES(WS_OP_SCATTER)) {
                 if (step == 0u) {
                     vec3 cell = vec3(0.0);
                     vec3 lean = vec3(0.0);
@@ -1021,6 +1048,7 @@ float field_eval(uint root, vec3 p) {
     return ret;
 }
 
+#undef WS_WALK_UNUSED
 #undef WS_A
 #undef WS_CHILD
 #undef WS_PUSH
