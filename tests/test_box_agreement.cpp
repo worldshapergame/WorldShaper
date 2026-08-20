@@ -120,13 +120,16 @@ void report(const BoxCellAudit& audit, const char* what) {
     }
 }
 
-}  // namespace
-
-TEST_CASE("a box settled in bulk agrees with its own cells, on clips/sampler.clip") {
+// One clip, asked the question. Two of them, because the fault D732 closed is a property of an OP
+// and not of a clip -- `clips/normal_test.clip` has a flight of its own, at a different place and a
+// different size, and it disagreed on 2,3xx cells of its own before the fix. A test that only ever
+// asks the clip the fault was found on is trap 25 with the resolution held fixed one axis along.
+void ask(const char* file) {
     VoxelTypeTable types;
     TagRegistry tags;
-    const Script script = load_clip_script(clip_path("sampler.clip"), types, tags);
-    REQUIRE_MESSAGE(script.errors.empty(), "clips/sampler.clip did not parse");
+    const Script script = load_clip_script(clip_path(file), types, tags);
+    const std::string note = std::string(file) + " did not parse";
+    REQUIRE_MESSAGE(script.errors.empty(), note.c_str());
 
     JobSystem jobs;
     set_box_cell_audit(true);
@@ -134,7 +137,7 @@ TEST_CASE("a box settled in bulk agrees with its own cells, on clips/sampler.cli
         sample(script.field, script.solid, script.paint, script.settings, &jobs);
     set_box_cell_audit(false);
     const BoxCellAudit audit = take_box_cell_audit();
-    report(audit, "clips/sampler.clip at its own metre");
+    report(audit, file);
 
     // What the sample cost, in numbers that do not drift. Six other agents can be on this machine
     // and a wall clock taken beside them is noise (D725); an evaluation count is the same in every
@@ -152,4 +155,14 @@ TEST_CASE("a box settled in bulk agrees with its own cells, on clips/sampler.cli
                   "a box settled SOLID over cells the per-cell rule calls air");
     CHECK_MESSAGE(audit.empty_over_claimed == 0,
                   "a box settled EMPTY over cells the per-cell rule calls matter");
+}
+
+}  // namespace
+
+TEST_CASE("a box settled in bulk agrees with its own cells, on clips/sampler.clip") {
+    ask("sampler.clip");
+}
+
+TEST_CASE("a box settled in bulk agrees with its own cells, on clips/normal_test.clip") {
+    ask("normal_test.clip");
 }
