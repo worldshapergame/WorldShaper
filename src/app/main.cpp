@@ -316,6 +316,9 @@ struct Options {
     // clip that reaches few ops is the case it was written for and nobody has authored one.
     // `clips/mirror_hall.clip` reaches five of sixty-seven — and finishes its whole run in 9 ms of
     // card, so it cannot time the lever either. That hole is the one left in the argument.
+    // The control arm for D732: ask the ladder about the edit ONE FINEST NODE AT A TIME, which is
+    // what R11h shipped and what D720 measured freezing. See `presample_for_edit`.
+    bool edit_presample_per_node = false;
     bool gpu_specialise = false;
     bool sweep_all_regions = false;
     bool refresh_shadows_on_paste = false;
@@ -1382,6 +1385,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
     } else if (arg == "--no-full-load") {
         options.full_load = false;
         options.full_load_asked = false;
+    } else if (arg == "--edit-presample-per-node") {
+        options.edit_presample_per_node = true;
     } else if (arg == "--gpu-specialise") {
         options.gpu_specialise = true;
     } else if (arg == "--sweep-all-regions") {
@@ -1950,6 +1955,9 @@ void print_help() {
         "  --sample-block-cells N  how small a box gets before the descent asks the field about a\n"
         "                        whole LEVEL at once instead of recursing (512, one render node).\n"
         "                        0 is the control arm: recurse to single voxels as before D724\n"
+        "  --edit-presample-per-node  ask the ladder about an edit one finest node at a time, which\n"
+        "                        is what R11h shipped and what D720 measured freezing. The control\n"
+        "                        arm: 87.45 ms on a four-metre carve against 0.11 for the same answer\n"
         "  --gpu-specialise      compile the card's field shader with the ops this clip never uses\n"
         "                        left out. Measured at 1.00x on the facility -- a warp's lanes stand\n"
         "                        on four ops of sixty-seven -- and kept for a clip that uses few\n"
@@ -6349,8 +6357,6 @@ bool Application::refine_node_of(const NodeKey& key, RefineNode& out) const {
            out.high.z - out.low.z >= voxel;
 }
 
-// Eight children in the parent's place. The list is the ladder's whole state, so this is the only
-// thing that ever adds to it.
 void Application::offer_the_way_in() {
     // Once. Three paths through `build_world` reach a world that exists -- a cache hit, the
     // up-front paste, and `--no-coarse-paste` where there is nothing to wait for -- and only the
@@ -6396,6 +6402,8 @@ void Application::log_the_plan(const char* what) const {
                 what, plan.rules_total, plan.rules_placed, plan.rules_per_voxel, share);
 }
 
+// Eight children in the parent's place. The list is the ladder's whole state, so this is the only
+// thing that ever adds to it.
 u32 Application::split_refine_node(usize at) {
     const NodeKey parent = refine_regions_[at].key;
     RefineNode children[8];
@@ -6446,7 +6454,13 @@ u32 Application::split_refine_node(usize at) {
 bool Application::demand_sample_of(const NodeKey& key, SampleCause cause) {
     if (refine_script_ == nullptr) return false;
     const forge::NodeBox want = forge::node_box(key);
-    for (RefineNode& box : refine_regions_) {
+    // The live list rather than every region there has ever been. Same reason as the pick's own
+    // sweep (D728) and the same guarantee: the list is a superset of the not-done, and the `done`
+    // test below is what it always was. The edit path no longer comes through here at all -- see
+    // `presample_for_edit`, which asks about the whole cut in one walk -- but the light paths still
+    // do, one key at a time (R9a, R9i).
+    for (const u32 index : refine_live_) {
+        RefineNode& box = refine_regions_[index];
         // `done` is either "in flight in a batch" or "nothing left to do here", and neither may be
         // disturbed: the delivery writes back by INDEX, so a node changed under a batch is a
         // node's answer written into another node's record.
@@ -6512,7 +6526,83 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
     static constexpr u64 kPresampleNodeCap = 32768;
 
     const u64 began = now_ns();
+
+    // ---- THE ASKING PATH, and it does not walk the edit node by node -------------------------
+    //
+    // D720 measured this freezing and named why: `demand_sample_of` is a linear scan of
+    // `refine_regions_` for every key it is given, `presample_for_edit` hands it **one key per
+    // finest node across the edit** — 3,757 of them on the carve that was measured — and only 86
+    // demands come out. So the cost is `O(keys x regions)` and **both factors grow**: keys with the
+    // size of the cut, which is the player's *"bigger the bigger the amount of the voxels placed"*,
+    // and regions with how much of the world the ladder has split. A settle on the facility reports
+    // 63,307 ladder nodes and the estate passes six hundred thousand.
+    //
+    // And the loop that built those keys was not free either: `refine_node_of` and
+    // `refine_node_is_a_no_op` per node, and the second of those is a field evaluation — about ten
+    // microseconds each (D722), so 3,757 of them is thirty-seven milliseconds before a single
+    // region has been looked at.
+    //
+    // **Both go away by asking the question the other way round.** Every key of the cut falls in
+    // exactly one leaf of the ladder's tree, so "mark the leaf each key falls in" and "mark every
+    // leaf the edit box meets" are the same set — reached in ONE walk of the live list instead of
+    // one walk per key, with one emptiness test per leaf instead of one per finest node.
+    //
+    // Where the two differ is the direction that is safe: a coarse leaf whose finest nodes are each
+    // individually empty may still answer "may hold matter" as a whole, so this marks a leaf the
+    // per-key version would not. That is more sampling, never less, and less is what leaves a
+    // blocky cut — which is the fault D697 records the last attempt at making this cheaper causing.
+    if (!options_.sync_edit_presample && !options_.edit_presample_per_node) {
+        const f64 per = static_cast<f64>(std::max(1, refine_authored_));
+        const forge::Vec3 want_low{static_cast<f64>(low[0] - refine_at_[0]) / per,
+                                   static_cast<f64>(low[1] - refine_at_[1]) / per,
+                                   static_cast<f64>(low[2] - refine_at_[2]) / per};
+        // Half open on the high side, because `high` is the last voxel INSIDE the edit and
+        // `boxes_meet` is half open — a box that ends where the next begins does not meet it.
+        const forge::Vec3 want_high{static_cast<f64>(high[0] + 1 - refine_at_[0]) / per,
+                                    static_cast<f64>(high[1] + 1 - refine_at_[1]) / per,
+                                    static_cast<f64>(high[2] + 1 - refine_at_[2]) / per};
+        u64 asked = 0;
+        u64 met = 0;
+        u64 already = 0;
+        for (const u32 index : refine_live_) {
+            RefineNode& box = refine_regions_[index];
+            if (!boxes_meet(box.low, box.high, want_low, want_high)) continue;
+            ++met;
+            // `done` is either "in flight in a batch" or "nothing left to do here", and neither may
+            // be disturbed: the delivery writes back by INDEX, so a node changed under a batch is
+            // one node's answer written into another node's record. Counted rather than skipped
+            // silently, because "no leaf overlaps this cut" and "every leaf it touches is already
+            // sharp" are opposite reports and the line printed nought for both.
+            if (box.done || box.forced) { ++already; continue; }
+            // The same test the picker uses, so the two cannot disagree about what an empty node
+            // is — and asked of the leaf rather than of every finest node inside it.
+            if (refine_node_is_a_no_op(box)) continue;
+            box.forced = true;
+            box.forced_by = SampleCause::kEdit;
+            box.refuse_until = 0;
+            ++asked;
+        }
+        if (asked > 0) {
+            // A demand is an event the ladder has to wake for, exactly as an edit is. The memos are
+            // NOT expired — see rearm_refinement for why a world event and a camera event must not
+            // reschedule alike. Once for the whole cut rather than once a node.
+            rearm_refinement(/*forget_refusals=*/false);
+            refine_settled_ = false;
+        }
+        sample_jobs_by_cause_[static_cast<u8>(SampleCause::kEdit)] += asked;
+        WS_LOG_INFO("edit",
+                    "asked the ladder for {} of the {} leaves the edit box meets at metre {} ({} "
+                    "were already sharp or in flight); {:.2f} ms on this frame, one walk of {} live "
+                    "nodes. The cut goes in now and the op log is replayed over each node as it "
+                    "lands",
+                    asked, met, want_per_metre, already, ns_to_ms(now_ns() - began),
+                    refine_live_.size());
+        return static_cast<u32>(asked);
+    }
+
     std::vector<RefineJob> jobs;
+    // Only the control arm reads this; the shipped path never builds it, which is most of what it
+    // saves. See D732.
     std::vector<NodeKey> wanted_keys;
     u64 wanted = 0;
     for (i64 z = first[2]; z <= last[2] && jobs.size() < kPresampleNodeCap; ++z) {
@@ -6525,7 +6615,7 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
                 // sampling it would paste nothing. The same test the picker uses, so the two
                 // cannot disagree about what an empty node is.
                 if (refine_node_is_a_no_op(node)) continue;
-                wanted_keys.push_back(NodeKey{x, y, z, finest});
+                if (options_.edit_presample_per_node) wanted_keys.push_back(NodeKey{x, y, z, finest});
                 RefineJob job;
                 // `at` is deliberately left at nought and never read. These jobs are NOT list
                 // entries: a delivery writes its answer back into `refine_regions_[job.at]` by
@@ -6541,6 +6631,23 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
             }
         }
     }
+    // ---- the control arm: one demand per finest node, which is what R11h shipped -------------
+    //
+    // See Options::edit_presample_per_node and D732. Every key of the cut walks the region list on
+    // its own, and D720 measured that as `O(keys x regions)` with both factors growing.
+    if (options_.edit_presample_per_node) {
+        u64 asked = 0;
+        for (const NodeKey& key : wanted_keys) {
+            if (demand_sample_of(key, SampleCause::kEdit)) ++asked;
+        }
+        sample_jobs_by_cause_[static_cast<u8>(SampleCause::kEdit)] += asked;
+        WS_LOG_INFO("edit",
+                    "--edit-presample-per-node: asked the ladder for {} of {} nodes at metre {} "
+                    "across the edit, one demand each ({:.2f} ms on this frame)",
+                    asked, wanted, want_per_metre, ns_to_ms(now_ns() - began));
+        return static_cast<u32>(asked);
+    }
+
     if (jobs.empty()) return 0;
     const usize nodes_wanted = jobs.size();
 
@@ -6579,19 +6686,6 @@ u32 Application::presample_for_edit(const std::vector<Op>& ops) {
     // of being right on the first frame and stopping the game for nine seconds to be. R11h's gate
     // is met at the fixed point rather than instantly. `--sync-edit-presample` is the control arm
     // and is the old path unchanged, including its timings.
-    if (!options_.sync_edit_presample) {
-        u64 asked = 0;
-        for (const NodeKey& key : wanted_keys) {
-            if (demand_sample_of(key, SampleCause::kEdit)) ++asked;
-        }
-        sample_jobs_by_cause_[static_cast<u8>(SampleCause::kEdit)] += asked;
-        WS_LOG_INFO("edit",
-                    "asked the ladder for {} of {} nodes at metre {} across the edit ({:.2f} ms on "
-                    "this frame); the cut goes in now and the op log is replayed over each node as "
-                    "it lands",
-                    asked, wanted, want_per_metre, ns_to_ms(now_ns() - began));
-        return static_cast<u32>(asked);
-    }
     sample_jobs_by_cause_[static_cast<u8>(SampleCause::kEdit)] += jobs.size();
 
     // Across the paste pool, which has one submitter — this thread — and is not the sampler's own

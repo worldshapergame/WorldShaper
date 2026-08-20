@@ -14161,3 +14161,69 @@ spatial spread with a queue to sort into. There is nothing to bin: moving a lane
 | D731 | **The diff with the flag OFF is 1.05x, unexplained** | honesty | Four runs, no overlap, nothing aimed at it; recorded, not claimed |
 | D731 | **440 warp-instructions a node visit against a core's 70** | decision | The four-op-bodies factor; the ceiling op-convergence would be chasing |
 | D731 | **The divergence is DEPTH, not spread, so there is nothing to bin** | decision | 5.94 distinct nodes over 28 lanes; a lane's task is 7.7 KB of private stack |
+
+---
+
+## D732 — The edit asks about the whole cut in one walk, and it is 795x
+
+**2026-08-20.** D720 recorded three faults and was told to document rather than fix them. This is the
+third of them, and the entry it left is a complete diagnosis: *"`demand_sample_of` is a linear scan of
+`refine_regions_` for every key it is given, and `presample_for_edit` hands it one key per
+finest-level node across the edit — 3,757 of them on the carve that was measured, which produced only
+86 accepted demands... the cost is `O(keys x regions)`, and both factors grow."*
+
+Keys grow with the size of the cut, which is the player's own *"bigger the bigger the amount of the
+voxels placed"*. Regions grow with how much of the world the ladder has split: a settle on the
+facility reports 63,307 and the estate passes six hundred thousand.
+
+### And the key loop was not free either
+
+D720 named the scan. There is a second cost in the same function and it is bigger per node: the loop
+that BUILDS those keys calls `refine_node_of` and `refine_node_is_a_no_op` for every finest node in
+the edit box, and the second of those is **a field evaluation** — about ten microseconds on the
+estate (D722). Four thousand nine hundred of them is fifty milliseconds before a single region has
+been looked at.
+
+### Asking the question the other way round
+
+Every key of a cut falls in exactly **one** leaf of the ladder's tree. So *"mark the leaf each key
+falls in"* and *"mark every leaf the edit box meets"* are the same set — and the second is **one walk
+of the live list** (D728) instead of one walk per key, with one emptiness test per leaf instead of one
+per finest node.
+
+Where the two differ is in the direction that is safe. A coarse leaf whose finest nodes are each
+individually empty can still answer *may hold matter* as a whole, so this marks a leaf the per-key
+version would not. **That is more sampling, never less** — and less is what leaves a blocky cut,
+which is precisely the fault D697 records the last attempt at making this cheaper causing: refusing
+nodes the world called empty took a carve from 8,849 ms to 149 **and from 610,623 voxels changed to
+248**.
+
+### Both arms, one binary, and they agree
+
+`--edit-presample-per-node` is the old path. A four-metre carve into the building at frame 60 of a
+cold estate:
+
+| | demands | on the frame |
+|---|---|---|
+| one demand a node | **8** of 4,913 | **87.45 ms** |
+| one walk | **8** of the 8 leaves the box meets | **0.11 ms** |
+
+**Identical answer, 795x less time.** Two more pairs, taken the same way: 80.57 ms against 0.11 with
+0 demands either way, and 68.81 against 0.00 with 0 either way. The synchronous arm
+(`--sync-edit-presample`, R11h's original) on a four-metre carve is **20,464 ms**, which is the
+twenty-second freeze the whole line of work exists to remove.
+
+### And the line it prints says which nothing it means
+
+`asked for 0 of 0 leaves` was printed both when no leaf overlapped the cut and when every leaf it
+touched was already sharp. Those are opposite reports — one is "the cut is in empty space" and the
+other is "the cut is in a part of the world that is already at full detail, and nothing is owed" —
+and the line counts them apart now.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D732 | **One walk of the live list, not one per key** | build | Every key falls in exactly one leaf, so the two are the same set |
+| D732 | **8 demands either way, 87.45 ms against 0.11** | measurement | Both arms in one binary, cold estate, a four-metre carve at frame 60 |
+| D732 | **The key loop cost a field evaluation per finest node** | fault | ~4,900 of them at ten microseconds, before any region was looked at — a cost D720's diagnosis did not name |
+| D732 | **Where the two differ is toward MORE sampling** | decision | A coarse leaf may answer "may hold matter" where its finest nodes do not; less is what leaves a blocky cut (D697) |
+| D732 | **"0 of 0" meant two opposite things** | instrument | No leaf overlaps, against every leaf already sharp |
