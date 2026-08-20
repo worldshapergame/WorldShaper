@@ -607,3 +607,317 @@ TEST_CASE("R4f: the two halves of the split are complementary and lose nothing")
     }
     CHECK(sum == doctest::Approx(1.0).epsilon(1e-9));
 }
+
+// ---- D720: the wire behind the glass, and what the composite does with it ----------------------
+//
+// Two faults were reported from playing and written up without being fixed (D720): the sky behind
+// glass being wrong *"when theres another glass"*, and *"some weird opposite color tinting
+// effect"*. The second is arithmetic and can be held against something other than itself, which is
+// most of what is below. The first is CONTROL FLOW and cannot be caught by evaluating an
+// expression, so it is written out as the state machine it is.
+//
+// Same honesty as the rest of this file: these are the expressions shaders/visibility.comp and
+// shaders/resolve.comp evaluate and the exits shaders/visibility.comp's loop has. They prove the
+// formulae and the flow, not that the marcher hands them the right transmittance.
+
+namespace {
+
+// shaders/node.glsl, `node_medium_through`: what a metre of a material lets by, rooted down to one
+// voxel. It is a TRANSMITTANCE -- the tint is mixed towards white by the opacity rather than
+// multiplied outright, so a pane a quarter opaque tints what passes by a quarter.
+constexpr f64 kVoxelsPerMetre = 32.0;
+
+Rgb medium_through_per_voxel(Rgb tint, f64 opacity) {
+    if (opacity >= 1.0) return {0.0, 0.0, 0.0};
+    const f64 keep = 1.0 - opacity;
+    const Rgb metre{(keep + opacity * tint.r) * keep, (keep + opacity * tint.g) * keep,
+                    (keep + opacity * tint.b) * keep};
+    return {std::pow(std::max(metre.r, 1e-4), 1.0 / kVoxelsPerMetre),
+            std::pow(std::max(metre.g, 1e-4), 1.0 / kVoxelsPerMetre),
+            std::pow(std::max(metre.b, 1e-4), 1.0 / kVoxelsPerMetre)};
+}
+
+Rgb medium_through(Rgb tint, f64 opacity, f64 metres) {
+    const Rgb per_voxel = medium_through_per_voxel(tint, opacity);
+    const f64 voxels = metres * kVoxelsPerMetre;
+    return {std::pow(per_voxel.r, voxels), std::pow(per_voxel.g, voxels),
+            std::pow(per_voxel.b, voxels)};
+}
+
+// shaders/node.glsl, `node_medium_absorb`: the three bytes are SIXTEENTHS per metre, and this is
+// Beer-Lambert over the true path a refracted ray took. **D720's own arithmetic dropped the
+// sixteenths** and quotes exp(-21.6) where the shader computes exp(-1.35); the fault it names is
+// real and its figure is not, which is worth having written down beside the right one.
+Rgb medium_absorb(u32 r, u32 g, u32 b, f64 metres) {
+    return {std::exp(-(static_cast<f64>(r) / 16.0) * metres),
+            std::exp(-(static_cast<f64>(g) / 16.0) * metres),
+            std::exp(-(static_cast<f64>(b) / 16.0) * metres)};
+}
+
+Rgb operator*(Rgb a, Rgb b) { return {a.r * b.r, a.g * b.g, a.b * b.b}; }
+Rgb operator*(Rgb a, f64 s) { return {a.r * s, a.g * s, a.b * s}; }
+Rgb operator+(Rgb a, Rgb b) { return {a.r + b.r, a.g + b.g, a.b + b.b}; }
+
+f64 spread_of(Rgb c) {
+    return std::max(std::max(c.r, c.g), c.b) - std::min(std::min(c.r, c.g), c.b);
+}
+
+// Which channel a colour is most of, so a hue can be asserted without asserting a brightness.
+int dominant(Rgb c) {
+    if (c.r >= c.g && c.r >= c.b) return 0;
+    return (c.g >= c.b) ? 1 : 2;
+}
+
+// shaders/visibility.comp, `visibility_pack_behind`: `lets_past` goes into byte 3 of `behind.y` and
+// bytes 0 and 1 of `behind.z`, beside the far surface's payload and its flags.
+void pack_lets_past(Rgb lets_past, u32 payload, bool far_hit, u32& y, u32& z) {
+    const auto q = [](f64 v) {
+        return static_cast<u32>(std::llround(std::clamp(v, 0.0, 1.0) * 255.0));
+    };
+    y = (payload & 0xFFFFFFu) | (q(lets_past.r) << 24u);
+    z = q(lets_past.g) | (q(lets_past.b) << 8u) | (far_hit ? (1u << 16u) : 0u) | (1u << 17u) |
+        (255u << 19u);
+}
+
+// shaders/resolve.comp, `main`: the same three bytes read back out.
+Rgb unpack_through(u32 y, u32 z) {
+    return {static_cast<f64>((y >> 24u) & 0xFFu) / 255.0, static_cast<f64>(z & 0xFFu) / 255.0,
+            static_cast<f64>((z >> 8u) & 0xFFu) / 255.0};
+}
+
+// What a pane's own diffuse is scaled by, in each of the two arms. The far surface is scaled by the
+// transmittance itself either way, which is not what was ever in doubt.
+Rgb pane_body_share(Rgb through, bool grey) {
+    if (!grey) return {1.0 - through.r, 1.0 - through.g, 1.0 - through.b};
+    const f64 widest = std::max(std::max(through.r, through.g), through.b);
+    return {1.0 - widest, 1.0 - widest, 1.0 - widest};
+}
+
+// shaders/resolve.comp's composite for a GLASS pixel: the pane's own diffuse, plus what is behind
+// it through the pane. `lit` stands in for everything reaching the near face and `behind_colour`
+// for the far surface already shaded.
+Rgb composite_glass(Rgb albedo, f64 lit, Rgb behind_colour, Rgb through, bool grey) {
+    return albedo * pane_body_share(through, grey) * lit + through * behind_colour;
+}
+
+}   // namespace
+
+TEST_CASE("D720: the transmittance that goes across the wire is the one that comes back") {
+    // The first thing D720 asks for: *"find it by reading the pack and the unpack against each
+    // other, and prove it with a probe -- a known transmittance in, the same numbers out"*. It is
+    // eight bits a channel, so the tolerance is one step and no more.
+    //
+    // The payload shares `behind.y` with the red byte and three flags share `behind.z` with green
+    // and blue, which is where a pair of this shape goes wrong: a payload running into bit 24, or a
+    // flag running into bit 8, comes back as a colour cast that looks exactly like a material
+    // fault. 0xFFFFFF is the largest payload either reading can carry -- a 21-bit type id or a
+    // 24-bit folded colour -- so it is the one that would collide if anything could.
+    for (const Rgb probe : {Rgb{1.0, 1.0, 1.0}, Rgb{0.0, 0.0, 0.0}, Rgb{0.256, 0.957, 0.502},
+                            Rgb{0.866, 0.330, 0.349}, Rgb{0.0045, 0.887, 0.067}}) {
+        u32 y = 0, z = 0;
+        pack_lets_past(probe, 0xFFFFFFu, true, y, z);
+        const Rgb back = unpack_through(y, z);
+        CHECK(std::abs(back.r - probe.r) <= 1.0 / 255.0);
+        CHECK(std::abs(back.g - probe.g) <= 1.0 / 255.0);
+        CHECK(std::abs(back.b - probe.b) <= 1.0 / 255.0);
+        // ...and the flags survive the colour, which is the same question from the other side.
+        CHECK(((z >> 16u) & 1u) == 1u);   // the far ray landed on something
+        CHECK(((z >> 17u) & 1u) == 1u);   // there IS a second layer
+        CHECK(((z >> 18u) & 1u) == 0u);   // and it is glass rather than an edge
+        CHECK((y & 0xFFFFFFu) == 0xFFFFFFu);
+    }
+    // So the wire is NOT the fault. It round-trips to the byte, in both directions, with the
+    // payload and the flags at their extremes.
+}
+
+TEST_CASE("D720: a pane's body drawn per channel is the complement of what the pane lets by") {
+    // **The probe D720 names, with a known input and a computable expected output**: `absorb` of
+    // 180,4,90 through 12 cm of the clip's own clear glazing.
+    const Rgb albedo{232.0 / 255.0, 240.0 / 255.0, 244.0 / 255.0};
+    const Rgb through = medium_through(albedo, 26.0 / 255.0, 0.12) * medium_absorb(180, 4, 90, 0.12);
+
+    // Green, and a great deal more of it than either of the others. That is what a white wall
+    // behind this pane has to come out as, and it is the whole reference for what follows.
+    CHECK(dominant(through) == 1);
+    CHECK(through.g > 3.0 * through.r);
+    CHECK(through.g > 1.7 * through.b);
+
+    // The arm that shipped. The channel the pane transmits most is the channel its own body is
+    // drawn DARKEST in, so the pane's body is magenta -- the exact complement -- whatever it is
+    // lit by and whatever is behind it.
+    const Rgb body_was = albedo * pane_body_share(through, false);
+    CHECK(body_was.r > 5.0 * body_was.g);
+    CHECK(body_was.b > 5.0 * body_was.g);
+
+    // ...and the arm that is right. What a pane did not transmit was absorbed or scattered, and
+    // only the scattered half comes back out as its body; scattering is the channel-independent
+    // half, bounded by the channel that lets most past. So the body is grey and the colour of the
+    // pane is the colour it lets by.
+    const Rgb body_now = albedo * pane_body_share(through, true);
+    CHECK(spread_of(body_now) < 0.02 * spread_of(body_was));
+
+    // A WINDOW IN DAYLIGHT is the case that makes it visible, because it is the case where the
+    // pane's own face is lit more brightly than what stands behind it. That is the picture D720
+    // records from the other end -- *"the wall behind it came out magenta"* -- and it is what a
+    // screenshot of this probe shows.
+    const Rgb wall{0.5, 0.5, 0.5};
+    const Rgb was = composite_glass(albedo, 1.2, wall, through, false);
+    const Rgb now = composite_glass(albedo, 1.2, wall, through, true);
+    CHECK(dominant(was) == 0);        // red, with green the SMALLEST channel: magenta
+    CHECK(was.g < was.r);
+    CHECK(was.g < was.b);
+    CHECK(dominant(now) == 1);        // and green, which is what the material says
+    CHECK(now.g > 2.0 * now.r);
+    CHECK(now.g > 1.5 * now.b);
+}
+
+TEST_CASE("D720: the chapel's three stained lights, which is the picture that was reported") {
+    // `clips/facility/_contract.clip`'s own bytes at `clips/facility/chapel.clip`'s own thickness,
+    // over the travertine pavement that file put under them on purpose. The player's words were
+    // *"olive-yellow glass"*, and olive-yellow is what `glass_blue` comes out as when its body is
+    // drawn in the complement of what it transmits: red and green up, blue down, on a material
+    // whose whole job is to be blue.
+    struct Light {
+        const char* name;
+        Rgb albedo;
+        u32 ar, ag, ab;
+        int transmits;   // 0 red, 1 green, 2 blue
+    };
+    const Light lights[3] = {
+        {"glass_ruby", {224 / 255.0, 150 / 255.0, 150 / 255.0}, 20, 190, 180, 0},
+        {"glass_gold", {228 / 255.0, 200 / 255.0, 140 / 255.0}, 30, 90, 200, 0},
+        {"glass_blue", {150 / 255.0, 180 / 255.0, 224 / 255.0}, 180, 120, 20, 2},
+    };
+    const f64 thickness = 0.09;
+    const Rgb travertine{214 / 255.0, 196 / 255.0, 164 / 255.0};
+
+    for (const Light& light : lights) {
+        const Rgb through = medium_through(light.albedo, 70.0 / 255.0, thickness) *
+                            medium_absorb(light.ar, light.ag, light.ab, thickness);
+        // The materials are authored RIGHT: what each one transmits is the colour it is named for.
+        // Whatever is wrong is downstream of `absorb`, which is what D720 says and this pins.
+        CHECK(dominant(through) == light.transmits);
+
+        const Rgb was = composite_glass(light.albedo, 0.85, travertine, through, false);
+        const Rgb now = composite_glass(light.albedo, 0.85, travertine, through, true);
+
+        // The complement the old arm adds back very nearly cancels the transmitted colour, which is
+        // why three lights of three different colours photograph as one pale pane each.
+        CHECK(spread_of(was) < 0.7 * spread_of(now));
+        // ...and the hue that survives is the material's own, which the old arm cannot promise:
+        // `glass_blue` came out with more green in it than blue.
+        CHECK(dominant(now) == light.transmits);
+    }
+
+    // Named on its own, because it is the player's sentence. The blue light's own body:
+    const Light& blue = lights[2];
+    const Rgb through = medium_through(blue.albedo, 70.0 / 255.0, thickness) *
+                        medium_absorb(blue.ar, blue.ag, blue.ab, thickness);
+    const Rgb body_was = blue.albedo * pane_body_share(through, false);
+    CHECK(body_was.r > 2.5 * body_was.b);   // olive-yellow: red and green over a dark blue
+    CHECK(body_was.g > 2.5 * body_was.b);
+    const Rgb body_now = blue.albedo * pane_body_share(through, true);
+    CHECK(body_now.b > body_now.r);         // ...and now it is the blue the author wrote
+    CHECK(body_now.b > body_now.g);
+}
+
+TEST_CASE("D720: a neutral pane does not move, which is what makes the fix safe on the building") {
+    // The facility's `glass`: rgb 198,214,224, opacity 64, and no `absorb` bytes at all. Every
+    // window in the building is this material and none of them may shift.
+    const Rgb through =
+        medium_through({198 / 255.0, 214 / 255.0, 224 / 255.0}, 64.0 / 255.0, 0.12);
+    const Rgb was = pane_body_share(through, false);
+    const Rgb now = pane_body_share(through, true);
+    // Four thousandths of the albedo in the channel that moves most -- under the eight-bit wire the
+    // share arrives on, so no window in the facility can be seen to change.
+    CHECK(std::abs(was.r - now.r) < 0.004);
+    CHECK(std::abs(was.g - now.g) < 0.004);
+    CHECK(std::abs(was.b - now.b) < 0.004);
+
+    // And the two arms are IDENTICAL wherever nothing is transmitted, which is every opaque surface
+    // in the world and every one of R5d's edges: both pass a `lets_past` of nought, and an edge
+    // does its own scaling outside with a share that was already grey.
+    const Rgb none{0.0, 0.0, 0.0};
+    CHECK(spread_of(pane_body_share(none, false)) == doctest::Approx(0.0));
+    CHECK(pane_body_share(none, true).r == doctest::Approx(1.0));
+    CHECK(pane_body_share(none, false).r == doctest::Approx(1.0));
+}
+
+TEST_CASE("D720: every exit of the bent-ray loop leaves a far surface behind it") {
+    // Fault 1, as the control flow it is. shaders/visibility.comp's loop over interfaces has three
+    // exits -- total internal reflection at an entry face, a ray that never leaves the medium, and
+    // the turn that finds the far surface -- and only the third assigns `far`. The flag that
+    // guarded the repair was set BEFORE the branch that decides which of the three happened, so
+    // from the second turn on it answered "the ray bent" to the question "is `far` valid".
+    //
+    // Four things a turn can do, and each list below is one turn each until the loop ends.
+    // `AnotherMedium` is the `continue` -- the path that reaches a second pane and is the only way
+    // any of the rest of this is reachable.
+    enum class Exit { TotalInternal, StuckInside, AnotherMedium, FoundIt };
+
+    // Where the `far` handed to `visibility_pack_behind` came from. `Uninitialised` is the answer
+    // that must not exist, and trap 7's rule is why it is a third value rather than a bool: "the
+    // bent ray's answer" and "nothing was ever written here" must never be the same reply.
+    enum class Source { Uninitialised, Bent, Straight };
+
+    // `bent`, the flag that shipped: set on every turn that got as far as marching a segment,
+    // including the turn that goes round again.
+    const auto shipped = [](std::initializer_list<Exit> turns) {
+        bool bent = false;
+        bool assigned = false;
+        for (const Exit e : turns) {
+            if (e == Exit::TotalInternal || e == Exit::StuckInside) break;
+            bent = true;   // ...before the branch below, which is the whole of the fault
+            if (e == Exit::FoundIt) {
+                assigned = true;
+                break;
+            }
+            // otherwise another medium: round again, and `far` is still not written
+        }
+        if (assigned) return Source::Bent;
+        return bent ? Source::Uninitialised : Source::Straight;   // the repair fires on !bent
+    };
+
+    // `have_far`, the flag that is right: set where, and only where, `far` is written.
+    const auto fixed = [](std::initializer_list<Exit> turns) {
+        bool have_far = false;
+        for (const Exit e : turns) {
+            if (e == Exit::TotalInternal || e == Exit::StuckInside) break;
+            if (e == Exit::FoundIt) {
+                have_far = true;
+                break;
+            }
+        }
+        return have_far ? Source::Bent : Source::Straight;   // the repair fires on !have_far
+    };
+
+    // ONE medium: the two agree on every exit, turn for turn. That is why `--no-refract-stack` is
+    // untouched by the fix, and it is why the fault was invisible for the life of the feature --
+    // `kRefractMedia` was 1 for everything before D718, so the loop only ever had a first turn.
+    for (const Exit only : {Exit::TotalInternal, Exit::StuckInside, Exit::FoundIt}) {
+        CHECK(shipped({only}) != Source::Uninitialised);
+        CHECK(shipped({only}) == fixed({only}));
+    }
+    // A SECOND medium reached and then given up on. Both breaks are reachable there -- D720 names
+    // them -- and the shipped flag says the pixel is covered when it is not, so `far` reaches
+    // `visibility_pack_behind` holding whatever was on the stack, `far.hit` included. That bit is
+    // the one that says THIS RAY REACHED THE SKY, which is why the report was about the sky.
+    CHECK(shipped({Exit::AnotherMedium, Exit::TotalInternal}) == Source::Uninitialised);
+    CHECK(shipped({Exit::AnotherMedium, Exit::StuckInside}) == Source::Uninitialised);
+    CHECK(fixed({Exit::AnotherMedium, Exit::TotalInternal}) == Source::Straight);
+    CHECK(fixed({Exit::AnotherMedium, Exit::StuckInside}) == Source::Straight);
+    // ...and the third turn and the fourth, because `kRefractMedia` is 4 and it is the `continue`
+    // that carries the flag forward: every turn past the first has the same hole in it.
+    CHECK(shipped({Exit::AnotherMedium, Exit::AnotherMedium, Exit::StuckInside}) ==
+          Source::Uninitialised);
+    CHECK(fixed({Exit::AnotherMedium, Exit::AnotherMedium, Exit::StuckInside}) == Source::Straight);
+    CHECK(shipped({Exit::AnotherMedium, Exit::AnotherMedium, Exit::AnotherMedium,
+                   Exit::TotalInternal}) == Source::Uninitialised);
+    CHECK(fixed({Exit::AnotherMedium, Exit::AnotherMedium, Exit::AnotherMedium,
+                 Exit::TotalInternal}) == Source::Straight);
+
+    // The case that always worked, either way round: the loop found a far surface and said so.
+    CHECK(shipped({Exit::AnotherMedium, Exit::FoundIt}) == Source::Bent);
+    CHECK(fixed({Exit::AnotherMedium, Exit::FoundIt}) == Source::Bent);
+    CHECK(fixed({Exit::AnotherMedium, Exit::AnotherMedium, Exit::FoundIt}) == Source::Bent);
+}

@@ -55,6 +55,16 @@ layout(binding = 28, rgba16f) uniform writeonly image2D out_reflect;
 #include "node.glsl"
 #include "beam.glsl"
 
+// D720 fault 1's control arm, and it is a compile-time constant rather than a probe bit because the
+// probe word is full and `main.cpp` belongs to somebody else this session.
+//
+// `true` is the shipped behaviour: the straight-ray fallback fires whenever `far` was never
+// assigned, whatever turn of the bent-ray loop gave up. `false` restores the read of an
+// uninitialised `far` on any SECOND medium exactly -- the loop's exit is then gated on `bent`
+// again, which is set on a path that does not assign `far`. It exists so the two arms can be built
+// from one tree; the control that decides anything is still the tree with this change absent.
+const bool kFarFallbackOnEveryTurn = true;
+
 // The sky, for the reflected segments that reach it, and the surfaces they land on.
 //
 // The same three shims shaders/shade_faces.comp uses and for the same reason, which is written out
@@ -451,9 +461,11 @@ void main() {
     // What a coarse hit wants instead is R5d, in the `else` below, and the two are exclusive by that
     // same test rather than by agreement between two conditions.
     //
-    // The `through` that comes back is the whole path's attenuation, not the material's, so the two
-    // halves are exactly complementary: the composite scales the pane's diffuse by (1 - through)
-    // and the far surface by `through`, and they sum to one. If the ray hit a second pane the
+    // The `through` that comes back is the whole path's attenuation, not the material's. The
+    // composite scales the far surface by it and the pane's own diffuse by `1 - max(through)` --
+    // **not by `1 - through`, which is what this comment used to say the two arms of and is D720
+    // fault 2**: a transmittance is not an alpha, and completing it channel by channel draws a
+    // coloured pane in the complement of what it transmits. If the ray hit a second pane the
     // product covers both. If it dies inside thick glass, `through` is by then under the marcher's
     // own 0.02 continuation floor, so what is packed is weighted at 2% and the error is smaller
     // than the byte it is quantised into -- deliberately not branched on.
@@ -481,7 +493,33 @@ void main() {
             // plan's own note says a hero wavelength per face sample -- which belongs with the face
             // pass rather than with the primary ray. `ior` is one number here for all three
             // channels.
+            // ---- D720 fault 1: the flag has to be "far is VALID", not "the ray bent" -----------
+            //
+            // These were one `bool bent`, and the two facts are not the same one. `bent` was set
+            // just after the segment march, which is BEFORE the branch that decides whether this
+            // turn ends the loop -- so the path that goes round again (`continue`, at another
+            // medium) set it and did not assign `far`. On the first turn that never showed:
+            // whichever break fired, `bent` was still false, the fallback below repaired it, and
+            // the pixel got D604's straight ray. On any LATER turn `bent` was already true and
+            // `far` had still never been written, so a break exited with `far` holding whatever was
+            // on the stack and the `!bent` repair could not fire. It is handed straight to
+            // `visibility_pack_behind`, which reads `far.hit` -- the bit that says THIS RAY REACHED
+            // THE SKY -- so the loudest symptom is the sky behind glass being wrong, and only ever
+            // when there is a second pane, because a second turn is the only way to get there.
+            //
+            // `have_far` is set where `far` is assigned and nowhere else, which is the invariant
+            // the fallback wanted all along. Both breaks are then repaired the same way at every
+            // turn, and the repair is the right picture rather than a safe one: `kThroughPass` from
+            // the eye slides through every medium on the way and lands on the first thing that is
+            // not one, which is the wall the player is looking THROUGH the glass at. Assigning
+            // `far = beyond` before the `continue` would also have removed the uninitialised read
+            // and would have drawn the second PANE as the thing behind the first, which is a sheet
+            // of glass behind a sheet of glass.
+            //
+            // At one medium the two flags are the same bit, because `last` is true on the only
+            // turn and the `continue` cannot fire -- so `--no-refract-stack` is untouched.
             NodeHit far;
+            bool have_far = false;
             bool bent = false;
             vec3 refract_through = vec3(1.0);
             if (probe_refract()) {
@@ -603,10 +641,11 @@ void main() {
                     beyond.t += travelled;
                     beyond.through *= crossed_through;
                     far = beyond;
+                    have_far = true;
                     break;
                 }
             }
-            if (!bent) {
+            if (!(kFarFallbackOnEveryTurn ? have_far : bent)) {
                 far = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
                                  report_used, report_face, true, false, kThroughPass,
                                  kNodeUnbounded, 0.0);

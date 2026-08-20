@@ -159,6 +159,14 @@ uint sky_cell_mix(uint x) {
 #include "pt_clouds.glsl"
 #include "pt_media.glsl"
 
+// D720 fault 2's control arm, a compile-time constant for the same reason visibility.comp's is: the
+// probe word is full and `main.cpp` belongs to somebody else this session.
+//
+// `true` is the shipped behaviour: a pane's own body is scaled by the GREY part of what it took out
+// of the ray. `false` restores `albedo * (1 - lets_past)` per channel exactly, which is the
+// inversion -- see shade_surface, where the reasoning is.
+const bool kGlassBodyIsGrey = true;
+
 // The real sky, the same one the path tracer draws.
 //
 // What was here was a three-colour vertical gradient with the numbers written into it. That is why
@@ -570,6 +578,9 @@ bool lobe_radiance(uint block, uint bins, uint side, vec2 at, out vec3 radiance)
 // `lets_past` is how much of what is behind this surface arrives THROUGH it, per channel, and it
 // is zero for everything opaque. Only the DIFFUSE term is scaled by what is left of it: a pane's
 // reflection and a lamp's emission happen AT the face and are not attenuated by the body of it.
+// **"What is left of it" is a grey SHARE and not the per-channel complement** -- see D720 fault 2
+// at the albedo multiply, where using the complement drew every coloured pane in the complement of
+// what it transmits.
 //
 // R5d's edges want a different scaling and deliberately do not ask for it here. Where a pixel is
 // only part covered, the surface does not transmit anything at all -- it simply is not there over
@@ -1262,7 +1273,37 @@ vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_pa
     // draws as the exterior plus a full-strength sheet of grey. The specular below and the
     // emission after it are deliberately left alone: a reflection happens AT the face and a lamp's
     // own glow is emitted BY it, so neither is attenuated by the thickness of the thing itself.
-    colour = albedo * (vec3(1.0) - lets_past) *
+    //
+    // ---- D720 fault 2: that scale is a SHARE, and it was being taken per channel --------------
+    //
+    // *"glass has some weird opposite color tinting effect"*, and this line is the whole of it.
+    // `lets_past` is a spectral TRANSMITTANCE, and `vec3(1.0) - lets_past` used it as though it were
+    // a per-channel alpha in an over-composite -- `main` finishes the composite with
+    // `+ through * far_colour`, and the comment there says the two "sum to one". They do, per
+    // channel, which is exactly the defect: **the light a coloured pane takes out of the ray is put
+    // back as the pane's own body colour, in the complement of what the pane transmits.** A green
+    // glass drew a magenta sheet, a ruby light drew a cyan one and the chapel's `glass_blue` drew
+    // OLIVE-YELLOW, which is the player's own word for it.
+    //
+    // What is not transmitted is absorbed OR scattered, and only the scattered part comes back out
+    // as the body of the pane. Absorption is where the colour is -- `absorb=` is three bytes a
+    // material and `node_medium_absorb` is Beer-Lambert over the true path -- and absorbed light is
+    // GONE. Scattering is the channel-independent half: `node_medium_through` mixes the tint towards
+    // white and multiplies by `(1 - opacity)`, so the part of the extinction that is the same in all
+    // three channels is the part the pane's own body is entitled to. That part is bounded by the
+    // channel that lets MOST past, which is why the share is `1 - max(lets_past)` and not a mean:
+    // any channel darker than the brightest is darker by absorption, and absorption owes the body
+    // nothing.
+    //
+    // **A neutral pane does not move**, which is what makes this safe to land on the building: the
+    // facility's `glass` transmits (0.9575, 0.9596, 0.9608) through 12 cm, so the share goes from
+    // (0.0425, 0.0404, 0.0392) to a flat 0.0392 -- three tenths of one per cent of the albedo, under
+    // the eight-bit wire `lets_past` arrives on. Everything opaque passes `lets_past` at nought and
+    // is identical to the bit, and so is R5d's edge, which passes nought here and does its own
+    // scaling outside with a share that was already grey.
+    const float body_share =
+        kGlassBodyIsGrey ? (1.0 - max(max(lets_past.r, lets_past.g), lets_past.b)) : 1.0;
+    colour = albedo * (kGlassBodyIsGrey ? vec3(body_share) : (vec3(1.0) - lets_past)) *
                  mix(1.0, face_diffuse_share((material >> 8u) & 0xFFu), lobe_share) *
                  (vec3(1.0) - turned_away) *
                  ((sun_radiance() * lambert + sky_radiance(normal) * sees_sky + lamp) *
@@ -1375,10 +1416,13 @@ void main() {
         // not cosmetic:
         //
         //   GLASS (R4d). The second march starts at the eye with `see_through` on and comes back
-        //   with the whole path's attenuation, so the two halves are exactly complementary: the
-        //   pane's diffuse is scaled by (1 - through) inside shade_surface and what is behind it by
-        //   `through` here. The pane's own reflection and its own emission are NOT scaled, because
-        //   they happen at the face and are not attenuated by the body of it.
+        //   with the whole path's attenuation. What is behind the pane is scaled by `through` here,
+        //   and the pane's own diffuse by `1 - max(through)` inside shade_surface. **The two halves
+        //   are NOT complementary per channel and the line that said they were was D720 fault 2**:
+        //   a transmittance is not an alpha, and completing it channel by channel puts the light a
+        //   coloured pane ABSORBED back on screen as the pane's own body, in the complement of what
+        //   it transmits. The pane's own reflection and its own emission are not scaled at all,
+        //   because they happen at the face and are not attenuated by the body of it.
         //
         //   AN EDGE (R5d). The near hit was a coarse node only part of which is matter, and the
         //   second march starts past it. `through` is then 1 - coverage: the share of the pixel the
