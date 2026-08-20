@@ -14777,3 +14777,118 @@ heard of the flag then does the new thing rather than the old one.
 | D737 | **The sky half was already done** | measurement | Camera 120 m up: already sky and analytic ground, not black. `pt_sky.glsl` untouched |
 | D737 | **Two flags of one wave shared a name** | trap | D736's is now `--no-through-fallback`; two agents reached for the same obvious word |
 | D737 | **A duplicated bit mis-states the free list for everyone after it** | trap | Bit 15 looked free because 14 was claimed twice; R9h holds 18 |
+
+---
+
+## D738 — R9g's second half: a fitting stops needing its voxels, and the cap stops being spent on the camera
+
+**2026-08-20.** D587 did R9g's first half — the scan became per chunk, 13.99 ms a rebuild became 2.54
+— and said plainly that *"what is left is the persistence, which waits on a world that unloads
+chunks"*. It is in.
+
+### D588 had already built half of what the brief said was missing
+
+A chunk's cells have gone into the world cache as `CachedEmitters` since D588, and both §8 R9g and
+the brief for this work read as though nothing was written at all. What was **actually** missing is
+the half that matters and that D588 does not do: `update_lights` iterated `world_.for_each_chunk`, so
+a persisted chunk that is **not resident contributes nothing**. The records were on disk and the list
+was still built from what happened to be in memory.
+
+### `EmitterStore`
+
+A chunk's emissive cells kept apart from the chunk — 88 bytes a cell against megabytes of voxels.
+`refresh(world, types, residency)` scans what is resident and not yet known and **keeps what is known
+whether or not the voxels came back**; the merge still sees every cell in chunk order, so a fitting
+straddling a boundary is joined exactly as it was.
+
+**`known()` is a separate question from `cells()`**, which is trap 7 and is the whole design: an
+absent chunk means *nobody has looked*, never *there are no lamps*. And a **deletion** is told from an
+**unload** by `forget_box`, which the announced edit box already calls — that is the entire safety
+argument for keeping a fitting whose voxels are gone, and it is not optional once they outlive them.
+
+The sidecar is `<world cache>.lamps`: magic, version, the world's own cache key, a payload hash,
+cells sorted by chunk, written under a temporary name and renamed. It refuses a file that is missing,
+short, of the wrong version, written for another world, or that does not hash to its own header — and
+refuses **without touching the store**, so a bad sidecar costs a scan and never a wrong answer. On
+read it fills only what the store does not already know: **the disk is a memory of a world, the world
+is the world.**
+
+### Identity, which is the gate rather than plausibility
+
+D587 set the precedent and it is followed exactly. `light_list_hash`, one world, three fittings, one
+of them straddling x = 256:
+
+| | `light_list_hash` |
+|---|---|
+| scanned from the world | **918220739987583276** |
+| merged from the store, same world | **918220739987583276** |
+| merged from the store against a world holding **no chunks at all** | **918220739987583276** |
+| written to the sidecar, read into a fresh store, merged | **918220739987583276** |
+| the control arm, `EmitterResidency::kDrop`, same empty world | empty list |
+
+The store round-trips at `emitter_store_hash` 5453972574273654655 either side, and the file written
+twice is byte-identical.
+
+### The cap is dealt round the world instead of cut off the camera
+
+Fittings are bucketed into 32 m neighbourhoods, each keeps its own brightest share, and the surplus
+is dealt round in key order. Nothing in it reads the camera, and under the cap not one line of
+behaviour changes. **1,152 fittings capped from two places 88 m apart give ONE set**
+(5955364838548894110); the camera ranking gives **two** (5830259334381516475 and
+5496186298377064511) — the same world, two places to stand, two different sets of lamps.
+
+Ties break on a **hash of the position** and not on the coordinate: ordering by coordinate dropped
+whole rows of each neighbourhood and left a hard edge of unlit lamps.
+
+### D587's "the cap fault is unreachable" is true of the facility and false of the engine
+
+D587 concluded from 21 emitters against a cap of 1,024 that a lamp past the cap could not happen.
+`clips/lamp_field.clip` is a sealed hall of 1,296 fittings, and the running engine reports **1024
+emitters with 272 fittings past the cap dropped**. It is one clip away, and that clip now exists.
+
+### What it costs, measured, and it is real
+
+On `clips/lamp_field.clip` over 1,071 rebuilds of an identical world, the list identity changed on
+**790** with the camera-free rule and **664** with the camera ranking — **19% more**, and each change
+makes every face in the store throw its lamp light away (D500). The cause is not a defect: ranking
+from the camera rejects a distant new fitting outright, *because under that rule the lamp does not
+exist.* A rule that lets a far neighbourhood keep its lamps has to notice when one arrives. A
+per-neighbourhood quota built to decouple the buckets **bought nothing — 790 either way** — and is
+kept for its argument rather than its figure, so nobody re-derives it.
+
+### Three things said rather than rounded up
+
+- **On a still frame nothing changes, and that was checked rather than assumed.** Same world, same
+  camera, both arms: mean luma 155.363 against 154.351 over 52,800 samples, mean absolute difference
+  8.6 of 255 — inside this renderer's own per-face speckle. What changes is *which lamps exist when
+  the camera moves*, and a still frame cannot show that. **No photograph of a lamp blinking out was
+  obtained**: the two frames are the same picture.
+- **The first in-game A/B was worthless and was thrown out.** `--fly` plus `--chisel` gave 739 bumps
+  against 664, but the two arms carved *different worlds* (`bb8f791851249cc6` against
+  `f24394ffc785d342`) because the carve target depends on what the ladder had pasted by that frame.
+  Only the `--cut` pair, which reproduced the world hash exactly in both arms, is evidence.
+- **A comment in `light_list.hpp` was wrong and is corrected.** It said the shader infers truncation
+  from `count == kMaxLights` and *turns direct light sampling off entirely*. It does not:
+  `shade_faces.comp` only ever writes `min(light_count, kMaxLights)` and samples that many, and
+  nothing anywhere reads the cap as a flag. The real cost of truncation is that a dropped fitting is
+  lit by nobody. `node.glsl`'s own comment already said the honest version.
+
+**The constant-cost-per-face rule was already built and needed nothing**: `shade_faces.comp` scores
+`kLampCandidates` fittings and keeps one by resampled importance sampling — one fitting per face per
+sample, whatever the list holds.
+
+Gate: `1429596 / efeb39a93c369a2d / shape d41424c8236d15ac` unmoved. **763 of 763 tests**, from 755.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D738 | **The records were persisted; the READER was not** | fault | D588 wrote `CachedEmitters`; `update_lights` still iterated resident chunks, so a persisted absent chunk contributed nothing |
+| D738 | **`known()` is a separate question from `cells()`** | decision | Trap 7: an absent chunk means nobody looked, never that there are no lamps |
+| D738 | **A deletion is told from an unload by `forget_box`** | decision | The entire safety argument for keeping a fitting whose voxels are gone |
+| D738 | **One hash across scanned, held, emptied-world and round-tripped** | measurement | 918220739987583276 four ways; identity rather than plausibility, D587's precedent |
+| D738 | **The cap is dealt round 32 m neighbourhoods** | build | 1,152 fittings from two places 88 m apart give one set; the camera ranking gives two |
+| D738 | **Ties break on a hash of the position, not the coordinate** | trap | Ordering by coordinate dropped whole rows and left a hard edge of unlit lamps |
+| D738 | **D587's "unreachable" is true of the facility, false of the engine** | fault | `clips/lamp_field.clip` reports 1024 emitters with 272 dropped |
+| D738 | **19% more list churn, and the cause is the feature** | honesty | 790 rebuilds against 664; a rule that lets a far neighbourhood keep its lamps must notice one arriving |
+| D738 | **A quota to fix that bought nothing — 790 either way** | measurement | Kept for the argument, not the figure |
+| D738 | **No photograph of a lamp blinking out** | honesty | A still frame is the same picture in both arms; what changes is what exists when the camera moves |
+| D738 | **The first A/B carved two different worlds and was discarded** | trap | The carve target depends on what the ladder had pasted by that frame |

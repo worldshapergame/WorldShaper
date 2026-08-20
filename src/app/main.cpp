@@ -75,6 +75,7 @@
 #include "world/world_cache.hpp"
 #include "world/voxel_type.hpp"
 #include "world/world.hpp"
+#include "world/emitter_store.hpp"
 
 namespace ws {
 namespace {
@@ -1093,6 +1094,11 @@ struct Options {
     // R9g: each chunk's emissive cells are kept between rebuilds and only what an edit touched is
     // rescanned. False rediscovers the whole world every time, which is D587's control arm.
     bool emitter_cache = true;
+    // R9g's other control arm: a fitting exists only while the chunk it was found in is resident,
+    // which is what the emitter list did before `EmitterStore`. Under it, a lamp in a region that is
+    // not loaded does not exist -- the light being a fact about what is loaded rather than about
+    // where the light is, which is the fault the stage is named for.
+    bool emitter_persist = true;
     // How many frames of head start to aim for. The ambient burst is kSkyBurst a frame, so this
     // times sixteen is roughly how many samples a face gains before it comes on screen -- and the
     // deficit it is closing is 112 samples against 707 (D585). Larger is a wider margin and more
@@ -1795,6 +1801,8 @@ bool parse_options_c(const std::string& arg, int& i, int argc, char** argv, Opti
     } else if (arg == "--no-emitter-cache") {
         // R9g's control arm: rediscover every chunk's emitters on every announced change.
         options.emitter_cache = false;
+    } else if (arg == "--no-emitter-persist") {
+        options.emitter_persist = false;
     } else if (arg == "--halo") {
         // R9c on: claim a margin past the screen, sized by how fast the camera is turning.
         options.halo = true;
@@ -3683,11 +3691,18 @@ private:
     // R9g: the emissive cells of each chunk, kept between rebuilds. A chunk is dropped from here
     // when the world changes inside it and rescanned on the next rebuild; everything else is
     // reused. See announce_world_change for why a cell can never straddle a chunk.
-    std::unordered_map<ChunkCoord, std::vector<EmissiveCell>, ChunkCoordHash> emitter_cache_;
+    // R9g's second half: kept between rebuilds AND across residency. A chunk is dropped from here
+    // when the world changes inside it and rescanned on the next rebuild; everything else is
+    // reused, whether or not its voxels are still in memory.
+    EmitterStore emitters_;
     // How many chunks the last rebuild had to look at, against how many it did not. The figure
     // this stage is judged on, and it belongs beside the time for the reason trap 20 gives.
     u32 last_emitter_scans_ = 0;
     u32 last_emitter_reused_ = 0;
+    // Fittings held for chunks the world is not holding: the number this stage exists to make
+    // non-zero. It is nought everywhere today because nothing unloads a chunk yet, and that is the
+    // honest state rather than a defect.
+    u32 last_emitter_absent_ = 0;
     // Floor division for the chunk a voxel falls in, which is not `/` for a negative coordinate --
     // and the origin is INSIDE this building, so half the world has negative coordinates.
     static i64 floor_div_i64(i64 value, i64 divisor) {
@@ -6362,18 +6377,10 @@ void Application::save_refined_world() {
     // fixed point of refinement and a chunk may never have been asked about -- writing only what
     // happens to be in the map would put a world on disk whose lamps depend on where the camera
     // stood while it was built, which is precisely the fault R9 as a whole is about.
-    world_.for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
-        auto found = emitter_cache_.find(coord);
-        if (found == emitter_cache_.end()) {
-            found = emitter_cache_
-                        .emplace(coord, scan_chunk_emitters(
-                                            chunk, coord.x * static_cast<i64>(kChunkEdge),
-                                            coord.y * static_cast<i64>(kChunkEdge),
-                                            coord.z * static_cast<i64>(kChunkEdge), types_))
-                        .first;
-        }
-        cache.emitters.push_back(CachedEmitters{coord.x, coord.y, coord.z, found->second});
-    });
+    emitters_.refresh(world_, types_, EmitterResidency::kKeep);
+    for (const ChunkCoord& coord : emitters_.sorted_coords()) {
+        cache.emitters.push_back(CachedEmitters{coord.x, coord.y, coord.z, *emitters_.cells(coord)});
+    }
     // And, when asked, the same world a second time beside its clip with the key an INSTALL will
     // ask for. Written from here rather than from a mode of its own because this is the one moment
     // it is safe: the ladder has stood down, nothing is half-pasted, and the edit check above has
@@ -8017,8 +8024,10 @@ void Application::build_world() {
                 // every chunk is scanned on the first rebuild, exactly as before. Trap 7, and here
                 // the wrong answer is a building with its lights off.
                 for (const CachedEmitters& chunk : cache.emitters) {
-                    emitter_cache_.emplace(ChunkCoord{chunk.chunk_x, chunk.chunk_y, chunk.chunk_z},
-                                           chunk.cells);
+                    // The world beats the disk: fill only what the store does not already know.
+                    // The file is a MEMORY of a world and the world is the world.
+                    const ChunkCoord coord{chunk.chunk_x, chunk.chunk_y, chunk.chunk_z};
+                    if (!emitters_.known(coord)) emitters_.remember(coord, chunk.cells);
                 }
                 if (!cache.emitters.empty()) {
                     WS_LOG_INFO("light", "the lamps came back with the world: {} chunks of cells",
@@ -8881,15 +8890,11 @@ void Application::announce_world_change(const i64 lo[3], const i64 hi[3], WorldC
     // cells can simply be kept and concatenated. Only the chunks the edited box touches are dropped
     // from the cache; the merge below still sees every cell in the world, so a fitting that
     // straddles a boundary is unaffected and the list is identical either way.
-    for (i64 cz = floor_div_i64(lo[2], kChunkEdge); cz <= floor_div_i64(hi[2], kChunkEdge); ++cz) {
-        for (i64 cy = floor_div_i64(lo[1], kChunkEdge); cy <= floor_div_i64(hi[1], kChunkEdge);
-             ++cy) {
-            for (i64 cx = floor_div_i64(lo[0], kChunkEdge); cx <= floor_div_i64(hi[0], kChunkEdge);
-                 ++cx) {
-                emitter_cache_.erase(ChunkCoord{cx, cy, cz});
-            }
-        }
-    }
+    // R9g: and this is the line that keeps a DELETED lamp from being remembered for ever. Once
+    // fittings outlive their voxels, "the chunk is not resident" and "the lamp is gone" stop being
+    // the same observation, and the announced edit box is the only thing that can tell them apart.
+    // It is not optional.
+    emitters_.forget_box(lo, hi);
 
     // And it says it to the region rather than to the world. Everything the change could have
     // altered the light of is inside its own bounds grown by the reach of a shadow; nothing
@@ -9525,32 +9530,26 @@ void Application::update_lights() {
     // R9g's control arm: every rebuild rediscovers every chunk, which is what this did before and
     // is the state every figure taken before it was measured in. It is a cleared cache rather than
     // a second path, so the two arms run the same code and differ by what is in a map.
-    if (!options_.emitter_cache) emitter_cache_.clear();
+    // R9g's two control arms. `--no-emitter-cache` is a cleared store rather than a second path,
+    // and `--no-emitter-persist` is one enum at one call site, so both arms run the same code and
+    // differ only by what is in a map.
+    if (!options_.emitter_cache) emitters_.clear();
     if (can_emit) {
-        // Scan only the chunks whose cells are not already known, and keep the rest. What was
-        // dropped from the cache is exactly what `announce_world_change` said had changed.
+        // Scan only the chunks whose cells are not already known, and keep the rest -- INCLUDING
+        // the ones the world is no longer holding, which is what makes a lamp's existence a fact
+        // about where the lamp is rather than about what is loaded.
         //
-        // The MERGE still sees every cell in the world, which is what keeps the answer identical:
-        // a fitting that straddles a chunk boundary is joined here exactly as it was when every
-        // chunk was rescanned, and the ranking and the cap see the same set in the same order.
-        std::vector<EmissiveCell> cells;
-        world_.for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
-            auto found = emitter_cache_.find(coord);
-            if (found == emitter_cache_.end()) {
-                ++last_emitter_scans_;
-                found = emitter_cache_
-                            .emplace(coord, scan_chunk_emitters(
-                                                chunk, coord.x * static_cast<i64>(kChunkEdge),
-                                                coord.y * static_cast<i64>(kChunkEdge),
-                                                coord.z * static_cast<i64>(kChunkEdge), types_))
-                            .first;
-            } else {
-                ++last_emitter_reused_;
-            }
-            cells.insert(cells.end(), found->second.begin(), found->second.end());
-        });
-        lights = merge_light_list(
-            cells, camera_.chunk_x() * kChunkEdge + static_cast<i64>(camera_.local_x()),
+        // The MERGE still sees every cell, which is what keeps the answer identical: a fitting that
+        // straddles a chunk boundary is joined exactly as it was when every chunk was rescanned,
+        // and the ranking and the cap see the same set.
+        const EmitterScan scan = emitters_.refresh(
+            world_, types_,
+            options_.emitter_persist ? EmitterResidency::kKeep : EmitterResidency::kDrop);
+        last_emitter_scans_ = scan.scanned;
+        last_emitter_reused_ = scan.reused;
+        last_emitter_absent_ = scan.absent;
+        lights = build_light_list_from_store(
+            emitters_, camera_.chunk_x() * kChunkEdge + static_cast<i64>(camera_.local_x()),
             camera_.chunk_y() * kChunkEdge + static_cast<i64>(camera_.local_y()),
             camera_.chunk_z() * kChunkEdge + static_cast<i64>(camera_.local_z()));
     }
