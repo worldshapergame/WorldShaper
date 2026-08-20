@@ -173,9 +173,32 @@ bool brighter(const LightSource& a, const LightSource& b) {
 
 // The cap, dealt round the world instead of measured from the camera. See kLightCapByWorld.
 //
-// Buckets of kLightCapCellVoxels, ordered by key; inside a bucket, brightest first; then round
-// after round, one from each bucket, until the cap is full. Nothing in it reads `centre`, so the
-// answer is a fact about the world and moving does not change it.
+// Buckets of kLightCapCellVoxels; inside a bucket, brightest first; each bucket keeps a QUOTA of
+// the cap, and whatever the sparse ones leave unspent is dealt round the rest in key order.
+// Nothing in it reads `centre`, so the answer is a fact about the world and moving does not change
+// it.
+//
+// # Why a quota rather than a round of one from each, and what that did NOT buy
+//
+// The first version dealt round after round, one from every bucket, until the cap filled. The round
+// boundary is then a function of every bucket's POPULATION, so a fitting pasted into one
+// neighbourhood moves what survives in all the others — and a moved set is a new `light_list_hash`,
+// which makes every face in the store throw its lamp light away and measure again (D500). The quota
+// removes that coupling by construction: a bucket keeps its own best `kMaxLights / buckets` whatever
+// any other bucket does, and only the leftovers are dealt globally.
+//
+// **It bought nothing measurable, and the measurement is why it is written down here.** On
+// clips/lamp_field.clip — 1,296 fittings, 1,024 kept, both arms on the identical world, content
+// 6d618740f888b9fd — the list identity changed on **790 of 1,071 rebuilds** with the quota and on
+// **790** with the round-robin. The coupling was never what moved it: every bucket here holds more
+// than its quota, the fittings are identical in brightness so the order inside a bucket is the
+// hashed tie-break, and a new fitting therefore lands inside the kept 256 about four times in five
+// however the shares are worked out.
+//
+// The camera ranking bumps on **664** of the same 1,071, and that difference is the honest cost of
+// this stage rather than a fault in it: ranking from the camera rejects a distant new fitting
+// outright, so the set does not move — because the lamp does not exist. A rule that lets a far
+// neighbourhood keep its lamps has to notice when one arrives.
 //
 // `ranked` arrives in the camera's order and the survivors come back in it, so only membership
 // changes here. Kept as a filter rather than a rebuild for exactly that reason.
@@ -205,7 +228,23 @@ std::vector<LightSource> deal_the_cap(const std::vector<LightSource>& ranked) {
 
     std::vector<bool> kept(ranked.size(), false);
     usize admitted = 0;
-    for (usize round = 0; admitted < kMaxLights; ++round) {
+
+    // Each neighbourhood's own share, taken without reference to any other. A bucket holding less
+    // than its share keeps everything it has and leaves the difference behind.
+    const usize quota = std::max<usize>(kMaxLights / std::max<usize>(cells.size(), 1), 1);
+    for (const ClusterKey& key : cells) {
+        const std::vector<u32>& mine = in_cell.find(key)->second;
+        const usize take = std::min(quota, mine.size());
+        for (usize i = 0; i < take && admitted < kMaxLights; ++i) {
+            kept[mine[i]] = true;
+            ++admitted;
+        }
+    }
+
+    // Then what the sparse ones left, round after round over the buckets that have more, in key
+    // order. This is the only part that couples two neighbourhoods, and it moves only when the set
+    // of buckets with a surplus does.
+    for (usize round = quota; admitted < kMaxLights; ++round) {
         bool any = false;
         for (const ClusterKey& key : cells) {
             const std::vector<u32>& mine = in_cell.find(key)->second;
