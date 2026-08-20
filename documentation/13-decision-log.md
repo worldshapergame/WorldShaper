@@ -13919,3 +13919,77 @@ of it. That is where a next attempt goes.
 | D728 | **Both arms build the same world to the voxel** | gate | A node missing from the list is never picked, and D624 is what that costs |
 | D728 | **The reason for doing it — that it grows — is FALSE** | honesty | 120,710 regions and 619,662 both cost 0.18–0.19 ms a frame; the sweeps a frame fall as the list grows |
 | D728 | **So it is worth 1.5% of a frame, and that is all** | honesty | 0.13 ms of eight to ten; the pick's total did not move |
+
+---
+
+## D729 — The resumed world was never changing: the hash was about the NAMES, not the building
+
+**2026-08-20.** D721 recorded an alarming open question: *"a resumed world's content hash changes on
+every launch — same 1,430,104 solid voxels, same 4 chunks, same 9,826 leaves, and
+`b6668786b3cb9363` then `27e32b65679665eb` on consecutive runs"*, noted that the control arm did it
+too, and left it standing because **trap 8 gates every measurement in this repository on that hash.**
+
+It is answered, and the answer is that the hash was measuring two things at once.
+
+### One hash was doing two jobs
+
+`Brick::content_hash` hashes the `VoxelTypeId` of every cell. **A type id is only meaningful against
+the table it was interned into.** Two worlds that are identical cell for cell hash differently if
+their type tables were built in a different order — and a resumed run builds its table in a different
+order by design.
+
+`resume_refinement` carries `done` over for **only** the leaves already at the clip's own detail, and
+the comment above that line is the argument for it: a wall the last run saw edge-on from forty metres
+and settled at four voxels a metre is the wall this run is standing in front of, so carrying its flag
+over would freeze the building at whatever the first camera happened to want. Everything coarser
+comes back live and is re-sampled — and re-sampling mints variation records afresh, which interns
+them in a different order, which renumbers them.
+
+### So: a second hash, about the shape and nothing else
+
+`World::shape_hash` walks exactly the same chunks and bricks in exactly the same order and asks one
+thing per brick — **which cells hold matter** — from the occupancy mask, with nothing about what the
+matter is. The two are keyed identically so a difference between them can never be a difference in
+what was looked at.
+
+**Measured, `clips/sampler.clip`, one cold build and three resumes:**
+
+| run | content | shape |
+|---|---|---|
+| 1, cold | `d0d5f84c685be847` | **`e105a8a6940f0da2`** |
+| 2, resumed | `48d4222d19a4c333` | **`e105a8a6940f0da2`** |
+| 3, resumed | `48d4222d19a4c333` | **`e105a8a6940f0da2`** |
+| 4, resumed | `48d4222d19a4c333` | **`e105a8a6940f0da2`** |
+
+**The building is the same in all four, to the voxel.** And the content hash moves **once**, on the
+first resume, and then holds — it does not drift for ever, which is what D721 saw and reported
+honestly from what it had.
+
+`clips/mirror_hall.clip` is cleaner still: `17d8f9291f5b94de` cold and resumed, three runs, and
+`78ab704776b41c08` shaped throughout. **So the renumbering is not universal** — it happens only where
+a re-sampled leaf mints variation records, and a clip whose coarse leaves carry no variation comes
+back with the identical table.
+
+### What this changes about gating
+
+- **A cold build is still the gate**, and `d0d5f84c685be847` at 1,430,104 voxels is still the number.
+  Nothing about that moves.
+- **Comparing two runs that resumed is now possible**, which it was not: compare the shape. Two
+  worlds that agree on `shape` and differ on `content` have built the same building and named its
+  materials differently — a completely different report from "the world changed", and the difference
+  between an afternoon and a shrug.
+- Both are printed wherever a world is identified: the whole-world load's own line and the `scene:`
+  line every screenshot writes.
+
+**What is NOT done**: making `content_hash` itself order-independent, by hashing each cell's record
+rather than its id. That would be the real fix and it would restate every hash in this log at once,
+so it is a decision rather than a change — and with `shape_hash` beside it the question it was
+blocking is no longer blocked.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D729 | **The resumed world's geometry never changed** | measurement | One shape hash across a cold build and three resumes, to the voxel |
+| D729 | **`content_hash` hashes type IDs, which are table-relative** | decision | A resumed run re-samples every leaf below authored detail and re-interns; the ids move, the cells do not |
+| D729 | **It moves ONCE and then holds** | honesty | D721 reported a drift from what it could see; runs 2, 3 and 4 agree |
+| D729 | **And not on every clip** — `mirror_hall` is identical cold and resumed | measurement | Only where a re-sampled leaf mints variation records |
+| D729 | **`shape_hash` makes two resumed runs comparable** | instrument | The half that survives a re-interned table, keyed identically to the other so they cannot disagree about what was looked at |

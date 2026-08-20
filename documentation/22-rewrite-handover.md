@@ -656,8 +656,10 @@ time, median, 99th, the GPU split by pass, and every quantity that grows as a wo
 2. **A box settled SOLID in bulk disagrees with its own cells** (D725) — 220 voxels of 1,430,104,
    and both answers pass the brute-force reference so the suite cannot see it. Which is right is
    genuinely open and it decides whether the descent may batch cells rather than levels.
-3. **A resumed world's content hash changes every launch** (D721) — same voxels, same chunks, same
-   leaves. Trap 8 gates every measurement here on that hash.
+3. ~~**A resumed world's content hash changes every launch**~~ — **answered, D729.** The building
+   never changed: `World::shape_hash` is identical across a cold build and three resumes, and the
+   content hash moves once and then holds because a resumed run re-interns its type table. Both are
+   printed now, and two resumed runs are comparable on the shape.
 4. **The rest of the pick** (D728) — the sweep is dealt with; the shortlist descent, `split_refine_node`
    and `enlist` are what is left, and they are proportional to the batch rather than the list.
 
