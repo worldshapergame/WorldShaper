@@ -316,13 +316,76 @@ struct WorldCacheWritten {
     u32 bricks_cleared = 0;             // bricks said to be air against a clip that fills them
     u32 bricks_left_to_the_clip = 0;    // derived, and therefore not in the file at all
     u32 chunks_fingerprinted = 0;
+
+    // ---- R11j: what an INCREMENTAL write did, which is a different question ----------------
+    //
+    // The three counts above are about the clip: how much of the world the file did not have to
+    // carry because the clip carries it. These are about the FILE ON DISK: how much of it this
+    // write had to touch, given that most of it was already right. A save that appends nothing at
+    // all is the interesting case and it has to be visible as a number, or "we made banking
+    // cheaper" is a claim rather than a measurement.
+    bool incremental = false;           // appended to what was there, rather than rewritten whole
+    bool unchanged = false;             // the file already held this world; nothing was written
+    u32 chunks_written = 0;             // chunks this write put in the file
+    u32 chunks_left_alone = 0;          // chunks already in the file, byte for byte, and skipped
+    u32 chunks_dropped = 0;             // chunks the file had and the world no longer has
+    u32 region_blocks_written = 0;      // of region_blocks_total
+    u32 region_blocks_total = 0;
+    u64 bytes_written = 0;              // what this write actually put on disk
+    u64 file_bytes = 0;                 // what the file is afterwards
 };
 
-// Writes to a temporary beside the target and renames, so a run interrupted mid-write leaves the
-// old cache intact rather than a truncated one that looks valid.
+// Writes the world to `path`.
+//
+// # A save after a save writes only what has changed — R11j
+//
+// This used to write the whole file every time, and D721 turned that from a cost paid once at the
+// end of a build into a cost paid EVERY TWO MINUTES for the length of one: the whole-world pass
+// banks what it has built so a stopped load resumes, and the estate's world is 54 MB today and
+// several hundred when it is finished. A multi-hundred-megabyte rewrite of mostly-unchanged data,
+// on the main thread, with the loading screen up, is not a bank — it is a stall with a good
+// reason.
+//
+// So the file is a JOURNAL. The first write lays down a whole world; every write after it appends
+// a segment holding only what differs from what the file already says — the chunks whose bytes
+// changed, the region blocks that moved, and the metadata if any of it did. A chunk nobody
+// touched since the last save is not written again. The reader replays the segments in order, so
+// **a file written incrementally holds exactly the world a file written whole would**, which is
+// the gate this is judged on and the only promise that matters.
+//
+// Two things bound it. The journal is rewritten whole once it has grown past twice the size of the
+// last whole write, so the file cannot creep; and a save that finds NOTHING changed writes nothing
+// at all and says so — which is the D721 waste where a resumed run rewrote hundreds of megabytes
+// to say exactly what the file already said.
+//
+// # And a machine that stops mid-save still has the world it had before
+//
+// **The header is the commit record and it is written last.** It says how long the journal is and
+// a check hash covers that, so the file is committed to exactly `64 + journal_bytes` bytes. An
+// append writes its new segments at the far end — past everything the header claims — and only
+// then writes the sixty-four bytes that move `journal_bytes` over them. So a machine that stops
+// before the tail lands, part way through it, or after it and before the header, leaves a file
+// whose committed part is untouched: **it reads back as the world the last finished save left,
+// whole, by its own content hash.** The uncommitted tail is ignored, which is not leniency — those
+// bytes were never claimed — and the next save writes over them.
+//
+// A file SHORTER than its header committed to, or one whose segments do not frame to exactly the
+// committed end, is a different thing and is still refused: that is a piece missing from the
+// middle of what the file claims, and reading it would give a world with holes in it that says it
+// is finished.
+//
+// There is no "a write is in progress" flag, and there must not be one — see the block at
+// `kSegmentMagic` in the .cpp. D701's `running`/`done` is the fourth field of the BAKE STAMP that
+// `tools/bake_world.ps1` keeps, and it answers a different question: whether the bake LOOP
+// finished, which is a fact about how complete the WORLD is rather than about how complete the
+// file is. Nothing in `tools/` reads this header.
+//
+// A first write, and any write that rebuilds the journal, still goes to a temporary beside the
+// target and is renamed, so it cannot damage the file it replaces.
 //
 // Writes every voxel when `cache.baseline` is null, and the difference from that baseline when it
-// is not. See WorldCache::baseline.
+// is not. See WorldCache::baseline. An edit-only file is never appended to: it is a difference
+// from a clip rather than a record of a build, it is small by construction, and it is written once.
 bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache,
                        WorldCacheWritten* written = nullptr);
 
