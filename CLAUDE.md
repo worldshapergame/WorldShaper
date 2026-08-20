@@ -25,8 +25,12 @@ Three things that make this a rule rather than a habit:
 
 - **Build before you commit.** A working tree that has not been compiled since the last edit is a
   draft, not a change. One was nearly merged that way.
-- **Kill any stale `WorldShaper.exe` first.** The linker fails with `LNK1168: cannot open
-  bin\WorldShaper.exe for writing`, which reads like a code fault and is not one.
+- **Kill any stale `WorldShaper.exe` first — and before every MEASUREMENT, not only every build.**
+  The linker fails with `LNK1168: cannot open bin\WorldShaper.exe for writing`, which reads like a
+  code fault and is not one. The worse half is quieter: a stray left over from a `Start-Process`
+  goes on sampling on half the machine, and every figure taken beside it is wrong **gradually** — one
+  took five readings of the same command from 18.8 s to 36.2 and looked exactly like a trend rather
+  than like contamination (D722). `Get-Process WorldShaper` before a run costs nothing.
 - **`--ff-only`.** A branch that has diverged from `main` is something to find out about
   deliberately, not by watching git invent a merge commit.
 - **Run `build.bat` from PowerShell, and give it the FULL path** -- `cmd /c "<repo>\build.bat"`, not a relative name and not a `cd` in front of it. Invoking it from

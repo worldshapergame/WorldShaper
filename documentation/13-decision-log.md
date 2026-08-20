@@ -13294,11 +13294,14 @@ slow if you click enter prematurely that the world is mostly empty"*.
 The coarse paste is the only mechanism in the engine that puts the WHOLE clip in the world at once.
 Measured, estate, cold, this machine:
 
-| grain | ready at | solid voxels | memory |
+| grain | built in | solid voxels | memory |
 |---|---|---|---|
 | **metre 1** (1 m voxels) | **3.77 s** | 833,781,760 | **14 MB** |
 | **metre 2** (0.5 m voxels) | **7.60 s** | 576,933,888 | **10 MB** |
 | **metre 4** (0.25 m voxels) | **22.70 s** | 511,984,640 | **10 MB** |
+
+At metre 2 as shipped, on a clean machine and with everything else a cold launch does happening
+around it, the whole estate is in the world in **8.4 and 8.7 s** over two runs.
 
 **Ten megabytes**, because a brick filled with one material is a palette entry and a mask — the
 count and the bytes are not the same question and it is the count that looks alarming. And every one
@@ -13310,7 +13313,24 @@ column is two, which is a building rather than a heap of blocks, and the ladder 
 the player looks at from there. `--clip-coarse N` is the dial and it is the one number that decides
 what a cold launch costs.
 
-**So the load a player sees goes from "the whole world, never" to "the whole world, 7.7 seconds".**
+### A trap that cost five measurements before it was noticed
+
+The three grains above were taken twice each and agreed. Then the same build measured **18.8 s,
+22.8, 24.4, 27.9 and 36.2** for the same work, getting worse every time, and the flags being varied
+between them explained none of it — the arm that should have been fastest was the slowest.
+
+**A `WorldShaper.exe` from an earlier `Start-Process` was still running, with 2,353 seconds of CPU
+and two gigabytes resident, sampling the estate on half the machine.** Every reading after it
+started was against a machine with a competing load, and the degradation was the stray warming up
+rather than anything in the change. Killed, the same command answers **8.7 s and 8.4 s**, twice.
+
+CLAUDE.md already says to kill a stale `WorldShaper.exe` before building, for the linker's sake. It
+is worth more than that: **a stale one poisons every measurement taken beside it, and it does so
+gradually**, so the readings do not look wrong, they look like a trend. `Get-Process WorldShaper`
+before a run costs nothing; five contradictory numbers cost an hour.
+
+**So the load a player sees goes from "the whole world, never" to "the whole world, about eight and
+a half seconds".**
 That is not a 100x on the sampler and this entry does not pretend it is. It is the difference
 between entering a world and entering an empty one.
 
@@ -13326,5 +13346,6 @@ between entering a world and entering an empty one.
 | D722 | **Throwing ALL the slack away is 1.15x — the ceiling** | measurement | `--slack-ceiling`; it is what any decomposition fix could ever have been worth |
 | D722 | **`--sample-cost`'s 5.1x does not transfer to the ladder** | trap | It prices the deep interior at 111 ms a node where the ladder's are 6.2 |
 | D722 | **Twelve levers measured; none over 1.3x** | honesty | 100x is not reachable by scheduling, batching, boxing, culling or slack |
-| D722 | **The whole estate is in the world in 7.7 s and 10 MB** | decision | The coarse paste is back on at metre 2; it is the only thing that answers the complaint |
+| D722 | **The whole estate is in the world in 8.5 s and 10 MB** | decision | The coarse paste is back on at metre 2; it is the only thing that answers the complaint |
+| D722 | **A stale WorldShaper poisons every measurement beside it, gradually** | trap | Five readings degraded 18.8 → 36.2 s with a 2,353-CPU-second stray running; killed, the same command is 8.5 s |
 | D722 | **The one lever left is a BLOCK evaluator** | honesty | 640 traversals a node become one; worth roughly 20x on these numbers, and a rewrite rather than a flag |

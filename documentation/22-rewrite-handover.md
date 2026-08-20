@@ -647,8 +647,11 @@ one to read before touching the sampler.
   ceiling above says is all it could ever have been; it is in because an unbounded part box is
   unsound as well as slow.
 - **What answers the complaint is the coarse paste, and it is back on at metre 2.** The whole 106 m
-  estate is in the world in **7.7 s and 10 MB**. `--clip-coarse N` is the dial: metre 1 is 3.8 s,
+  estate is in the world in **8.5 s and 10 MB**. `--clip-coarse N` is the dial: metre 1 is 3.8 s,
   metre 4 is 22.7 s. `--no-coarse-paste` is what shipped between D673 and here.
+- **Kill any stale `WorldShaper.exe` before measuring, not just before building.** One left over
+  from a `Start-Process` took five readings of the same command from 18.8 s to 36.2 and looked
+  exactly like a trend. D722.
 - **The one lever left with a large multiple in it is a BLOCK evaluator** — one traversal carrying
   all 512 cells of a node with the arithmetic vectorised, so 640 traversals become one. Roughly 20x
   on the numbers above, and a rewrite of the hottest code in the engine rather than a flag.
