@@ -2338,10 +2338,19 @@ void Shell::draw_node_parameters(const Rect& rect) {
         }
     }
 
+    // What it is made of, for a node that has no numbers of its own. A union IS its children, and
+    // a panel that answered *nothing to change here* to the most common node in a clip would be a
+    // panel a player stops opening. Listed by name, each a press that goes there — which turns the
+    // one node with nothing to say into the table of contents for everything under it.
+    std::vector<u32> made_of;
+    for (u32 input : node.inputs) {
+        if (input < graph_.nodes.size()) made_of.push_back(input);
+    }
+
     const Rect list{column.box.x0, column.y, column.box.x1, column.box.y1};
     const f32 row_height = metrics.row() + metrics.px(4.0f);
-    const f32 content = static_cast<f32>(node.numbers.size() + node.words.size() + 1) * row_height;
-    const Rect inner = ui_.begin_scroll(id_of("node.scroll"), list, content);
+    const f32 rows = static_cast<f32>(node.numbers.size() + node.words.size() + made_of.size() + 2);
+    const Rect inner = ui_.begin_scroll(id_of("node.scroll"), list, rows * row_height);
     f32 y = inner.y0;
 
     usize positional = 0;
@@ -2428,6 +2437,36 @@ void Shell::draw_node_parameters(const Rect& rect) {
                 }
             }
         }
+    }
+
+    if (!made_of.empty()) {
+        const Rect heading{inner.x0, y, inner.x1, y + metrics.row()};
+        y += row_height;
+        ui_.label(Rect{heading.x0 + metrics.px(4.0f), heading.y0, heading.x1, heading.y1},
+                  "made of", Align::Left, kPlain, 0.5f);
+        for (usize m = 0; m < made_of.size(); ++m) {
+            const ClipNode& part = graph_.nodes[made_of[m]];
+            const Rect row{inner.x0, y, inner.x1, y + metrics.row()};
+            y += row_height;
+            if (row.y1 < list.y0 || row.y0 > list.y1) continue;
+            const f32 cell = metrics.icon() * 0.8f;
+            ui_.draw().icon(Rect{row.x0 + metrics.px(4.0f), row.mid_y() - cell * 0.5f,
+                                 row.x0 + metrics.px(4.0f) + cell, row.mid_y() + cell * 0.5f},
+                            icon_of(part));
+            ui_.label(Rect{row.x0 + cell + metrics.px(8.0f), row.y0, row.x1 - metrics.row(), row.y1},
+                      part.name.empty() ? part.head : part.name, Align::Left, kPlain, 0.85f);
+            const Rect go{row.x1 - metrics.row(), row.y0, row.x1, row.y1};
+            if (ui_.icon_button(id_of("node.part", m), go, Icon::Up, "Look at this one")) {
+                choose(made_of[m]);
+                break;
+            }
+        }
+    } else if (node.numbers.empty() && node.words.empty()) {
+        // The honest empty case, said rather than left blank: a blank panel and a broken one look
+        // the same, which is the failure `14-ui-style.md` names for a refusal that does not explain
+        // itself.
+        ui_.label(Rect{inner.x0 + metrics.px(4.0f), y, inner.x1, y + metrics.row()},
+                  "nothing to change here", Align::Left, kPlain, 0.5f);
     }
 
     ui_.end_scroll();

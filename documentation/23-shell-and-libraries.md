@@ -400,6 +400,10 @@ in:
 - **Where a box sits comes out of the document** — its column is how far it is from a leaf, its row
   is the order it was written in — so the picture is the same every time it is opened, and there is
   no remembered layout to be state about a file that the file does not carry (D445).
+- **A node with no numbers of its own lists what it is MADE of**, each a press that goes there. A
+  union *is* its children, and a panel that answered *nothing to change here* to the commonest node
+  in a clip would be a panel a player stops opening — so the one node with nothing to say becomes
+  the table of contents for everything under it.
 
 ## 5d. A parameters window folds, and every value can be put back
 
