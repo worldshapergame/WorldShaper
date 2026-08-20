@@ -425,11 +425,14 @@ What the shell is, in the order it gets built:
    behind it.
 5. **The three tabs** on every library window: *library*, *community* (Stage 16 — the tab exists here
    and says so), *editor*.
-6. **The editor tab, script view** (D452–D455): it asks for a file first, then edits the clip
-   language `20-clip-forge.md` already defines, re-parsing on every keystroke. The **visual view and
-   the live link between the two are Stage 20's** (D456), because there is exactly one node editor in
-   this project and building a second one here to throw away is what this roadmap's ordering rationale
-   exists to prevent.
+6. **The editor tab, both views** (D452–D455, D743–D752): it asks for a file first — and whatever is
+   selected in the library is an answer to that — then edits the clip language `20-clip-forge.md`
+   already defines, re-parsing on every keystroke. The **visual view** is here too: the same
+   statements as boxes, the names between them as wires, and a node's numbers as sliders on the left.
+   **What is still Stage 20's is the node EDITOR** (D456) — the palette, the wiring gesture, the
+   sub-graphs and a node set per library. D456's reasoning holds over that and does not hold over a
+   view of a document that adds no node type and no second language; the two are separated in
+   `23-shell-and-libraries.md` §8.
 
 **What you can do:** open the game to a title, keep many worlds and a library of your creations
 organised the way you organise anything else, change every setting from a slider you can also type
@@ -522,11 +525,15 @@ Motorised joints with PD control; balance controller; protective behaviours (bra
 
 ## Stage 20 — Logic and wires ▶ **PLAYABLE #18** · XL
 
-**The one node editor** (answer O19, D66, D456) lands here, and with it the **visual half of every
-library's editor tab** and the live link between the two views: the node array is the document, wires
-and text are two views of it, and editing either updates the other (D452–D454,
-`23-shell-and-libraries.md` §5c). Every node's parameters are a parameters window on the left, made
-of sliders that can be typed into (D444).
+**The one node editor** (answer O19, D66, D456) lands here: the palette, drag-to-connect, sub-graphs,
+and a node set per library — world generation, logic, materials, clips — learned once.
+
+**The editor tab's visual VIEW is not waiting for it and landed in Stage 15** (D744–D752). The two
+views of a document, the live link between them, the wires coloured by what they carry and a node's
+numbers as sliders on the left are all built; what is not is authoring a graph *with* them. So what
+this stage adds to the editor tab is the half that makes a wire something you can draw rather than
+something you can read: a palette to take a node from, a gesture to join two of them with, and the
+sub-graph. See `23-shell-and-libraries.md` §5c for what exists and §8 for the line between them.
 
 Node-graph visual programming plus **physical wires and logic components in the style of LittleBigPlanet/Dreams** — but destructible, physics-simulated, and attachable to moving objects (answer I1). Signal propagation on its own event-driven tick synchronised to the sim tick (answer I2, my call: separate tick, event-driven, not polled). Sensors (pressure, light, heat, fluid, proximity), displays, timers, math and logic nodes. **Accounted matter source/sink ops** so drills and printers cannot break conservation (answer I6). The node editor UI here also serves reaction authoring from Stage 14.
 

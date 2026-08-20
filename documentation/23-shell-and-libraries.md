@@ -304,9 +304,25 @@ design:
 
 ### 5c. editor — the two views of one thing
 
-**The editor tab asks for a file first.** Not a dialog: it sends you to the library tab, with *new*
-sitting where the cursor already is. There is no editing without something to edit, and an editor
-that opens on an untitled nothing has to invent a place to put it.
+**The editor tab asks for a file first, and a selection is one of the ways of telling it** (D455,
+D743). There is no editing without something to edit, and an editor that opens on an untitled
+nothing has to invent a place to put it — but choosing something in the library and then opening the
+editor *is* a player asking to edit that thing, and answering *open something first* asks the
+question they have just finished answering. So: whatever is selected opens here. With nothing
+selected it says so and the button goes to the library tab, with *new* in the menu a right-click
+gives.
+
+When the open document has unsaved changes and something else is chosen, nothing is thrown away and
+nothing pops up: the tab says which file is waiting, and opens it the moment the tick is pressed.
+
+**A world opens here too** (D744). *open* on the worlds shelf enters the world — that is what a
+double-click means and it is not changed — so a world's row now carries both things you can do to
+one: *enter this world* and *edit*. Before that, the one file kind the editor could never see was
+the file the game itself writes when a player presses *new*.
+
+**What came with the game opens and does not save** (D494, D749). The refusal says so in one line
+and names *duplicate* as the way, because a built-in is not the player's to lose and a delete or an
+edit that came back on the next install would look like it had failed.
 
 Then two sub-tabs, which are **two views of the same document**:
 
@@ -315,10 +331,18 @@ Then two sub-tabs, which are **two views of the same document**:
 | **visual** | nodes with parameters, sliders and operations, wired together |
 | **script** | the same graph as text, in the same language a clip file is written in |
 
-**Editing either updates the other, live** (D452). This is not an import and an export. `20-clip-forge.md`
-§8 already states the rule this rests on: *the node array is the real representation; text and wires
-are two views of it, and either can be saved as either.* Both views read and write that array.
-Neither is the master.
+**Editing either updates the other, live** (D452). This is not an import and an export. Both views
+read and write one thing and neither is the master.
+
+**What that one thing is, exactly** (D745). `20-clip-forge.md` §8 says *the node array is the real
+representation; text and wires are two views of it*, and that is true of what a clip MEANS. It is not
+what an editor can edit. By the time a file has become a `forge::Field`, one `let` has become a dozen
+nodes, every name has gone, the numbers have been folded together and the comments never existed — so
+a visual edit made against it could not be written back without rewriting the whole file, which is
+exactly what the round-trip rule below forbids. So the document the two views share is **the
+statements the author wrote**: `src/game/clip_graph.*` reads them, the names they bound, and the
+numbers as they spelled them, each with the line and column it is written at. Those lower to field
+nodes; the field nodes do not lift back.
 
 Four things that has to be true for it to work, and each is a decision rather than an implementation
 detail:
@@ -329,7 +353,11 @@ detail:
 - **A round trip does not reformat what you wrote.** Comments, blank lines, the order you declared
   things in and your own spacing are part of the document, not decoration around it. A visual edit
   rewrites the lines it touched and leaves the rest byte-identical — otherwise nobody will trust the
-  text view twice.
+  text view twice. In practice it is narrower than that and deliberately so (D746): a slider
+  rewrites **the bytes of one number**, checked against what the graph said was written there, and
+  touches nothing else in the file. **The author's own spelling decides the step**, so `sides=6`
+  moves by one and `round=0.04` by a hundredth and nothing had to be told which; a value typed into
+  the row widens the spelling only where it has to.
 - **The script view is the more powerful one, deliberately.** It has expressions, loops, its own
   functions, and does not have to arrange anything on a canvas. The visual view is not a toy
   underneath it: everything the language can say has a node, including the awkward ones — a
@@ -344,7 +372,27 @@ detail:
 
 **Every node parameter is a slider** by §3, with the same double-click-to-type, and the same lack of
 a cap. A node's parameters are a parameters window: they open on the left while its node is
-selected, which is why the two families exist.
+selected, which is why the two families exist. A value that is **not** a number is not a slider —
+`axis=y` is a word and `where=grain` is a name — and where it names something the document bound,
+the row carries a press that goes and looks at it.
+
+Four more things the view does, each because a document is a thing you have to be able to get about
+in:
+
+- **A wire is coloured by what it carries**, which is `14-ui-style.md`'s third permitted colour: the
+  player's own ink rotated by a third of the circle for each of the language's three value types, so
+  an interface whose ink is grey has grey wires. A name the document never declared — every part of
+  a world is one — takes the reading of the node that uses it (D752).
+- **Double-click a node and the script view opens on the line it is written at**; the statement the
+  caret is in is the box that is lit over here. Two views of one document means being able to get
+  from either to the other at the place you were looking at rather than at the top.
+- **Double-click an `include` and that file opens in the editor**, resolved the way the game
+  resolves one — beside the file that says it, then the clips the game ships with (D494). A world is
+  a manifest, so a visual view of one that could not be walked through would be twenty boxes and no
+  way to reach anything they stand for.
+- **Where a box sits comes out of the document** — its column is how far it is from a leaf, its row
+  is the order it was written in — so the picture is the same every time it is opened, and there is
+  no remembered layout to be state about a file that the file does not carry (D445).
 
 ## 5d. A parameters window folds, and every value can be put back
 
@@ -445,12 +493,12 @@ Two structural notes worth writing down before either is built:
 | The worlds library, over real folders, with bulk select | **15** — **DONE** | nothing |
 | The settings window, over what `19-auto-quality.md` already stores | **15** — **DONE** | nothing |
 | Clip, material and mod libraries | **15** | the formats: `.wsclip` is Stage 15's own, `.wsmat` is Stage 6's, `.wsmod` is Stage 14's. There is no character library: see §4 |
-| The editor tab, **script view only** | **15** | the clip language exists today (`20-clip-forge.md`); the live parse is new |
-| The editor tab, **visual view**, and the live link between the two | **20** | the node editor is Stage 20's, and answer O19 says there is only one of them. Building a second one here to throw away would be the one thing the roadmap's ordering rationale exists to prevent |
+| The editor tab, **script view** | **15** — **DONE** | the clip language exists today (`20-clip-forge.md`); the live parse is new |
+| The editor tab, **visual view**, and the live link between the two | **15** — **DONE** (D744–D752) | It was Stage 20's, and D456's reasoning is about an EDITOR rather than a VIEW: Stage 20 builds the palette, the wiring gesture, the sub-graphs and a node set per library, and none of those is here. This draws the document that is already open in the other tab, adds no node type and no second language, and the only edit it can make is to move a number the author already wrote. **Wiring by hand is still Stage 20's**, and the script view is where a wire is changed until then |
 | The community tab | **16** | it is a multiplayer feature and there is no transport before Stage 16 |
 | DHT rendezvous, so the community reaches strangers | **16+** | its own decision — see §5b |
 
-**Until each of the last three lands, the tab exists and says so in one line.** A tab that is missing
+**Until each of the last two lands, the tab exists and says so in one line.** A tab that is missing
 teaches a player it will never exist; a tab that says *this needs the multiplayer stage* is a
 roadmap they can read without opening a document.
 
@@ -479,6 +527,10 @@ the screen costs nothing at all, and with no window open the pass does not run.
 Where it lives:
 
 ```
+src/game/clip_graph.*  the document as a graph: the statements, the names between them, and where
+                     every number is written. ws_game rather than ws_forge for the reason
+                     markup.hpp is there -- it is a reader of a text format, and ws_ui links
+                     ws_game and does not link ws_forge
 src/ui/glyphs.hpp    the typeface's metrics, generated from the font and checked against it
 src/ui/ink.*         the ink rule on the host, which is what can be swept and tested
 src/ui/draw.*        the list of marks, and the tiles each one reaches
@@ -504,7 +556,6 @@ src/gpu/shell_pass.* the surface, the buffers, and the two ways it is presented
   the next piece; the shelf, the author tag and the path everything is opened through are already
   what it will use, so it lands underneath the interface rather than through it.
 - **The community tab** — Stage 16, and the tab says so.
-- **The editor's visual view** — Stage 20, and the sub-tab says so and refuses with a line.
 - **Clip, material and mod libraries** are on the shelf and list their own kind, but
   *open* on them goes to the editor rather than to a tool, because the tools are their own stages.
 - **A selection is not dragged between folders yet.** *move* exists in the library and has no
@@ -515,7 +566,13 @@ project is taken by a flag that walks *past* the title, so the one screen the ga
 one screen no automated run would ever look at — the same failure `14-ui-style.md` names for the
 tool previews, *a shape nobody can photograph is a shape nobody notices has stopped being drawn*.
 So `--title-shot FILE` photographs the title after `--title-frames N`, and `--title-open
-worlds|settings|both` puts a docked window up first, in the world as well as on the title. **A
+worlds|settings|both` puts a docked window up first, in the world as well as on the title.
+**`--open-editor FILE` opens the editor on a document**, `--editor-view script|visual` chooses which
+of the two views is showing, and `--editor-node NAME` chooses a node in it — which is the only way a
+run with no hand on the mouse can put a node's parameters on the left, and that panel is half of what
+the visual view is for (D751). It is `--open-editor` and not `--edit`, because `--edit` has been the
+scripted chisel edit since Stage 5 and two flags of one name is `--clip` against `--clip-file` again
+(D733, D750). **A
 scripted title steps its clock by a fixed sixtieth** (D473), so `--title-frames N` means N/60 seconds
 rather than however long that took on this machine; `--logo-seed N` pins which combination the mark
 draws and `--logo-change N` asks it for another one on a named frame, which is the only way the

@@ -429,7 +429,27 @@ Verdict Shell::frame(const InputState& input, u32 width, u32 height, f64 seconds
     draw_overlay();
 
     ui_.clear_claims();
-    if (dock_.is_open(window_settings_)) draw_settings(dock_.rect(window_settings_));
+    // Before anything reads it, and not inside whichever panel happens to read it first.
+    //
+    // The parameters window is drawn BEFORE the editor tab, and it is the one that writes: a slider
+    // rewrites the bytes of a number, which makes the graph stale, and the panel that drew from the
+    // stale graph on the next frame would hand `write_clip_number` the OLD text for a span that now
+    // holds the new one. That comparison is what stops a stale graph writing through — so it
+    // refuses, correctly, and the slider stops moving after the first frame of the drag. One line
+    // here rather than a call in each reader, because a reader that forgets it is a slider that
+    // half works.
+    refresh_graph();
+    // The left-hand window is the parameters family, and a NODE's parameters are a parameters
+    // window (`23-shell-and-libraries.md` §5c) — which is the whole reason there are two families.
+    // So while a node is selected in the visual view, this side is that node; the rest of the time
+    // it is the game's own settings.
+    if (dock_.is_open(window_settings_)) {
+        if (a_node_is_selected()) {
+            draw_node_parameters(dock_.rect(window_settings_));
+        } else {
+            draw_settings(dock_.rect(window_settings_));
+        }
+    }
     if (dock_.is_open(window_worlds_)) draw_library(dock_.rect(window_worlds_), verdict);
 
     if (message_until_ > seconds_ && !message_.empty()) {
@@ -574,7 +594,7 @@ void Shell::draw_icon_sheet() {
         "up",     "new",      "rename",  "duplicate", "delete",    "trash",
         "sort",   "search",   "private", "shared",    "close",     "clip",
         "material", "mod",    "character", "script",  "tick",      "play",
-        "reset",  "collapsed", "expanded",
+        "reset",  "collapsed", "expanded",  "pattern", "graph",
     };
     constexpr u32 kCount = static_cast<u32>(std::size(kNames));
     static_assert(kCount + 1 == static_cast<u32>(Icon::Count), "one name per drawing");
@@ -1191,7 +1211,11 @@ void Shell::draw_library(const Rect& rect, Verdict& verdict) {
     }
 
     const Rect tabs{rect.x0, top, rect.x1, top + metrics.row()};
+    const u32 was_tab = tab_;
     ui_.tabs(id_of("library.tabs"), tabs, kTabIcons, kTabLabels, 3, tab_);
+    // Choosing something and then opening the editor is a player asking to edit that thing. It
+    // used to open on *open something first*, which is the question they had just answered.
+    if (tab_ == 2 && was_tab != 2) follow_selection();
 
     const Rect body{rect.x0, tabs.y1, rect.x1, rect.y1};
     if (tab_ == 0) draw_library_tab(body, verdict);
@@ -1474,6 +1498,11 @@ void Shell::draw_library_menu(Verdict& verdict) {
         folder ? "open" : (worlds ? "enter this world" : "edit");
     const std::string duplicate_label = one ? "duplicate" : ("duplicate" + many);
     const std::string delete_label = one ? "delete" : ("delete" + many);
+    // A world has TWO things you can do to it and *open* can only be one of them. Entering it is
+    // what a double-click means and is what the row is mostly for; editing it is how you get at
+    // what it is made of, and before this there was no way to reach that at all — the one file
+    // kind the editor could not open was the one the game makes when a player presses *new*.
+    const bool world_file = worlds && one && !folder;
 
     // A built-in one can be opened and copied and nothing else. It is not the player's to rename or
     // to lose, and a delete that came back on the next launch would look like the delete failed.
@@ -1482,38 +1511,54 @@ void Shell::draw_library_menu(Verdict& verdict) {
         if (entry.shipped) any_shipped = true;
     }
 
+    // What each row DOES, kept beside the row rather than worked out from its index. The menu is
+    // one item longer on a world than on a clip, and a switch over positions is how a menu that
+    // changes shape comes to run the wrong thing — which is a fault this menu has already had once
+    // (D488, the selection changing under an open menu).
+    enum class Act : u32 { Open, Edit, Rename, Duplicate, Delete, NewFolder, NewFile, Sort };
+    std::vector<Act> acts;
     std::vector<Ui::MenuItem> items;
     if (any) {
         items.push_back({folder ? Icon::Folder : (worlds ? Icon::Play : Icon::Editor), open_label,
                          one});
+        acts.push_back(Act::Open);
+        if (world_file) {
+            items.push_back({Icon::Editor, "edit", true});
+            acts.push_back(Act::Edit);
+        }
         items.push_back({Icon::Rename, "rename", one && !any_shipped});
+        acts.push_back(Act::Rename);
         items.push_back({Icon::Duplicate, duplicate_label, true});
+        acts.push_back(Act::Duplicate);
         items.push_back({Icon::Delete, delete_label, !any_shipped});
+        acts.push_back(Act::Delete);
     } else {
         items.push_back({Icon::Folder, "new folder", true});
+        acts.push_back(Act::NewFolder);
         items.push_back({Icon::New, "new one of these", true});
+        acts.push_back(Act::NewFile);
         items.push_back({Icon::Sort, "sort", true});
+        acts.push_back(Act::Sort);
     }
 
     const i32 picked = ui_.menu(id, items.data(), static_cast<u32>(items.size()));
-    if (picked < 0) return;
+    if (picked < 0 || static_cast<usize>(picked) >= acts.size()) return;
 
-    if (!any) {
-        if (picked == 0) {
+    switch (acts[static_cast<usize>(picked)]) {
+        case Act::NewFolder:
             naming_folder_ = true;
             folder_buffer_ = "new folder";
-        } else if (picked == 1) {
+            break;
+        case Act::NewFile:
             make_new_file();
-        } else {
+            break;
+        case Act::Sort: {
             const u32 by = (static_cast<u32>(library_.sort()) + 1) % 4;
             library_.set_sort(static_cast<Sort>(by), library_.descending());
             say(std::string("sorted by ") + std::string(kSortNames[by]), 1.5);
+            break;
         }
-        return;
-    }
-
-    switch (picked) {
-        case 0:
+        case Act::Open:
             if (one) {
                 if (chosen.front().folder) {
                     clear_selection();
@@ -1524,17 +1569,20 @@ void Shell::draw_library_menu(Verdict& verdict) {
                 }
             }
             break;
-        case 1:
+        case Act::Edit:
+            if (one) open_editor(chosen.front().path);
+            break;
+        case Act::Rename:
             if (one) {
                 renaming_ = chosen.front().name;
                 rename_buffer_ = chosen.front().shown;
             }
             break;
-        case 2:
+        case Act::Duplicate:
             say(library_.duplicate(chosen), 2.5);
             ui_.sound().say(Cue::Commit);
             break;
-        case 3: {
+        case Act::Delete: {
             std::string why = library_.erase(chosen);
             if (why.empty()) why = "moved to the trash";
             say(why, 2.5);
@@ -1542,8 +1590,6 @@ void Shell::draw_library_menu(Verdict& verdict) {
             ui_.sound().say(Cue::Erase);
             break;
         }
-        default:
-            break;
     }
 }
 
@@ -1567,8 +1613,7 @@ void Shell::open_entry(const Entry& entry, Verdict& verdict) {
         ui_.sound().say(Cue::Open);
         return;
     }
-    open_document(entry.path);
-    tab_ = 2;
+    open_editor(entry.path);
     ui_.sound().say(Cue::Open);
 }
 
@@ -1618,23 +1663,232 @@ void Shell::draw_community_tab(const Rect& rect) {
                  "It needs the multiplayer stage, which is where those connections are built.\n");
 }
 
+// --- the editor: two views of one document ------------------------------------------------------
+//
+// `23-shell-and-libraries.md` §5c and D452: the visual editor and the script editor are two views
+// of the same document, and editing either updates the other, live. Neither is the master. What
+// they both read and write is `lines_` — the document as the author wrote it — and the graph in
+// between is `game/clip_graph.hpp`, re-read whenever the text changes.
+//
+// The visual view WAS Stage 20's (D456), on the reasoning that there is exactly one node editor in
+// this project and building a second one here to throw away is what the roadmap's ordering exists
+// to prevent. That reasoning still holds for the node editor Stage 20 builds — the one with a
+// palette, drag-to-connect and sub-graphs. It does not hold for this, which is a VIEW of a document
+// and not a way to author one: it adds no node type, no wiring gesture and no second language, and
+// the thing it draws is the file. Asked for directly by the user on 2026-08-20 — *"selecting
+// something like a clip or a world or anything and then opening the editor actually shows it and
+// its code and its visual code so that you can modify it"*.
+
+namespace {
+
+// A node's drawing. The icon is the control and the word is the fallback (14-ui-style.md), which
+// here means: what kind of thing this is has to be legible before the name is read.
+Icon icon_of(const ClipNode& node) {
+    if (node.opaque) return Icon::Editor;          // lines this reader could not read, carried whole
+    if (node.head == "material") return Icon::Material;
+    if (node.head == "paint") return Icon::Rename;  // a pen over a line, which is what a coat is
+    if (node.head == "include") return Icon::Library;
+    if (node.head == "solid" || node.head == "region") return Icon::World;
+    if (node.head == "metre" || node.head == "meter" || node.head == "bounds" ||
+        node.head == "param" || node.head == "origin" || node.head == "variation") {
+        return Icon::Settings;
+    }
+    return (node.carries == ClipCarries::Shape) ? Icon::Clip : Icon::Pattern;
+}
+
+// What the node says on one line, in the author's own numbers. Words first, because the word is
+// usually the subject — `paint stone where=grain` reads in that order and the numbers qualify it.
+std::string summary_of(const ClipNode& node) {
+    if (node.opaque) {
+        const usize first = node.source.find('\n');
+        return (first == std::string::npos) ? node.source : node.source.substr(0, first);
+    }
+    std::string out;
+    for (const ClipWord& word : node.words) {
+        if (!out.empty()) out += " ";
+        out += word.key.empty() ? word.text : (word.key + "=" + word.text);
+    }
+    std::string last_key;
+    for (const ClipNumber& number : node.numbers) {
+        if (!number.key.empty() && number.key == last_key) {
+            out += "," + number.text;
+            continue;
+        }
+        if (!out.empty()) out += " ";
+        out += number.key.empty() ? number.text : (number.key + "=" + number.text);
+        last_key = number.key;
+    }
+    return out;
+}
+
+// What a positional number is called, which the language does not say and the shapes agree about
+// anyway: every position in a clip is a triple, and a solid written as two opposite corners is two
+// of them. Anything else is numbered, because a made-up name is worse than an index.
+std::string positional_name(const ClipNode& node, usize index, usize count) {
+    static constexpr const char* kAxes[3]{"x", "y", "z"};
+    if (count == 1) return node.head;   // `metre 32`, `weather desert 0.6`
+    if (count == 3) return kAxes[index % 3];
+    if (count == 6) return std::string(kAxes[index % 3]) + ((index < 3) ? "0" : "1");
+    return std::to_string(index + 1);
+}
+
+// The three wire colours, and there is no palette written down anywhere.
+//
+// `14-ui-style.md`, the five permitted colours: *node-graph wires, coloured by what they carry.
+// Three hues because the script language has three value types; a fourth hue would have to mean a
+// fourth kind of value. They are the player's own ink rotated by a third of the circle each, so an
+// interface whose ink is grey has grey wires.* So this rotates the accent's HUE and keeps its
+// saturation — a grey accent stays grey through the rotation, which is the property that makes the
+// rule hold rather than a claim about it. Brightness is taken to the top, because wires are STATED
+// rather than inverted and a dark wire over dark glass is a wire that is not there.
+u32 wire_rgb(const f32 accent[3], ClipCarries carries) {
+    const f32 r = std::clamp(accent[0], 0.0f, 1.0f);
+    const f32 g = std::clamp(accent[1], 0.0f, 1.0f);
+    const f32 b = std::clamp(accent[2], 0.0f, 1.0f);
+    const f32 high = std::max(r, std::max(g, b));
+    const f32 low = std::min(r, std::min(g, b));
+    const f32 chroma = high - low;
+    f32 hue = 0.0f;
+    if (chroma > 1.0e-5f) {
+        if (high == r) hue = std::fmod((g - b) / chroma + 6.0f, 6.0f);
+        else if (high == g) hue = (b - r) / chroma + 2.0f;
+        else hue = (r - g) / chroma + 4.0f;
+        hue /= 6.0f;
+    }
+    const f32 saturation = (high > 1.0e-5f) ? (chroma / high) : 0.0f;
+    const f32 value = std::max(high, 0.85f);
+
+    hue = std::fmod(hue + static_cast<f32>(static_cast<u32>(carries)) / 3.0f, 1.0f);
+    const f32 sector = hue * 6.0f;
+    const i32 which = static_cast<i32>(std::floor(sector)) % 6;
+    const f32 f = sector - std::floor(sector);
+    const f32 p = value * (1.0f - saturation);
+    const f32 q = value * (1.0f - saturation * f);
+    const f32 t = value * (1.0f - saturation * (1.0f - f));
+    f32 out[3]{value, value, value};
+    switch (which) {
+        case 0: out[0] = value; out[1] = t; out[2] = p; break;
+        case 1: out[0] = q; out[1] = value; out[2] = p; break;
+        case 2: out[0] = p; out[1] = value; out[2] = t; break;
+        case 3: out[0] = p; out[1] = q; out[2] = value; break;
+        case 4: out[0] = t; out[1] = p; out[2] = value; break;
+        default: out[0] = value; out[1] = p; out[2] = q; break;
+    }
+    u32 packed = 0;
+    for (u32 i = 0; i < 3; ++i) {
+        packed = (packed << 8) | static_cast<u32>(std::clamp(out[i], 0.0f, 1.0f) * 255.0f + 0.5f);
+    }
+    return packed;
+}
+
+// Which shelf a file belongs to, by its own extension. A document is opened from four places and
+// only one of them is a row of the shelf it matches.
+Icon icon_for_file(const std::filesystem::path& path) {
+    const std::string extension = path.extension().string();
+    for (const Kind& kind : shipped_kinds()) {
+        if (extension == kind.extension || (!kind.also.empty() && extension == kind.also)) {
+            return kind.icon;
+        }
+    }
+    return Icon::Editor;
+}
+
+}  // namespace
+
+void Shell::open_editor(const std::filesystem::path& path) {
+    dock_.set_open(window_worlds_, true);
+    tab_ = 2;
+    if (path != editing_) open_document(path);
+    waiting_.clear();
+}
+
+bool Shell::open_editor_view(std::string_view which) {
+    if (which == "script") {
+        view_ = 0;
+        return true;
+    }
+    if (which == "visual") {
+        view_ = 1;
+        return true;
+    }
+    return false;
+}
+
+// Where an `include` points, by the rule the game itself resolves one with (D494): beside the file
+// that says it, and — only when there is nothing there — the folder of clips the game ships with.
+// Beside always wins, because that is what lets a player copy a building's parts next to their own
+// world and edit them.
+std::filesystem::path Shell::follow_include(const std::string& named) const {
+    std::error_code error;
+    const std::filesystem::path beside =
+        (editing_.parent_path() / named).lexically_normal();
+    if (std::filesystem::exists(beside, error) && !error) return beside;
+    error.clear();
+    const std::filesystem::path shipped =
+        (library_.shipped_root() / "clips" / named).lexically_normal();
+    if (std::filesystem::exists(shipped, error) && !error) return shipped;
+    return {};
+}
+
+bool Shell::choose_node(std::string_view name) {
+    refresh_graph();
+    for (const ClipNode& node : graph_.nodes) {
+        if (node.name == name) {
+            chosen_node_ = ClipGraph::key_of(node);
+            view_ = 1;
+            open_settings();
+            return true;
+        }
+    }
+    return false;
+}
+
+// Choosing something in the library and then opening the editor is a player asking to edit that
+// thing. An editor that answers with *open something first* has asked the question they have just
+// finished answering, and that is what this is for (D455 is unchanged: the editor still asks for a
+// file first — a selection is now one of the ways of telling it).
+void Shell::follow_selection() {
+    const std::vector<Entry> chosen = selection();
+    if (chosen.size() != 1 || chosen.front().folder) return;
+    if (chosen.front().path == editing_) return;
+    if (dirty_) {
+        // Nothing is thrown away and nothing pops up. The editor says which file is waiting and
+        // opens it the moment this one is saved — which is one press, on the button that is
+        // already there.
+        waiting_ = chosen.front().path;
+        return;
+    }
+    open_document(chosen.front().path);
+}
+
+void Shell::refresh_graph() {
+    if (!graph_stale_) return;
+    graph_stale_ = false;
+    graph_ = read_clip_graph(lines_);
+}
+
+bool Shell::a_node_is_selected() const {
+    return dock_.is_open(window_worlds_) && tab_ == 2 && view_ == 1 && !chosen_node_.empty() &&
+           graph_.find(chosen_node_) != ClipGraph::kNone;
+}
+
 void Shell::draw_editor_tab(const Rect& rect) {
     const Metrics& metrics = ui_.metrics();
     const Rect body = rect.inset(metrics.px(8.0f));
 
-    // The editor asks for a file first (D455). Not a dialog: it sends you to the library tab,
-    // with *new* sitting where the cursor already is. There is no editing without something to
-    // edit, and an editor that opens on an untitled nothing has to invent a place to put it.
+    // The editor asks for a file first (D455). Not a dialog: it sends you to the library tab, with
+    // *new* sitting where the cursor already is. There is no editing without something to edit, and
+    // an editor that opens on an untitled nothing has to invent a place to put it.
     if (editing_.empty()) {
         ui_.markdown(body,
                      "### editor\n"
                      "\n"
-                     "Open something first. The *library* tab is where things are, and *new* is "
-                     "in its toolbar.\n"
+                     "Choose something on the *library* tab and come back — a clip, a world, "
+                     "anything on any shelf — and it opens here. *new* is in the menu a "
+                     "right-click gives.\n"
                      "\n"
-                     "The **script** view is here. The **visual** view — the same document as "
-                     "nodes and wires, live — is the node editor's, and there is exactly one node "
-                     "editor in this game so that you learn it once.\n");
+                     "**script** is the document as text. **visual** is the same document as "
+                     "nodes and wires, live: change either and the other changes with it.\n");
         const Rect go{body.x0, body.y1 - metrics.row(), body.x0 + metrics.px(120.0f), body.y1};
         if (ui_.button(id_of("editor.go"), go, Icon::Library, "to the library",
                        "Choose something to edit")) {
@@ -1643,64 +1897,103 @@ void Shell::draw_editor_tab(const Rect& rect) {
         return;
     }
 
+    refresh_graph();
+
     Column column;
     column.box = body;
     column.y = body.y0;
     column.row = metrics.row();
     column.gap = metrics.px(4.0f);
 
+    // --- what is being edited ------------------------------------------------------------------
+    //
+    // The name, the drawing that says what kind of thing it is, and who made it. A panel that says
+    // only *script* and *visual* is a panel that does not say what it is about, and this tab is
+    // reached with one file selected out of forty.
     {
         const Rect bar = column.next();
-        const f32 each = bar.width() / 4.0f;
-        const auto slot = [&](u32 i) {
-            return Rect{bar.x0 + each * static_cast<f32>(i), bar.y0,
-                        bar.x0 + each * static_cast<f32>(i + 1), bar.y1};
-        };
-        ui_.label(Rect{slot(0).x0, bar.y0, slot(2).x1, bar.y1},
-                  editing_.filename().string() + (dirty_ ? " *" : ""));
-        if (ui_.icon_button(id_of("editor.save"), slot(3), Icon::Tick, "Write it back to the file")) {
+        const f32 cell = metrics.icon();
+        // The drawing is the FILE's kind and not the shelf's. They are usually the same and the one
+        // time they are not is the one that matters: a clip opened while the worlds shelf is
+        // showing had a globe beside its name, which says the wrong thing about the wrong file.
+        ui_.draw().icon(Rect{bar.x0, bar.mid_y() - cell * 0.5f, bar.x0 + cell, bar.mid_y() + cell * 0.5f},
+                        icon_for_file(editing_));
+        const Rect save{bar.x1 - metrics.row(), bar.y0, bar.x1, bar.y1};
+        const Rect name{bar.x0 + cell + metrics.px(5.0f), bar.y0, save.x0 - metrics.px(4.0f), bar.y1};
+        ui_.draw().push_clip(name);
+        ui_.label(name, editing_.stem().string() + (dirty_ ? " *" : ""), Align::Left, kBold);
+        ui_.draw().pop_clip();
+        if (ui_.icon_button(id_of("editor.save"), save, Icon::Tick,
+                            dirty_ ? "Write it back to the file" : "Nothing to write")) {
             save_document();
         }
     }
 
-    // The two sub-tabs, which are two views of the SAME document. The visual one is Stage 20's
-    // and says so rather than being absent (D456) — a view that is missing teaches a player it
-    // will never exist.
+    // The one line the unsaved case needs. Not a dialog: what it says is which file is waiting, and
+    // the button that answers it is the tick above.
+    if (!waiting_.empty() && waiting_ != editing_) {
+        const Rect row = column.next(metrics.px(16.0f));
+        ui_.label(row, waiting_.stem().string() + " opens when this is saved", Align::Left, kPlain,
+                  0.75f);
+    }
+
+    // --- the two views -------------------------------------------------------------------------
     {
-        static constexpr Icon kViews[2]{Icon::Editor, Icon::Mod};
+        static constexpr Icon kViews[2]{Icon::Editor, Icon::Graph};
         static constexpr std::string_view kViewLabels[2]{"script", "visual"};
         static constexpr std::string_view kViewHints[2]{
             "The document as text, in the language a clip is written in",
-            "The same document as nodes and wires - the node editor's, in Stage 20"};
+            "The same document as nodes and wires - change either and the other follows"};
         const Rect views = column.next();
         u32 want = view_;
         if (ui_.choice(id_of("editor.view"), views, {}, kViews, kViewLabels, kViewHints, 2, want)) {
-            if (want == 1) {
-                // Said once, on the press, rather than every frame: a refusal that repeats sixty
-                // times a second is a refusal nobody reads and a sound nobody forgives.
-                ui_.refuse(views, "the visual view waits for the node editor, in Stage 20");
-            } else {
-                view_ = want;
+            // Arriving in the visual view selects whatever the caret was sitting in, so the two
+            // views agree about where you are rather than each keeping its own place.
+            if (want == 1 && view_ == 0) {
+                const u32 under = node_at_line(caret_line_ + 1);
+                if (under != ClipGraph::kNone) {
+                    chosen_node_ = ClipGraph::key_of(graph_.nodes[under]);
+                }
             }
+            view_ = want;
         }
     }
 
-    // The parse, which happens on every keystroke and whose failure is not an error.
+    // --- the parse, which happens on every keystroke and whose failure is not an error ----------
     const Rect status = column.next(metrics.px(16.0f));
     if (report_.ok) {
         ui_.label(status, "reads", Align::Left, kPlain, 0.55f);
+    } else if (report_.line > 0) {
+        ui_.label(status, "line " + std::to_string(report_.line) + ": " + report_.message,
+                  Align::Left, kPlain, 0.85f);
     } else {
-        ui_.label(status,
-                  "line " + std::to_string(report_.line) + ": " + report_.message, Align::Left,
-                  kPlain, 0.85f);
+        // The fault is in something this document includes. Naming the file is the whole of what
+        // the player can act on; a line number against a file they are not looking at is worse
+        // than none.
+        ui_.label(status, report_.where.empty() ? report_.message
+                                                : (report_.where + ": " + report_.message),
+                  Align::Left, kPlain, 0.85f);
     }
 
-    // --- the text ------------------------------------------------------------------------------
     const Rect page{column.box.x0, column.y, column.box.x1, column.box.y1};
+    if (view_ == 0) {
+        draw_script_view(page);
+    } else {
+        draw_visual_view(page);
+    }
+}
+
+void Shell::draw_script_view(const Rect& page) {
+    const Metrics& metrics = ui_.metrics();
     const f32 size = metrics.text();
     const f32 line_height = DrawList::line_height(size) + metrics.px(2.0f);
     const f32 content = static_cast<f32>(lines_.size() + 2) * line_height;
     const Rect inner = ui_.begin_scroll(id_of("editor.scroll"), page, content);
+
+    // Which node the caret is in, drawn as a wash down the lines it covers. That is the whole of
+    // the link from this view back to the other one: the statement you are typing in is the box
+    // that is lit over there.
+    const u32 under = node_at_line(caret_line_ + 1);
 
     const f32 gutter = DrawList::measure("0000", size, kMono) + metrics.px(6.0f);
     for (usize i = 0; i < lines_.size(); ++i) {
@@ -1709,6 +2002,10 @@ void Shell::draw_editor_tab(const Rect& rect) {
         // The line number, quieter than the code, because it is not part of the document.
         ui_.draw().text(inner.x0 + gutter - metrics.px(6.0f), y, std::to_string(i + 1), size,
                         kMono, Align::Right, 0.35f);
+        if (under != ClipGraph::kNone && graph_.nodes[under].line <= i + 1 &&
+            graph_.nodes[under].last_line >= i + 1) {
+            ui_.draw().ink(Rect{inner.x0, y, inner.x1, y + line_height}, 0.07f);
+        }
         if (!report_.ok && report_.line == static_cast<u32>(i + 1)) {
             ui_.draw().ink(Rect{inner.x0, y, inner.x1, y + line_height}, 0.14f);
         }
@@ -1752,6 +2049,371 @@ void Shell::draw_editor_tab(const Rect& rect) {
     if (!ui_.wants_keys()) edit_keys(ui_.input());
 }
 
+// Which node covers a line, preferring the innermost — a `box` inside a `displace` is the answer,
+// because that is the one whose numbers a player is looking at.
+u32 Shell::node_at_line(u32 line) const {
+    u32 best = ClipGraph::kNone;
+    u32 span = 0xFFFFFFFFu;
+    for (usize i = 0; i < graph_.nodes.size(); ++i) {
+        const ClipNode& node = graph_.nodes[i];
+        if (node.line > line || node.last_line < line) continue;
+        const u32 wide = node.last_line - node.line;
+        if (wide < span) {
+            span = wide;
+            best = static_cast<u32>(i);
+        }
+    }
+    return best;
+}
+
+// --- the visual view ---------------------------------------------------------------------------
+//
+// The document's statements as boxes and the names between them as wires, laid out left to right by
+// what is made of what. It is drawn from the same `lines_` the script view is, re-read whenever
+// those change, so the two cannot disagree about what the document is (D452) — and what it cannot
+// draw is a box carrying the source rather than nothing at all (D454).
+void Shell::draw_visual_view(const Rect& page) {
+    const Metrics& metrics = ui_.metrics();
+
+    if (graph_.nodes.empty()) {
+        ui_.label(Rect{page.x0, page.y0, page.x1, page.y0 + metrics.row()},
+                  "nothing in this document yet", Align::Left, kPlain, 0.55f);
+        return;
+    }
+
+    const f32 node_w = metrics.px(104.0f);
+    const f32 node_h = metrics.px(26.0f);
+    const f32 gap_x = metrics.px(26.0f);
+    const f32 gap_y = metrics.px(7.0f);
+
+    // Where each node sits: its column is how far it is from a leaf, and its row is the order it
+    // was written in. Both come out of the document, so the picture is the same every time it is
+    // opened — a layout that remembered where a player last dragged a box would be state about a
+    // file that the file does not carry, which is the one rule the whole library rests on (D445).
+    std::vector<u32> in_column;
+    std::vector<f32> at_x(graph_.nodes.size(), 0.0f);
+    std::vector<f32> at_y(graph_.nodes.size(), 0.0f);
+    u32 columns = 0;
+    for (usize i = 0; i < graph_.nodes.size(); ++i) {
+        const u32 column = graph_.nodes[i].depth;
+        if (column >= in_column.size()) in_column.resize(column + 1, 0);
+        at_x[i] = static_cast<f32>(column) * (node_w + gap_x);
+        at_y[i] = static_cast<f32>(in_column[column]) * (node_h + gap_y);
+        ++in_column[column];
+        columns = std::max(columns, column + 1);
+    }
+    f32 content_w = static_cast<f32>(columns) * (node_w + gap_x);
+    f32 content_h = 0.0f;
+    for (u32 rows : in_column) {
+        content_h = std::max(content_h, static_cast<f32>(rows) * (node_h + gap_y));
+    }
+
+    // --- moving about --------------------------------------------------------------------------
+    //
+    // A drag on the empty canvas, and the wheel. Not a scroll bar and not a zoom: a graph is a
+    // thing you push about, and every extra control on this panel is a control that is not a node.
+    const bool over_page = page.holds(ui_.pointer_x(), ui_.pointer_y());
+    if (over_page && ui_.input().wheel != 0.0f) {
+        if (ui_.input().is_down(Key::Shift)) {
+            graph_pan_x_ += ui_.input().wheel * metrics.px(48.0f);
+        } else {
+            graph_pan_y_ += ui_.input().wheel * metrics.px(48.0f);
+        }
+    }
+    if (over_page && ui_.input().mouse_left && !ui_.busy() && dragging_graph_) {
+        graph_pan_x_ += ui_.input().mouse_dx;
+        graph_pan_y_ += ui_.input().mouse_dy;
+    }
+    if (!ui_.input().mouse_left) dragging_graph_ = false;
+    graph_pan_x_ = std::clamp(graph_pan_x_, std::min(0.0f, page.width() - content_w), 0.0f);
+    graph_pan_y_ = std::clamp(graph_pan_y_, std::min(0.0f, page.height() - content_h), 0.0f);
+
+    const f32 origin_x = page.x0 + graph_pan_x_;
+    const f32 origin_y = page.y0 + graph_pan_y_;
+    const auto box_of = [&](usize i) {
+        return Rect{origin_x + at_x[i], origin_y + at_y[i], origin_x + at_x[i] + node_w,
+                    origin_y + at_y[i] + node_h};
+    };
+
+    ui_.draw().push_clip(page);
+
+    // --- the wires, first, so the nodes sit over them -------------------------------------------
+    const f32 thin = std::max(1.0f, metrics.scale * 0.8f);
+    for (usize i = 0; i < graph_.nodes.size(); ++i) {
+        const Rect into = box_of(i);
+        for (u32 input : graph_.nodes[i].inputs) {
+            if (input >= graph_.nodes.size()) continue;
+            const Rect from = box_of(input);
+            const u32 rgb = wire_rgb(preferences_.accent, graph_.nodes[input].carries);
+            const f32 mid = std::min(from.x1 + gap_x * 0.45f, into.x0 - metrics.px(2.0f));
+            const f32 y0 = from.mid_y();
+            const f32 y1 = into.mid_y();
+            if (from.x1 > page.x1 && into.x0 > page.x1) continue;
+            if (std::max(from.x1, into.x1) < page.x0) continue;
+            ui_.draw().hue(Rect{from.x1, y0 - thin * 0.5f, std::max(mid, from.x1), y0 + thin * 0.5f},
+                           rgb);
+            ui_.draw().hue(Rect{mid - thin * 0.5f, std::min(y0, y1), mid + thin * 0.5f,
+                                std::max(y0, y1)},
+                           rgb);
+            ui_.draw().hue(Rect{std::min(mid, into.x0), y1 - thin * 0.5f, into.x0,
+                                y1 + thin * 0.5f},
+                           rgb);
+        }
+    }
+
+    // --- the nodes ------------------------------------------------------------------------------
+    const u32 caret_node = node_at_line(caret_line_ + 1);
+    bool hit_a_node = false;
+    for (usize i = 0; i < graph_.nodes.size(); ++i) {
+        const ClipNode& node = graph_.nodes[i];
+        const Rect box = box_of(i);
+        if (box.y1 < page.y0 || box.y0 > page.y1 || box.x1 < page.x0 || box.x0 > page.x1) continue;
+
+        const bool chosen = !chosen_node_.empty() && ClipGraph::key_of(node) == chosen_node_;
+        ui_.draw().glass(box, 0.55f);
+        ui_.draw().ink(box, chosen ? 0.22f : 0.10f);
+        ui_.draw().edge(box, chosen ? 0.9f : (caret_node == i ? 0.6f : 0.28f),
+                        chosen ? 2.0f : 1.0f);
+
+        ui_.draw().push_clip(box);
+        const f32 cell = metrics.icon() * 0.8f;
+        ui_.draw().icon(Rect{box.x0 + metrics.px(3.0f), box.y0 + metrics.px(2.0f),
+                             box.x0 + metrics.px(3.0f) + cell, box.y0 + metrics.px(2.0f) + cell},
+                        icon_of(node));
+        const Rect words{box.x0 + cell + metrics.px(6.0f), box.y0, box.x1 - metrics.px(3.0f),
+                         box.y0 + node_h * 0.55f};
+        ui_.label(words, node.name.empty() ? node.head : node.name, Align::Left,
+                  node.name.empty() ? kPlain : kBold);
+
+        // The second line: what it IS on the left, and what its numbers are on the right.
+        //
+        // `all` says what it is called and `union` says what it is, and a box with only one of the
+        // two is a box you have to open to read. They are given SEPARATE room rather than drawn
+        // over each other: at a hundred interface pixels a material's name and its `rgb=` ran into
+        // one another and came out as `mgterisl24,120,112`, which is neither of them.
+        const f32 small = metrics.small_text();
+        const f32 under_y = box.y0 + node_h * 0.56f;
+        const f32 left = box.x0 + metrics.px(4.0f);
+        const f32 right = box.x1 - metrics.px(4.0f);
+        const std::string under = node.name.empty() ? std::string() : node.head;
+        f32 spent = 0.0f;
+        if (!under.empty()) {
+            ui_.draw().text(left, under_y, under, small, kPlain, Align::Left, 0.55f);
+            spent = DrawList::measure(under, small, kPlain) + metrics.px(5.0f);
+        }
+        const std::string values = summary_of(node);
+        if (!values.empty() && left + spent < right) {
+            ui_.draw().push_clip(Rect{left + spent, box.y0, right, box.y1});
+            ui_.draw().text(right, under_y, values, small, kPlain, Align::Right, 0.45f);
+            ui_.draw().pop_clip();
+        }
+        ui_.draw().pop_clip();
+
+        if (over_page && box.holds(ui_.pointer_x(), ui_.pointer_y())) {
+            if (ui_.pressed_in(box)) {
+                hit_a_node = true;
+                chosen_node_ = ClipGraph::key_of(node);
+                // A node's parameters are a parameters window (§5c), so choosing one opens the
+                // left-hand side on it — which is the whole reason the two families exist.
+                open_settings();
+                ui_.sound().say(Cue::Step);
+                if (ui_.input().click_count >= 2 && !node.target.empty()) {
+                    // An `include` is a door. A world is a manifest — twenty lines naming the files
+                    // it is assembled out of — so a visual view of one that could not be walked
+                    // through would be twenty boxes and no way to reach anything they stand for.
+                    const std::filesystem::path went = follow_include(node.target);
+                    if (went.empty()) {
+                        say("there is no '" + node.target + "' beside this or in the game's clips",
+                            3.0);
+                        ui_.sound().say(Cue::Refuse);
+                    } else {
+                        open_editor(went);
+                        ui_.sound().say(Cue::Open);
+                    }
+                    break;
+                }
+                if (ui_.input().click_count >= 2) {
+                    // Straight to the line it is written on, in the other view. Two views of one
+                    // document means being able to get from either to the other at the place you
+                    // were looking at, rather than at the top.
+                    caret_line_ = (node.line > 0) ? node.line - 1 : 0;
+                    caret_column_ = 0;
+                    view_ = 0;
+                    const f32 size = metrics.text();
+                    const f32 line_height = DrawList::line_height(size) + metrics.px(2.0f);
+                    ui_.set_scroll(id_of("editor.scroll"),
+                                   std::max(0.0f, static_cast<f32>(caret_line_) * line_height -
+                                                      page.height() * 0.4f));
+                    ui_.sound().say(Cue::Open);
+                }
+            }
+        }
+    }
+    ui_.draw().pop_clip();
+
+    // A press on the empty canvas is *nothing selected*, and the start of a pan. Both, because
+    // they are the same gesture until the hand moves.
+    if (over_page && ui_.pressed_in(page) && !hit_a_node && !ui_.busy()) {
+        chosen_node_.clear();
+        dragging_graph_ = true;
+    }
+}
+
+// A node's parameters, on the left, while its node is selected.
+//
+// `23-shell-and-libraries.md` §5c: *every node parameter is a slider by §3, with the same
+// double-click-to-type and the same lack of a cap. A node's parameters are a parameters window:
+// they open on the left while its node is selected, which is why the two families exist.*
+void Shell::draw_node_parameters(const Rect& rect) {
+    const Metrics& metrics = ui_.metrics();
+    const u32 at = graph_.find(chosen_node_);
+    if (at == ClipGraph::kNone) return;
+    const ClipNode node = graph_.nodes[at];   // by value: the graph is re-read under this
+
+    ui_.panel(rect);
+    draw_header(rect, window_settings_, icon_of(node),
+                node.name.empty() ? node.head : node.name);
+
+    Column column;
+    column.box = Rect{rect.x0 + metrics.px(8.0f), rect.y0 + metrics.row() + metrics.px(6.0f),
+                      rect.x1 - metrics.px(8.0f), rect.y1 - metrics.px(6.0f)};
+    column.y = column.box.y0;
+    column.row = metrics.row();
+    column.gap = metrics.px(4.0f);
+
+    {
+        const Rect row = column.next();
+        const Rect back{row.x0, row.y0, row.x0 + metrics.px(96.0f), row.y1};
+        if (ui_.button(id_of("node.back"), back, Icon::Up, "settings",
+                       "Stop looking at this node")) {
+            chosen_node_.clear();
+            return;
+        }
+        // What it is, in the language's own word, for the case where the name says nothing about
+        // it: `all` is a union and `grain` is an fbm, and this row is where that is said.
+        ui_.label(Rect{back.x1 + metrics.px(8.0f), row.y0, row.x1, row.y1}, node.head, Align::Right,
+                  kPlain, 0.6f);
+    }
+
+    if (node.opaque) {
+        // D454: this is source nothing could read, carried whole rather than dropped. The panel
+        // says so and shows it; the script view is where it is edited.
+        const Rect where{column.box.x0, column.y, column.box.x1, column.box.y1};
+        ui_.markdown(where,
+                     "This is text the graph could not read, kept exactly as it is written. "
+                     "The **script** view is where it is edited.\n");
+        return;
+    }
+
+    // The ranges, worked out once when the node is chosen. A range recomputed from the value every
+    // frame puts the handle back in the middle of its travel on every frame of a drag, which reads
+    // as a slider that cannot be moved.
+    if (range_node_ != chosen_node_ || node_range_.size() != node.numbers.size()) {
+        range_node_ = chosen_node_;
+        node_range_.clear();
+        for (const ClipNumber& number : node.numbers) {
+            const f64 span = std::max(1.0, std::abs(number.value));
+            const f64 step = std::pow(10.0, -static_cast<f64>(clip_number_decimals(number.text)));
+            const f64 low = std::floor((number.value - span) / step) * step;
+            node_range_.emplace_back(low, low + span * 2.0);
+        }
+    }
+
+    const Rect list{column.box.x0, column.y, column.box.x1, column.box.y1};
+    const f32 row_height = metrics.row() + metrics.px(4.0f);
+    const f32 content = static_cast<f32>(node.numbers.size() + node.words.size() + 1) * row_height;
+    const Rect inner = ui_.begin_scroll(id_of("node.scroll"), list, content);
+    f32 y = inner.y0;
+
+    usize positional = 0;
+    usize positional_count = 0;
+    for (const ClipNumber& number : node.numbers) {
+        if (number.key.empty()) ++positional_count;
+    }
+
+    for (usize i = 0; i < node.numbers.size(); ++i) {
+        const ClipNumber& number = node.numbers[i];
+        const Rect row{inner.x0, y, inner.x1, y + metrics.row()};
+        y += row_height;
+        if (row.y1 < list.y0 || row.y0 > list.y1) {
+            if (number.key.empty()) ++positional;
+            continue;
+        }
+
+        std::string label;
+        if (number.key.empty()) {
+            label = positional_name(node, positional, positional_count);
+            ++positional;
+        } else {
+            label = number.key;
+            // `rgb=124,120,112` is three rows, and each of them has to say which one it is.
+            usize of_this_key = 0;
+            for (const ClipNumber& other : node.numbers) {
+                if (other.key == number.key) ++of_this_key;
+            }
+            if (of_this_key > 1) label += " " + std::to_string(number.index + 1);
+        }
+
+        // Both of these are string_views onto strings that have to outlive the call, which is
+        // what these two locals are for. Written as one line each and it was wrong once: assigning
+        // a `+` expression straight into the view left it pointing at a temporary that had already
+        // been destroyed, which is the sort of fault that draws correctly on the machine it was
+        // written on.
+        const std::string tooltip =
+            "Written as " + number.text + " on line " + std::to_string(number.line);
+        Number about;
+        about.label = label;
+        about.tooltip = tooltip;
+        about.low = (i < node_range_.size()) ? node_range_[i].first : number.value - 1.0;
+        about.high = (i < node_range_.size()) ? node_range_[i].second : number.value + 1.0;
+        const u32 decimals = clip_number_decimals(number.text);
+        // The document's own precision is the slider's step, so `sides=6` steps by one and
+        // `round=0.04` by a hundredth. Nothing had to be told which: the file already said.
+        about.step = std::pow(10.0, -static_cast<f64>(decimals));
+        about.decimals = static_cast<i32>(decimals);
+
+        f64 value = number.value;
+        if (ui_.number(id_of("node.number", i), row, about, value) && value != number.value) {
+            // The one way the visual view changes a document: the bytes of this number, and no
+            // others. Everything else in the file — the comments, the blank lines, the author's own
+            // spacing — is untouched, which is what makes the text view worth trusting after a
+            // visual edit.
+            if (write_clip_number(lines_, number, spell_clip_number(value, number.text))) {
+                dirty_ = true;
+                graph_stale_ = true;
+                reparse();
+            }
+        }
+    }
+
+    for (usize w = 0; w < node.words.size(); ++w) {
+        const ClipWord& word = node.words[w];
+        const Rect row{inner.x0, y, inner.x1, y + metrics.row()};
+        y += row_height;
+        if (row.y1 < list.y0 || row.y0 > list.y1) continue;
+        // A value that is not a number is not a slider (D444): a choice is a choice and a name is a
+        // name. What it gets instead is a row saying what it is — and, where it names something the
+        // document bound, a press that goes there.
+        ui_.label(Rect{row.x0 + metrics.px(4.0f), row.y0, row.x1, row.y1},
+                  word.key.empty() ? word.text : (word.key + "  " + word.text), Align::Left, kPlain,
+                  0.8f);
+        if (word.names_a_part) {
+            const Rect go{row.x1 - metrics.row(), row.y0, row.x1, row.y1};
+            if (ui_.icon_button(id_of("node.follow", w), go, Icon::Up,
+                                "Look at what this names")) {
+                for (const ClipNode& other : graph_.nodes) {
+                    if (other.name == word.text) {
+                        chosen_node_ = ClipGraph::key_of(other);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    ui_.end_scroll();
+}
+
 std::string Shell::document() const {
     std::string text;
     for (usize i = 0; i < lines_.size(); ++i) {
@@ -1763,6 +2425,7 @@ std::string Shell::document() const {
 
 void Shell::open_document(const std::filesystem::path& path) {
     editing_ = path;
+    editing_shipped_ = library_.is_shipped(path);
     lines_.clear();
     std::ifstream file(path, std::ios::binary);
     std::string line;
@@ -1774,11 +2437,37 @@ void Shell::open_document(const std::filesystem::path& path) {
     caret_line_ = 0;
     caret_column_ = 0;
     dirty_ = false;
-    if (parse_) report_ = parse_(document());
+    // Everything about the OTHER view goes with it: a graph of the last document, a node chosen in
+    // it, and the travel its sliders were given are all about a file that is no longer open.
+    graph_stale_ = true;
+    chosen_node_.clear();
+    range_node_.clear();
+    node_range_.clear();
+    graph_pan_x_ = 0.0f;
+    graph_pan_y_ = 0.0f;
+    ui_.set_scroll(id_of("editor.scroll"), 0.0f);
+    reparse();
+}
+
+// The parse, and the ONE place it happens, so the two views cannot be showing different verdicts.
+// `editing_` goes over with the text because a document's includes resolve relative to where it
+// lives, and a world is very often one `include` line and nothing else.
+void Shell::reparse() {
+    if (parse_) report_ = parse_(document(), editing_);
 }
 
 void Shell::save_document() {
     if (editing_.empty()) return;
+    // What came with the game is not the player's to change (D494). It can be opened and it can be
+    // duplicated — and the duplicate lands on their own shelf, which is what makes *duplicate* the
+    // way to edit something the game shipped. Refused rather than written, and the refusal says
+    // what to do instead: a refusal that does not explain itself is indistinguishable from a bug.
+    if (editing_shipped_) {
+        say("this one came with the game -- duplicate it and edit the copy", 4.0);
+        ui_.sound().say(Cue::Refuse);
+        return;
+    }
+    if (!dirty_) return;
     std::ofstream file(editing_, std::ios::binary | std::ios::trunc);
     if (!file) {
         message_ = "could not write that file";
@@ -1789,6 +2478,13 @@ void Shell::save_document() {
     file.write(text.data(), static_cast<std::streamsize>(text.size()));
     dirty_ = false;
     ui_.sound().say(Cue::Commit);
+    // Whatever was chosen while this one had unsaved changes opens now. Nothing was thrown away
+    // and nothing had to be answered: the file that was waiting is the one the player picked.
+    if (!waiting_.empty() && waiting_ != editing_) {
+        const std::filesystem::path next = waiting_;
+        waiting_.clear();
+        open_document(next);
+    }
 }
 
 void Shell::edit_keys(const InputState& input) {
@@ -1851,7 +2547,11 @@ void Shell::edit_keys(const InputState& input) {
         // Re-parsed on every keystroke, and a script that does not parse is NOT an error (D453):
         // the status line says where it stopped and nothing pops up, because a parser that
         // interrupts you halfway through typing a word is a parser you fight.
-        if (parse_) report_ = parse_(document());
+        reparse();
+        // And re-read into a graph, so the other view is this document rather than the document as
+        // it was when it was opened (D452). It is a few hundred lines, on a keystroke; the parse
+        // beside it costs more.
+        graph_stale_ = true;
     }
 }
 

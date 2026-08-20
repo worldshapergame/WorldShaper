@@ -105,6 +105,9 @@ enum class Icon : u32 {
     Reset,       // an arrow going back round: put this value back where it started
     Collapsed,   // a section that is folded away, pointing at what would open
     Expanded,    // and one that is open, pointing at what is under it
+    Pattern,     // a wave: a field read for its value rather than its sign, which is what every
+                 // grain, checker and stripe in a clip is
+    Graph,       // two nodes and the wire between them: the visual view of a document
     Count,
 };
 

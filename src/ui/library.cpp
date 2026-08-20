@@ -251,6 +251,16 @@ const std::filesystem::path& Library::top_of_here() const {
     return top_mine_ = mine;
 }
 
+bool Library::is_shipped(const std::filesystem::path& path) const {
+    if (game_.empty()) return false;
+    // The player's own root wins, and that is not a nicety: a portable install puts
+    // `WorldShaper\` beside the working directory, which on a development build is the folder the
+    // executable is in — so without this every file a player made would read as one the game
+    // shipped, and the editor would refuse to save any of them.
+    if (within(path, root_)) return false;
+    return within(path, game_);
+}
+
 bool Library::within(const std::filesystem::path& what, const std::filesystem::path& root) {
     std::error_code error;
     const std::string inside = what.lexically_normal().generic_string();

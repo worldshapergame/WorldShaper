@@ -235,3 +235,13 @@ still measurable.
 
 Players will write these, or wire them together visually. The node array is the real
 representation; text and wires are two views of it, and either can be saved as either.
+
+**One correction to that last sentence, made when the visual view was built** (D745). It is true of
+what a clip *means* and it is not what an editor can edit. By the time a file has become a `Field`,
+one `let` is a dozen nodes, every name has gone, the numbers are folded together and the comments
+never existed — so a visual edit made against the node array could not be written back without
+rewriting the whole file, and `23-shell-and-libraries.md` §5c forbids exactly that: *a round trip
+does not reformat what you wrote.* What the two views actually share is the **document** — the
+statements the author wrote, the names they bound and the numbers as they spelled them, each with
+the line and column it sits at. `src/game/clip_graph.*` is that reader, and it is what the editor's
+wires are drawn from. The statements lower to field nodes; the field nodes do not lift back.

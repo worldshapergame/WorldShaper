@@ -1282,6 +1282,21 @@ struct Options {
     // only by clicking, so a report about one of them could only be answered by clicking too.
     std::string shelf;
 
+    // `--open-editor FILE` and `--editor-view script|visual`: open the editor on a document, in one
+    // of its two views. The visual view is a whole screen nothing could reach without a hand on the
+    // mouse, which is exactly the case `--title-shot` and `--icon-sheet` exist for.
+    //
+    // NOT `--edit`, which is thirty lines above this and is a scripted CHISEL edit taking six
+    // voxel coordinates and a material. Two flags of one name is `--clip` and `--clip-file` again
+    // (D733), where a run given the wrong one loaded the estate instead of the sampler and said
+    // nothing about it for a session.
+    std::string open_editor;
+    std::string editor_view;
+    // And which node is chosen in it, by the name the document bound. It is the only way a run with
+    // no hand on the mouse can put a node's parameters on the left, and that panel is half of what
+    // the visual view is for.
+    std::string editor_node;
+
     // Which combination the logo draws, fixed. 0 is "whatever the seed the shell chose says", which
     // is different on every launch on purpose (src/ui/logo.hpp) — and a photograph of a thing that
     // is different every time cannot be compared with the last one, so a photograph of the mark
@@ -1387,6 +1402,12 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         options.icon_sheet = true;
     } else if (arg == "--shelf") {
         if (i + 1 < argc) options.shelf = argv[++i];
+    } else if (arg == "--open-editor") {
+        if (i + 1 < argc) options.open_editor = argv[++i];
+    } else if (arg == "--editor-view") {
+        if (i + 1 < argc) options.editor_view = argv[++i];
+    } else if (arg == "--editor-node") {
+        if (i + 1 < argc) options.editor_node = argv[++i];
     } else if (arg == "--logo-seed") {
         options.logo_seed = static_cast<u32>(next_number(options.logo_seed));
     } else if (arg == "--logo-change") {
@@ -13956,21 +13977,65 @@ int run_windowed(const Options& options) {
     // Whether a script would parse, asked on every keystroke by the editor tab. The tables are
     // this function's rather than the shell's, because ws_ui does not know what a clip is — and a
     // scratch table here cannot contaminate the one a world is using.
+    //
+    // **The includes are spliced first, exactly as the game splices them when it opens the file.**
+    // Without that the editor's verdict was wrong on the one file the game itself makes: *new* on
+    // the worlds shelf writes `include "facility.clip"`, the splice is what takes an include out
+    // before a token is read, and text handed straight to the parser therefore came back *unknown
+    // statement 'include'*. It also means a world whose pieces have been deleted says so here, by
+    // name, rather than in a log nobody opens.
     TagRegistry editor_tags;
-    shell.set_parser([&](const std::string& text) {
+    const std::string shipped_clips =
+        (std::filesystem::path(Window::base_path()) / "clips").string();
+    shell.set_parser([&](const std::string& text, const std::filesystem::path& path) {
         ui::ParseReport report;
         // A parse that interns materials into a table on every keystroke is a table that grows
         // without bound over an afternoon of typing, so a fresh one is made each time. It is a few
         // microseconds against a keystroke, and it cannot contaminate the table a world is using.
         VoxelTypeTable scratch;
-        const forge::Script script = forge::parse_clip_script(text, scratch, editor_tags);
+        std::vector<forge::SourceLine> origin;
+        std::vector<forge::ScriptError> trouble;
+        const std::string spliced =
+            forge::expand_includes_of(text, path.string(), origin, trouble, shipped_clips);
+        forge::Script script;
+        if (trouble.empty()) {
+            script = forge::parse_clip_script(spliced, scratch, editor_tags);
+        }
+        script.errors.insert(script.errors.begin(), trouble.begin(), trouble.end());
         if (!script.errors.empty()) {
+            const forge::ScriptError& first = script.errors.front();
             report.ok = false;
-            report.line = script.errors.front().line;
-            report.message = script.errors.front().message;
+            report.message = first.message;
+            // The line is against the SPLICED text, which is a file nobody wrote. Put it back where
+            // it came from — and where that is one of the included files rather than this one, say
+            // the file and no line at all, because a line number against a document the player is
+            // not looking at is worse than none.
+            if (first.line > 0 && first.line <= origin.size()) {
+                const forge::SourceLine& from = origin[first.line - 1];
+                if (std::filesystem::path(from.file) == path) {
+                    report.line = from.line;
+                } else {
+                    report.where = std::filesystem::path(from.file).filename().string();
+                }
+            }
         }
         return report;
     });
+
+    // `--open-editor FILE`, and `--editor-view script|visual` beside it: open the editor on a
+    // document without a click, so the screens this adds are screens a scripted run can photograph.
+    // The same argument `--title-shot` is made of (D460): a shape nobody can photograph is a shape
+    // nobody notices has stopped being drawn.
+    if (!options.open_editor.empty()) {
+        shell.open_editor(std::filesystem::path(options.open_editor));
+        if (!options.editor_view.empty() && !shell.open_editor_view(options.editor_view)) {
+            WS_LOG_WARN("shell", "there is no editor view called '{}'", options.editor_view);
+        }
+        if (!options.editor_node.empty() && !shell.choose_node(options.editor_node)) {
+            WS_LOG_WARN("shell", "'{}' does not name anything in '{}'", options.editor_node,
+                        options.open_editor);
+        }
+    }
 
     {
         const f64 cold_ms = ns_to_ms(now_ns() - launched_ns);

@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "core/types.hpp"
+#include "game/clip_graph.hpp"
 #include "ui/dock.hpp"
 #include "ui/library.hpp"
 #include "ui/logo.hpp"
@@ -130,8 +131,12 @@ struct Overlay {
 // error (D453): the view says so in one line and nothing pops up.
 struct ParseReport {
     bool ok = true;
+    // The line IN THIS DOCUMENT, or nought when the trouble is inside something it includes — a
+    // world is very often one `include` line and the fault is three files away, and marking line
+    // three of the wrong file is worse than marking nothing.
     u32 line = 0;
     std::string message;
+    std::string where;   // the file it is in, when that is not this one
 };
 
 class Shell {
@@ -168,7 +173,13 @@ public:
 
     // Somebody has to be able to say whether a document parses without ws_ui knowing what a clip
     // is. The application supplies this, using the type table it already has.
-    void set_parser(std::function<ParseReport(const std::string&)> parser) {
+    //
+    // It is given the PATH as well as the text, because a document's includes resolve relative to
+    // where it lives — and a world is very often nothing but `include "facility.clip"`, which
+    // without the path reads as an error on the one file the game makes when a player presses
+    // *new*.
+    void set_parser(std::function<ParseReport(const std::string&, const std::filesystem::path&)>
+                        parser) {
         parse_ = std::move(parser);
     }
 
@@ -205,6 +216,20 @@ public:
     // a run could photograph, so "the built-in clips are not in the library" was a report that
     // could only be answered by clicking.
     bool open_shelf(std::string_view folder);
+
+    // Open the editor on a file, with the library window up and the editor tab showing. This is
+    // what *edit* in the library's menu does, what following a selection into the editor does, and
+    // what `--edit FILE` does — one path, because "open this in the editor" meaning three slightly
+    // different things is exactly how two of them end up wrong.
+    void open_editor(const std::filesystem::path& path);
+    // `--editor-view script|visual`: which of the two views is showing. The visual one is the one
+    // nothing could photograph, which is the same argument `--title-shot` is made of.
+    bool open_editor_view(std::string_view which);
+    // `--editor-node NAME`: choose a node by the name the document bound it to, which is the only
+    // way a run with no hand on the mouse can put the parameters panel on screen. Without it the
+    // whole left-hand half of this feature is a screen nothing automated ever looks at.
+    bool choose_node(std::string_view name);
+    const std::filesystem::path& editing() const { return editing_; }
 
     // What is being played, so the worlds library can say so and offer the way out.
     void set_playing(std::string name) { playing_ = std::move(name); }
@@ -244,6 +269,29 @@ private:
     std::string wipe_everything();
     void draw_community_tab(const Rect& rect);
     void draw_editor_tab(const Rect& rect);
+    // The two views of one document (D452). The script is text; the visual one is the same
+    // statements drawn as nodes and the names between them drawn as wires.
+    void draw_script_view(const Rect& rect);
+    void draw_visual_view(const Rect& rect);
+    // A node's parameters are a parameters window, and that is why the two families exist
+    // (`23-shell-and-libraries.md` §5c). It takes the left-hand window while a node is selected.
+    void draw_node_parameters(const Rect& rect);
+    bool a_node_is_selected() const;
+    // Re-read the document into a graph. Only when the text has actually changed, because this is
+    // otherwise a parse a frame for a window nobody is typing into.
+    void refresh_graph();
+    // Which node covers a line of the document, innermost first. It is the whole of the link
+    // between the two views: the statement the caret is in is the box that is lit over there, and
+    // the box you double-click is the line the caret goes to.
+    u32 node_at_line(u32 line) const;
+    // Where an `include` points, by the rule the game resolves one with: beside the file that says
+    // it, then the clips the game ships with. Empty when it is nowhere, which is a world whose
+    // parts have been deleted and is a thing that has happened three times.
+    std::filesystem::path follow_include(const std::string& named) const;
+    // The selection follows the library into the editor: choosing something and opening the editor
+    // is how a player asks to edit it, and an editor that then says "open something first" has
+    // asked the question they just answered.
+    void follow_selection();
     void draw_header(const Rect& rect, u32 window, Icon icon, std::string_view title);
 
     // The selection, which every operation in a library works on. Held by NAME rather than by
@@ -303,20 +351,49 @@ private:
     bool naming_folder_ = false;
     std::string folder_buffer_;
 
-    // The editor tab. It asks for a file before it opens (D455), so this is empty until one is
-    // chosen and the tab sends you to the library until it is.
+    // The editor tab. It asks for a file before it opens (D455) — but a file already CHOSEN in
+    // the library is an answer to that question, so this is empty only when nothing is selected
+    // and nothing has been opened.
     std::filesystem::path editing_;
+    // It came with the game rather than off the player's own shelf, so it opens and does not save
+    // (D494). Worked out from where the file IS rather than from the row it was opened through,
+    // because it is opened four ways and a flag set in three of them is a file written to in the
+    // fourth.
+    bool editing_shipped_ = false;
     std::vector<std::string> lines_;
     u32 caret_line_ = 0;
     u32 caret_column_ = 0;
     bool dirty_ = false;
     ParseReport report_{};
-    std::function<ParseReport(const std::string&)> parse_;
+    std::function<ParseReport(const std::string&, const std::filesystem::path&)> parse_;
+    // Something else was selected while this document had unsaved changes. Nothing is thrown away
+    // and nothing pops up: the editor says which file is waiting, and opens it the moment this one
+    // is saved.
+    std::filesystem::path waiting_;
+
+    // The same document as a graph, which is what the visual view draws. Re-read when the text
+    // changes and not otherwise.
+    ClipGraph graph_;
+    bool graph_stale_ = true;
+    // Which node is selected, by the key that survives a re-read — its name, or where its head is
+    // written. An index would be a different node by the time a drag's second frame arrived.
+    std::string chosen_node_;
+    // Where each of the selected node's sliders may travel, worked out once when it is selected. A
+    // range recomputed from the value every frame is a handle that never leaves the middle.
+    std::vector<std::pair<f64, f64>> node_range_;
+    f32 graph_pan_x_ = 0.0f;
+    f32 graph_pan_y_ = 0.0f;
+    bool dragging_graph_ = false;
+    // Which node `node_range_` was worked out for. The ranges must NOT be recomputed when the
+    // document is re-read, which happens on every frame of a drag — a handle whose travel is
+    // recentred on the value it is showing never leaves the middle of its own slider.
+    std::string range_node_;
 
     std::string document() const;
     void open_document(const std::filesystem::path& path);
     void save_document();
     void edit_keys(const InputState& input);
+    void reparse();
 
     f64 seconds_ = 0.0;
 };

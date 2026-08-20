@@ -15180,3 +15180,76 @@ clean. **`--max-seconds` bounds the LOAD, not the session** — the flag that en
 | D742 | **And it is paid at the tail: 14.27 → 20.43 ms at the 99th** | honesty | +43%; the median moves 3%. The frames that spike are the ones carrying a paste |
 | D742 | **The card would cost the frame nothing and stays off** | decision | D678: device lost at 883 ms against a two-second watchdog. The game gone mid-session |
 | D742 | **`--max-seconds` bounds the load, not the session** | trap | Two runs of my own sat open for twenty minutes on the machine the next figures would come from |
+
+## D743–D752 — the editor shows the thing you chose, its code, and its wires
+
+*Asked for directly on 2026-08-20: **"make it so that selecting something like a clip or a world or
+anything and then opening the editor actually shows it and its code and its visual code so that you
+can modify it"**. Three things were wrong and this is all three. The editor did not follow the
+selection, so choosing a file and opening the editor answered with* open something first *— the
+question they had just finished answering. A world could not be opened in it at all, because* open
+*on the worlds shelf means* enter *. And the visual view refused with one line, because D456 put it
+in Stage 20.*
+
+### What was there, and which part of it was actually a decision
+
+D456 said the visual view waits for the node editor Stage 20 builds, and the reasoning was sound:
+there is exactly one node editor in this project (answer O19, D66), and building a second one here
+to throw away is what the roadmap's ordering exists to prevent.
+
+**That reasoning is about an EDITOR and this is a VIEW**, and the difference is not a quibble. Stage
+20's node editor has a palette, a wiring gesture, sub-graphs, and a node set per library — it is a
+way to *author* a graph, and everything in it is a thing that would be built twice. What was asked
+for here adds none of those. It draws the document that is already on the screen in the other tab,
+it introduces no node type and no second language, and the only edit it can make is to move a number
+the author already wrote. So D456 stands over Stage 20's editor and does not stand over this, and
+the honest way to record that is here rather than by quietly deleting it.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D743 | **The editor follows the library's selection** | user | Choosing something and then opening the editor is a player asking to edit that thing, and answering *open something first* is asking the question they just answered. D455 is unchanged — the editor still asks for a file before it opens — a selection is now one of the ways of telling it. When the open document has unsaved changes, nothing is thrown away and nothing pops up: the tab says which file is waiting and opens it the moment the tick is pressed |
+| D744 | **A world is editable, and the menu carries both things you can do to one** | user | *open* on the worlds shelf enters the world, which is right and is what a double-click means. It also left the one file kind the editor could never see — and that is the file the game itself makes when a player presses *new*. A world's row now has *enter this world* and *edit*, and the menu's actions are kept beside their rows rather than switched on by index, because a menu that is one item longer on a world than on a clip is exactly how a menu comes to run the wrong thing |
+| D745 | **What the visual view draws is the DOCUMENT's graph, not `forge::Field`'s node array** | correction | `20-clip-forge.md` §8 says *the node array is the real representation; text and wires are two views of it*, and that is true of what a clip MEANS. It is not what an editor can edit. By the time a file is a `Field`, one `let` is a dozen nodes, every name has gone, the numbers are folded together and the comments never existed — so a visual edit against it could not be written back without rewriting the whole file, which is exactly what D452's round-trip rule forbids. `src/game/clip_graph.*` reads the statements the author wrote, the names they bound and the numbers as they spelled them. Those lower to field nodes; field nodes do not lift back |
+| D746 | **A visual edit rewrites one span of one line, and the author's own spelling sets the slider's step** | — | Every number carries the line and column it is written at and the text it was written as. A slider writes those bytes and no others, so the comments, the blank lines and the author's own column of aligned `=` signs survive an edit — which is what makes the text view worth trusting after one. The spelling also decides the step: `sides=6` moves by one and `round=0.04` by a hundredth, and nothing had to be told which. A typed value widens the spelling where it has to, because `0.045` into a row that read `0.04` must not come back as what the row already said |
+| D747 | **A node is held by where its head is written, not by its name** | trap | `20-clip-forge.md` calls re-binding *the form most authoring actually takes* and `clips/sampler.clip` does it five times: `let slab_a = displace { slab_a grain }`. Two nodes of one name means a key that finds the first one for both — so choosing the displace would have opened the BOX's numbers, and a box's corners and a displace's amount are both plausible in each other's panel. The position does not move when a number further along the line changes, which is the edit a slider makes sixty times a second while the node is selected |
+| D748 | **The editor's live parse splices includes, and this was a live fault** | correction | The parser never sees an `include` — the splice takes them out before a token is read — so text handed straight to `parse_clip_script` came back *unknown statement 'include'*. **That is the file the game itself writes**: *new* on the worlds shelf puts `include "facility.clip"` in it. `forge::expand_includes_of` splices a buffer that has not been saved yet, as though it were the file at that path, so the editor's verdict is the one the game gives once it is written — and a world whose pieces have been deleted says so here, by name, instead of in a log nobody opens. Errors from inside an included file name the file and no line, because a line number against a document the player is not looking at is worse than none |
+| D749 | **What came with the game opens in the editor and does not save** | — | D494: a built-in can be opened and duplicated, not renamed or deleted, and *duplicate* is the way to edit one. The refusal says that in one line, because a refusal that does not explain itself is indistinguishable from a bug. Worked out from where the file IS rather than from the row it was opened through — it is opened four ways now, and a flag set in three of them is a file written to in the fourth |
+| D750 | **`--open-editor`, and not `--edit`, which was already a scripted chisel** | trap | `--edit "x0,y0,z0,x1,y1,z1,material"` has been the scripted chisel edit since Stage 5. A second flag of that name compiles, takes the same argument, and does something else entirely — which is `--clip` and `--clip-file` again (D733), where a run given the wrong one loaded the estate instead of the sampler and said nothing for a session. Caught by the compiler here only because both wanted to be a member of the same struct |
+| D751 | **The three screens this adds are photographable from the command line** | instrument | `--open-editor FILE`, `--editor-view script\|visual` and `--editor-node NAME`. Every measurement in this project is taken by a flag that walks past the title, so the interface is the part no automated run ever looks at — and `14-ui-style.md`'s own rule about the tool previews applies exactly: *a shape nobody can photograph is a shape nobody notices has stopped being drawn*. `--editor-node` is the one that matters most: a node's parameters are a panel that only a click could reach, which makes it half of this feature and none of the pictures |
+| D752 | **A wire's colour is the player's own ink rotated by a third, and a name from elsewhere takes the reading of whoever uses it** | — | `14-ui-style.md` grants node-graph wires one of the five permitted colours, on the condition that they are the accent rotated rather than a palette — so an interface whose ink is grey has grey wires, and this rotates the HUE and keeps the saturation, which is the property that makes that true rather than a claim about it. The third case had no answer: a world is a manifest and `union { part_site part_podium }` names shapes declared in files it includes, so the document cannot say what they are. It can see that a union is made of them, and a union is made of shapes — an unresolved name takes the carries of the first node that takes it as a CHILD, and a reference through a KEY is not counted, because `paint moss where=grain` is a material rule reading a pattern |
+
+### The gate, and what it is a gate on
+
+**Every `.clip` in the repository reads as a graph with nothing left over** —
+`tests/test_clip_graph.cpp`, over `clips/` recursively, `opaque_lines == 0` on every file. That is
+the check an argument cannot settle: the reader is not judged by a clip written for it, it is judged
+by the estate and by the facility's twenty-two fragments, which were written by other hands against
+a language this reader only has two tables of. A statement head added to the language and not to the
+reader turns a whole fragment into one grey box — honest, by D454, and still a picture nobody can
+edit — so it has to be findable here rather than by opening the editor on the estate and seeing it.
+
+`tests/test_shell.cpp` is the other half and it is new: `Shell` needs no device, so a frame of the
+editor over a real document runs headless. Four documents go through it — a clip, a world of nothing
+but includes, a Lua mod the graph cannot read a line of, and nothing at all.
+
+**And the whole-world gate is unmoved**, which is what `forge::expand_includes_of` needed to be
+checked against, because it is a refactor of the path every clip in the game is loaded through:
+
+```
+scene: 4 chunks, 1429596 solid voxels, 10018 of 10018 nodes sharpened, content efeb39a93c369a2d, shape d41424c8236d15ac
+box against cell: 68324 boxes settled solid and 47943 empty over 2567288 cells; 0 filled that are air and 0 cleared that are matter
+```
+
+### What is not built, each for a stated reason
+
+- **Wiring by hand.** A node's numbers move; its wires do not. Re-wiring means rewriting a name in
+  two places and a gesture to do it with, and both of those are the node editor Stage 20 builds
+  rather than a view of a document. The script view is where a wire is changed, and §5c already says
+  it is the more powerful of the two deliberately.
+- **Nodes a player can drag about.** Where a box sits comes out of the document — its column is how
+  far it is from a leaf and its row is the order it was written in — so the picture is the same
+  every time it is opened. A remembered layout would be state about a file that the file does not
+  carry, which is the one rule the whole library rests on (D445).
+- **A picture of the thing itself.** The editor shows the document and its graph; it does not sample
+  the clip and draw the solid beside them. That is the clip viewer's job (`24-clip-viewer.md`) and
+  it is a renderer, not a panel.

@@ -286,6 +286,10 @@ public:
     Rect begin_scroll(u64 id, const Rect& rect, f32 content_height);
     void end_scroll();
     f32 scroll_of(u64 id) const;
+    // Put a scroll somewhere, for the one case a list has to move without the hand moving it:
+    // jumping from a node in the visual view to the line it is written on in the script view. It
+    // is clamped by `begin_scroll` on the next frame like any other offset.
+    void set_scroll(u64 id, f32 offset) { scrolls_[id] = offset; }
 
     // --- selection ---------------------------------------------------------------------------
     //

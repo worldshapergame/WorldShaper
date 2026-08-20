@@ -626,6 +626,54 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### THE EDITOR, 2026-08-20 — D743–D752. Read this first, then the wave below it
+
+**Asked for directly:** *"make it so that selecting something like a clip or a world or anything and
+then opening the editor actually shows it and its code and its visual code so that you can modify
+it"*. All three halves of that were missing and all three are in.
+
+| what changed | | how to look at it |
+|---|---|---|
+| the editor tab **follows the library's selection** | it answered *open something first* to a player who had just chosen a file | `--open-editor FILE` |
+| a **world** is editable — the menu carries *enter this world* AND *edit* | the one file kind the editor could never see was the one `new` writes | `--open-editor <a .wsworld>` |
+| the **visual view** is built: statements as boxes, names as wires, numbers as sliders on the left | D456 put it in Stage 20, and D456's reasoning is about an EDITOR rather than a VIEW | `--editor-view visual`, `--editor-node NAME` |
+| the live parse **splices includes** | a world read as *unknown statement 'include'* — on the file the game itself writes | — |
+| what came with the game **opens and does not save** | D494; the refusal names *duplicate* | — |
+
+**Three things to know before touching it.**
+
+1. **`src/game/clip_graph.*` reads the DOCUMENT, not `forge::Field`.** D745, and
+   `20-clip-forge.md` §8 is corrected in the same change. A `Field` has lost the names, the
+   comments and the author's spelling by the time it exists, so a visual edit against it could not
+   be written back without reformatting the file — which is the one thing D452's round trip forbids.
+   The reader is syntax plus **two tables copied from `Parser::call`**: which heads take a `{ }` of
+   many children and which take one. They have to be there, because `box -2 2 -0.4 2 3 0.4 grain`
+   and `union { a b }` differ only in whether the head takes children, and in the first `grain`
+   belongs to whatever encloses the box.
+2. **The gate is `tests/test_clip_graph.cpp`'s last case**: every `.clip` in the repository reads
+   with `opaque_lines == 0`. A statement head added to the language and not to the reader turns a
+   whole fragment into one grey text node — which is honest by D454 and is still a picture nobody
+   can edit. That case is how it is found.
+3. **A node is keyed by where its head is written, not by its name** (D747). `sampler.clip` re-binds
+   `slab_a` and `hut`; two nodes of one name means the selection opens the wrong one's numbers, and
+   a box's corners and a displace's amount are both plausible in each other's panel.
+
+**What is open here, in the order I would take it:**
+
+1. **Wiring by hand is not built and is Stage 20's.** A node's numbers move; its wires do not. The
+   script view is where a wire is changed until the node editor lands.
+2. **A node's positional arguments are named by a heuristic** — one is the head, three are `x y z`,
+   six are two corners, anything else is numbered. It is right for every solid in the language and
+   it is a guess. A per-head table would be a third table beside the two above, so it is worth doing
+   only when something reads wrong.
+3. **The panel is the library window's**, which is docked right and about a quarter of the screen.
+   A graph in it pans, and a player who wants more drags the edge (the dock allows up to 0.55). If
+   that reads as cramped in the build, the answer is a wider default for the editor tab rather than
+   a second window.
+4. **`--open-editor` writes to whatever path it is given.** `editing_shipped_` is worked out from
+   where the file IS, so the in-game path refuses a built-in correctly; a command-line path into
+   `clips/` is treated as a developer's own and saves.
+
 #### THE STATE AFTER THE WAVE OF 2026-08-20 — D733–D742
 
 **Seven agents ran at once and every one came back with something.** Start here rather than at the

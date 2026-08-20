@@ -262,5 +262,18 @@ std::string expand_includes(const std::string& path, std::vector<SourceLine>& or
                             std::vector<ScriptError>& errors,
                             const std::string& beside = {});
 
+// The same splice, for text that has NOT been written to disk yet — which is the editor, asking on
+// every keystroke whether what is in front of the player parses.
+//
+// `path` is where that text would be, so its includes resolve from where the file will live rather
+// than from wherever the buffer came from. Without it a world — which is very often the one line
+// `include "facility.clip"` — reads in the editor as *unknown statement 'include'*, because the
+// parser never sees an include: the splice takes them out before a token is read, and text handed
+// straight to `parse_clip_script` has never been through it. So the editor's verdict was wrong on
+// exactly the file the game makes when a player presses *new*.
+std::string expand_includes_of(const std::string& text, const std::string& path,
+                               std::vector<SourceLine>& origin, std::vector<ScriptError>& errors,
+                               const std::string& beside = {});
+
 }  // namespace forge
 }  // namespace ws

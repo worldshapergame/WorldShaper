@@ -1974,16 +1974,27 @@ Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const T
     return script;
 }
 
-std::string expand_includes(const std::string& path, std::vector<SourceLine>& origin,
-                            std::vector<ScriptError>& errors, const std::string& beside) {
+// The splice itself. `body` is the top file's text when the caller already has it, and a null
+// pointer when it is to be read from disk — a POINTER rather than a "is it empty" test, because an
+// empty document is a document a player can be in the middle of making and reading the old file off
+// the disk instead would answer a question nobody asked.
+static std::string splice_includes(const std::string* body, const std::string& path,
+                                   std::vector<SourceLine>& origin,
+                                   std::vector<ScriptError>& errors, const std::string& beside) {
     std::vector<std::string> open;   // the include stack, for cycle detection
     std::string out;
 
     // Recursive, and deliberately textual: an include splices one file's lines into another's
     // before a single token is read, so `include` costs the parser nothing and a fragment is
     // exactly the text it appears to be.
-    const std::function<void(const std::string&, u32)> pull = [&](const std::string& file,
-                                                                  u32 depth) {
+    //
+    // `body` is the top file's text when the caller already has it and what is on disk is not it —
+    // which is the editor, asking on every keystroke whether what is in front of the player parses.
+    // Everything below it is read from disk as it always was, so an include resolves from where the
+    // file WILL be rather than from where the buffer is, and the editor's answer is the one the
+    // game gives once it is saved.
+    const std::function<void(const std::string&, u32, const std::string*)> pull =
+        [&](const std::string& file, u32 depth, const std::string* text) {
         if (depth > 16) {
             errors.push_back(ScriptError{0, "includes nested more than sixteen deep in '" +
                                                 file + "'"});
@@ -1995,17 +2006,26 @@ std::string expand_includes(const std::string& path, std::vector<SourceLine>& or
                 return;
             }
         }
-        std::ifstream in(file, std::ios::binary);
-        if (!in) {
-            errors.push_back(ScriptError{0, "could not open '" + file + "'"});
-            return;
+        std::ifstream from_disk;
+        std::istringstream from_memory;
+        std::istream* in = nullptr;
+        if (text != nullptr) {
+            from_memory.str(*text);
+            in = &from_memory;
+        } else {
+            from_disk.open(file, std::ios::binary);
+            if (!from_disk) {
+                errors.push_back(ScriptError{0, "could not open '" + file + "'"});
+                return;
+            }
+            in = &from_disk;
         }
         open.push_back(file);
 
         const std::filesystem::path here = std::filesystem::path(file).parent_path();
         std::string line;
         u32 number = 0;
-        while (std::getline(in, line)) {
+        while (std::getline(*in, line)) {
             ++number;
             if (!line.empty() && line.back() == '\r') line.pop_back();
 
@@ -2093,7 +2113,7 @@ std::string expand_includes(const std::string& path, std::vector<SourceLine>& or
                                     "': this file is built out of pieces and one of them is gone"});
                     continue;
                 }
-                pull(resolved, depth + 1);
+                pull(resolved, depth + 1, nullptr);
                 continue;
             }
 
@@ -2104,7 +2124,7 @@ std::string expand_includes(const std::string& path, std::vector<SourceLine>& or
         open.pop_back();
     };
 
-    pull(std::filesystem::path(path).lexically_normal().string(), 0);
+    pull(std::filesystem::path(path).lexically_normal().string(), 0, body);
     // A document with a hole in it is not a document, and every caller has to agree about that.
     //
     // Returning the lines that DID load was the old behaviour, and what it produced was a building
@@ -2120,6 +2140,17 @@ std::string expand_includes(const std::string& path, std::vector<SourceLine>& or
         origin.clear();
     }
     return out;
+}
+
+std::string expand_includes(const std::string& path, std::vector<SourceLine>& origin,
+                            std::vector<ScriptError>& errors, const std::string& beside) {
+    return splice_includes(nullptr, path, origin, errors, beside);
+}
+
+std::string expand_includes_of(const std::string& text, const std::string& path,
+                               std::vector<SourceLine>& origin, std::vector<ScriptError>& errors,
+                               const std::string& beside) {
+    return splice_includes(&text, path, origin, errors, beside);
 }
 
 Script load_clip_script(const std::string& path, VoxelTypeTable& types, const TagRegistry& tags) {

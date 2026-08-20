@@ -144,6 +144,7 @@ add_library(ws_game STATIC
     src/game/quality.cpp
     src/game/chisel.cpp
     src/game/clip.cpp
+    src/game/clip_graph.cpp
     src/game/font.cpp
     src/game/markup.cpp
     src/game/clipboard.cpp
@@ -217,6 +218,7 @@ set(WS_TEST_SOURCES_HEADLESS
     tests/test_field_block.cpp
     tests/test_cuts.cpp
     tests/test_clip_script.cpp
+    tests/test_clip_graph.cpp
     tests/test_weathering.cpp
     tests/test_sample.cpp
     tests/test_box_agreement.cpp
@@ -272,6 +274,7 @@ set(WS_TEST_SOURCES_UI
     tests/test_widgets.cpp
     tests/test_dock.cpp
     tests/test_library.cpp
+    tests/test_shell.cpp
     tests/test_sound.cpp)
 
 enable_testing()

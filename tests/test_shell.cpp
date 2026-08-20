@@ -1,0 +1,135 @@
+// The editor: opening a document, and the two views of it.
+//
+// documentation/23-shell-and-libraries.md §5c, decisions D452–D456. `Shell` needs no device — it
+// produces a list of marks and somebody else draws it — so the whole of this runs headless, which
+// is the only reason the visual view has a gate at all: it is a screen, and a screen is otherwise
+// something only a person looking at it can check.
+
+#include <filesystem>
+#include <fstream>
+
+#include "doctest/doctest.h"
+#include "ui/shell.hpp"
+
+using namespace ws;
+using namespace ws::ui;
+
+namespace {
+
+struct Scratch {
+    std::filesystem::path root;
+    explicit Scratch(const char* name) {
+        root = std::filesystem::temp_directory_path() / "worldshaper-tests" / name;
+        std::filesystem::remove_all(root);
+        std::filesystem::create_directories(root);
+    }
+    ~Scratch() {
+        std::error_code ignored;
+        std::filesystem::remove_all(root, ignored);
+    }
+};
+
+std::filesystem::path write_file(const std::filesystem::path& at, const std::string& text) {
+    std::filesystem::create_directories(at.parent_path());
+    std::ofstream out(at, std::ios::binary | std::ios::trunc);
+    out.write(text.data(), static_cast<std::streamsize>(text.size()));
+    return at;
+}
+
+constexpr const char* kClip =
+    "# a clip with one of everything the editor draws\n"
+    "metre 32\n"
+    "param wall 0.12\n"
+    "material stone rgb=124,120,112 rough=210\n"
+    "let plinth = box -6 0 -3   6 0.3 3 round=0.04\n"
+    "let grain  = fbm size=0.10 octaves=4 seed=3\n"
+    "let all    = union { plinth }\n"
+    "paint stone where=grain above=0.55\n"
+    "solid all\n";
+
+// One frame of the shell with nobody touching anything. Enough to run every layout and hit test in
+// the editor over a real document, which is what a crash in the visual view would look like.
+Verdict quiet_frame(Shell& shell, f64 seconds) {
+    InputState input{};
+    input.mouse_x = -1000.0f;
+    input.mouse_y = -1000.0f;
+    return shell.frame(input, 1280, 800, seconds);
+}
+
+}  // namespace
+
+TEST_CASE("the editor opens a document, and both views draw it") {
+    Scratch scratch("shell-editor");
+    const std::filesystem::path clip = write_file(scratch.root / "clips" / "one.wsclip", kClip);
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    CHECK(shell.editing() == clip);
+
+    // A node the document bound, found by the name the author gave it. This is the whole of the
+    // graph plumbing — read the text, lay it out, key every node — asked as one question.
+    CHECK(shell.choose_node("plinth"));
+    CHECK(shell.choose_node("grain"));
+    CHECK(shell.choose_node("all"));
+    CHECK_FALSE(shell.choose_node("nothing of that name"));
+
+    CHECK(shell.open_editor_view("script"));
+    CHECK_FALSE(quiet_frame(shell, 0.0).quit);
+    CHECK(shell.open_editor_view("visual"));
+    CHECK_FALSE(quiet_frame(shell, 0.1).quit);
+    CHECK_FALSE(shell.open_editor_view("wires please"));
+
+    // And with a node chosen, which is what puts its parameters on the LEFT — a second panel, a
+    // second layout, and the one that reads the numbers out of the document.
+    CHECK(shell.choose_node("plinth"));
+    CHECK_FALSE(quiet_frame(shell, 0.2).quit);
+    CHECK_FALSE(shell.ui().draw().empty());
+}
+
+TEST_CASE("a document that is not a clip opens rather than being refused") {
+    // D453 and D454 together, at the level a player meets them: the mods shelf holds Lua, the graph
+    // cannot read a line of it, and opening it must give them their file rather than an empty view.
+    Scratch scratch("shell-editor-lua");
+    const std::filesystem::path lua = write_file(
+        scratch.root / "mods" / "thing.wslua",
+        "-- a mod\nlocal function tick(world)\n  world:set(0, 0, 0, \"stone\")\nend\n");
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(lua);
+    CHECK(shell.editing() == lua);
+    CHECK(shell.open_editor_view("visual"));
+    CHECK_FALSE(quiet_frame(shell, 0.0).quit);
+    CHECK_FALSE(shell.ui().draw().empty());
+}
+
+TEST_CASE("a world of nothing but includes opens, and the editor draws it") {
+    // The case the editor could not reach at all: *open* on the worlds shelf enters the world, so
+    // the one file kind the editor never saw was the one the game itself makes when a player
+    // presses *new* — and that file is `include "facility.clip"`.
+    Scratch scratch("shell-editor-world");
+    write_file(scratch.root / "worlds" / "parts" / "wall.clip",
+               "let wall = box 0 0 0 1 2 0.2\n");
+    const std::filesystem::path world =
+        write_file(scratch.root / "worlds" / "a.wsworld",
+                   "# a world is a manifest\ninclude \"parts/wall.clip\"\nsolid wall\n");
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(world);
+    CHECK(shell.editing() == world);
+    CHECK(shell.open_editor_view("visual"));
+    CHECK_FALSE(quiet_frame(shell, 0.0).quit);
+    CHECK_FALSE(shell.ui().draw().empty());
+}
+
+TEST_CASE("the editor is empty until something is opened, and says so rather than drawing nothing") {
+    Scratch scratch("shell-editor-empty");
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    CHECK(shell.editing().empty());
+    shell.open_window("worlds", true);
+    CHECK_FALSE(quiet_frame(shell, 0.0).quit);
+    CHECK_FALSE(shell.ui().draw().empty());
+}

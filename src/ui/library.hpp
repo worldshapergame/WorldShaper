@@ -126,6 +126,11 @@ public:
     // Where the game's own files are — the folder the executable sits in. The built-in clips are
     // read from under here and never copied; without it, a shelf shows only what the player made.
     void set_shipped_root(std::filesystem::path where);
+    const std::filesystem::path& shipped_root() const { return game_; }
+    // Whether a path is one of the game's own rather than one of the player's. A built-in can be
+    // opened and duplicated and not written to (D494): the copy that came back on the next install
+    // would look like the edit had failed.
+    bool is_shipped(const std::filesystem::path& path) const;
 
     // Makes sure every shelf exists. Called once at start-up; a shelf that a player deleted comes
     // back rather than making the library an error message.

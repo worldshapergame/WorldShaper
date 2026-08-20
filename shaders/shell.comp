@@ -596,6 +596,45 @@ float icon_expanded(vec2 p, float m, float w) {
 
 // The distance to the nearest ink of one drawing. Names match Icon in src/ui/draw.hpp value for
 // value; anything unknown is drawn as nothing, which is the failure a reader can see.
+float icon_pattern(vec2 p, float m, float w) {
+    // A wave. A pattern is a field read for its VALUE rather than its sign — a grain, a checker, a
+    // set of stripes — and a wave is the one picture all of those are. A crest, a trough and a
+    // crest: three features across, inside the four the style allows at sixteen device pixels,
+    // where a fourth turns it into a comb.
+    //
+    // It TRAVELS when it is pressed, because that is what a wave does. Growing or flattening it
+    // instead would be the drawing saying something about amplitude, which is not what the control
+    // under it means.
+    float shift = m * 11.0;
+    float d = 1e9;
+    for (int i = 0; i < 16; ++i) {
+        float x0 = 8.0 + float(i) * 3.0;
+        float x1 = x0 + 3.0;
+        vec2 a = vec2(x0, 32.0 - 13.0 * sin((x0 - 8.0 + shift) * 0.19635));
+        vec2 b = vec2(x1, 32.0 - 13.0 * sin((x1 - 8.0 + shift) * 0.19635));
+        d = min(d, sd_line(p, a, b));
+    }
+    return d - w * 0.5;
+}
+
+float icon_graph(vec2 p, float m, float w) {
+    // Two nodes and the wire between them: the visual view of a document, said in one cell. The
+    // boxes are OUTLINES because they are containers and the style draws a container as its edge;
+    // the wire is a stroke, because a wire is not a container.
+    //
+    // The WIRE is what answers a press — it retracts to the first node and runs back out to the
+    // second — rather than the boxes moving. What this view does is join things up.
+    float d = sd_edge(sd_round_box(p, vec2(16.0, 20.0), vec2(11.0, 8.0), 2.5), w);
+    d = min(d, sd_edge(sd_round_box(p, vec2(47.0, 44.0), vec2(11.0, 8.0), 2.5), w));
+
+    float run = clamp(1.0 - m, 0.0, 1.0);        // 1 at rest, 0 fully pressed
+    float along = min(run * 2.0, 1.0);
+    float down = clamp(run * 2.0 - 1.0, 0.0, 1.0);
+    float wire = sd_line(p, vec2(27.0, 20.0), vec2(mix(27.0, 36.0, along), 20.0));
+    wire = min(wire, sd_line(p, vec2(36.0, 20.0), vec2(36.0, mix(20.0, 44.0, down))));
+    return min(d, wire - w * 0.42);
+}
+
 float icon_field(uint which, vec2 p, float m, float w) {
     switch (which) {
         case 1u:  return icon_world(p, m, w);
@@ -625,6 +664,8 @@ float icon_field(uint which, vec2 p, float m, float w) {
         case 25u: return icon_reset(p, m, w);
         case 26u: return icon_collapsed(p, m, w);
         case 27u: return icon_expanded(p, m, w);
+        case 28u: return icon_pattern(p, m, w);
+        case 29u: return icon_graph(p, m, w);
         default:  return 1e9;
     }
 }
