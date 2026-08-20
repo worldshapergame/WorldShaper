@@ -626,6 +626,77 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### THE STATE AFTER THE WAVE OF 2026-08-20 — D733–D742
+
+**Seven agents ran at once and every one came back with something.** Start here rather than at the
+table below it, which is the session before this one.
+
+**The gate MOVED, and this is the command and the number.** Anything in this file quoting
+`1430104` / `a1f8bc6c656343b7`, or `d0d5f84c685be847`, predates D735.
+
+```
+build\bin\WorldShaper.exe --clip-file clips/sampler.clip --refine-all --no-despeckle --no-clip-cache --no-title --settle --screenshot <out.png> --screenshot-frame 240 --max-seconds 300
+```
+```
+scene: 4 chunks, 1429596 solid voxels, 10018 of 10018 nodes sharpened, content efeb39a93c369a2d, shape d41424c8236d15ac
+```
+
+**`--clip` is a scripted clip EDIT that parses twelve numbers; the world is `--clip-file`, and a run
+given the wrong one loads the estate and says nothing** (D733). `--refine-all` and `--no-despeckle`
+are both load-bearing. `--max-seconds` bounds the LOAD, not the session — the flag that ends a run is
+`--screenshot-frame` (D742).
+
+| what changed | | the way back |
+|---|---|---|
+| **every node loads, whatever the camera looks at**, at full detail | 34% more nodes wanted; free — same rate, median frame 5.89 ms against 6.22 | `--camera-driven` |
+| the sampler gets the machine less two instead of half of it | **1.25–1.29x** the load rate; the 99th frame 14.27 → 20.43 ms | `--half-the-machine` |
+| `Op::Stairs` stops claiming to be a distance field | **the gate moves 508 voxels**; the descent now agrees with its own cells everywhere | — |
+| the sky behind a second pane is no longer an uninitialised read | stone behind two panes was 35 of 255 too bright | `--no-through-fallback` |
+| a coloured pane is no longer drawn in the complement of what it transmits | `glass_blue` had more green in it than blue | `--no-grey-glass-body` |
+| a light ray past the last node gets the coarsest folded colour | faces shadowed by ignorance 197–272 → 0–8 | `--no-far-fallback` |
+| a lamp exists where the lamp is, not where the camera is | one `light_list_hash` scanned, held, emptied and round-tripped | `--no-emitter-persist` |
+| a brick records whether a PERSON wrote it, and the re-sample refuses it | a carve survived save+reload and was then destroyed by the re-sample: 768 voxels | `--no-edit-tracking` |
+| a level is signed | R8a; `--infinite-detail` exists and changes nothing on screen yet | `--infinite-detail` is off |
+| the paste is sliced across frames | closed by construction, and it does not engage on the ladder | `--no-paste-slice` |
+| `done` is counted rather than walked for | four O(regions) walks, one on every batch delivery | — |
+
+**Two instruments came out of it.** `--box-cell-audit` — every bulk-settled box re-asks its own cells
+through a reader that shares no code with the box test, and **it must read `0 filled that are air and
+0 cleared that are matter`**. That is stronger than the hash: a hash says two runs agree, this says
+the answer is right. And `checked_refine_done()`, which runs in the shipped build and repairs.
+
+**What is open, in the order I would take it:**
+
+1. **`tools/darkroom.ps1` is RED at HEAD** (D741) — *"dark room, clear: FAILED — brightest channel 1
+   of 255, 107 pixels above nought"*, reproducing with the change stashed. **A sealed room is not
+   black on `main`.** Nobody has looked at it. This is first because it is a live fault in a gate.
+2. **`Op::Stairs` refuses rather than bounding, and the tight fix is owed** (D735) — a per-part
+   SLOPE beside `SamplePlan::part_slack`, with `slack_here` charging `slack + slope * radius`. That
+   is what the op actually needs and what every future non-metric solid will need. It costs +6.9%
+   shape evaluations today.
+3. **The estate has not been re-gated since the gate moved**, and it carries three flights of steps —
+   `or_steps` is 9.9 m wide. The +6.9% does not transfer to it.
+4. **R8a's shader half draws nothing below a voxel yet** (D740) — `node_descend` breaks at
+   `kNodeLeaf`, so `--infinite-detail` is inert. It needs `variation_descend` called from the
+   marcher's intra-brick walk, which is R8b's call site.
+5. **R12d's payoff is not taken** (D739) — unedited bricks are still stored. It needs
+   `--derive-in-marcher` viable, which is 30x slower (D699), plus the first cold frame, which cannot
+   be derived from inside the marcher.
+6. **The game cannot save an edited world and load it back** (D739) — `main.cpp` refuses outright and
+   `--clip-plus-edits` writes a file nothing reads.
+7. **R10d is built and not shipped** (D741), on branch `r10d-bent-normal`. Pick it up when R4c needs
+   a specular-occlusion direction; it costs 12.7 MB unconditionally and nothing reads it today.
+8. **`shade_faces.comp` reads `absorb` once, at the first medium, on the LIGHT path** — D718 recorded
+   it and D736 did not touch it.
+
+**And the thing this wave taught that is not about any one change**: three agents independently found
+that `kProbeRefractStack` and `kProbeCoverageBins` were the same bit (D736), from three different
+files, none of them looking for it. **A duplicated bit does not only break its own two flags — it
+mis-states the free list for everyone after it**, which is why R9h was written against a bit that was
+not free. And one agent read the code before believing its brief and found R10 was already built
+(D741). Both are arguments for the same thing: the brief is not the source.
+
+
 #### THE STATE OF THE LOAD AND THE FRAME, 2026-08-20, after D721–D728
 
 Everything below landed in one session and the defaults moved with it. **This is what a launch does
@@ -646,7 +717,9 @@ now**, and every one of these is a flag away from what it did before.
 ```
 build\bin\WorldShaper.exe --no-title --world clips/sampler.clip --full-load --no-coarse-paste --no-clip-cache --cycle 20 --max-seconds 200
 ```
-must say `1430104 solid voxels, content d0d5f84c685be847`. `test.bat` is green end to end — 748 of
+must say `1430104 solid voxels, content d0d5f84c685be847`. **BOTH HALVES OF THAT SENTENCE ARE WRONG
+NOW and are kept only so the correction has something to point at**: `--world` is not how a clip is
+loaded (D733) and the number moved (D735). The gate is the one at the top of this section. `test.bat` is green end to end — 748 of
 748, the headless audit, the node pool's GPU mirror, and R11a's agreement check on the facility.
 
 **Two instruments came out of it and both ship.** `heartbeat at frame N` every ten seconds — frame
@@ -659,15 +732,16 @@ time, median, 99th, the GPU split by pass, and every quantity that grows as a wo
 1. ~~**The card**~~ — **measured out, D731.** The lever D727 named is 1.00x, and the reason is that
    a warp's lanes already stand on only four ops. What is left there is unbuilt rather than unfound:
    the entry says what the ceiling is and why nothing reaches it.
-2. **A box settled SOLID in bulk disagrees with its own cells** (D725) — 220 voxels of 1,430,104,
-   and both answers pass the brute-force reference so the suite cannot see it. Which is right is
-   genuinely open and it decides whether the descent may batch cells rather than levels.
+2. ~~**A box settled SOLID in bulk disagrees with its own cells**~~ — **answered, D735.** It is
+   `Op::Stairs`, which is a step function and claimed nought slack. **The cells were right**, every
+   disagreeing voxel on two clips lies inside a flight of steps, and the gate moved 508 voxels.
 3. ~~**A resumed world's content hash changes every launch**~~ — **answered, D729.** The building
    never changed: `World::shape_hash` is identical across a cold build and three resumes, and the
    content hash moves once and then holds because a resumed run re-interns its type table. Both are
    printed now, and two resumed runs are comparable on the shape.
-4. **The rest of the pick** (D728) — the sweep is dealt with; the shortlist descent, `split_refine_node`
-   and `enlist` are what is left, and they are proportional to the batch rather than the list.
+4. **The rest of the pick** (D728) — the sweep is dealt with, and D733 took the last O(regions) walk
+   out of the batch delivery. The shortlist descent, `split_refine_node` and `enlist` are what is
+   left, and they are proportional to the batch rather than the list.
 
 #### WHERE THE CARD'S EIGHTY WENT, answered — and what is left
 

@@ -95,6 +95,12 @@ compare **shape** whenever a resume is involved, and content only cold against c
 cleared that are matter**. That is the descent's whole correctness argument checked directly, and it
 is stronger than the hash: a hash says two runs agree, this says the answer is right.
 
+**And `--max-seconds` bounds the LOAD, not the SESSION.** A run given `--max-seconds 120` and no
+`--screenshot-frame` never quits: it stops building and goes on drawing for ever. Two of mine sat
+open for twenty minutes at 2,900 and 3,600 CPU-seconds, on the machine every figure taken afterwards
+would have come from — which is the stray-poisons-the-measurement trap above, self-inflicted, an hour
+after writing it down. **The flag that ends a run is `--screenshot-frame`.** D742.
+
 The two that catch people most often:
 
 - **A counter taken from inside the change is not a control.** When two theories both fit the
