@@ -576,6 +576,18 @@ public:
     // The value of node `at` for a point, in metres.
     f64 eval(u32 at, Vec3 p) const;
 
+    // The same question asked of MANY points, in one traversal. See src/forge/field_block.cpp.
+    //
+    // `points` and `out` are both `count` long, and the promise is that this fills `out` with
+    // exactly what `count` calls to `eval` would have — bit for bit, because the sampler settles
+    // boxes on these numbers and every world here is gated on a content hash.
+    //
+    // What it saves is the WALK. D722 measured one evaluation of the estate at 632 field-node
+    // visits and 15.5 ns a visit, and the sampler asks about 640 points inside a box a quarter of a
+    // metre across to fill one node of the render tree. All 640 walks visit the same nodes and take
+    // the same turns; this takes them once.
+    void eval_block(u32 root, const Vec3* points, usize count, f64* out) const;
+
     // How far the field's answer can under-state the real distance to the surface.
     //
     // A signed distance is what lets the sampler skip empty space: a point that reports being

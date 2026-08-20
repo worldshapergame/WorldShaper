@@ -158,6 +158,7 @@ target_link_libraries(ws_game PUBLIC ws_core ws_world)
 # --------------------------------------------------------------------------------------
 add_library(ws_forge STATIC
     src/forge/field.cpp
+    src/forge/field_block.cpp
     src/forge/sample.cpp
     src/forge/measure.cpp
     src/forge/world_stipple.cpp
