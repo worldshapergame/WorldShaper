@@ -443,7 +443,7 @@ inline constexpr u32 kProbeRefract = 1u << 9;
 // path behind the first pane is straight.
 inline constexpr u32 kProbeRefractStack = 1u << 14;
 
-// D736: `--no-far-fallback` off restores the read of an uninitialised `far` on any SECOND medium.
+// D736: `--no-through-fallback` off restores the read of an uninitialised `far` on any SECOND medium.
 // Spelled again in `shaders/visibility.comp`, which consumes it, rather than in `node.glsl`, so the
 // bit has exactly one reader.
 //
@@ -451,7 +451,14 @@ inline constexpr u32 kProbeRefractStack = 1u << 14;
 // by `resolve.comp`, and the composite has no binding for the light probe buffer at all -- its set
 // is 0-15 and 20, and the probe is 19 on the node set. A bit was reserved for it and could not be
 // read. It lives in `RenderParams::r5[2]` instead, which is what `r4` and `r5` exist for.
-inline constexpr u32 kProbeFarFallback = 1u << 17;
+inline constexpr u32 kProbeThroughFallback = 1u << 17;
+
+// R9h, and note the SENSE: the bit is set to turn the fallback OFF. The dial word is zeroed before
+// anything writes it, so an unset bit has to mean the default -- and a host that has never heard of
+// the flag then does the new thing rather than the old one. Every other constant here is the other
+// way round because every other one defaults off. Must match `kProbeFarFallbackOff` in
+// shaders/node_far.glsl.
+inline constexpr u32 kProbeFarFallbackOff = 1u << 18;
 // R4e: a translucent face with the sun behind it casts the ray `sun_possible` used to throw away,
 // through the matter behind it, and is lit by what survives the crossing. Cleared by
 // `--no-translucency`, which is the state every figure before it was taken in: marble as granite.

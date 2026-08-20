@@ -156,7 +156,13 @@
 // D713's *"two agents named one field, and the size assert was satisfied"* one door along, with no
 // assert at all this time: the two constants sit 150 lines apart in one header and each is mirrored
 // into a shader that cannot see the other. Not fixed here -- neither file is this stage's.
-const uint kProbeFarFallbackOff = 1u << 15;
+// **BIT 18, NOT 15.** This file was written against a header in which 15 looked free; it was not
+// free by the time the wave was integrated, and 15 was not free when this was written either -- the
+// dial word had `kProbeRefractStack` and `kProbeCoverageBins` BOTH at bit 14 (D736), so every bit
+// above the collision read as available when the next one along had in fact been claimed. The
+// collision is fixed and CoverageBins holds 15; 16 is unused, 17 is `--no-through-fallback`.
+// Must match `kProbeFarFallbackOff` in src/gpu/render_params.hpp.
+const uint kProbeFarFallbackOff = 1u << 18;
 
 // How many levels the walk may climb above where the march stopped. R9f's `kFaceAncestorStep`, by
 // name rather than by value, because the two are the same rule read from two ends: this one finds

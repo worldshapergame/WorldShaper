@@ -2995,6 +2995,17 @@ void node_face_hit(inout NodeHit result, bool report, ivec3 voxel, int level, iv
     }
 }
 
+// R9h -- the fallback, for where there is genuinely nothing. Past the last node the answer is the
+// analytic sky and the coarsest folded colour on the path: never black, never a stall and never a
+// request. It is included HERE, after `node_face_hit` and before `node_march`, because it reads
+// `Found`, `node_locate`, `node_folded_colour`, `NodeHit`, `node_face_hit`, `kFaceAncestorStep`,
+// `kLeafLevel`, `kEntryLevel` and `light_probe`, all of which are declared above this line.
+//
+// And it is the MARCH that had to change, which is what took the stage so long to place: an
+// ignorance stop carries no face key at all, so nothing downstream has anything to walk up from.
+// `shade_faces.comp` says exactly that at the line where it returns nought for one.
+#include "node_far.glsl"
+
 const uint kNodeMaxSteps = 512u;
 
 // `stand_in` is what a ray does when the pool does not know what is in a cell the world says is
@@ -3869,6 +3880,16 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     result.normal = last_normal;
                     result.level = min(outer_level, kNodeMaxDetail);
                     result.coverage = 255u;
+                    // R9h: and the one answer this ray can still be given -- the coarsest folded
+                    // colour on its own path, out of a node the pool ALREADY HOLDS. It reports
+                    // nothing and asks for nothing; the R9i entry above is the one entry this ray
+                    // is allowed and is untouched. Leaves `unknown` set when there is genuinely
+                    // nothing, which is the arm every build before this one ran.
+                    //
+                    // Not the tail of the march -- the tail is `hit == false`, which already
+                    // resolves to the analytic sky and needs nothing. This is where the march gives
+                    // up with an answer it cannot use.
+                    node_far_stopped(result, voxel, last_normal);
                     return result;
                 }
 

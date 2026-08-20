@@ -644,6 +644,19 @@ struct Options {
     // per ray into a feedback buffer the streamer shares. D589 measured R9h's other two thirds and
     // found both needed nothing; this is the third.
     bool light_name_cap = true;
+    // R9h: a light ray stopped by a cell the pool has not built resolves ANALYTICALLY -- the
+    // coarsest folded colour on its own path, out of a node the pool already holds -- rather than
+    // coming back with no answer at all.
+    //
+    // On, and `--no-far-fallback` is the control arm. Measured on `clips/sampler.clip` with the
+    // pool starved to `--node-payload 8`, settled, one binary: faces shadowed by a cell the pool
+    // has not built read **197-272 with it off against 0-8 with it on**, bands that do not overlap,
+    // with the world identity unmoved and R11e's middle number at nought in BOTH arms -- the
+    // fallback makes no report, so it offers the sampler nothing to refuse.
+    //
+    // Not to be confused with `--no-through-fallback`, which is D736 and is about what is behind a
+    // PANE. Both were called `--no-far-fallback` by the agents that built them, in one wave.
+    bool far_fallback = true;
 
     // An edit reopens a face's LAMP term only where it can stand between that face and a fitting.
     //
@@ -1000,9 +1013,9 @@ struct Options {
     // COMPLEMENT of what it transmits: the chapel's blue light photographed as olive-yellow.
     bool grey_glass_body = true;
     // D736 fault 1: the straight-ray fallback behind glass fires whenever the bent-ray loop never
-    // assigned a far surface, rather than only when it never bent. `--no-far-fallback` is the
+    // assigned a far surface, rather than only when it never bent. `--no-through-fallback` is the
     // control arm and restores the read of an uninitialised `far` on any SECOND medium.
-    bool far_fallback = true;
+    bool through_fallback = true;
     // R4f: the REFLECTED half of the same interface. A specular reflection is a continuation of
     // the primary ray -- Fresnel over the material's own index of refraction splits it, part bends
     // through (D652) and part reflects and marches on -- rather than a lookup into a face's stored
@@ -1671,6 +1684,8 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         // has been since R9a landed, and a wall that a thousand rays land on is named a thousand
         // times.
         options.light_name_cap = false;
+    } else if (arg == "--no-far-fallback") {
+        options.far_fallback = false;
     } else if (arg == "--no-sun-confidence") {
         // R5b's control arm: a face's own sun ratio is believed the moment it has one sample,
         // which is the state every figure taken before this was measured in. The shading pass
@@ -1813,8 +1828,8 @@ bool parse_options_c(const std::string& arg, int& i, int argc, char** argv, Opti
         options.refract_stack = false;
     } else if (arg == "--no-grey-glass-body") {
         options.grey_glass_body = false;
-    } else if (arg == "--no-far-fallback") {
-        options.far_fallback = false;
+    } else if (arg == "--no-through-fallback") {
+        options.through_fallback = false;
     } else if (arg == "--no-ior-reflection") {
         // R4f's control arm: no primary ray continues as a reflection, so a specular surface is
         // drawn out of R4c's stored bins alone -- which is D703 exactly and is what every figure
@@ -2106,6 +2121,9 @@ void print_help() {
         "                        leave it. R9f's first control arm\n"
         "  --no-coarse-bounce    a gathering ray that lands on a surface with no light of its own\n"
         "                        reads nothing rather than the coarse face over it. The second\n"
+        "  --no-far-fallback     a light ray stopped by a cell the pool has not built comes back\n"
+        "                        with no answer at all again, instead of the coarsest folded\n"
+        "                        colour on its own path. R9h control arm\n"
         "  --no-light-probe      stop counting what gathering rays land on. The counters are\n"
         "                        printed at every screenshot and this is what costs nothing\n"
         "  --max-seconds N       wall-clock deadline for a scripted run. Every run that ends by\n"
@@ -11005,11 +11023,13 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.see_through ? kProbeSeeThrough : 0u) |
                               (options_.refraction ? kProbeRefract : 0u) |
                               (options_.refract_stack ? kProbeRefractStack : 0u) |
-                              (options_.far_fallback ? kProbeFarFallback : 0u) |
+                              (options_.through_fallback ? kProbeThroughFallback : 0u) |
                               (options_.translucency ? kProbeTranslucent : 0u) |
                               (options_.edge_aa ? kProbeEdgeAA : 0u) |
                               (options_.level_blend ? kProbeLevelBlend : 0u) |
-                              (options_.sun_confidence ? kProbeSunConfidence : 0u);
+                              (options_.sun_confidence ? kProbeSunConfidence : 0u) |
+                              // R9h, and the sense is INVERTED on purpose -- see kProbeFarFallbackOff.
+                              (options_.far_fallback ? 0u : kProbeFarFallbackOff);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),

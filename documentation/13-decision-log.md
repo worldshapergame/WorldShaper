@@ -14674,3 +14674,106 @@ path. D718 recorded it; it is a separate fault from either of these.
 | D736 | **The composite has no probe binding, so one dial is in `r5`** | trap | A bit was reserved for it and could not be read; set 0–15 and 20 against a probe at 19 |
 | D736 | **D720's probe arithmetic was off by sixteen** | fault | The bytes are sixteenths per metre; (0.256, 0.957, 0.502), not (0, 0.62, 0) |
 | D736 | **`mirror_hall` cannot gate this** | honesty | Same-arm floor 158,538 px at mean 5.6 against a 162,160 px effect at 7.7 |
+
+---
+
+## D737 — R9h: past the last node, the coarsest folded colour rather than no answer at all
+
+**2026-08-20.** R9h has read *planned, not started* since the plan was written. It is in.
+
+Past the last node the marcher used to give up with a hit it could not use: `unknown` set, no colour,
+and — the part that mattered — **no face key at all**, so nothing downstream had anything to walk up
+from. `shade_faces.comp` says exactly that at the line where it returns nought for an ignorance stop:
+*any rule that reads light where the pool has not built has to change the marcher first.*
+
+`shaders/node_far.glsl` is that change and it is four lookups. Walk up at most `kFaceAncestorStep`
+levels from the stopped cell, take the first ancestor that has a folded colour, clear `unknown`, and
+name that one face with `report = false`.
+
+**No third exception to R9's rule.** The file writes to no buffer, makes no feedback entry and asks
+for no node. R9i's report for the stopped cell has already gone out four lines above the call site
+and is untouched. The one face it names is a node the pool **already holds**, which is R9a's existing
+exception, and it is named so the marcher itself sends nothing.
+
+**And nothing here invents an irradiance**, which is D589's objection answered structurally rather
+than by taste: once the hit carries a folded colour and a face key, `bounce_radiance` does the rest —
+and it reads the light a face **measured**, returning `vec3(0.0)` when none has. That is why
+`darkroom.ps1` cannot be moved by this.
+
+### Where it goes, and it is not the tail of the march
+
+The tail is `hit == false`, which already resolves to the analytic sky and needs nothing. The
+fallback goes where the march **gives up with an answer it cannot use**, inside `occlude_unknown`.
+The agent that built it also photographed the world genuinely running out — camera 120 m up, world
+below the horizon — and found **it is already sky and analytic ground, not black**. D589's *"the sky
+half has been done since R9's bounce landed"* is correct at HEAD, so `pt_sky.glsl` is untouched. A
+file not edited because it did not need editing is worth more than a diff to justify owning it.
+
+### What it is worth, and it is a counter rather than a picture
+
+From the agent's own worktree, `clips/sampler.clip` with the pool starved to `--node-payload 8`,
+settled, one binary, on the line `faces ... shadowed by a cell the pool has not built`:
+
+| arm | readings |
+|---|---|
+| control, the change absent from the tree | 272, 225, 198, 197, 229, 210 |
+| present but compiled out | 213 |
+| **fallback on** | **8, 2, 2, 0, 0** |
+
+The bands do not overlap. R11e's middle number is **nought in every arm** over six runs, with the
+first two numbers on that line not nought — the guard is being asked and answering no, which is what
+makes the nought mean something.
+
+**Those readings are the agent's and are attributed rather than restated.** Integrated here, the same
+command on this machine reads `0 shadowed by a cell the pool has not built` in **both** arms — the
+default camera settles only 22 to 35 sun-facing faces, which is too small a sample to move the
+counter either way. The integrator's gates are the ones that reproduced: geometry unmoved at
+`1429596 / efeb39a93c369a2d / shape d41424c8236d15ac` in both arms, and 755 of 755 tests.
+
+### What changed on screen: nothing measurable, and it is not rounded up
+
+Both arms photographed at debug modes 0, 9 and 19 with exposure pinned:
+
+```
+mode 0   control vs control    32.11%   <- the noise floor
+mode 0   control vs fallback   35.25%
+mode 9   control vs control     3.56%   <- the noise floor
+mode 9   control vs fallback    2.11%
+```
+
+**The control does not reproduce itself to better than the size of the effect**, so the pixel diff
+proves nothing and is reported as nothing. The reason is D589 reproducing to the digit: gathering
+rays stopped by ignorance read **0 of 25,002** on this scene and 3 of 482,773 on the estate, so the
+**colour** half of R9h is worth almost nothing. What R9h is actually worth is the **shadow** half —
+the face is shadowed either way, and what changes is that it stops being shadowed *by ignorance*, so
+it can settle instead of re-casting for ever.
+
+### Two flags of one wave were both called `--no-far-fallback`
+
+This one and D736's, for completely different features — a light ray past the last node, and what is
+behind a pane of glass. D736's is renamed **`--no-through-fallback`**, after the `kThroughPass` it
+marches. Two agents in one wave reaching for the same obvious name is not a coincidence to fix once;
+it is what a wave does.
+
+### And the bit it wanted was not free, for D736's reason
+
+`node_far.glsl` was written against a header in which bit 15 looked free. It was not — and the reason
+it looked free is D736's collision: `kProbeRefractStack` and `kProbeCoverageBins` were **both bit
+14**, so every bit above the collision read as available when the next one along had in fact been
+claimed. **A duplicated bit does not only break its own two flags; it silently mis-states the free
+list for everyone after it.** R9h holds bit 18.
+
+The sense is inverted on purpose: the bit is set to turn the fallback **off**. The dial word is
+zeroed before anything writes it, so an unset bit has to mean the default, and a host that has never
+heard of the flag then does the new thing rather than the old one.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D737 | **The marcher had to change first** | decision | An ignorance stop carries no face key, so nothing downstream has anything to walk up from |
+| D737 | **197–272 faces shadowed by ignorance become 0–8** | measurement | Agent's worktree, starved pool, bands that do not overlap; attributed, not restated |
+| D737 | **R11e's middle number is nought in every arm** | measurement | Six runs, with the first two numbers on the line not nought |
+| D737 | **The colour half is worth almost nothing** | honesty | 0 of 25,002 gathering rays stopped by ignorance; D589 reproducing to the digit |
+| D737 | **The picture cannot gate it** | honesty | Control against control is 32.11% and the effect is 35.25% |
+| D737 | **The sky half was already done** | measurement | Camera 120 m up: already sky and analytic ground, not black. `pt_sky.glsl` untouched |
+| D737 | **Two flags of one wave shared a name** | trap | D736's is now `--no-through-fallback`; two agents reached for the same obvious word |
+| D737 | **A duplicated bit mis-states the free list for everyone after it** | trap | Bit 15 looked free because 14 was claimed twice; R9h holds 18 |
