@@ -270,6 +270,19 @@ struct Options {
     // worth answering is what fixing it would BUY, and this answers it in one run: the same load
     // with the descent working, against the same load with it off.
     bool slack_ceiling = false;
+    // How small a box has to get before the sampler's descent stops recursing and runs the rest of
+    // itself a LEVEL at a time, asking `Field::eval_block` about every box of a level in one
+    // traversal. See `forge::set_sample_block_cells`, which is where the reasoning lives.
+    //
+    // 512 is one whole node of the render tree and is the shipped default. **0 is the control arm**:
+    // the descent recurses to single voxels exactly as it did before D724, and nothing calls
+    // `eval_block` at all. Both arms build the same world, bit for bit, and that is the gate.
+    //
+    // A flag rather than the `WS_SAMPLE_BLOCK_CELLS` the sampler also reads, because an environment
+    // variable is a measurement nobody can reproduce from a command line in a log — and because an
+    // EMPTY one is not an unset one: `atoi("")` is nought, nought is the control arm, and a shell
+    // that clears a variable by assigning `""` silently measures the arm it is comparing against.
+    u32 sample_block_cells = 512;
     // The control arm for the edit pre-sample's own emptiness test: sample every node the
     // ladder would not refuse, which is what R11h shipped and what a player reported as a
     // lag spike proportional to the size of the edit.
@@ -1331,6 +1344,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
     } else if (arg == "--no-full-load") {
         options.full_load = false;
         options.full_load_asked = false;
+    } else if (arg == "--sample-block-cells") {
+        options.sample_block_cells = static_cast<u32>(next_number(512));
     } else if (arg == "--slack-ceiling") {
         options.slack_ceiling = true;
     } else if (arg == "--box-probe") {
@@ -1884,6 +1899,9 @@ void print_help() {
         "                        to sample: one call over the box N levels above a leaf, against\n"
         "                        every leaf in it on its own. Also prints what the plan's parts\n"
         "                        actually hold, and what one field evaluation walks. D722\n"
+        "  --sample-block-cells N  how small a box gets before the descent asks the field about a\n"
+        "                        whole LEVEL at once instead of recursing (512, one render node).\n"
+        "                        0 is the control arm: recurse to single voxels as before D724\n"
         "  --slack-ceiling       throw the plan's slack away, so the descent settles on the raw\n"
         "                        distance. THE WORLD THIS BUILDS MAY BE WRONG -- it measures what a\n"
         "                        working parts decomposition would be worth, and nothing else\n"
@@ -15833,6 +15851,9 @@ int main(int argc, char** argv) {
     // Before ANY clip is parsed, because the hierarchy is built inside `parse_clip_script` and a
     // Field's shape does not change after that. Set here rather than beside each parse for the same
     // reason: there are several parses and only one decision.
+    // The descent's block sweep, before any clip is sampled. Set here for the same reason the
+    // hierarchy below it is: there are several samplers and only one decision.
+    ws::forge::set_sample_block_cells(options.sample_block_cells);
     if (options.accelerate_from > 0) {
         ws::forge::accelerate_unions_from(options.accelerate_from);
     }
