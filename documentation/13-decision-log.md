@@ -14390,8 +14390,13 @@ and 9,826 of 9,826 nodes sharpen either way.
 batch of a full settle. The ladder's paste was never the thing, which is what D511 found from the
 other end and is why it took a job-pool fix rather than a slicing one.
 
-So what this ceiling protects is the **big** pastes — a clipboard region (D511 timed one at 5,359
-bricks), the up-front coarse build — and not the common path. That is the honest size of it.
+So what this ceiling protects is a **large ladder delivery** — the estate, where a node carries
+more than a brick — and nothing else. **The sentence that first stood here said it also protects a
+clipboard region and the up-front coarse build, and that is false**: only the ladder's delivery goes
+through the backlog. The clipboard region paste and the two coarse-build pastes call `paste_clip`
+directly, and routing them through would need `paste_clip` itself to take a range, because each is
+ONE paste rather than a queue of jobs. It is corrected in the hour it was written because an
+overclaim in this file is worse than a gap in it.
 
 **What is owed**: the estate, where a node carries more than a brick, and where the mechanism would
 actually bite. It is owed because seven agents were building on this machine and CLAUDE.md's own rule
@@ -14406,5 +14411,6 @@ what this entry rests on.
 | D734 | **One job always goes in, checked after rather than before** | trap | A node bigger than the budget would otherwise sit at the head of the backlog for ever |
 | D734 | **Back-pressure at four batches owed** | build | A landed job holds its sampled clip; peak 717 at `--paste-slice 16`, cap plus what was already in flight |
 | D734 | **Same world in all three arms** | measurement | 1,430,104 · `a1f8bc6c656343b7` · shape `e105a8a6940f0da2`, fully sharpened in each |
-| D734 | **It does not engage on the ladder — 103-124 bricks a batch** | measurement | The ladder's paste was never the hitch (D511 from the other end); this ceiling is for the big pastes |
+| D734 | **It does not engage on the ladder — 103-124 bricks a batch** | measurement | The ladder's paste was never the hitch (D511 from the other end); the ceiling is for a LARGE delivery, which means the estate |
+| D734 | **"It also protects the clipboard paste" was false, corrected the same hour** | honesty | Only the ladder's delivery goes through the backlog; the other three `paste_clip` calls do not |
 | D734 | **The estate measurement is owed** | honesty | Seven agents were building on this machine; a timing taken beside them is noise |

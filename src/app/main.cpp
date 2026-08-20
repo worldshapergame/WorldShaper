@@ -129,6 +129,11 @@ struct Options {
     // estate is where a node carries more than a brick and where this has to be measured; that is
     // owed, and it is owed because seven agents were building on this machine and a timing taken
     // beside them is noise.
+    //
+    // **And only the LADDER's delivery goes through the backlog.** The clipboard region paste and
+    // the two coarse-build pastes call `paste_clip` directly and are untouched by this; routing
+    // them through would need `paste_clip` itself to take a range, because each of them is one
+    // paste rather than a queue of jobs.
     usize paste_slice_bricks = 512;
     // The control arm for D620. A refinement paste REPLACES, so it erases the coarse voxels a
     // node's finer sample supersedes -- and a brick or a chunk emptied that way used to stay

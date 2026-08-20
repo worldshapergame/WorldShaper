@@ -3079,8 +3079,11 @@ Two fixes, in the order they paid:
    arm and all three arms settle on `1,430,104` / `a1f8bc6c656343b7` / shape `e105a8a6940f0da2`,
    fully sharpened. **But a ladder batch pastes 103-124 bricks against a 512 budget, so it never
    engages on the common path** -- which is D511's own conclusion arrived at from the other end. What
-   the ceiling protects is a clipboard region and the up-front coarse build. The estate measurement
-   is owed. Everything below is the history and is still the most useful part of this item:
+   the ceiling protects is a LARGE LADDER DELIVERY, which means the estate, and nothing else: the
+   clipboard region paste and the two coarse-build pastes call `paste_clip` directly and never touch
+   the backlog. Routing them through would need `paste_clip` to take a range, because each is one
+   paste rather than a queue of jobs. The estate measurement is owed. Everything below is the
+   history and is still the most useful part of this item:
 
    **The stall is closed, and slicing was not what closed
    it** — D511–D514. The paste was never doing the work. Read that block before touching any of
