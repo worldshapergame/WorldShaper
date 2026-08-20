@@ -651,8 +651,9 @@ time, median, 99th, the GPU split by pass, and every quantity that grows as a wo
 
 **What is still open, in the order I would take it:**
 
-1. **The card, and it is the only large multiple left** — see D727 below and the shader
-   specialisation it names.
+1. ~~**The card**~~ — **measured out, D731.** The lever D727 named is 1.00x, and the reason is that
+   a warp's lanes already stand on only four ops. What is left there is unbuilt rather than unfound:
+   the entry says what the ceiling is and why nothing reaches it.
 2. **A box settled SOLID in bulk disagrees with its own cells** (D725) — 220 voxels of 1,430,104,
    and both answers pass the brute-force reference so the suite cannot see it. Which is right is
    genuinely open and it decides whether the descent may batch cells rather than levels.
@@ -677,9 +678,17 @@ visit against a CPU core's seventy. More resident warps changed nothing, so the 
 issuing rather than stalling: **every lane pays for every other lane's opcode**, in a switch over
 sixty-seven ops.
 
-**So the lever is specialising the shader per clip** — `facility.clip` uses a fraction of those ops.
-A block walk is NOT it: on a card it would make 512 lanes lockstep where 32 already are, and D724 has
-priced the cull replay.
+**And the lever D727 named is now measured and is worth nothing (D731).** A subgroup ballot says a
+warp's lanes stand on **4.03 distinct ops of the sixty-seven**, never ten or more — so the eighteen
+`facility.clip` never reaches were never being executed, and deleting them is **1.00x**. It is built,
+gated, agreeing 0/0/0, and OFF behind `--gpu-specialise`, kept for a clip that reaches few ops
+(`mirror_hall` reaches five, and is too fast to time).
+
+**So the honest end of the line D722 opened:** about 440 warp-instructions a node visit against a CPU
+core's seventy is the four-op-bodies factor, and at 5.94 distinct nodes over 28 lanes the divergence
+is **depth in a per-lane walk with a 128-frame private stack**, not a spatial spread with a queue to
+sort into. There is nothing to bin — a lane's task is 7.7 KB of stack — and sorting by op within a
+warp is what the hardware already does. **No buildable way to reach it was found.**
 
 **And the frame rate fault is fixed (D726).** *"ever lower framerate the more things load"* was the
 ladder re-opening a two-second every-face-re-measures-its-shadow window three times a second for the

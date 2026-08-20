@@ -337,7 +337,8 @@ bool FieldSampler::create(Device& device, const std::filesystem::path& source_di
     // really is most of the shader — `mirror_hall.clip` reaches 5 of the 67 ops — and it is off
     // until somebody measures that clip and finds a number.
     const char* wanted = std::getenv("WS_GPU_SPECIALISE");
-    specialise_ = wanted != nullptr && wanted[0] != '\0' && wanted[0] != '0';
+    specialise_ = specialise_asked_ ||
+                  (wanted != nullptr && wanted[0] != '\0' && wanted[0] != '0');
     if (specialise_) {
         WS_LOG_WARN("clip",
                     "WS_GPU_SPECIALISE is set: each clip gets a pipeline compiled for its own op "

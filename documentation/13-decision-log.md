@@ -14065,3 +14065,99 @@ world is what makes it a way in.
 | D730 | **t+153 ms on the path every launch after the first takes** | measurement | 5.6 s cold, once per clip per machine |
 | D730 | **Over the five-second budget on a cold estate, and said rather than moved** | honesty | 5,559 ms against a row that asks for 5,000 |
 | D730 | **A button offering an empty sky is not a way IN** | decision | It is a way out of the loading screen, and the two are different things |
+
+---
+
+## D731 — A warp stands on FOUR ops of sixty-seven, so specialising the switch is 1.00x
+
+**2026-08-20.** D727 measured the card at parity per node visit with ten scalar cores, concluded
+that *"every lane pays for every other lane's opcode"* in a switch over sixty-seven ops, and named
+specialising the shader per clip as the only lever left with a large multiple in it.
+
+**The conclusion is half right and the lever is worth nothing, and one number says both.**
+
+### The number D727 did not have
+
+A subgroup ballot at the top of the walk loop, at the exact turn the switch is entered, over the
+ladder's own nodes on `clips/facility.clip`:
+
+**A warp carries 26.7–31.1 of its 32 lanes, and they stand on 4.03 DISTINCT ops, over 5.94 distinct
+nodes.**
+
+Of 137,216 warps, by mean distinct ops: **1 → 182 warps, 2 → 6,411, 3 → 32,967, 4–5 → 94,629, 6–9 →
+3,027, and NOTHING at ten or more.** Reproduced on a second run: 4.03 again.
+
+**So the warp already runs about four op bodies a turn, and deleting the ops no lane is standing on
+cannot make it run fewer.** The eighteen ops `facility.clip` never reaches — it uses 49 of 67, from
+629 roots — were never being executed. Specialisation takes instruction stream and nothing else.
+
+**And the distinct-NODE count is why this is control flow rather than memory**: 4.5 lanes share each
+80-byte record, so a warp-turn is about six cache lines and not thirty. Memory is not the bill.
+
+### It was built anyway, gated, and measured at 1.00x
+
+Vulkan specialisation constants — `constant_id` is the op's own number, one pipeline per distinct op
+set, cached on the set. No runtime shader compiler, no generated source. Three details worth keeping:
+guards are written `WS_USES(WS_OP_TORUS)` and expand through the same `#define` the case label uses,
+so no op number is written twice; every constant defaults `true`, so a pipeline built with no
+specialisation info is byte-for-byte the shader that was there; and **a guarded-out case REFUSES
+rather than answering**, because a plain `break` would fall through to a real number and a wrong op
+set would then build a quietly different building instead of a counted, reported refusal.
+
+**The arm, over the same 1,089 dispatches and 17,842,176 cells in every run:**
+
+| | µs a cell |
+|---|---|
+| the change absent from the tree, rebuilt | 3.471, 3.497, 3.462 |
+| specialised, 49 of 67 ops | 3.503, 3.450, 3.507, 3.486 |
+
+**1.00x.** Against 721 ms of `vkCreateComputePipelines` the first time a machine sees a clip's op set
+(1 ms after, from the driver's own cache; 427 ms for `sampler.clip`, 173 for `mirror_hall.clip`).
+
+**It ships OFF** — `--gpu-specialise` turns it on — and is kept rather than deleted for D637's
+reason: a clip that reaches few ops is the case it was written for and nobody has authored one.
+`mirror_hall.clip` reaches **five of sixty-seven**, and finishes its whole run in **9 ms of card**, so
+it cannot time the lever either. That is the hole left in the argument and it is written into the
+shader.
+
+### The measurement that decided it is not the flag's own A/B
+
+The duty line's µs-a-cell moved 19% between two runs of the *same* arm, because a time-bounded load
+samples whatever the ladder reached and a faster arm reaches further — trap 8 through the harness. The
+ladder's order is deterministic (1,247 of 1,248 batch descriptors match line for line between arms),
+so the figure above is the per-dispatch GPU time summed over an identical set of dispatches.
+
+**And the flag's own A/B could not have settled it, because both flag arms are inside the diff.**
+Turned off in this tree against turned on in this tree reads **0.93x**, which is wrong. The arm that
+decided it is the tree with the change absent — D683's own trap, which is the rule CLAUDE.md states:
+a counter taken from inside the change is not a control.
+
+**One thing is unexplained and is not being claimed.** This tree with specialisation off measures
+3.29, 3.17, 3.40, 3.36 against the absent-change control's 3.47, 3.50, 3.46 — four runs, no overlap,
+**1.05x**, with nothing in the diff aimed at it. The plausible mechanism is that spec-constant guards
+stop `glslc -O` folding across them, so the driver compiles from less pre-optimised SPIR-V and does
+better. That is a hypothesis. It is recorded because it is repeatable and because the next person
+measuring this file should know it is there.
+
+### So where the card's eighty actually went
+
+D727: **813 million node visits a second across the whole card against ten CPU cores' 645 million**,
+holding 4,608 lanes. This entry: **about 440 warp-instructions a node visit against a CPU core's
+seventy**, which is roughly the four-op-bodies factor. That is the ceiling any op-convergence work is
+chasing — and at 5.94 distinct nodes over ~28 lanes the lanes are already walking almost together, so
+the divergence is **depth in a per-lane depth-first walk with a 128-frame private stack**, not a
+spatial spread with a queue to sort into. There is nothing to bin: moving a lane's task means moving
+7.7 KB of stack, and sorting by op within a warp is what the hardware's branch masking already does.
+
+**No buildable way to reach it was found.** That is the honest end of the line D722 opened.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D731 | **A warp's lanes stand on 4.03 distinct ops of 67** | measurement | Subgroup ballot at the turn the switch is entered; nothing at ten or more, reproduced |
+| D731 | **So specialising the switch is 1.00x** | fault | The 18 unused ops were never executed; 3.47 µs a cell either way over identical dispatches |
+| D731 | **Kept and settable rather than deleted** | decision | D637's precedent; `mirror_hall` reaches 5 of 67 and is too fast to time |
+| D731 | **A guarded-out case must REFUSE, not fall through** | trap | A `break` returns a real number, so a wrong op set would build a quietly different building |
+| D731 | **The flag's own A/B reads 0.93x and is wrong** | trap | Both arms are inside the diff; the control is the tree with the change absent |
+| D731 | **The diff with the flag OFF is 1.05x, unexplained** | honesty | Four runs, no overlap, nothing aimed at it; recorded, not claimed |
+| D731 | **440 warp-instructions a node visit against a core's 70** | decision | The four-op-bodies factor; the ceiling op-convergence would be chasing |
+| D731 | **The divergence is DEPTH, not spread, so there is nothing to bin** | decision | 5.94 distinct nodes over 28 lanes; a lane's task is 7.7 KB of private stack |

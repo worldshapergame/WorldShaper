@@ -304,6 +304,19 @@ struct Options {
     // On during a load that is a window that never closes. See `announce_world_change`.
     // The control arm for `refine_live_`: sweep every region the ladder has ever made, finished or
     // not, which is what the pick did until D728. See the member for what it costs.
+    // R12d: build the card's field shader with the ops this clip does not use compiled OUT.
+    //
+    // OFF, and it is a measurement rather than a doubt. D731: a warp's lanes stand on **4.03
+    // distinct ops** of the sixty-seven, so deleting the eighteen `facility.clip` never reaches
+    // cannot make a warp run fewer op bodies — it takes instruction stream and nothing else, and
+    // the arm measures **1.00x** over 1,089 identical dispatches. Against that it costs 721 ms of
+    // `vkCreateComputePipelines` the first time a machine sees a clip's op set.
+    //
+    // Kept and settable rather than deleted, which is D637's precedent for the union hierarchy: a
+    // clip that reaches few ops is the case it was written for and nobody has authored one.
+    // `clips/mirror_hall.clip` reaches five of sixty-seven — and finishes its whole run in 9 ms of
+    // card, so it cannot time the lever either. That hole is the one left in the argument.
+    bool gpu_specialise = false;
     bool sweep_all_regions = false;
     bool refresh_shadows_on_paste = false;
     bool no_field_turns = false;
@@ -1369,6 +1382,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
     } else if (arg == "--no-full-load") {
         options.full_load = false;
         options.full_load_asked = false;
+    } else if (arg == "--gpu-specialise") {
+        options.gpu_specialise = true;
     } else if (arg == "--sweep-all-regions") {
         options.sweep_all_regions = true;
     } else if (arg == "--refresh-shadows-on-paste") {
@@ -1935,6 +1950,9 @@ void print_help() {
         "  --sample-block-cells N  how small a box gets before the descent asks the field about a\n"
         "                        whole LEVEL at once instead of recursing (512, one render node).\n"
         "                        0 is the control arm: recurse to single voxels as before D724\n"
+        "  --gpu-specialise      compile the card's field shader with the ops this clip never uses\n"
+        "                        left out. Measured at 1.00x on the facility -- a warp's lanes stand\n"
+        "                        on four ops of sixty-seven -- and kept for a clip that uses few\n"
         "  --sweep-all-regions   have the ladder's pick sweep every region it has ever made rather\n"
         "                        than the ones that might still have work in them. The control arm\n"
         "                        for D728, and what the pick did before it\n"
@@ -11282,6 +11300,10 @@ int Application::play(const Options& options) {
     // has stopped compiling. A failure here is not fatal — `--cpu-sample`'s arm is the fallback,
     // and it says so by name rather than quietly sampling somewhere else.
     if (!options_.cpu_sample) {
+        // Before `create`, which is where the decision is read. See Options::gpu_specialise: it is
+        // off, it is 1.00x on the clip this engine ships, and it is kept for a clip that reaches
+        // few of the sixty-seven ops.
+        field_sampler_.ask_to_specialise(options_.gpu_specialise);
         if (!field_sampler_.create(device_, std::filesystem::path(WS_SHADER_SOURCE_DIR), shaders)) {
             WS_LOG_WARN("gpu", "the ladder cannot sample on the card: {}",
                         field_sampler_.why_not());

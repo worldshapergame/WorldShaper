@@ -286,6 +286,11 @@ public:
     // trap is why the arm that decided it was the tree without the change rather than the flag
     // turned off, because both flag arms are inside the diff.
     bool specialised() const { return active_ != VK_NULL_HANDLE; }
+    // Asked for by `--gpu-specialise` as well as by `WS_GPU_SPECIALISE`, and it has to be said
+    // BEFORE `create`, which is where the decision is read. A flag rather than only a variable
+    // because an environment variable is an arm nobody can reproduce from a command line in a log,
+    // and because an empty one is not an unset one -- the same trap D725 records.
+    void ask_to_specialise(bool on) { specialise_asked_ = on; }
     u32 clip_ops() const { return clip_ops_; }
     // Milliseconds `vkCreateComputePipelines` took for the last specialised pipeline built, and how
     // many were built against how many times one was asked for. Opening the same clip twice must
@@ -399,6 +404,7 @@ private:
     // hash would collide silently, and a silent collision here is a clip running another clip's
     // shader, which is a different building rather than an error.
     bool specialise_ = true;
+    bool specialise_asked_ = false;   // --gpu-specialise; see ask_to_specialise
     std::filesystem::path spirv_path_;
     std::unordered_map<std::string, VkPipeline> specialised_;
     VkPipeline active_ = VK_NULL_HANDLE;
