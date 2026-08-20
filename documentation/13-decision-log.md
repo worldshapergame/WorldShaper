@@ -12989,3 +12989,181 @@ hash is — an edit at frame 200 and the same edit at frame 20,000 are two diffe
 | D720 | **`demand_sample_of` is O(keys x regions) and both grow** | trap | 3,757 keys for 86 distinct demands, scanned against a list that reached 63,307 nodes |
 | D720 | **A frame number is part of a measurement's scene** | method | D719's 74.7 ms was taken at frame 200 with a nearly empty region list, and is not what play costs |
 | D720 | **Documented and not fixed, asked for directly** | — | *"dont fix these only document them for the next session"* |
+
+---
+
+## D721 — A world is FINISHED before you are put in it, and `play now` is how you say you would rather not wait
+
+**2026-08-20, asked for directly:** *"make the worlds launch first by loading the entire world and
+saving it to cache, if i want to enter the world i can just press the enter now button"*.
+
+This is D686's trade, decided. That entry measured the whole world up front at four grains and ended
+with the two ends written down — *"337 ms to standing in it and filling around you, or 22 seconds to
+standing in a world made of half-metre blocks"* — and said everything between them was a dial
+somebody could choose. **The dial is now set to the far end, and the button is the way back.**
+
+### What actually changed
+
+A load used to end at the first frame that could be drawn. It now ends when the **ladder has taken
+every node of the clip to the detail it was authored at** and the finished world has been written to
+the cache. The loading screen stays up for all of it with the bar moving, and `play now` ends it at
+the next node boundary keeping every voxel already built.
+
+It is one new pass, `Application::build_the_whole_world`, and it is deliberately **not new
+machinery**: it is `pump_refinement` in a loop with `draw_loading` beside it. The same picker, the
+same sampler, the same paste, the same two fixed points, the same cache write — so a world finished
+here and a world finished by standing in it for an hour are the same world, and there is no second
+code path to keep honest.
+
+**One rule is suspended for the length of it, and it is the rewrite's own.** `refine_everything_`
+turns off *what nobody can see is not processed*, because at that moment nobody can see anything and
+the honest answer would be "process nothing". It is `--refine-all`'s condition reached by a
+different route, and it goes false again the instant a player is standing in the world.
+
+### Where it runs, and why every other place was wrong
+
+Last, after the HUD, and each of the three reasons rules somewhere else out.
+
+- **The card's sampler is up.** Run it earlier and `ensure_field_on_card` latches `field_card_tried_`
+  over a sampler that does not exist yet, so `--gpu-sample` would silently take the CPU arm for the
+  whole session.
+- **The node pool is created and holds nothing.** Every node of it is built on demand from the
+  world, and the world it will be built from is the finished one — so `announce_world_change` skips
+  the pool for the length of the pass. A quarter of a million boxes queued in `dirty_` to be walked
+  against no live roots is the one part of a node's arrival worth nothing here. Everything else in
+  that function still runs: the emitter cache really does go stale, and the ladder really does have
+  to be re-armed by its own paste.
+- **The bar's last stage is still the last thing that happens**, so a hundred per cent still means
+  the game is up rather than nearly up, which is the promise `loading.hpp` is written around.
+
+### The bar is a DISTANCE, and the node count is the failure this file's header is written against
+
+The obvious quantity was `nodes done / nodes in the list`. It is wrong, and it is wrong in the exact
+way `loading.hpp` opens by warning about.
+
+**The denominator grows.** Refining a node splits it into eight, so the ratio is not a share of the
+work, it is a share of *the work discovered so far*. Photographed on the estate: **the bar read 95%
+with 684,544 of 719,359 nodes built**, and the node list went on past a million. Ninety-five per
+cent, for a quarter of an hour.
+
+What is bounded by something known is **distance**. The picker ranks by size over distance, so the
+ladder finishes outward from where the player is standing — one run's batch line climbed `3.4 m out`,
+`5.2`, `6.9`, `13.5` without once going back. So:
+
+- the **frontier** is the nearest node that is not built; everything closer is finished, so it is
+  the radius of the finished world;
+- the **reach** is the furthest corner of the clip's own bounding box from the camera;
+- the bar is one over the other, clamped monotone because a node splitting into not-done children
+  can step the frontier back a fraction of a metre while the near field bottoms out.
+
+Both are real lengths and the ratio cannot grow underneath itself. It also gives the log a sentence
+a person can read: *the world is finished for 15.3 m around the player of the 106.2 m the clip
+reaches.*
+
+**Measured, cold estate, this machine, the default arm:** fifteen minutes → **634,496 of 667,847
+nodes, 78,613,728 solid voxels, 56 chunks**, banked seven times, not finished. Sixty seconds from a
+resumed world → **15.3 m of 106.2 m**, and the screen's own estimate of what was left was **172
+minutes**. For scale, D701's whole-estate bake took seventy-five minutes to reach 210,944 nodes; this
+reaches three times that in a fifth of the time, which is the whole machine plus everything D700,
+D705 and D710 landed in between.
+
+**`clips/sampler.clip`, cold, the same pass: 487 ms, finished, cached** — 1,430,104 solid voxels,
+which is the reference world to the voxel. A clip that fits finishes in under a second; the estate
+is an evening, and both are the same code.
+
+### It is banked as it goes
+
+Every two minutes the pass drains what is out and writes the world, so a load stopped by the button,
+by the window closing or by a machine going to sleep resumes where it stopped. A fifteen-minute
+estate run banked seven times; the run after it opened at **32 chunks and 15,964,121 solid voxels**
+— exactly what its predecessor left — off the disk in 157 ms.
+
+### The second question, which is much larger than the first: how finely
+
+"The entire world" has two readings and they differ by days, so the pass has a dial and the default
+is the smaller one.
+
+- **`--full-load`, the default.** Every node of the clip, **at the detail its own distance
+  justifies** — the ladder's own pixel rule, with nothing left out for facing away or being hidden.
+  What that produces is a world with **no holes anywhere**: the far side of the estate is THERE, at
+  the size it actually subtends, rather than absent until somebody looks at it. That is the
+  complaint D701's photograph is of, and this is enough to answer it.
+- **`--full-load-authored`.** Every node at the **clip's own detail**, three centimetres everywhere
+  including the campanile a hundred metres away. It is the literal whole world, it is what a
+  `--bake-world` run should take, and it is measured in hours.
+
+**Measured, this machine, the estate, `--full-load-authored`:** resuming from a world already 15.9 M
+solid voxels deep, twenty minutes of it took the finished radius from about 11.7 m to **13.2 m**,
+at 128 nodes a batch and roughly five batches a second, with the node list growing 162,000 →
+417,579 and about 27,000 nodes outstanding throughout. **It is days on this clip, and that is
+arithmetic about how much building there is rather than a limit of the sampler** — D686 reached the
+same place from the other side and D701 from a third.
+
+The two arms are the same pass with one term changed — `refine_to_the_finest()` in the split loop
+rather than `refine_the_lot()` — so the arm is a flag and not a mode.
+
+### The trap the periodic save walked into, and `refine_hold_`
+
+**A node is marked `done` when it is PICKED, not when its voxels land.** It has to be, or the next
+pick chooses it again and samples it twice. Both saves that existed before this one happen at a
+fixed point where nothing is outstanding, so neither had ever had to know that — and a save taken in
+the middle of a pass writes four dozen nodes as finished whose voxels are not in the world. The run
+that resumes from that file **skips them**: holes, in a file that claims to be whole, which is
+precisely what D701's `-RequireWhole` gate exists to refuse.
+
+So `refine_hold_` — pick nothing new — and the save is taken only after everything already out has
+landed. **An interrupted drain takes no save at all**, which is what keeps the button instant: a
+press abandons the drain and the write both, and what it costs is at most the two minutes since the
+last one.
+
+### What it does NOT do, and the flags that say so
+
+`--settle`, `--screenshot`, `--benchmark` and every other scripted mode **do not finish the world**
+unless `--full-load` asks by name. That is the rule the way in already follows (D712/R11i) and it is
+here for the same reason: a run under any of those has to reach the state it reached before this
+existed, or every figure in this repository is quietly about a different load. `--no-full-load` is
+the control arm for a played run, and it is exactly what every launch did until today.
+
+And the pass honours `--max-seconds`, measured from `load_began_ns_` like the frame loop's own
+deadline. Without that, `--full-load --max-seconds 60` is a sixty-second promise a run keeps two
+hours later — this pass is the one part of a load that can run for hours.
+
+### The budget moved rather than broke
+
+`09-performance-budgets.md` said **enter a world ≤ 5 s** and the whole-world load blows through it by
+three orders of magnitude. The budget is not abandoned; it is **measured to the button now**. The
+compulsory wait is the wait until a player is allowed to stop watching, `play now` is offered as soon
+as the clip has been parsed, and `a player could have entered from t+N ms` is printed on every
+launch. **Five seconds moved from "the load has finished" to "the load has stopped being
+compulsory", which is the number a player feels.** There is no grain at which the whole estate is
+instant and still a building — D686 measured four of them — so a budget on finishing it would be a
+budget on how much building there is.
+
+### Two things seen while measuring this, neither of them caused by it
+
+- **A resumed world's content hash changes on every launch.** Same 1,430,104 solid voxels, same 4
+  chunks, same 9,826 leaves of which 6,010 at authored detail, and `b6668786b3cb9363` then
+  `27e32b65679665eb` on consecutive runs of `sampler.clip`. **The control arm does it too** — two
+  `--no-full-load --settle --screenshot` runs produced those same two hashes in that order — so it is
+  the resume path and not this pass. It matters because trap 8 gates every measurement in this
+  repository on that hash.
+- **A resumed run rewrites the whole cache file every launch**, because `refine_saved_regions_`
+  starts at nought and the fixed point is reached again. On the estate that is a rewrite of hundreds
+  of megabytes for a world that did not change. Also in the control arm.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D721 | **A world is finished before the player is put in it** | decision | Asked for directly; D686's dial, set to the far end |
+| D721 | **`play now` is the way back, and it is instant** | decision | A press abandons the drain and the save both, and keeps every voxel already built |
+| D721 | **The pass is `pump_refinement` in a loop, not new machinery** | decision | One code path, so a world finished at load and one finished in play are the same world |
+| D721 | **A node is `done` when PICKED, so a mid-pass save writes holes** | trap | Both existing saves are at fixed points and never had to know; `refine_hold_` drains first |
+| D721 | **Banked every two minutes, so a stopped load resumes** | decision | The estate is tens of minutes; an hour at the mercy of one closed lid is not a design |
+| D721 | **Scripted runs do not do it unless `--full-load` says so** | trap | Otherwise every figure in this repository is about a different load |
+| D721 | **The "enter a world" budget is measured to the BUTTON now** | decision | The compulsory wait is the one a budget can hold; finishing is linear in how much clip there is |
+| D721 | **"The entire world" has two readings and they differ by days** | decision | The default is every node at the detail its distance justifies; `--full-load-authored` is the literal one |
+| D721 | **`--full-load-authored` on the estate is DAYS** | measurement | Twenty minutes took the finished radius 11.7 m → 13.2 m, node list 162,000 → 417,579 |
+| D721 | **`keeping it for next time` is 24 characters and the slot holds 23** | fault | Drawn cut short on every load since the screen existed; the new test walks the enum |
+| D721 | **The pass takes the whole machine; the ladder in play takes half** | decision | `5 workers of 10` for the length of a build nobody is watching from inside |
+| D721 | **The bar is a DISTANCE, not a node count** | trap | `done/total` read 95% at 684,544 of 719,359 with the list still growing; the frontier over the reach cannot grow underneath itself |
+| D721 | **Cold estate: 15 min → 78.6 M voxels, 634,496 nodes, not finished** | measurement | Banked seven times; `clips/sampler.clip` finishes the same pass in 487 ms |
+| D721 | **A resumed world's hash changes every launch, in both arms** | honesty | Seen while measuring this, not caused by it — and trap 8 gates on that hash |

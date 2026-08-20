@@ -180,3 +180,79 @@ TEST_CASE("the interface scale never collapses on a small window") {
     // Sized from the SHORT side, so a very wide window does not grow the column off the sides.
     CHECK(loading_ui_scale(3840, 720) == doctest::Approx(loading_ui_scale(1280, 720)));
 }
+
+TEST_CASE("a load spent finishing the world is a BUILD, not a cache hit") {
+    // The two shapes are kept apart so that a cache hit never teaches the next cold build that
+    // building is free -- a stage weighted at nothing cannot move the bar however long it runs,
+    // and that pinned a real bar at eight per cent for a hundred and forty seconds.
+    //
+    // `shape_of` used to ask that question of `Sampling` alone, which was the whole of the
+    // world-making until the whole-world pass existed. It is now where nearly all of a cold
+    // load's time goes: a world read from the cache in 200 ms and then FINISHED over twenty
+    // minutes is a twenty-minute build, and filing it as a cache hit is the exact fault the two
+    // shapes exist to prevent.
+    f64 finished_the_world[static_cast<usize>(LoadStage::Count)]{};
+    finished_the_world[static_cast<usize>(LoadStage::Reading)] = 0.2;
+    finished_the_world[static_cast<usize>(LoadStage::Stamping)] = 0.3;
+    finished_the_world[static_cast<usize>(LoadStage::Filling)] = 1200.0;
+    CHECK(LoadHistory::shape_of(finished_the_world) == LoadHistory::kBuilt);
+
+    // ...and a world that came back COMPLETE spends nothing there, which is a cache hit and has
+    // to stay one.
+    f64 read_it_back[static_cast<usize>(LoadStage::Count)]{};
+    read_it_back[static_cast<usize>(LoadStage::Reading)] = 0.2;
+    read_it_back[static_cast<usize>(LoadStage::Stamping)] = 3.0;
+    read_it_back[static_cast<usize>(LoadStage::Uploading)] = 1.0;
+    read_it_back[static_cast<usize>(LoadStage::Filling)] = 0.05;
+    CHECK(LoadHistory::shape_of(read_it_back) == LoadHistory::kCached);
+
+    // And the cold up-front build, which is what the question used to be about and must not have
+    // stopped working.
+    f64 sampled_it[static_cast<usize>(LoadStage::Count)]{};
+    sampled_it[static_cast<usize>(LoadStage::Reading)] = 0.2;
+    sampled_it[static_cast<usize>(LoadStage::Sampling)] = 30.0;
+    sampled_it[static_cast<usize>(LoadStage::Stamping)] = 1.0;
+    CHECK(LoadHistory::shape_of(sampled_it) == LoadHistory::kBuilt);
+}
+
+TEST_CASE("every stage has a name, including the last one") {
+    // The screen packs `stage_name` into the push block and the shader draws whatever arrives, so
+    // a stage added to the enum and not to the switch is a blank line on the loading screen rather
+    // than a compile error. Every one of them, by walking the enum.
+    for (u32 i = 0; i < static_cast<u32>(LoadStage::Count); ++i) {
+        const char* name = stage_name(static_cast<LoadStage>(i));
+        REQUIRE(name != nullptr);
+        CHECK(std::string(name).size() > 0);
+        // Twenty-three characters is the whole of a text slot in `gpu/loading_screen.cpp`, and a
+        // name longer than that is silently cut in half on the one screen nobody tests by eye.
+        CHECK(std::string(name).size() <= 23);
+    }
+}
+
+TEST_CASE("a finished load reports the last stage rather than a named one") {
+    LoadProgress progress;
+    LoadHistory history;
+    progress.begin(history, false);
+    progress.enter(LoadStage::Filling);
+    progress.finish();
+    const LoadProgress::Snapshot look = progress.look();
+    CHECK(look.complete);
+    CHECK(look.fraction == doctest::Approx(1.0));
+    // It named `settling` here until the stage after it existed, which drew the wrong icon on the
+    // one frame that says the game is up.
+    CHECK(look.stage == static_cast<LoadStage>(static_cast<u32>(LoadStage::Count) - 1));
+}
+
+TEST_CASE("the whole-world stage carries most of the bar on a first run") {
+    // The nominal weights are only ever used on the very first run of a clip, and getting this one
+    // wrong is not cosmetic: a `finishing the world` stage weighted like `settling` would put the
+    // bar in the high nineties within a second of launching and leave it there for twenty minutes,
+    // which is the failure the whole file is written against.
+    LoadProgress progress;
+    LoadHistory history;   // nothing known: the nominal weights
+    progress.begin(history, false);
+    progress.enter(LoadStage::Filling);
+    progress.within(0.0);
+    const LoadProgress::Snapshot at_the_start = progress.look();
+    CHECK(at_the_start.fraction < 0.35);
+}

@@ -621,6 +621,47 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### THE NEWEST THING, 2026-08-20: a world is FINISHED before you are put in it
+
+**Asked for directly and it is shipped:** *"make the worlds launch first by loading the entire world
+and saving it to cache, if i want to enter the world i can just press the enter now button"*. This
+is D686's dial set to the far end, and **D721** is the whole entry. What a session picking this up
+needs to know before it measures anything:
+
+- A load no longer ends at the first drawable frame. `Application::build_the_whole_world` runs the
+  ladder over **every node of the clip** — `refine_everything_`, which is `--refine-all`'s condition
+  reached by a different route — until there is nothing left anywhere, and the finished world goes
+  in the cache. The pass is `pump_refinement` in a loop with `draw_loading` beside it, so there is
+  no second code path.
+- **"The entire world" has two readings and they differ by days, so there is a dial.** The default
+  builds every node at **the detail its own distance justifies** — no holes anywhere, nothing left
+  out for facing away or being hidden. `--full-load-authored` builds every node at **the clip's own
+  three centimetres**, which is the literal thing and is what a `--bake-world` run wants; on the
+  estate it is measured in days and D721 has the numbers. Do not reach for it casually.
+- **`play now` ends it at any moment**, keeping every voxel already built, and the ladder carries on
+  from where the player stands exactly as it always did.
+- **It is banked every two minutes**, so a load stopped by the button or by the window closing
+  resumes. `refine_hold_` is what makes that safe — see D721 for the trap it walks into otherwise,
+  and it is the sharpest thing in the change.
+- **The bar is a DISTANCE — the finished radius over how far the clip reaches — and not a node
+  count.** `done / list size` reads 95% while the list is still doubling, which is the failure
+  `loading.hpp`'s own header opens by warning about. D721 has the photograph.
+- **How long it takes: `clips/sampler.clip` 487 ms and finished; the estate an evening.** Fifteen
+  minutes of cold estate is 78.6 M solid voxels and 15 m of a 106 m clip, banked seven times. It
+  is the same code either way, and the estate gets closer every launch.
+- **A scripted run does not do it** unless `--full-load` says so by name. `--settle`,
+  `--screenshot`, `--benchmark` and `baseline.ps1` reach the state they always reached. That is the
+  same rule the way in follows and it is what keeps every figure in this repository comparable.
+  `--no-full-load` is the control arm for a played run.
+- **The load budget in `09-performance-budgets.md` moved rather than broke**: the five seconds are
+  measured to `play now` being offered rather than to the load finishing.
+
+**Two things were seen while measuring it and are open, and NEITHER is caused by it — the control
+arm does both.** A resumed world's content hash changes on every launch (same voxels, same chunks,
+same leaves), and a resumed run rewrites the whole cache file every launch. The first matters
+because trap 8 gates every measurement here on that hash; the second is hundreds of megabytes of
+write for a world that did not change. Both are the resume path, and both are worth a session.
+
 #### START HERE — twelve agents were dispatched at once on 2026-08-19, and this is who owns what
 
 **The user asked for the rewrite finished, "especially step 12", and for every agent to produce

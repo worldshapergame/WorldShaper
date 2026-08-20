@@ -84,9 +84,9 @@ inline LoadingButtonRect loading_button_rect(u32 width, u32 height) {
     return out;
 }
 
-// A finer record than the seven stages below, and the reason it exists is a sixteen-second hole.
+// A finer record than the eight stages below, and the reason it exists is a sixteen-second hole.
 //
-// `load stages:` reports the seven, and six of them are honest because each is one thing. The
+// `load stages:` reports the eight, and seven of them are honest because each is one thing. The
 // seventh, `settling`, is everything between the world being built and the first frame being
 // drawable: the pool, nine device buffers, two descriptor layouts, seven compute pipelines, the
 // render target and the HUD. On a cold driver cache that bucket has been measured at **16,395 ms
@@ -122,6 +122,23 @@ enum class LoadStage : u32 {
     Caching,      // writing the built world beside the clip, so this never happens again
     Uploading,    // handing the bricks to the card
     Settling,     // the summary tree and the first frame that can actually be shown
+    // The whole world, before anybody is put in it.
+    //
+    // Asked for directly on 2026-08-20: *"make the worlds launch first by loading the entire world
+    // and saving it to cache, if i want to enter the world i can just press the enter now button"*.
+    // Every stage above it builds the part of the world somebody is standing in; this one runs the
+    // ladder over ALL of it -- the far side of the estate as well as the room you spawn in -- until
+    // there is nothing left anywhere to sharpen, and then keeps it.
+    //
+    // It is last because it is chronologically last: it needs the card's sampler, which is created
+    // in `settling`, and it hands over to the frame loop the instant it is done. So the bar still
+    // cannot reach a hundred before the game can be shown, which is the promise the whole file is
+    // written around.
+    //
+    // It is also the only stage a player is EXPECTED to cut short. The rest of the load is work
+    // nothing can be drawn without; this is work that makes the world complete rather than
+    // possible, and `play now` ends it at the next node boundary keeping every voxel already in.
+    Filling,
     Count,
 };
 

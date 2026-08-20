@@ -144,10 +144,26 @@ Fixed-size pools sized at startup from detected memory. Zero runtime GPU allocat
 | Event | Budget |
 |---|---|
 | Cold start to main menu | ≤ 3 s |
-| Enter a world | ≤ 5 s (T0: ≤ 8 s) |
+| **`play now` offered** | **≤ 5 s (T0: ≤ 8 s)** — this is the "enter a world" budget, and it is now measured to the button rather than to the frame loop. See below |
+| Enter a world, by pressing it | ≤ 0.5 s from the press to the first frame |
+| Finish the whole world | **no budget: it is linear in how much clip there is** |
 | Join a session (click to playing) | ≤ 15 s |
 | **Save on every edit (answer K3)** | **0 ms main-thread stall** — append-only journal written on the IO thread |
 | World close / compaction | ≤ 2 s, backgrounded |
+
+**Why "enter a world" is measured to the button now.** From 2026-08-20 a load does not end when a
+frame can be drawn; it ends when the ladder has taken every node of the clip to the detail it was
+authored at and the finished world has been written to the cache (D721, and it was asked for). On
+the estate that is tens of minutes the first time and a 400 ms read of a file every time after.
+
+There is no grain at which the whole estate is instant and still a building — D686 measured four of
+them — so a budget on finishing it would be a budget on how much building there is, which is a
+decision for whoever authors the clip. What a budget CAN hold is the wait that is compulsory, and
+that is the wait until the player is allowed to stop watching: `play now` is offered as soon as the
+clip has been parsed, and pressing it puts them in the world with everything built so far. **So the
+five seconds moved from "the load has finished" to "the load has stopped being compulsory", which
+is the number a player actually feels.** `a player could have entered from t+N ms` is printed on
+every launch and is the figure this row is judged on.
 
 ## 9. Regression policy
 

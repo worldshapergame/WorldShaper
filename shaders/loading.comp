@@ -257,6 +257,19 @@ bool mark_settling(ivec2 c, float t) {
     return mod(angle - gap + 6.2831853, 6.2831853) > 1.1;
 }
 
+bool mark_filling(ivec2 c, float t) {
+    // A grid filling in from the middle outwards: the ladder sharpening the world one node at a
+    // time, from where you are standing to the far side of it. Every other mark on this screen is
+    // about something passing through; this one is about something being COMPLETED, so it grows
+    // and starts again rather than scrolling.
+    vec2 p = vec2(c) - vec2(6.0);
+    float ring = max(abs(p.x), abs(p.y));           // square rings, because the world is boxes
+    float front = mod(t * 3.5, 8.0);
+    if (ring > front) return false;                  // not reached yet
+    if (ring > front - 1.2) return true;             // the edge that is arriving, solid
+    return ((c.x & 1) == 0) == ((c.y & 1) == 0);     // and behind it, filled in
+}
+
 bool mark_on(uint stage, ivec2 c, float t) {
     if (c.x < 0 || c.x > 12 || c.y < 0 || c.y > 12) return false;
     if (stage == 0u) return mark_reading(c, t);
@@ -265,7 +278,8 @@ bool mark_on(uint stage, ivec2 c, float t) {
     if (stage == 3u) return mark_stamping(c, t);
     if (stage == 4u) return mark_caching(c, t);
     if (stage == 5u) return mark_uploading(c, t);
-    return mark_settling(c, t);
+    if (stage == 6u) return mark_settling(c, t);
+    return mark_filling(c, t);
 }
 
 // --- the screen -------------------------------------------------------------------------------

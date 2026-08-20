@@ -16,17 +16,26 @@ namespace {
 // on the very first run of a clip that has never been built; the second run uses what the first
 // one measured.
 //
-// Sampling dominates by two orders of magnitude and the numbers say so. A bar that gave the seven
-// stages a seventh each would spend six sevenths of its travel in the first few per cent of the
+// Sampling dominates by two orders of magnitude and the numbers say so. A bar that gave the eight
+// stages an eighth each would spend seven eighths of its travel in the first few per cent of the
 // work and then stop.
 constexpr f64 kNominal[static_cast<usize>(LoadStage::Count)] = {
     0.002,   // Reading
-    0.780,   // Sampling
-    0.090,   // Varying
-    0.040,   // Stamping
-    0.030,   // Caching
-    0.048,   // Uploading
-    0.010,   // Settling
+    0.078,   // Sampling
+    0.009,   // Varying
+    0.004,   // Stamping
+    0.003,   // Caching
+    0.005,   // Uploading
+    0.001,   // Settling
+    // Filling — the whole world, and on a clip of any size it IS the load.
+    //
+    // The seven above are the world a player is standing in and they are seconds. This one is
+    // every node of the clip, and it is 487 ms on `clips/sampler.clip` and an evening on the
+    // estate -- fifteen minutes of it built 78.6 M voxels and reached fifteen metres of a
+    // hundred-and-six-metre clip (D721). Weighting it at anything smaller would put the bar at
+    // ninety-something within a second of launching and leave it there, which is the exact
+    // failure the top of this file is written against.
+    0.898,
 };
 
 // And when the world comes back from the cache instead of being built, which is the ordinary
@@ -35,10 +44,15 @@ constexpr f64 kFromCache[static_cast<usize>(LoadStage::Count)] = {
     0.020,   // Reading — the clip text, to work out whether the cache is still good
     0.000,
     0.000,
-    0.640,   // Stamping — decoding a third of a gigabyte of bricks back into the world
+    0.440,   // Stamping — decoding a third of a gigabyte of bricks back into the world
     0.000,
-    0.300,   // Uploading
-    0.040,   // Settling
+    0.200,   // Uploading
+    0.030,   // Settling
+    // Filling. A world that comes back FINISHED spends nothing here and the bar simply runs out
+    // of stages, which is what a warm launch should look like. A world that comes back HALF
+    // finished — every world anybody has actually stopped the ladder in the middle of — carries on
+    // from where it stopped, and that is the wait this share is reserved for.
+    0.310,
 };
 
 f64 from_bits(u64 bits) {
@@ -98,9 +112,18 @@ const char* stage_name(LoadStage stage) {
         case LoadStage::Sampling:  return "cutting the shape";
         case LoadStage::Varying:   return "colouring every voxel";
         case LoadStage::Stamping:  return "building the world";
-        case LoadStage::Caching:   return "keeping it for next time";
+        // TWENTY-THREE CHARACTERS IS THE WHOLE ALLOWANCE, and this one was twenty-four.
+        //
+        // `gpu/loading_screen.cpp` packs a name into a slot of six uints, four characters each,
+        // and keeps `kSlotChars - 1` of them — so `keeping it for next time` has been drawn as
+        // `keeping it for next tim` on every load since the screen existed. Nothing said so: the
+        // packing truncates silently and the only reader is a person watching a bar. The test
+        // beside this walks the enum and checks every name against the slot, which is the only
+        // way a name added later cannot do the same thing again.
+        case LoadStage::Caching:   return "saving it for next time";
         case LoadStage::Uploading: return "handing it to the card";
         case LoadStage::Settling:  return "settling";
+        case LoadStage::Filling:   return "finishing the world";
         default:                   return "";
     }
 }
@@ -109,7 +132,15 @@ usize LoadHistory::shape_of(const f64* seconds) {
     f64 total = 0.0;
     for (usize i = 0; i < static_cast<usize>(LoadStage::Count); ++i) total += seconds[i];
     if (total <= 0.0) return kBuilt;
-    return (seconds[static_cast<usize>(LoadStage::Sampling)] < total * 0.05) ? kCached : kBuilt;
+    // How much of this load was MAKING world rather than reading it, which is the question the two
+    // shapes are kept apart to answer. It used to be asked of `Sampling` alone, and that was the
+    // whole of the making until `Filling` existed — the whole-world pass is now where nearly all
+    // of a cold load's time goes, and a cold load filed as a cache hit teaches the next cold load
+    // that building is free. Which is the exact fault the two shapes exist to prevent: the bar sat
+    // at eight per cent for a hundred and forty seconds the last time a stage worth nothing ran.
+    const f64 making = seconds[static_cast<usize>(LoadStage::Sampling)] +
+                       seconds[static_cast<usize>(LoadStage::Filling)];
+    return (making < total * 0.05) ? kCached : kBuilt;
 }
 
 LoadHistory LoadHistory::read(const std::string& path) {
@@ -122,8 +153,11 @@ LoadHistory LoadHistory::read(const std::string& path) {
         f64 total = 0.0;
         bool sane = true;
         for (f64 v : values) {
-            // Nonsense, or from another machine entirely.
-            if (!(v >= 0.0) || v > 7200.0) { sane = false; break; }
+            // Nonsense, or from another machine entirely. A day rather than the two hours it
+            // used to be: `Filling` builds the WHOLE clip, and the estate's own whole-world build
+            // has been measured at over an hour and unfinished (D701). Two hours was a limit that
+            // would have thrown away the one measurement the next run most needs.
+            if (!(v >= 0.0) || v > 86400.0) { sane = false; break; }
             total += v;
         }
         if (!sane || total <= 0.0) continue;
@@ -248,7 +282,9 @@ LoadProgress::Snapshot LoadProgress::look() const {
     out.may_enter = offer_.load(std::memory_order_acquire) && !out.entering;
     out.complete = complete_.load(std::memory_order_acquire);
     if (out.complete) {
-        out.stage = LoadStage::Settling;
+        // The LAST stage, whichever that is, rather than a stage named here -- this branch drew
+        // `settling` for a load that finished in `filling` until the stage after it existed.
+        out.stage = static_cast<LoadStage>(static_cast<u32>(LoadStage::Count) - 1);
         out.fraction = 1.0;
         out.seconds_left = 0.0;
         return out;

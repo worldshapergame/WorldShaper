@@ -177,6 +177,49 @@ struct Options {
     // run is the load `--settle` and `baseline.ps1` have always measured.
     bool enter_now = false;
     bool no_early_entry = false;
+    // ---- the whole world, before the player is put in it (2026-08-20) ----------------------
+    //
+    // Asked for directly: *"make the worlds launch first by loading the entire world and saving it
+    // to cache, if i want to enter the world i can just press the enter now button"*.
+    //
+    // ON, and it is the shipped state. A load no longer ends at the first frame that can be drawn.
+    // It ends when the ladder has taken every node of the clip to the detail it was authored at --
+    // the far side of the estate as well as the room you spawn in -- and the finished world has
+    // been written to the cache. The loading screen stays up for all of it with the bar moving,
+    // and `play now` ends it at the next node boundary keeping every voxel already built, after
+    // which the ladder carries on from where the player is standing exactly as it did before.
+    //
+    // What it costs is not small and it was measured before it was chosen: D686 puts the whole
+    // estate at tens of minutes and D701 at over an hour to the last node. What it buys is that
+    // the SECOND launch of a world is a read of a finished file, and that the world stops
+    // assembling itself around somebody who is trying to look at it -- which is the complaint
+    // D701's own photograph is of. The cost is paid once per clip per machine; the complaint was
+    // every launch. And it is banked as it goes: the pass saves what it has built every couple of
+    // minutes, so a load stopped by the button, by the window closing or by anything else resumes
+    // where it stopped rather than starting again.
+    //
+    // NOT DONE ON A SCRIPTED RUN unless `--full-load` asks by name, and that is the rule the way
+    // in already follows for the same reason: `--settle`, `--screenshot`, `--benchmark` and the
+    // rest have to reach the state they reached before this existed or every figure in this
+    // repository is about a different load. `--no-full-load` is the control arm for a played run.
+    bool full_load = true;
+    bool full_load_asked = false;   // ...by name, which is what lets a scripted run take this arm
+    // ...and HOW FINELY the whole world is built, which is a second question and a much larger one.
+    //
+    // OFF, so the pass takes every node to the detail its own distance justifies -- the ladder's
+    // own rule, with nothing left out for facing away or being hidden. What that produces is a
+    // world with no holes in it anywhere: the far side of the estate is THERE, at the size it
+    // actually subtends, rather than absent until somebody looks at it. That is the complaint
+    // D701's photograph is of, and it is what this flag off is enough to answer.
+    //
+    // ON -- `--full-load-authored` -- takes every node to the clip's own detail instead, three
+    // centimetres everywhere including the campanile a hundred metres away. It is the literal
+    // whole world and it is measured in hours: this machine spent twenty minutes reaching a radius
+    // of about twelve metres, at 128 nodes a batch and roughly five batches a second, and the node
+    // list was still growing. D686 and D701 both arrive at the same place from the other side.
+    //
+    // The two are the same pass with one term changed, so the arm is a flag rather than a mode.
+    bool full_load_authored = false;
     // The control arm for the edit pre-sample's own emptiness test: sample every node the
     // ladder would not refuse, which is what R11h shipped and what a player reported as a
     // lag spike proportional to the size of the edit.
@@ -1221,6 +1264,19 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         options.sync_edit_presample = true;
     } else if (arg == "--no-early-entry") {
         options.no_early_entry = true;
+    } else if (arg == "--full-load") {
+        // By name, which is the only way a scripted run gets one. See Options::full_load.
+        options.full_load = true;
+        options.full_load_asked = true;
+    } else if (arg == "--no-full-load") {
+        options.full_load = false;
+        options.full_load_asked = false;
+    } else if (arg == "--full-load-authored") {
+        // The whole world at the clip's OWN detail rather than at the detail distance justifies.
+        // Implies the pass, because it is a description of the pass. See Options::full_load_authored.
+        options.full_load = true;
+        options.full_load_asked = true;
+        options.full_load_authored = true;
     } else if (arg == "--no-clip-cache") {
         options.no_clip_cache = true;
     } else if (arg == "--no-paste-pool") {
@@ -1746,6 +1802,14 @@ void print_help() {
         "                        run is offered no button unless this says so, so --settle and\n"
         "                        --screenshot measure the load they always measured\n"
         "  --no-early-entry      offer no button at all, scripted or not\n"
+        "  --no-full-load        enter the world as soon as a frame can be drawn, rather than\n"
+        "                        waiting for the ladder to build the whole of it. What every\n"
+        "                        launch did before 2026-08-20, and the control arm\n"
+        "  --full-load           finish the whole world before entering it, by name -- which is\n"
+        "                        what a scripted run needs, being offered none otherwise\n"
+        "  --full-load-authored  ...and take every node to the CLIP's detail rather than to the\n"
+        "                        detail its distance justifies. The literal whole world, and it is\n"
+        "                        hours on the estate. Implies --full-load\n"
         "  --serial-pipelines    compile the six pipelines one after another and wait for each,\n"
         "                        which is what every load did before R11i. The control arm\n"
         "  --loading-shot FILE   photograph the LOADING SCREEN after --loading-shot-frame N of\n"
@@ -2954,6 +3018,72 @@ private:
     // 13 ms and a frame is 19, so a single pick per frame leaves it idle again.
     bool start_refinement();
     void pump_refinement();
+
+    // ---- the whole world, before the player is put in it -----------------------------------
+    //
+    // See Options::full_load. Runs the ladder over every node of the clip, with the loading screen
+    // still up and the bar still moving, until there is nothing left anywhere to sharpen -- at
+    // which point the ladder writes the finished world to the cache and tears itself down.
+    //
+    // Returns false when it was cut short: the player pressed `play now`, or the window was
+    // closed. What is already in the world stays in it either way, which is the whole promise of
+    // the button; a cut-short pass leaves the ladder standing so it carries on from wherever the
+    // player is.
+    bool build_the_whole_world();
+    // The two lengths its bar is made of: how far out the world is finished, and how far it has to
+    // go. See `build_the_whole_world` for why the bar is a distance and not a node count.
+    f64 frontier_of_the_build() const;
+    f64 furthest_corner_of_the_clip() const;
+
+    // Refine EVERYTHING, whether this camera can see it or not.
+    //
+    // Two things ask for that and they are not the same thing. `--refine-all` is R11b's gate arm
+    // and is a property of the whole run; `refine_everything_` is the whole-world load, which is
+    // true for the length of that pass and false the moment a player is standing in the world --
+    // because the rule the rest of the game is built on is that what nobody can see is not
+    // processed, and a full load is the one time nobody is looking at anything yet.
+    bool refine_the_lot() const { return options_.refine_all || refine_everything_; }
+    // ...and whether a node is split to the FINEST level there is rather than to the level its own
+    // distance justifies, which is a different question with a different answer.
+    //
+    // `--refine-all` has always meant both at once — it is R11b's gate arm and the bake's, and both
+    // need a world that does not depend on where a camera stood, at the detail the clip was written
+    // at. The whole-world load means the first always and the second only when it is asked to,
+    // because the two differ by hours. See Options::full_load_authored.
+    bool refine_to_the_finest() const {
+        return options_.refine_all || (refine_everything_ && options_.full_load_authored);
+    }
+    bool refine_everything_ = false;
+    // Set for the length of the whole-world pass, and read in exactly one place: the node pool
+    // holds nothing yet and is about to be handed a finished world, so telling it about every box
+    // the ladder pastes is a quarter of a million announcements about a tree with no nodes in it.
+    bool full_load_running_ = false;
+    // Whether the whole-world pass was ended by the button rather than by finishing, so the line
+    // that reports the way in can say which of the two things was actually skipped.
+    bool full_load_cut_short_ = false;
+    // Whether the world already holds the up-front coarse build. NOT the same question as
+    // `!options_.no_coarse_paste`: the button skips the paste as well as the sample, and a node
+    // seeded as though eight-voxels-a-metre of world were under it when nothing is would tell the
+    // ladder there was almost nothing to do. See seed_refine_nodes.
+    bool coarse_build_pasted_ = false;
+    // Pick nothing new until what is already out has landed.
+    //
+    // The whole-world pass writes the world to disk every couple of minutes so that hours of it
+    // are never at the mercy of one closed lid — and a node is marked `done` when it is PICKED
+    // rather than when its voxels land, which is what stops the next pick choosing it twice. So a
+    // file written with a batch still in the sampler's hands says four dozen nodes are finished
+    // whose voxels are not in the world, and the run that resumes from it skips them: holes, in a
+    // file that claims to be whole. The two saves that existed before this both happen at a fixed
+    // point where nothing is outstanding, which is exactly this condition arrived at by waiting.
+    bool refine_hold_ = false;
+    // The ladder's sampler is sized for the whole machine while the whole world is being built and
+    // for half of it while somebody is playing, and this is how it gets from one to the other.
+    //
+    // It cannot simply be freed when the pass ends: the button ends the pass in the middle of a
+    // batch, and the sampler thread is inside that pool. So the pass says the pool is the wrong
+    // size and `pump_refinement` frees it on the first frame that has nothing outstanding, which
+    // is a second or so into play and costs one comparison a frame until then.
+    bool refine_pool_oversized_ = false;
 
     // ---- R11e and R11h: who is allowed to cause a sample, and what an edit does about it -------
     //
@@ -4419,6 +4549,11 @@ void Application::rearm_refinement(bool forget_refusals) {
 }
 
 bool Application::start_refinement() {
+    // Deliberately above everything, including the sweep: a hold is for draining what is already
+    // out, and a sweep that picked one more node would be the thing being drained. See
+    // `refine_hold_`. Nothing sets it outside the whole-world load, so this is one branch a frame
+    // on every other path.
+    if (refine_hold_) return false;
     {
         std::lock_guard<std::mutex> lock(refine_mutex_);
         if (refine_outstanding_ >= kRefineInFlight) return false;
@@ -4549,7 +4684,7 @@ bool Application::start_refinement() {
         const f64 to_y = (box.low.y + box.high.y) * 0.5 - cy;
         const f64 to_z = (box.low.z + box.high.z) * 0.5 - cz;
         const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
-        if (reach > 1e-6 && !options_.refine_all && !box.forced &&
+        if (reach > 1e-6 && !refine_the_lot() && !box.forced &&
             (to_x * fx + to_y * fy + to_z * fz) / reach < 0.0) {
             rank *= 0.05;
         }
@@ -4610,7 +4745,7 @@ bool Application::start_refinement() {
         // Split it down the same way the winner was, so every member of the batch is at the level
         // its own distance justifies rather than at whatever level it happened to be listed at.
         while (refine_regions_[next].key.level > finest &&
-               (options_.refine_all || refine_regions_[next].forced ||
+               (refine_to_the_finest() || refine_regions_[next].forced ||
                 next_keen > kRefineSplitAt ||
                 !refine_would_improve(refine_regions_[next]))) {
             const usize first_child = refine_regions_.size();
@@ -4682,13 +4817,24 @@ bool Application::start_refinement() {
     if (refine_jobs_ == nullptr && !gpu_sampling()) {
         // Fewer workers than the main system, and deliberately. This runs while somebody is
         // playing; taking every core would sharpen the world by stuttering it.
+        //
+        // ...EXCEPT while the whole world is being built before anybody is put in it, where the
+        // premise of that sentence is false. Nobody is playing, the only thing on the main thread
+        // is a bar drawn thirty times a second, and half the machine sitting idle is half of a
+        // wait that is measured in tens of minutes. Measured on this machine: `5 workers of 10`,
+        // for the length of an estate build. The pool goes back to the playing size before the
+        // first frame — see `refine_pool_oversized_`, because it cannot be freed while the
+        // sampler is inside it.
         const u32 hardware = std::thread::hardware_concurrency();
-        const u32 workers = (options_.refine_workers > 0)
-                                ? options_.refine_workers
-                                : (hardware > 4 ? hardware / 2 : 1);
-        WS_LOG_INFO("clip", "the ladder's sampler: {} workers of {} the machine has", workers,
-                    hardware);
+        const u32 share = full_load_running_ ? std::max(hardware, 1u)
+                                             : ((hardware > 4) ? hardware / 2 : 1u);
+        const u32 workers = (options_.refine_workers > 0) ? options_.refine_workers : share;
+        WS_LOG_INFO("clip", "the ladder's sampler: {} workers of {} the machine has{}", workers,
+                    hardware,
+                    full_load_running_ ? " -- the whole machine, because nobody is playing yet"
+                                       : "");
         refine_jobs_ = std::make_unique<JobSystem>(workers);
+        refine_pool_oversized_ = full_load_running_ && options_.refine_workers == 0;
     }
 
     refine_total_nodes_ += refine_batch_.size();
@@ -4724,6 +4870,14 @@ bool Application::start_refinement() {
 
 // Take delivery of a finished batch, if one is ready, and put it in the world.
 void Application::pump_refinement() {
+    // The whole-world pass left the sampler sized for a machine with nobody on it. See
+    // `refine_pool_oversized_`: this is the first moment it can be freed, because nothing is out
+    // in it, and the next batch builds a pool of the playing size in `start_refinement`.
+    if (refine_pool_oversized_ && !full_load_running_ && refine_jobs_ != nullptr &&
+        !refine_busy()) {
+        refine_pool_oversized_ = false;
+        refine_jobs_.reset();
+    }
     ensure_field_on_card();
     // R12: take the card's answer BEFORE topping the queue up, so the slot it frees is available to
     // the pick immediately below rather than a frame later. This is D622's own ordering finding —
@@ -4785,6 +4939,238 @@ void Application::pump_refinement() {
         return;
     }
     deliver_refinement(std::move(delivered));
+}
+
+// How often the whole-world load writes down what it has built so far.
+//
+// Two minutes, and the number is a trade between two costs that are both real. Writing is a walk
+// of every chunk and a file of hundreds of megabytes; not writing is an hour of somebody's evening
+// that a closed lid throws away. `save_refined_world` writes nothing at all unless more nodes are
+// sharp than the file already knows about, so on a pass that is making no progress this costs the
+// comparison and nothing else.
+constexpr u64 kFullLoadSaveEvery = 120ull * 1000ull * 1000ull * 1000ull;
+
+// How far the clip reaches from where the player is standing: the furthest of its own bounding
+// box's eight corners. That is the distance the whole-world pass has to finish out to, and it is
+// the denominator of its bar.
+f64 Application::furthest_corner_of_the_clip() const {
+    const f64 cx = camera_.metres_x();
+    const f64 cy = camera_.metres_y();
+    const f64 cz = camera_.metres_z();
+    // Per axis, whichever end of the box is further away — which picks the furthest corner without
+    // enumerating eight of them.
+    const f64 dx = std::max(std::abs(refine_bounds_low_.x - cx), std::abs(refine_bounds_high_.x - cx));
+    const f64 dy = std::max(std::abs(refine_bounds_low_.y - cy), std::abs(refine_bounds_high_.y - cy));
+    const f64 dz = std::max(std::abs(refine_bounds_low_.z - cz), std::abs(refine_bounds_high_.z - cz));
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// The nearest node that is NOT built. Everything closer than it is finished, so it is the radius of
+// the finished world — see the bar in `build_the_whole_world` for why that is the quantity and the
+// node count is not.
+//
+// A walk of the whole region list, which reaches a million entries on the estate. Called once a
+// second and nowhere else.
+f64 Application::frontier_of_the_build() const {
+    const f64 cx = camera_.metres_x();
+    const f64 cy = camera_.metres_y();
+    const f64 cz = camera_.metres_z();
+    f64 nearest = -1.0;
+    for (const RefineNode& box : refine_regions_) {
+        if (box.done) continue;
+        // Nought inside the box, which is the same distance the picker ranks by — so the frontier
+        // and the order the ladder works in are the same measurement.
+        const f64 dx = std::max({box.low.x - cx, 0.0, cx - box.high.x});
+        const f64 dy = std::max({box.low.y - cy, 0.0, cy - box.high.y});
+        const f64 dz = std::max({box.low.z - cz, 0.0, cz - box.high.z});
+        const f64 away = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (nearest < 0.0 || away < nearest) nearest = away;
+    }
+    // Nothing left anywhere: the world is finished out to its furthest corner and beyond.
+    return (nearest < 0.0) ? furthest_corner_of_the_clip() : nearest;
+}
+
+// THE WHOLE WORLD, BEFORE THE PLAYER IS PUT IN IT. See Options::full_load.
+//
+// Everything the ladder does in a frame, done here instead, with the loading screen in front of it
+// and nobody standing in the world yet — so the one rule that is suspended for the length of this
+// function is the rule the whole rewrite is about. `refine_everything_` turns off "what nobody can
+// see is not processed", because at this moment nobody can see anything and the answer would be
+// "process nothing". Everything else is the same code on the same path: the same picker, the same
+// sampler, the same paste, the same cache write, so a world finished here and a world finished by
+// standing in it for an hour are the same world.
+//
+// Returns false when it was cut short — the button, or the window closing. Nothing is dropped
+// either way: the ladder is left standing and carries on from wherever the player is.
+bool Application::build_the_whole_world() {
+    // Nothing to finish, and that is a real state rather than a failure: a clip built at its
+    // authored detail in one pass has no ladder, and neither has a world that came back from the
+    // cache already complete — `resume_refinement` resets it on exactly that condition.
+    if (refine_script_ == nullptr || refine_regions_.empty()) return true;
+
+    const u64 began = now_ns();
+    refine_everything_ = true;
+    full_load_running_ = true;
+    WS_LOG_INFO("load",
+                "finishing the whole world before entering it: {} nodes, everywhere rather than "
+                "where the camera happens to point, {}. `play now` ends this at any moment and "
+                "keeps every voxel already built",
+                refine_regions_.size(),
+                options_.full_load_authored
+                    ? std::string("every one of them at the clip's own metre ") +
+                          std::to_string(refine_authored_) + " (--full-load-authored: hours)"
+                    : std::string("each at the detail its own distance justifies"));
+
+    // HOW FAR OUT THE WORLD IS FINISHED, which is the bar, and it is NOT the node count.
+    //
+    // `done / size` was the obvious quantity and it is the failure this file's own header is
+    // written against. The denominator GROWS -- refining a node splits it into eight -- so the
+    // ratio is not a share of the work, it is a share of the work DISCOVERED SO FAR. Photographed
+    // on the estate: **the bar read 95% with 684,544 of 719,359 nodes built, and the node list
+    // went on to pass a million.** Ninety-five per cent, for a quarter of an hour, which is
+    // exactly "it fills quickly and then sits at ninety-nine".
+    //
+    // What is bounded by something known is DISTANCE. The picker ranks by size over distance, so
+    // the ladder finishes outward from where the player is standing -- the batch line's `m out`
+    // figure climbed 3.4, 5.2, 6.9, 13.5 over one run without once going back. So the nearest node
+    // that is NOT built is the radius of the finished world, and the furthest corner of the clip's
+    // own bounds is how far it has to go. Both are real lengths, and the ratio of them is a share
+    // of a thing that cannot grow underneath it.
+    //
+    // It is still clamped monotone. A node splits into children that are not done, so the frontier
+    // can step back a fraction of a metre while the near field bottoms out, and a bar going
+    // backwards reads as work being undone.
+    const f64 reach = furthest_corner_of_the_clip();
+    f64 shown = 0.0;
+    u64 counted_ns = 0;
+    u64 saved_ns = began;
+    bool finished = false;
+    const char* why_not = "";
+
+    // Everything out in the sampler, landed and pasted, and then the file. See `refine_hold_` for
+    // why a save cannot simply be taken where it is wanted.
+    const auto bank = [&] {
+        refine_hold_ = true;
+        // The button is honoured here too. A drain is a batch's worth of waiting and a save is a
+        // file of hundreds of megabytes, and a player who has just asked to be let in must not be
+        // held by either -- so a press abandons both. What is lost is at most the two minutes
+        // since the last save, which is what the interval is chosen to be worth.
+        while (refine_busy() && !loading_quit_ && !progress_.asked_to_enter()) {
+            pump_refinement();
+            draw_loading();
+            if (!loading_screen_.valid()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(4));
+            }
+        }
+        const bool quiet = !refine_busy();
+        refine_hold_ = false;
+        // ...and an INTERRUPTED drain has no save to take. See `refine_hold_`: a file written with
+        // a batch still out says those nodes are finished when their voxels are not in the world.
+        if (quiet && refine_script_ != nullptr) save_refined_world();
+    };
+
+    for (;;) {
+        pump_refinement();
+
+        // Finished, and there are two ways to say so because there are two fixed points. The
+        // ladder that runs out of nodes tears itself down in `deliver_refinement`, having written
+        // the world first; the ladder that finds nothing left to pick STANDS DOWN and its save is
+        // taken by `pump_refinement` on the tick after. Both mean the same thing here.
+        if (refine_script_ == nullptr) { finished = true; break; }
+        if (refine_stood_down_ && !refine_save_owed_ && !refine_busy()) { finished = true; break; }
+
+        // The way out. Read before anything else this iteration does, because the promise the
+        // button makes is that it is answered at the next node boundary and not at the next
+        // convenient one.
+        const u64 at = now_ns();
+        if (progress_.asked_to_enter()) {
+            full_load_cut_short_ = true;
+            why_not = "the player pressed `play now`";
+            break;
+        }
+        if (loading_quit_) {
+            full_load_cut_short_ = true;
+            why_not = "the window was closed";
+            break;
+        }
+        // EVERY SCRIPTED RUN ENDS ON THE CLOCK, and this pass is the one part of a load that can
+        // run for hours -- so the deadline has to reach in here or `--full-load --max-seconds 60`
+        // is a sixty-second promise a run keeps two hours later. Measured from `load_began_ns_`,
+        // which is what the frame loop's own deadline is measured from, so one flag means one
+        // thing wherever it is read. See Options::max_seconds.
+        if (options_.max_seconds > 0.0 &&
+            ns_to_ms(at - load_began_ns_) > options_.max_seconds * 1000.0) {
+            full_load_cut_short_ = true;
+            why_not = "the run's own --max-seconds deadline";
+            break;
+        }
+
+        // What is built, and how much world there is, once a second.
+        //
+        // Not every iteration, and the reason is arithmetic rather than taste: this loop turns
+        // over about two hundred and fifty times a second, the node count is a walk of a list that
+        // reaches a hundred and sixty thousand entries on the estate and the voxel count is a walk
+        // of every chunk. Twice a frame would be a measurable share of the main thread spent
+        // measuring. A bar that moves once a second is a bar that moves; `look` creeps it along in
+        // between from the stage's own share of the wall clock.
+        if (at - counted_ns > 1000000000ull) {
+            counted_ns = at;
+            const f64 ratio = (reach > 1e-6) ? (frontier_of_the_build() / reach) : 0.0;
+            if (ratio > shown) shown = ratio;
+            progress_.within((shown > 1.0) ? 1.0 : shown);
+            progress_.count(world_.stats().solid_voxels, 0);
+        }
+
+        draw_loading();
+        // `draw_loading` is what PACES this loop: it draws thirty times a second and sleeps four
+        // milliseconds on the turns between. With no screen to draw — a run whose loading shader
+        // would not compile, or any path that reaches here without one — it returns at once, and
+        // this becomes a spin on the sampler's own mutex at a hundred thousand turns a second,
+        // which does not merely waste a core, it starves the thing it is waiting for. So the
+        // pacing is stated here rather than borrowed from something that might not be there.
+        if (!loading_screen_.valid()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        }
+
+        if (at - saved_ns > kFullLoadSaveEvery) {
+            saved_ns = at;
+            bank();
+        }
+    }
+
+    refine_everything_ = false;
+    full_load_running_ = false;
+    // The world is a great deal bigger than it was, and how far it reaches is what every ray is
+    // clipped to. `announce_world_change` does not do this — an edit does it separately — so a
+    // pass that added the far side of the estate has to say so once, here.
+    refresh_world_bounds();
+
+    const f64 spent = ns_to_ms(now_ns() - began);
+    const WorldStats now = world_.stats();
+    if (finished) {
+        WS_LOG_INFO("load",
+                    "the whole world is built in {:.0f} ms: {} chunks, {} solid voxels, content "
+                    "{:016x} -- and it is in the cache, so the next launch of this clip reads it "
+                    "back instead",
+                    spent, now.chunks, now.solid_voxels, world_.content_hash());
+        return true;
+    }
+    // NOT saved here, and that is the button's whole point: a press means the player wants to be
+    // in the world now, and standing them in front of a three-hundred-megabyte write is answering
+    // a different request. What they built is banked by the periodic save above to within two
+    // minutes, and the rest is written on the way out like every other session's.
+    usize done = 0;
+    for (const RefineNode& box : refine_regions_) {
+        if (box.done) ++done;
+    }
+    WS_LOG_INFO("load",
+                "left the whole-world build after {:.0f} ms ({}): the world is finished for "
+                "{:.1f} m around the player of the {:.1f} m the clip reaches, {} of {} nodes "
+                "built, {} solid voxels in {} chunks, content {:016x}. Nothing is dropped -- the "
+                "ladder carries on from where the player is standing",
+                spent, why_not, frontier_of_the_build(), reach, done, refine_regions_.size(),
+                now.solid_voxels, now.chunks, world_.content_hash());
+    return false;
 }
 
 void Application::deliver_refinement(RefineDelivery delivered) {
@@ -5411,7 +5797,7 @@ void Application::seed_refine_nodes(const forge::Script& script) {
                     // already holds here, and with no coarse paste it holds nothing. Seeding it
                     // with the coarse resolution anyway would tell every node it was already
                     // eight-voxels-a-metre good and the ladder would refine almost nothing.
-                    node.applied_per_metre = options_.no_coarse_paste ? 0 : refine_coarse_per_metre_;
+                    node.applied_per_metre = coarse_build_pasted_ ? refine_coarse_per_metre_ : 0;
                     refine_regions_.push_back(node);
                 }
             }
@@ -5808,7 +6194,7 @@ bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64
     // cut is very often behind something -- that is what carving is -- and a node demoted for
     // facing away or refused for being occluded is a node the edit will cut blind.
     const bool demanded = refine_regions_[at].forced;
-    if (reach > 1e-6 && !options_.refine_all && !demanded) {
+    if (reach > 1e-6 && !refine_the_lot() && !demanded) {
         const f64 facing = (to_x * fx + to_y * fy + to_z * fz) / reach;
         if (facing < 0.0) keen *= 0.05;
     }
@@ -5826,7 +6212,7 @@ bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64
     // for the three log entries that measured this test costing more than it saved and one that
     // measured it being actively WRONG on a cold load, and for what enlisting the hidden nodes
     // costs in return.
-    if (options_.occlusion_cull && reach > 1e-6 && !options_.refine_all && !demanded) {
+    if (options_.occlusion_cull && reach > 1e-6 && !refine_the_lot() && !demanded) {
         const f64 v = static_cast<f64>(kVoxelsPerMetre);
         const u64 ray_began = now_ns();
         const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z, reach * v);
@@ -6156,6 +6542,9 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
     // What the world on disk is already at: the coarse rung it was built with. A cached world may
     // hold sharpened boxes as well, which resume_refinement marks below.
     refine_coarse_per_metre_ = refine_script_->settings.voxels_per_metre;
+    // A resumed world holds whatever the run that wrote it laid down, and the saved regions below
+    // overwrite this node by node anyway; what it decides is the nodes the file says nothing about.
+    coarse_build_pasted_ = !options_.no_coarse_paste;
     seed_refine_nodes(*refine_script_);
 
     // An empty list is a world built at its authored detail in one pass, with no ladder behind it
@@ -6906,6 +7295,12 @@ void Application::build_world() {
                 field_card_tried_ = false;
                 refine_resumed_ = false;   // built from nothing this run
                 refine_coarse_per_metre_ = refine_script_->settings.voxels_per_metre;
+                // What is ACTUALLY under the ladder. The paste above is skipped by
+                // `--no-coarse-paste` and by the button both, and only one of those was being
+                // asked about -- so a player who pressed `play now` on a `--coarse-paste` run got
+                // a ladder told the world was already coarse-good everywhere over a world that
+                // was empty, and it refined almost nothing.
+                coarse_build_pasted_ = !options_.no_coarse_paste && !stop_for_button;
                 seed_refine_nodes(*refine_script_);
                 WS_LOG_INFO("clip",
                             "{} eight-metre nodes to sharpen, biggest on screen first; each one "
@@ -7538,7 +7933,17 @@ void Application::announce_world_change(const i64 lo[3], const i64 hi[3], WorldC
     // was never built -- which on a large delete is nearly all of them: 1,573,269 announced,
     // 13,325 nodes actually refreshed, 714 ms to find that out. The pool holds the tree, so the
     // pool prunes.
-    node_pool_.invalidate_box(lo, hi);
+    //
+    // ...and NOT during the whole-world load, because there is no tree to prune yet.
+    //
+    // That pass runs before the first frame, so the pool has been created and holds nothing: every
+    // one of its nodes is built on demand from the world, and the world it will be built from is
+    // the finished one. A quarter of a million announcements about an empty tree is a quarter of a
+    // million boxes queued in `dirty_` to be walked against no live roots at all -- pure book-
+    // keeping, and it is the one part of a node's arrival that is worth nothing here. Every other
+    // line of this function still runs: the emitter cache really does go stale, and the ladder
+    // really does have to be re-armed by its own paste.
+    if (!full_load_running_) node_pool_.invalidate_box(lo, hi);
 }
 
 // How far the world reaches, which is how far a ray may usefully travel: `bounds_min` and
@@ -11038,6 +11443,42 @@ int Application::play(const Options& options) {
     if (!hud_.create(device_, window_, swapchain_.format())) return 1;
     steps.lap("the interface");
 
+    // ---- THE WHOLE WORLD, AND ONLY THEN THE PLAYER -------------------------------------------
+    //
+    // Asked for directly on 2026-08-20: *"make the worlds launch first by loading the entire world
+    // and saving it to cache, if i want to enter the world i can just press the enter now button"*.
+    //
+    // HERE, and it is the last thing before the frame loop, for three reasons that each rule out
+    // everywhere else it could have gone. The card's sampler is up, so `--gpu-sample` takes the
+    // arm it asks for rather than latching itself off. The node pool is created and holds NOTHING
+    // — it builds every node on demand from the world, and the world it will be built from is the
+    // finished one, which is why `announce_world_change` skips it for the length of this pass.
+    // And the bar's last stage is still the last thing that happens, so a hundred per cent still
+    // means the game is up rather than nearly up.
+    //
+    // A SCRIPTED RUN DOES NOT DO THIS unless `--full-load` says so by name. That is the same rule
+    // the way in follows and it is here for the same reason: `--settle`, `--screenshot`,
+    // `--benchmark` and `baseline.ps1` have to reach the state they reached before this existed,
+    // or every figure in this repository is silently about a different load. See D686 for what
+    // this costs on the estate, measured, and Options::full_load for what it buys.
+    const bool finish_the_world =
+        options_.full_load && !progress_.asked_to_enter() &&
+        (!options_.scripted() || options_.full_load_asked);
+    if (finish_the_world) {
+        progress_.enter(LoadStage::Filling);
+        draw_loading();
+        const bool whole = build_the_whole_world();
+        steps.lap(whole ? "finish the whole world" : "the whole world, cut short");
+    } else if (refine_script_ != nullptr) {
+        // Said out loud, because "the world filled in around me" and "this build does not finish
+        // worlds up front" are the same report from the two sides of the screen, and the log is
+        // the only thing that can tell them apart without a special build.
+        WS_LOG_INFO("load", "the world is NOT finished up front: {}",
+                    !options_.full_load        ? "--no-full-load"
+                    : progress_.asked_to_enter() ? "the way in was taken before it could start"
+                                                 : "a scripted run -- see --full-load");
+    }
+
     // A hundred per cent, and the next thing that happens is a real frame.
     //
     // This is the whole promise of the screen and it is kept here rather than anywhere earlier:
@@ -11111,14 +11552,17 @@ int Application::play(const Options& options) {
             WS_LOG_INFO("load",
                         "the way in was offered at t+{:.0f} ms and taken at t+{:.0f} ms; {}",
                         offered, ns_to_ms(load_entered_ns_ - load_began_ns_),
-                        progress_.entered_early()
+                        full_load_cut_short_
+                            ? "the whole-world build was cut short and the rest of it is built "
+                              "from where the player is standing"
+                        : progress_.entered_early()
                             ? "the up-front build and the cache write were skipped"
                             : "the world was already built, so nothing was left to skip");
             // ...and the same two numbers, taken here, with the whole of the GPU setup in between.
             // If they differ from the pair above, something between the button and the frame loop
             // re-derived or dropped what the player had already been given, which is the one thing
             // this feature must never do.
-            if (progress_.entered_early()) {
+            if (progress_.entered_early() || full_load_cut_short_) {
                 const WorldStats kept = world_.stats();
                 WS_LOG_INFO("load", "and it is still {} solid voxels in {} chunks, content {:016x}",
                             kept.solid_voxels, kept.chunks, world_.content_hash());
