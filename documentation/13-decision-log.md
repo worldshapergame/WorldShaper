@@ -14998,3 +14998,89 @@ Gate: `1429596 / efeb39a93c369a2d / shape d41424c8236d15ac` unmoved — bookkeep
 | D739 | **R11f's documented data-loss case closes as a side effect** | measurement | A carved-and-refilled brick agrees with the clip and used to be dropped unless a box was named |
 | D739 | **The game cannot save an edited world and load it back** | honesty | The gate is in-process through the shipped reader and writer; the save path does not exist |
 | D739 | **A carve through an unallocated slot records nothing** | honesty | Carving open sky must stay free; the one hole left in the bookkeeping |
+
+---
+
+## D741 — R10 was already built, the row said otherwise, and an agent read the code before believing it
+
+**2026-08-20.** A wave of seven agents was dispatched from a list of what was missing. One item on
+that list was *"R10 — ambient occlusion, per face and under it (planned, not started; interiors lit
+as if in the open)"*, quoted from `21-renderer-rewrite.md` §8.0.
+
+**R10a, R10b, R10c and R10h have been in the tree since D325–D337 and D381–D396.**
+
+### Where the wrong row came from, and what stopped it costing a day
+
+The ledger holds **four** rows for R10. The three sub-step rows say `done`. The stage row said
+*planned, not started* — and it was the stage row that got read into a brief. `22-rewrite-handover.md`
+§3 also says done, in the R3 line, and a paragraph 5,000 lines further down said *not started*. Two
+files, four places, two answers.
+
+The agent dispatched against it **read the code before writing anything** and found:
+
+- `shaders/shade_faces.comp` accumulates a cosine-weighted hemisphere ray into its own counters;
+- `resolve.comp` already reads it — `float sees_sky = face_sky_visibility(open_sky, unoccluded) * kSkyAmbient;`
+- the line the brief quoted as current, `kSkyAmbient * (0.5 + 0.5 * normal.y)`, **survives only as a
+  comment explaining what was replaced**;
+- R10b's near/far split is in `sky_cast`, one ray answering both;
+- debug views **17, 18, 19 and 20** are R10h, and are in the `--debug-mode` help.
+
+It said so plainly and built the one sub-step that genuinely is not there. **That is the whole value
+of the "say what you could not make work" rule pointing the other way**: an agent that had simply
+built what it was told to would have rewritten a working stage, and the gate would have passed.
+
+Both stale places are corrected in the same change as this entry.
+
+### R10d — the bent normal — was built, measured, and is NOT shipped
+
+The bent normal is the l=1 moment of the visibility function whose l=0 and linear moments the face
+record already holds. Three `int` accumulators, no ray, no pass, no count of its own:
+`sky_accumulate` adds `s.dir * (1 - s.contact)`, which the pass was **throwing away** exactly as it
+threw away `s.at` before R10c. It folds up the tree exactly — a mean direction over four adjoining
+patches of one plane *is* the mean over the patch they make up — seeds from the nearest ancestor
+rescaled to the seed count, and an edit scales it with the near field it is a moment of.
+
+**Debug view 27, the tilt in degrees off the geometric normal, is the picture worth having**: the
+flat middle of every wall is black, which is the correct answer and proves there is no self-tilt on a
+plane, and every wall-to-wall and wall-to-ceiling seam glows as a smooth band that brightens into the
+corner — **continuous across the face lattice**, no per-face blocks, no seam. "Corner, plane and
+shape aware" as one consequence rather than four heuristics.
+
+**And the shaded picture does not move, which is why it is not shipped.** With the term on and
+rebuilt, the room moved 88.03% of pixels at a mean of **2.2020 of 255**. Two runs of the **control
+binary against itself** moved 87.99% at **2.2141 of 255**. The effect is exactly the run-to-run
+floor. Applying the composite hunk and re-shooting gave 88.44% at 2.2393 — the same floor again.
+
+Debug view 28 explains it: the bent normal built here is the first moment of the **near field**, so
+its cone is a *contact* cone over one metre, not a sky cone. In a 5-metre room nearly every ray
+clears a metre, so openness reads 1 almost everywhere. It is the right input for R4c's specular
+occlusion and for R9's gathering direction; **"a wall beside a doorway is lit from the doorway" needs
+the moment of SKY visibility over the FAR ray, which is three more words and is not built.**
+
+It costs the face light array **92,928 KB → 105,600 KB, +12,672 KB, +13.6%**, unconditionally,
+because the words are in the record whether the flag is on or not. **A 12.7 MB tax for a term
+nothing reads is not a trade, so it is left on its branch** (`r10d-bent-normal`, `38462d0`) rather
+than merged, to be picked up when R4c needs it. The agent's own recommendation was the same, which is
+worth recording: it said *if you do not want the resolve.comp hunks, this change is dead weight and
+should be reverted rather than shipped.*
+
+### Two things it found that are not R10
+
+- **`tools/darkroom.ps1` is RED at HEAD.** *"dark room, clear: FAILED — brightest channel 1 of 255,
+  107 pixels above nought"*, with identical numbers on a clean rebuild with the change stashed. **A
+  sealed room is not black on `main` right now.** Not investigated here; recorded so the next session
+  starts from a fact rather than from a surprise.
+- **`clips/facility.clip` could not be photographed as an A/B at all.** Two runs of one binary settled
+  on different worlds — 291 chunks / 568,729,853 voxels / `0d38404e696e20e6`, then 289 /
+  522,827,058 / `3bdcda750f99ffd2`, warm cache included. That is trap 8 with six other agents on the
+  machine. `clips/glazed_skylight.clip` was used instead because it settles to a fixed content hash.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D741 | **R10 was built and one of its four ledger rows said otherwise** | fault | The three sub-step rows said done; the stage row said planned, and the stage row is what got read |
+| D741 | **The agent read the code before believing the brief** | decision | It would otherwise have rewritten a working stage, and the gate would have passed |
+| D741 | **R10d built, measured at the run-to-run floor, not shipped** | measurement | 88.03% at 2.2020 against a control-against-itself floor of 87.99% at 2.2141 |
+| D741 | **It is the moment of the NEAR field, not of the sky** | honesty | A contact cone over one metre; the doorway case needs the far ray and is not built |
+| D741 | **+12,672 KB unconditionally, so it stays on its branch** | decision | The words are in the record whether the flag is on or not; a tax for a term nothing reads |
+| D741 | **`darkroom.ps1` is RED at HEAD** | fault | A sealed room is not black on `main`; identical with the change stashed |
+| D741 | **The facility cannot A/B a picture** | trap | Two runs of one binary settled 46 million voxels apart |

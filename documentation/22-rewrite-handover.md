@@ -5201,6 +5201,15 @@ incomparable, so it wants to be its own change with its own baseline.
 
 ### R10 — ambient occlusion, and why it is planned next to R3c rather than as a feature
 
+> **STALE, and corrected on 2026-08-20 (D741). R10 IS BUILT** — a, b, c and h landed at D325–D337
+> and D381–D396, and section 3 of this file has said so all along. The composite has read measured
+> visibility since D325; the orientation guess described below survives only as a comment in
+> `resolve.comp` explaining what was replaced, and debug views 17, 18, 19 and 20 are R10h. **A wave
+> of agents was very nearly dispatched against this paragraph.** The one that was read the code
+> first, said the premise was stale, and built R10d instead. What is genuinely left is R10d (built,
+> measured, NOT shipped — D741) and R10e–R10g. Everything below is kept because the ARGUMENT in it
+> is still the right one and is still what the stage rests on.
+
 Asked for by the user, planned in `21-renderer-rewrite.md` §8 R10 and not started. Read that section
 before the rest of this list, because it changes what R3c's sky sub-step is: **the composite already
 applies an ambient term to every surface in the frame and there is nothing anywhere that occludes
