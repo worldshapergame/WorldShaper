@@ -13847,3 +13847,75 @@ D724 has already priced what the cull replay costs.
 | D727 | **1.05× and 18% of watchdog margin** | build | 2.85 → 2.71 µs a cell, control arm built with the change absent |
 | D727 | **Specialising the shader per clip is the lever; a block walk is not** | honesty | 512 lockstep lanes where 32 already are, and D724 priced the cull replay |
 | D727 | **An instrument that counts turns is not counting work** | trap | "1.75× the CPU" was 1.75 turns a node; D681's lesson for the third time |
+
+---
+
+## D728 — The pick sweeps what is left to do, and the reason it was going to get worse did not survive measurement
+
+**2026-08-20.** D726's heartbeat put the ladder's own main-thread cost in the log for the first time,
+and the line that came out of it was `ladder 619,662 regions, pick 5,992 ms of main thread so far
+(2,421 of it sweeping 283,303,203 entries)`. This is that number attacked, and the honest half of the
+entry is that **the argument for attacking it turned out to be wrong.**
+
+### The change
+
+`refine_regions_` only ever grows. A node that is finished stays in it for ever — its box and its
+`applied_per_metre` are what `save_refined_world` writes and what a resumed run reads back — and the
+pick swept **all of them** to find the one worth sampling next. On the estate at full resolution the
+list passes six hundred thousand within a few minutes, and nearly every entry is done.
+
+`refine_live_` holds the indices of the nodes that might still have work in them. **A superset,
+deliberately, and that is what makes it safe:** every not-done node is in it, an entry whose node has
+since been finished is skipped by the same `box.done` test the sweep always had, and so the invariant
+to keep is only ever *add on the way in*. There are exactly three places a node becomes not-done —
+`seed_refine_nodes`, `split_refine_node`, and the requeue in `stop_refine_worker` — and it is compacted
+when more than half of what it holds is stale, counted during the sweep that is walking it anyway.
+
+Indices rather than pointers because `refine_regions_` reallocates, and index stability is a property
+everything here already leans on: `RefineJob::at` is an index held across a batch that is out being
+sampled.
+
+**Matched arms, one shared cache, 2,400 frames each, 293 chunks and ~195,000 live faces either way:**
+
+| | entries swept | sweep ms |
+|---|---|---|
+| `--sweep-all-regions` | 17,455,929 | 458 |
+| the live list | **1,022,781** | **143** |
+
+**Seventeen times fewer entries and 3.2 times less time.** And the gate that actually matters here is
+the world: both arms build `clips/sampler.clip` at **1,430,104 solid voxels, content
+`d0d5f84c685be847`**. A node missing from the live list is a node the picker never chooses, and D624
+is what that costs — 606 voxels that were sampled and never pasted, invisible until somebody hashed
+the world.
+
+### And what it is worth is 1.5% of a frame, not a growing share
+
+**The reason to do it was that the cost grows with a list that reaches millions. That did not
+survive the measurement.** Two readings of the control arm:
+
+| regions | sweep, per frame |
+|---|---|
+| 120,710 | 0.19 ms |
+| 619,662 | 0.18 ms |
+
+**Five times the list, the same cost a frame.** The per-frame cost is flat because the number of
+sweeps a frame falls as the ladder slows down — there are fewer free slots to pick into once the
+sampler is saturated — and the two effects cancel almost exactly.
+
+So this is worth about **0.13 ms of an eight-to-ten millisecond frame**, and it will go on being
+worth about that. It is in because it is measured, gated and free at run time; it is written down
+this way because the version of this entry that said "and it grows without bound" would have been an
+argument rather than a measurement, and the next person would have believed it.
+
+**The pick's total did not move**: 1,194 ms against 1,065 over the same 2,400 frames, with the
+sweeping down by 315 of them. The rest of a pick — the shortlist descent, `refine_candidate`,
+`split_refine_node`, `enlist` — is per-pick work proportional to the batch, and it is now the whole
+of it. That is where a next attempt goes.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D728 | **The pick walks the not-done, not everything ever made** | build | 17,455,929 entries against 1,022,781 over 2,400 matched frames |
+| D728 | **A superset is what makes it safe** | decision | A stale entry costs one comparison; the invariant is only "add on the way in", in three places |
+| D728 | **Both arms build the same world to the voxel** | gate | A node missing from the list is never picked, and D624 is what that costs |
+| D728 | **The reason for doing it — that it grows — is FALSE** | honesty | 120,710 regions and 619,662 both cost 0.18–0.19 ms a frame; the sweeps a frame fall as the list grows |
+| D728 | **So it is worth 1.5% of a frame, and that is all** | honesty | 0.13 ms of eight to ten; the pick's total did not move |
