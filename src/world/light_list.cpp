@@ -139,6 +139,84 @@ f64 contribution(const LightSource& light, i64 centre_x, i64 centre_y, i64 centr
     return luminance * radius * radius / distance_sq;
 }
 
+// What a fitting gives off, with the observer taken out of it: `contribution` without the distance
+// term. A fact about the lamp, which is the whole point — it is what the cap is spent by when the
+// cap is spent on the world rather than on the camera.
+f64 emitted_power(const LightSource& light) {
+    const f64 radius = 0.87 * std::cbrt(static_cast<f64>(std::max(light.voxels, 1u)));
+    const f64 luminance = 0.2126 * static_cast<f64>(light.red) +
+                          0.7152 * static_cast<f64>(light.green) +
+                          0.0722 * static_cast<f64>(light.blue);
+    return luminance * radius * radius;
+}
+
+// A total order over two fittings that never consults the camera: brightest first, and the bytes
+// when two are equally bright. It has to be total — `std::sort` is not stable, so a comparator that
+// leaves two records equal lets the input order decide, and the input order here came from a map.
+bool brighter(const LightSource& a, const LightSource& b) {
+    const f64 pa = emitted_power(a);
+    const f64 pb = emitted_power(b);
+    if (pa != pb) return pa > pb;
+    return std::memcmp(&a, &b, sizeof(LightSource)) < 0;
+}
+
+// The cap, dealt round the world instead of measured from the camera. See kLightCapByWorld.
+//
+// Buckets of kLightCapCellVoxels, ordered by key; inside a bucket, brightest first; then round
+// after round, one from each bucket, until the cap is full. Nothing in it reads `centre`, so the
+// answer is a fact about the world and moving does not change it.
+//
+// `ranked` arrives in the camera's order and the survivors come back in it, so only membership
+// changes here. Kept as a filter rather than a rebuild for exactly that reason.
+std::vector<LightSource> deal_the_cap(const std::vector<LightSource>& ranked) {
+    std::unordered_map<ClusterKey, std::vector<u32>, ClusterKeyHash> in_cell;
+    std::vector<ClusterKey> cells;
+    for (u32 i = 0; i < static_cast<u32>(ranked.size()); ++i) {
+        const LightSource& light = ranked[i];
+        const ClusterKey key{floor_div(light.x, kLightCapCellVoxels),
+                             floor_div(light.y, kLightCapCellVoxels),
+                             floor_div(light.z, kLightCapCellVoxels)};
+        const auto [at, fresh] = in_cell.try_emplace(key, std::vector<u32>{});
+        if (fresh) cells.push_back(key);
+        at->second.push_back(i);
+    }
+
+    std::sort(cells.begin(), cells.end(), [](const ClusterKey& a, const ClusterKey& b) {
+        if (a.x != b.x) return a.x < b.x;
+        if (a.y != b.y) return a.y < b.y;
+        return a.z < b.z;
+    });
+    for (const ClusterKey& key : cells) {
+        std::vector<u32>& mine = in_cell.find(key)->second;
+        std::sort(mine.begin(), mine.end(),
+                  [&](u32 a, u32 b) { return brighter(ranked[a], ranked[b]); });
+    }
+
+    std::vector<bool> kept(ranked.size(), false);
+    usize admitted = 0;
+    for (usize round = 0; admitted < kMaxLights; ++round) {
+        bool any = false;
+        for (const ClusterKey& key : cells) {
+            const std::vector<u32>& mine = in_cell.find(key)->second;
+            if (round >= mine.size()) continue;
+            any = true;
+            kept[mine[round]] = true;
+            if (++admitted == kMaxLights) break;
+        }
+        // Cannot happen while there are more fittings than the cap, which is the only way in here.
+        // Stated rather than assumed, because a loop that depends on a caller's condition is a hang
+        // waiting for somebody to change the caller.
+        if (!any) break;
+    }
+
+    std::vector<LightSource> out;
+    out.reserve(admitted);
+    for (usize i = 0; i < ranked.size(); ++i) {
+        if (kept[i]) out.push_back(ranked[i]);
+    }
+    return out;
+}
+
 // Say it once, not once a frame.
 //
 // The list is rebuilt on every edit, so a scene that has outgrown the cap would otherwise write
@@ -375,12 +453,19 @@ std::vector<LightSource> merge_light_list(const std::vector<EmissiveCell>& sourc
     for (const Ranked& entry : ranked) lights.push_back(entry.light);
 
     const usize dropped = (lights.size() > kMaxLights) ? lights.size() - kMaxLights : 0;
-    // Truncate to exactly the cap, which is the shader's signal for "this list is not all of
-    // them". Stopping one short would look complete to it, and it would then hand every dropped
-    // lamp to nobody: direct sampling owns emitters outright, so the ones past the end would
-    // simply go out. Losing direct sampling for the whole scene is the honest failure, and the
-    // warning above is how anyone finds out it happened.
-    if (dropped > 0) lights.resize(kMaxLights);
+    // Down to exactly the cap, which is all the buffer the card has. Whatever is dropped is lit by
+    // nobody — direct sampling owns emitters outright, so a fitting past the end goes out until a
+    // bounce happens to land on it — and the warning above is how anyone finds out it happened.
+    //
+    // WHICH ones go is R9g. Cutting the camera's ranking makes the surviving set a fact about where
+    // the player is standing, so walking turns lamps off; dealing the cap round the world makes it a
+    // fact about the world, so only an edit can. Both arms end with exactly kMaxLights entries and
+    // differ in nothing else.
+    if (dropped > 0) {
+        lights = kLightCapByWorld ? deal_the_cap(lights)
+                                  : std::vector<LightSource>(lights.begin(),
+                                                             lights.begin() + kMaxLights);
+    }
     note_overflow(dropped);
     return lights;
 }

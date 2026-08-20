@@ -130,6 +130,7 @@ add_library(ws_world STATIC
     src/world/world_cache.cpp
     src/world/gpu_brick.cpp
     src/world/light_list.cpp
+    src/world/emitter_store.cpp
     src/world/node_pool.cpp
     src/world/face_store.cpp)
 target_include_directories(ws_world PUBLIC src)

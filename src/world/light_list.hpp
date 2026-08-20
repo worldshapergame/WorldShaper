@@ -68,15 +68,49 @@ inline constexpr i64 kLightFittingVoxels = 32;
 // so past this ratio the merge is refused and the pieces stay pieces.
 inline constexpr u32 kLightMergeSlack = 8;
 
-// More than this and the weakest are dropped. Matched by `const uint kMaxLights` in
-// shaders/node.glsl, and the two have to agree: the shader has no separate flag for a
-// truncated list, it infers one from `count == kMaxLights` and turns direct light sampling off
-// entirely when it sees that. So a list of exactly this length means "do not trust me", and a
-// shorter one means "these are all of them".
+// More than this and some are dropped. Matched by `const uint kMaxLights` in shaders/node.glsl and
+// by the length of `light_buffer_`, and the three have to agree: the shader clamps its own index
+// against it and reads nothing past it.
+//
+// **A dropped fitting is lit by nobody.** Direct sampling owns emitters outright, so a lamp that is
+// not in this buffer is not aimed at by any face, and the only thing left that can find it is a
+// diffuse bounce landing on it by chance — which is the interior noise this whole file exists to
+// remove. That is the cost of the cap, and it is why WHICH fittings survive it matters as much as
+// how many do. (An earlier version of this comment said the shader infers truncation from
+// `count == kMaxLights` and turns direct sampling off entirely when it sees it. It does not:
+// shade_faces.comp only ever writes `min(node_push.light_count, kMaxLights)` and samples that many.
+// Nothing anywhere reads the cap as a flag.)
 //
 // Raising it is a shader edit as well as this one, and costs 28 bytes of host-visible buffer
 // per light (1024 lights is 28 KB today).
 inline constexpr usize kMaxLights = 1024;
+
+// ---- and WHICH of them survive it, which is R9g's other half ----------------------------------
+//
+// The list is ranked by what each fitting delivers at the camera and then cut at the cap. In a
+// scene that overflows, that makes the SET of lamps that exist a function of where the player is
+// standing: walk twenty metres, the ranking turns over, and a fitting that was in the list is not —
+// so a lamp goes out with nothing having changed about the lamp. It is the face set's fault (R9a)
+// one system along: the light is defined by where the camera is rather than by where the light is.
+//
+// So the cap is spent on the WORLD instead. Fittings are bucketed by a coarse cell of world space
+// and the cap is dealt round the buckets, strongest first inside each — every neighbourhood keeps
+// its brightest lamps, and it keeps exactly the same ones whatever the camera does. What survives
+// then changes only when the world changes, which is the one thing `light_list_hash` is allowed to
+// notice, and a lamp cannot blink because somebody walked.
+//
+// The order of the list is still the ranking, because the head of it being the most useful costs
+// nothing and reads better in a dump. Order is not what the cap depends on and not what the hash
+// runs over (D500).
+//
+// Under the cap this does nothing at all — the facility has 21 fittings against 1,024 — so this is
+// a mechanism for a scene that is not yet built rather than a change to the one that is.
+inline constexpr bool kLightCapByWorld = true;
+
+// The neighbourhood the cap is dealt round: 1,024 voxels is 32 metres, which is a room and its
+// neighbours rather than a building. Small enough that no quarter of a scene can be starved by a
+// dense one next door, large enough that the deal is over hundreds of cells and not thousands.
+inline constexpr i64 kLightCapCellVoxels = 1024;
 
 // ---- the two halves of finding the lamps, split so only one of them has to be redone ----------
 //

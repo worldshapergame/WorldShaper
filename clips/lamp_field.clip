@@ -1,0 +1,40 @@
+# A field of more fittings than the emitter list can hold, which is the scene R9g's cap needs.
+#
+# D587 measured the facility at **21 emitters against a cap of 1,024** and concluded that a lamp
+# blinking out past the cap could not happen in the only scene this engine is judged against. That
+# is true of the facility and it is not a reason to leave the mechanism untested: the fault is one
+# clip away, and a mechanism with no scene that exercises it is a mechanism nobody can check.
+#
+# So: 1,156 separate fittings on a plane, far enough apart that no two of them merge into one, over
+# a floor with nothing else in it. The list is cut to 1,024 and 132 fittings are dropped, which the
+# builder says out loud. What the clip is for is the question of WHICH 132 — under a list ranked
+# from the camera it is the 132 furthest from wherever somebody happens to be standing, so walking
+# turns lamps off and on; under a cap dealt round the world it is the same 132 whatever the camera
+# does, and a lamp can only change when the world does.
+#
+# Deliberately shallow. The sample volume is thirty metres square and three high because the point
+# of it is the COUNT of fittings, and a room built round them would cost minutes of sampling to say
+# nothing this does not already say.
+
+metre 32
+bounds -15 -0.4 -15   15 3.2 15
+
+material lf_floor rgb=110,106,102 rough=225
+material lf_lamp  rgb=255,228,180 rough=140 emit=200
+
+# The floor, so there is something for the lamps to light and something for a chisel to bite.
+let lf_slab  = box -14.6 -0.4 -14.6   14.6 0.0 14.6
+
+# One fitting: five voxels a side at 32 to the metre. A cluster cell is four voxels and fittings
+# merge when their cells touch face to face, so the 0.69 m of air between neighbours keeps all
+# 1,156 of them separate — which is the whole point, since merging is what usually brings a scene
+# back under the cap.
+let lf_cube  = box -0.08 2.40 -0.08    0.08 2.56 0.08
+let lf_grid  = translate { repeat { lf_cube } x=0.85 nx=34 z=0.85 nz=34 } -14.0 0 -14.0
+
+let lf_all   = union { lf_slab lf_grid }
+
+paint lf_floor
+paint lf_lamp where=lf_grid below=0.02
+
+solid lf_all
