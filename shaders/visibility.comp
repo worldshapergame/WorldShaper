@@ -63,7 +63,13 @@ layout(binding = 28, rgba16f) uniform writeonly image2D out_reflect;
 // uninitialised `far` on any SECOND medium exactly -- the loop's exit is then gated on `bent`
 // again, which is set on a path that does not assign `far`. It exists so the two arms can be built
 // from one tree; the control that decides anything is still the tree with this change absent.
-const bool kFarFallbackOnEveryTurn = true;
+//
+// It is a RUNTIME dial now -- `--no-far-fallback`. The agent that built it left it compile-time
+// because the probe word looked full; it was not, it had a collision. `kProbeRefractStack` and
+// `kProbeCoverageBins` were both bit 14, so bits 15 upward read as taken when they were not. Bit 17
+// is this one. Must match `kProbeFarFallback` in src/gpu/render_params.hpp.
+const uint kProbeFarFallback = 1u << 17;
+bool probe_far_fallback() { return (light_probe.words[0] & kProbeFarFallback) != 0u; }
 
 // The sky, for the reflected segments that reach it, and the surfaces they land on.
 //
@@ -645,7 +651,7 @@ void main() {
                     break;
                 }
             }
-            if (!(kFarFallbackOnEveryTurn ? have_far : bent)) {
+            if (!(probe_far_fallback() ? have_far : bent)) {
                 far = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
                                  report_used, report_face, true, false, kThroughPass,
                                  kNodeUnbounded, 0.0);

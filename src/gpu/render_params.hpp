@@ -442,6 +442,16 @@ inline constexpr u32 kProbeRefract = 1u << 9;
 // second pane of a stack contributes its opacity tint and none of its `absorb` colour, and the
 // path behind the first pane is straight.
 inline constexpr u32 kProbeRefractStack = 1u << 14;
+
+// D736: `--no-far-fallback` off restores the read of an uninitialised `far` on any SECOND medium.
+// Spelled again in `shaders/visibility.comp`, which consumes it, rather than in `node.glsl`, so the
+// bit has exactly one reader.
+//
+// **Its sibling `--no-grey-glass-body` is NOT here, and the reason is worth the line**: it is read
+// by `resolve.comp`, and the composite has no binding for the light probe buffer at all -- its set
+// is 0-15 and 20, and the probe is 19 on the node set. A bit was reserved for it and could not be
+// read. It lives in `RenderParams::r5[2]` instead, which is what `r4` and `r5` exist for.
+inline constexpr u32 kProbeFarFallback = 1u << 17;
 // R4e: a translucent face with the sun behind it casts the ray `sun_possible` used to throw away,
 // through the matter behind it, and is lit by what survives the crossing. Cleared by
 // `--no-translucency`, which is the state every figure before it was taken in: marble as granite.
@@ -589,7 +599,26 @@ inline constexpr f32 kExposureUnit = 65536.0f;
 // (kProbeLobeCoverage), which is D599's ROUGHNESS-only sharp class and is still off by default;
 // with both on, a face may reach the sharp class by either route, which is why they are two bits
 // and not one.
-inline constexpr u32 kProbeCoverageBins = 1u << 14;
+// **BIT 15 AND NOT 14, AND THAT IS A FIX RATHER THAN A CHOICE.** This constant and
+// `kProbeRefractStack` above were BOTH `1u << 14`, in the same `words[0]`, both ORed into the same
+// dials word in `main.cpp`. Since both default to true, passing either flag on its own left the bit
+// SET and neither feature switched off:
+//
+//     default                                -> coverage and roughness ON
+//     --no-refract-stack                      -> coverage and roughness ON
+//     --no-coverage-bins                      -> coverage and roughness ON
+//     --no-coverage-bins --no-refract-stack   -> coverage and roughness off
+//
+// So D718's control arm has never worked, and D720's most useful sentence -- *"that magenta was
+// present in the `--no-refract-stack` control arm too"* -- was taken against an arm bit-identical to
+// the shipped one. The conclusion it was used for survives, because D736 proved the inversion
+// independently and it is downstream of both arms; the evidence for it was not what it looked like.
+//
+// THIS one moved rather than the other, because `kProbeRefractStack` is spelled again in
+// `shaders/node.glsl` and this one in `shaders/face_worklist.comp`, and the second is the file that
+// was free to touch. A control arm that does nothing is worse than no control arm: it reads as
+// evidence.
+inline constexpr u32 kProbeCoverageBins = 1u << 15;
 
 // How many bytes one block of the lobe pool is, header and bins together. Derived from the two
 // figures above rather than written again, so a change to either cannot leave this behind.

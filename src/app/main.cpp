@@ -994,6 +994,15 @@ struct Options {
     // `--no-refract-stack` is the control arm and is bit-identical to every build before the loop
     // existed, by construction rather than by care: at one medium the loop IS the old code.
     bool refract_stack = true;
+    // D736 fault 2: a pane's own body is scaled by the GREY part of what it took out of the ray --
+    // `1 - max(lets_past)` -- and not by the per-channel complement. `--no-grey-glass-body` is the
+    // control arm and restores `albedo * (1 - lets_past)`, which drew every coloured pane in the
+    // COMPLEMENT of what it transmits: the chapel's blue light photographed as olive-yellow.
+    bool grey_glass_body = true;
+    // D736 fault 1: the straight-ray fallback behind glass fires whenever the bent-ray loop never
+    // assigned a far surface, rather than only when it never bent. `--no-far-fallback` is the
+    // control arm and restores the read of an uninitialised `far` on any SECOND medium.
+    bool far_fallback = true;
     // R4f: the REFLECTED half of the same interface. A specular reflection is a continuation of
     // the primary ray -- Fresnel over the material's own index of refraction splits it, part bends
     // through (D652) and part reflects and marches on -- rather than a lookup into a face's stored
@@ -1802,6 +1811,10 @@ bool parse_options_c(const std::string& arg, int& i, int argc, char** argv, Opti
         // "translucent voxels behind translucent voxels dont render properly". Green glass behind
         // green glass added no green, and a stack at an angle displaced no further than a sheet.
         options.refract_stack = false;
+    } else if (arg == "--no-grey-glass-body") {
+        options.grey_glass_body = false;
+    } else if (arg == "--no-far-fallback") {
+        options.far_fallback = false;
     } else if (arg == "--no-ior-reflection") {
         // R4f's control arm: no primary ray continues as a reflection, so a specular surface is
         // drawn out of R4c's stored bins alone -- which is D703 exactly and is what every figure
@@ -10448,7 +10461,7 @@ void Application::record_frame(f32 time_seconds) {
         // those arms the number these two would act on does not exist.
         params.r5[0] = (options_.level_blend && options_.voxel_blend) ? 1.0f : 0.0f;
         params.r5[1] = (options_.edge_aa && options_.edge_layers) ? 1.0f : 0.0f;
-        params.r5[2] = 0.0f;
+        params.r5[2] = options_.grey_glass_body ? 1.0f : 0.0f;   // D736; see params.glsl
         params.r5[3] = 0.0f;
         params.r4[0] = options_.reflected_image ? 1.0f : 0.0f;
         params.r4[1] = options_.dispersion ? 1.0f : 0.0f;
@@ -10992,6 +11005,7 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.see_through ? kProbeSeeThrough : 0u) |
                               (options_.refraction ? kProbeRefract : 0u) |
                               (options_.refract_stack ? kProbeRefractStack : 0u) |
+                              (options_.far_fallback ? kProbeFarFallback : 0u) |
                               (options_.translucency ? kProbeTranslucent : 0u) |
                               (options_.edge_aa ? kProbeEdgeAA : 0u) |
                               (options_.level_blend ? kProbeLevelBlend : 0u) |

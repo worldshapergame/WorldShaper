@@ -95,8 +95,11 @@
     // the sun's counters are the windowed count they have always been. y: how many unanimous rays a
     // face must take before it stops casting at the sun, 0 for `--no-face-rest` and every build
     // before this one. z: 0 for `--no-light-name-cap`, so R9a's face request is bounded per
-    // gathering face alone, exactly as it was. w spare. See RenderParams in
-    // src/gpu/render_params.hpp.
+    // gathering face alone, exactly as it was. **z: 0 for `--no-grey-glass-body`** (D736), which
+    // restores `albedo * (1 - lets_past)` -- a spectral transmittance used as a per-channel alpha,
+    // so a pane's own body was drawn in the COMPLEMENT of what it transmits. It is here rather than
+    // in the probe bit reserved for it because the composite has no binding for that buffer. w
+    // spare. See RenderParams in src/gpu/render_params.hpp.
     vec4 r5;
 
     // R5b/R9h's dials. A separate vector from `r5` because two agents of one wave both

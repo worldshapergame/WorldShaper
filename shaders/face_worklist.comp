@@ -55,7 +55,7 @@ layout(local_size_x = 64) in;
 // Must match kProbeCoverageBins in src/gpu/render_params.hpp. Spelled here rather than beside the
 // other dials in node.glsl because node.glsl belongs to the passes that READ a lobe, and this bit
 // is only ever asked about by the pass that sizes one.
-const uint kProbeCoverageBins = 1u << 14;
+const uint kProbeCoverageBins = 1u << 15;   // 15 and not 14: it collided with kProbeRefractStack, D736
 bool probe_coverage_bins() { return (light_probe.words[0] & kProbeCoverageBins) != 0u; }
 
 // How many pixels this face covers, measured rather than guessed.

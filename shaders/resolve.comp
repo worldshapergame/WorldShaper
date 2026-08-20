@@ -165,7 +165,12 @@ uint sky_cell_mix(uint x) {
 // `true` is the shipped behaviour: a pane's own body is scaled by the GREY part of what it took out
 // of the ray. `false` restores `albedo * (1 - lets_past)` per channel exactly, which is the
 // inversion -- see shade_surface, where the reasoning is.
-const bool kGlassBodyIsGrey = true;
+//
+// It is a RUNTIME dial now -- `--no-grey-glass-body` -- and it is in `params.r5.z` rather than in a
+// probe bit, for the reason `r4` and `r5` exist at all and which is written out beside them in
+// params.glsl: **the composite has no binding for the light probe buffer.** Its set is 0-15 and 20;
+// the probe is 19, on the node set. A bit was reserved for this and could not be read from here.
+bool probe_grey_glass_body() { return push.r5.z != 0.0; }
 
 // The real sky, the same one the path tracer draws.
 //
@@ -1302,8 +1307,8 @@ vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_pa
     // is identical to the bit, and so is R5d's edge, which passes nought here and does its own
     // scaling outside with a share that was already grey.
     const float body_share =
-        kGlassBodyIsGrey ? (1.0 - max(max(lets_past.r, lets_past.g), lets_past.b)) : 1.0;
-    colour = albedo * (kGlassBodyIsGrey ? vec3(body_share) : (vec3(1.0) - lets_past)) *
+        probe_grey_glass_body() ? (1.0 - max(max(lets_past.r, lets_past.g), lets_past.b)) : 1.0;
+    colour = albedo * (probe_grey_glass_body() ? vec3(body_share) : (vec3(1.0) - lets_past)) *
                  mix(1.0, face_diffuse_share((material >> 8u) & 0xFFu), lobe_share) *
                  (vec3(1.0) - turned_away) *
                  ((sun_radiance() * lambert + sky_radiance(normal) * sees_sky + lamp) *

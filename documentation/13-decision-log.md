@@ -14543,3 +14543,134 @@ own rule is that a timing taken beside them is noise.
 | D735 | **The gate moves to 1,429,596 / `efeb39a93c369a2d` / shape `d41424c8236d15ac`** | measurement | 508 = 856 - 348, and the count D725's rejected arm built: three routes to one number |
 | D735 | **The audit reads nought on the fixed tree** | instrument | 0 of 2,567,288 cells over 116,267 settled boxes; stronger than a hash, which only says two runs agree |
 | D735 | **+6.9% shape evaluations, no wall clock** | honesty | Seven agents were building beside it; the timing is owed |
+
+---
+
+## D736 — The sky behind a second pane was an uninitialised read, and the tinting was a transmittance used as an alpha
+
+**2026-08-20.** D720 diagnosed two reported faults about glass and was told to document rather than
+fix them. Both are fixed. **And a third thing was found on the way that is worse than either, because
+it means a control arm in this repository has never worked.**
+
+### Fault 1: `far` on any SECOND medium
+
+D720's diagnosis was exact and is not repeated here. The choice it left open — assign
+`far = beyond` before the `continue`, or carry a `bool have_far` — is settled by a picture rather
+than by taste. The fallback marches `kThroughPass` from the eye, which **slides through every medium
+on the way and lands on the first thing that is not one**: the wall the player is looking at through
+the glass. `far = beyond` also removes the uninitialised read, but it draws the **second pane's own
+near face** as what is behind the first pane — a sheet of glass behind a sheet of glass.
+
+At **one** medium the two flags are the same bit — `last` is true on the only turn and the `continue`
+cannot fire — so the single-pane picture is untouched by construction. Measured: two panes with stone
+behind them drew the stone **35 of 255 too bright** (183,186,191 before, 152,154,158 after), while
+the half of the same frame crossing one pane moved by **two tenths of a level**.
+
+**Break A is not reachable in the shipped code**: `refract(seg_dir, n, 1.0 / max(ior, 1.0))` with
+`ior >= 1` can never return zero. Break B — a ray that enters a medium and never leaves it — is the
+live one, and both are repaired the same way.
+
+### Fault 2: a spectral transmittance used as a per-channel alpha
+
+`resolve.comp`, one line: `albedo * (vec3(1.0) - lets_past)`.
+
+`lets_past` is a **spectral transmittance** and that line used it as a per-channel alpha in an
+over-composite, which finishes `+ through * far_colour`. So the light a coloured pane **absorbed**
+was put back on screen as the pane's own body, in **the complement of what the pane transmits**. It
+is exactly the shape D720 predicted — a `1 - x` on the wrong side of the wire — and being upstream of
+D718 is why the magenta appeared in the control arm as well.
+
+**The pack/unpack pair is NOT the fault.** It round-trips to the byte with the payload and all three
+flags at their extremes, which is now a test. `node_medium_absorb` and the material bytes are
+correct, and are pinned as correct.
+
+The share is `1 - max(lets_past)`: what is not transmitted is absorbed **or scattered**, only the
+scattered half comes back out as the body, and scattering is the channel-independent half of the
+extinction — bounded by the channel that lets most past.
+
+**The chapel's three stained lights, photographed either side**, lifted verbatim out of
+`_contract.clip`:
+
+| | before | after |
+|---|---|---|
+| `glass_blue` | (154, 161, 158) — **more green in it than blue** | **(109, 125, 155)** |
+| `glass_gold` | (162, 161, 150) | **(161, 138, 105)** |
+| `glass_ruby` | (165, 154, 154) | **(164, 103, 103)** |
+
+Three different materials photographed as three near-identical pale grey panes. The bare wall beside
+them is (206.0, 203.3, 199.7) in **both** arms. And the probe: `absorb=180,4,90` over a white wall
+read **pink-magenta** (181,168,190) and comes out **green** (110,167,122), with the stone floor
+beside it identical to the tenth in both arms.
+
+### And the third thing: two control arms are ONE BIT, and D718's has never worked
+
+`kProbeRefractStack` and `kProbeCoverageBins` were **both `1u << 14`**, in the same `words[0]`, both
+ORed into the same dials word. Since both default to true, passing either flag alone left the bit
+**set** and neither feature switched off:
+
+```
+default                                -> coverage and roughness ON
+--no-refract-stack                     -> coverage and roughness ON
+--no-coverage-bins                     -> coverage and roughness ON
+--no-coverage-bins --no-refract-stack  -> coverage and roughness off
+```
+
+**So D720's most useful sentence — that the magenta was present in the `--no-refract-stack` control
+arm too — was taken against an arm bit-identical to the shipped one.** The conclusion it was used for
+survives, because the inversion was proved independently here and is downstream of both arms. The
+evidence for it was not what it looked like.
+
+**Three of the seven agents in this wave found it independently, from three different files**, none
+of them looking for it: one checking whether bit 15 was free, one taking a bit for a mode, one
+hunting the magenta. That is D713's *two agents named one field and the size assert was satisfied*
+one door along, with no assert at all this time — the constants sit 150 lines apart in one header and
+each is mirrored into a shader that cannot see the other.
+
+**`kProbeCoverageBins` moved to 15 and not the other one**, because `kProbeRefractStack` is spelled
+again in `shaders/node.glsl` and this one in `shaders/face_worklist.comp`, and the second was the
+file free to touch in a wave.
+
+**A control arm that does nothing is worse than no control arm: it reads as evidence.**
+
+### The composite cannot read a probe bit, which is why one dial is not one
+
+A bit was reserved for `--no-grey-glass-body` and could not be used. `resolve.comp` has **no binding
+for the light probe buffer at all** — its set is 0–15 and 20, and the probe is 19 on the node set. It
+lives in `RenderParams::r5[2]`, which is precisely what `r4` and `r5` were added for and which their
+own comments say. The bit for `--no-far-fallback` is real, because `visibility.comp` does include
+`node.glsl`.
+
+### D720's own arithmetic for its probe was off by sixteen
+
+`node_medium_absorb` reads the bytes as **sixteenths** per metre, so `absorb=180,4,90` through 12 cm
+transmits `(0.256, 0.957, 0.502)` and not the `(0, 0.62, 0)` D720 quotes. Still green-dominant, so
+the diagnosis is unaffected; the number was wrong and is pinned correctly in the tests now.
+
+### Gates
+
+`1429596 solid voxels, content efeb39a93c369a2d, shape d41424c8236d15ac` — unmoved, because glass is
+light and not geometry. **755 of 755 tests**, from 750.
+
+**What the pictures could NOT gate, said rather than rounded up**: `clips/mirror_hall.clip` has no
+transmissive material at all, and its before/after differs by 162,160 px at mean 7.7 against a
+**same-arm floor of 158,538 px at mean 5.6**. That scene cannot gate anything. What the evidence
+rests on instead is that both non-glass scenes have `lets_past == vec3(0)`, where the changed
+expression is arithmetically the identity — pinned by a test — plus the opaque patches inside the
+glass scenes, identical to a tenth of a level.
+
+**Still open**: `shaders/shade_faces.comp` reads `absorb` once, at the first medium, on the LIGHT
+path. D718 recorded it; it is a separate fault from either of these.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D736 | **`have_far`, not `far = beyond`** | decision | The fallback slides through every medium to the wall; the other option draws glass behind glass |
+| D736 | **Two panes drew the stone 35 of 255 too bright** | measurement | 183,186,191 against 152,154,158; one pane moved by two tenths |
+| D736 | **A transmittance was used as a per-channel alpha** | fault | Absorbed light put back as the pane's body, in the complement of what it transmits |
+| D736 | **The pack/unpack pair is innocent** | measurement | Round-trips to the byte with the payload and all three flags at their extremes |
+| D736 | **`glass_blue` had more green in it than blue** | measurement | (154,161,158) becomes (109,125,155); three materials photographed as one pale grey |
+| D736 | **`kProbeRefractStack` and `kProbeCoverageBins` were the same bit** | fault | Each flag alone left bit 14 set, so neither feature switched off; D718's control arm never worked |
+| D736 | **Three agents found it independently from three files** | honesty | None was looking for it; 150 lines apart in one header, mirrored into shaders that cannot see each other |
+| D736 | **A control arm that does nothing is worse than none** | decision | It reads as evidence |
+| D736 | **The composite has no probe binding, so one dial is in `r5`** | trap | A bit was reserved for it and could not be read; set 0–15 and 20 against a probe at 19 |
+| D736 | **D720's probe arithmetic was off by sixteen** | fault | The bytes are sixteenths per metre; (0.256, 0.957, 0.502), not (0, 0.62, 0) |
+| D736 | **`mirror_hall` cannot gate this** | honesty | Same-arm floor 158,538 px at mean 5.6 against a 162,160 px effect at 7.7 |
