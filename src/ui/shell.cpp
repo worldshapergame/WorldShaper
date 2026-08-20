@@ -1940,8 +1940,13 @@ void Shell::draw_editor_tab(const Rect& rect) {
         ui_.draw().push_clip(name);
         ui_.label(name, editing_.stem().string() + (dirty_ ? " *" : ""), Align::Left, kBold);
         ui_.draw().pop_clip();
+        // The one sentence in this interface is the tooltip, and this is where it earns its place:
+        // a built-in cannot be saved and there is nothing on a row that could say so wordlessly.
+        // The press still refuses and says the same thing out loud (D494, D749).
         if (ui_.icon_button(id_of("editor.save"), save, Icon::Tick,
-                            dirty_ ? "Write it back to the file" : "Nothing to write")) {
+                            editing_shipped_
+                                ? "This one came with the game - duplicate it and edit the copy"
+                                : (dirty_ ? "Write it back to the file" : "Nothing to write"))) {
             save_document();
         }
     }

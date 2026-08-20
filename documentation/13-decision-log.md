@@ -15263,6 +15263,19 @@ marks than a screen of boxes. And the 1,602-line fragment costs the same as the 
 because only the nodes on screen are drawn. Every row is a third of the budget and half of the
 0.3 ms `09` §3 gives the interface on this machine.
 
+**And what the whole frame pays, which is the number a player feels.** The same two arms, alternated
+twice, with the editor open on the 702-node fragment and a node chosen:
+
+| | median frame | 99th | GPU total | of which `shell` |
+|---|---|---|---|---|
+| nothing open | 3.02 / 3.02 ms | 3.25 / 3.43 | 2.82 / 2.80 | 0.06 |
+| the editor, both panels | 3.12 / 3.23 ms | 3.81 / 3.64 | 2.94 / 2.94 | 0.19 / 0.20 |
+
+**0.10–0.21 ms of median frame, of which 0.13 is the interface's own GPU pass** — so the host side
+of it is inside the spread of two rounds and cannot be resolved on this machine, which is the honest
+statement rather than a claim that it is nought. The tail moves about 0.4 ms and is stated because
+`09` §9 judges frame time at the 99th and not at the average.
+
 | # | Decision | Kind | Why |
 |---|---|---|---|
 | D753 | **The document is re-read into a graph on every keystroke; the PARSE is not** | correction | D453 says *the script is parsed on every keystroke*, and the rule it exists for is unchanged and is the important half: a script that does not parse is not an error, the view says so in one line, and nothing pops up. What was literal in it was *every keystroke*, and that was affordable while the only thing the editor could open was a clip. **A world costs the whole building** — 22.6 ms to splice its twenty-two pieces and 54.0 to read them, measured — which is five frames a letter on exactly the file kind D744 made editable. So the verdict is asked for when the text has been STILL for a moment, and the moment is three times what the last one cost, capped at half a second: a document that parses in a millisecond re-parses three milliseconds later, which is every keystroke in everything but name, and a world re-parses a fifth of a second after you stop typing. The cap is what stops a document that has become expensive from quietly stopping being checked. The GRAPH is not deferred — it is 1.3 ms on the largest fragment in the repository and it reads the document alone, where the parse reads everything the document includes |
