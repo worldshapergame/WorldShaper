@@ -653,9 +653,22 @@ private:
     // mistake can reach, and reaching it says which mistake in the author's own terms.
     static constexpr u32 kMaxBlockDepth = 64;
 
+    // Whether the last `block()` call saw a `{` at all, which is not the same question as whether
+    // it came back with anything.
+    //
+    // A one-child operation falls back to the braceless form — `shell walls 0.1` — when the block
+    // is empty, and it decided that from `parts.empty()`. So an EXPLICIT empty pair, `rotate { }
+    // x=0 y=0 z=0`, took the fallback as well and read `x` as its child: the key was swallowed, the
+    // rest of the line came apart, and what was left ran into the statement after it. Nothing in
+    // `clips/` writes an empty pair, which is why fifteen months of clips never found it — and the
+    // editor's palette writes one for every one-child node it makes, so it found it at once.
+    bool saw_braces_ = false;
+
     std::vector<u32> block() {
+        saw_braces_ = false;
         std::vector<u32> parts;
         if (done() || peek().text != "{") return parts;
+        saw_braces_ = true;
         if (depth_ >= kMaxBlockDepth) {
             fail("blocks nested more than 64 deep -- the braces above this are unbalanced");
             at_ = tokens_.size();   // there is nothing left to say about this file
@@ -937,8 +950,9 @@ bool Parser::call(u32& out) {
         head == "remap" || head == "power" || head == "displace" || head == "blend" ||
         head == "occlusion" || head == "curvature" || head == "facing") {
         std::vector<u32> parts = block();
-        if (parts.empty()) {
-            // Also allow `shell walls 0.1` without braces, which reads better for one child.
+        if (parts.empty() && !saw_braces_) {
+            // Also allow `shell walls 0.1` without braces, which reads better for one child. Only
+            // where there were no braces: see `saw_braces_`.
             u32 child = 0;
             if (expression(child)) parts.push_back(child);
         }

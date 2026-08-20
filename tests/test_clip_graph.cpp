@@ -773,3 +773,161 @@ TEST_CASE("where a box sits is not part of what the file builds") {
     // And a document with no markers in it comes back byte for byte, without being rebuilt.
     CHECK(clip_without_layout(plain) == plain);
 }
+
+TEST_CASE("copying a set keeps the wiring among it and leaves the rest pointing where it did") {
+    // The whole reason this is not a copy of some lines. Duplicating `plinth` and `all = union {
+    // plinth }` has to give a second union made of the SECOND plinth — otherwise what comes back is
+    // one new shape and one new name for the old one, and moving it moves the original.
+    std::vector<std::string> lines = lines_of(kWirable);
+    ClipGraph graph = read_clip_graph(lines);
+    const u32 plinth = graph.find(ClipGraph::key_of(*named(graph, "plinth")));
+    const u32 all = graph.find(ClipGraph::key_of(*named(graph, "all")));
+
+    std::vector<std::string> made;
+    CHECK(duplicate_clip_nodes(lines, graph, {plinth, all}, made).empty());
+    REQUIRE(made.size() == 2);
+    CHECK(made[0] == "plinth_2");
+    CHECK(made[1] == "all_2");
+
+    const ClipGraph after = read_clip_graph(lines);
+    const ClipNode* copy = named(after, "all_2");
+    REQUIRE(copy != nullptr);
+    CHECK(copy->head == "union");
+    REQUIRE(copy->inputs.size() == 1);
+    CHECK(after.nodes[copy->inputs[0]].name == "plinth_2");
+    // And the original is untouched — still made of the original.
+    const ClipNode* was = named(after, "all");
+    REQUIRE(was != nullptr);
+    REQUIRE(was->inputs.size() == 1);
+    CHECK(after.nodes[was->inputs[0]].name == "plinth");
+    // The copies are placed where they can be seen rather than exactly under what they came from.
+    CHECK(copy->placed);
+}
+
+TEST_CASE("a copy that points outside the set keeps pointing at the original") {
+    std::vector<std::string> lines = lines_of(kWirable);
+    const ClipGraph graph = read_clip_graph(lines);
+    const u32 all = graph.find(ClipGraph::key_of(*named(graph, "all")));
+
+    std::vector<std::string> made;
+    CHECK(duplicate_clip_nodes(lines, graph, {all}, made).empty());
+    const ClipGraph after = read_clip_graph(lines);
+    const ClipNode* copy = named(after, "all_2");
+    REQUIRE(copy != nullptr);
+    REQUIRE(copy->inputs.size() == 1);
+    CHECK(after.nodes[copy->inputs[0]].name == "plinth");   // the one that was already there
+}
+
+TEST_CASE("a coat is copied with the key that reads its pattern, not with half of it") {
+    std::vector<std::string> lines = lines_of(
+        "material stone rgb=1,2,3\n"
+        "let grain = fbm size=0.1\n"
+        "paint stone where=grain above=0.5\n"
+        "let a = box 0 0 0 1 1 1\n"
+        "solid a\n");
+    const ClipGraph graph = read_clip_graph(lines);
+    u32 coat = ClipGraph::kNone;
+    u32 grain = ClipGraph::kNone;
+    for (usize i = 0; i < graph.nodes.size(); ++i) {
+        if (graph.nodes[i].head == "paint") coat = static_cast<u32>(i);
+        if (graph.nodes[i].name == "grain") grain = static_cast<u32>(i);
+    }
+    REQUIRE(coat != ClipGraph::kNone);
+    REQUIRE(grain != ClipGraph::kNone);
+
+    std::vector<std::string> made;
+    // The coat has no name of its own to rebind, so it is the GRAIN that is copied and the coat
+    // that comes with it -- and the copied coat has to read the copied grain, key and all.
+    CHECK(duplicate_clip_nodes(lines, graph, {grain}, made).empty());
+    const ClipGraph after = read_clip_graph(lines);
+    CHECK(named(after, "grain_2") != nullptr);
+    // Nothing lost the `where=` it had.
+    for (const ClipNode& node : after.nodes) {
+        if (node.head != "paint") continue;
+        REQUIRE(node.word("where") != nullptr);
+    }
+}
+
+TEST_CASE("taking a whole group out is not the same question asked several times") {
+    // `all` is made of `plinth`, so asking for `plinth` alone is refused. Asking for both is not:
+    // the only thing that reads `plinth` is going with it.
+    std::vector<std::string> lines = lines_of(kWirable);
+    const ClipGraph graph = read_clip_graph(lines);
+    const u32 plinth = graph.find(ClipGraph::key_of(*named(graph, "plinth")));
+    const u32 all = graph.find(ClipGraph::key_of(*named(graph, "all")));
+    const u32 solid_at = [&] {
+        for (usize i = 0; i < graph.nodes.size(); ++i) {
+            if (graph.nodes[i].head == "solid") return static_cast<u32>(i);
+        }
+        return ClipGraph::kNone;
+    }();
+    REQUIRE(solid_at != ClipGraph::kNone);
+
+    CHECK_FALSE(delete_clip_nodes(lines, graph, {plinth}).empty());
+    CHECK_FALSE(delete_clip_nodes(lines, graph, {plinth, all}).empty());   // `solid` still reads it
+    CHECK(delete_clip_nodes(lines, graph, {plinth, all, solid_at}).empty());
+
+    const ClipGraph after = read_clip_graph(lines);
+    CHECK(named(after, "plinth") == nullptr);
+    CHECK(named(after, "all") == nullptr);
+    CHECK(named(after, "post") != nullptr);   // and nothing else went with them
+}
+
+TEST_CASE("everything in the palette can be made, and every group's heads are the language's") {
+    // The palette offered a third of the vocabulary and the rest was reachable only by typing,
+    // which teaches a player the language is smaller than it is.
+    u32 heads = 0;
+    for (const ClipPaletteGroup& group : clip_palette()) {
+        for (const std::string& head : group.heads) {
+            ++heads;
+            CHECK_MESSAGE(!clip_node_template(head).empty(), "no template for " << head);
+        }
+    }
+    CHECK(heads >= 75);
+
+    // And every one of them written into an empty document reads as the node it says it is.
+    for (const ClipPaletteGroup& group : clip_palette()) {
+        for (const std::string& head : group.heads) {
+            std::vector<std::string> lines = lines_of(
+                "material stone rgb=1,2,3\nlet a = box 0 0 0 1 1 1\nsolid a\n");
+            const ClipGraph graph = read_clip_graph(lines);
+            std::string made;
+            const std::string why = add_clip_node(lines, graph, head, 0.0f, 0.0f, made);
+            CHECK_MESSAGE(why.empty(), head << ": " << why);
+            const ClipGraph after = read_clip_graph(lines);
+            CHECK_MESSAGE(after.opaque_lines == 0, head << " came back as text");
+            bool found = false;
+            for (const ClipNode& node : after.nodes) {
+                if (node.head == head) found = true;
+            }
+            CHECK_MESSAGE(found, head << " is not in the document it was added to");
+        }
+    }
+}
+
+TEST_CASE("an explicit empty pair of braces is not a braceless child") {
+    // `rotate { } x=0 y=0 z=0` -- which is what the palette writes for every one-child node it
+    // makes. The one-child form falls back to `shell walls 0.1` when the block is empty, and
+    // deciding that from "the block came back with nothing" took the fallback here too: `x` was
+    // read as the child, the key was swallowed, and what was left of the line ran into the next
+    // statement. Nothing in `clips/` writes an empty pair, which is why nothing found it until
+    // something started writing them.
+    const ClipGraph graph = read_clip_graph(lines_of(
+        "let a = box 0 0 0 1 1 1\n"
+        "let turned = rotate { } x=0 y=0.25 z=0\n"
+        "solid a\n"));
+    CHECK(graph.opaque_lines == 0);
+    const ClipNode* turned = named(graph, "turned");
+    REQUIRE(turned != nullptr);
+    CHECK(turned->head == "rotate");
+    CHECK(turned->inputs.empty());
+    CHECK(turned->has_block);
+    REQUIRE(turned->number("y") != nullptr);
+    CHECK(turned->number("y")->value == doctest::Approx(0.25));
+    // And the statement after it is still its own statement.
+    bool has_solid = false;
+    for (const ClipNode& node : graph.nodes) {
+        if (node.head == "solid") has_solid = true;
+    }
+    CHECK(has_solid);
+}

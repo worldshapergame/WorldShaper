@@ -1297,9 +1297,9 @@ struct Options {
     // view can now CHANGE a document, and a change nothing automated can make is a change nothing
     // automated can check.
     std::string editor_add;
-    // And which node is chosen in it, by the name the document bound. It is the only way a run with
-    // no hand on the mouse can put a node's parameters on the left, and that panel is half of what
-    // the visual view is for.
+    // And which node is chosen in it, by the name the document bound — or several, separated by
+    // commas. It is the only way a run with no hand on the mouse can put a node's parameters on the
+    // left, and the only way it can photograph a choice of several.
     std::string editor_node;
 
     // Which combination the logo draws, fixed. 0 is "whatever the seed the shell chose says", which

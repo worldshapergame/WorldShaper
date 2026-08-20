@@ -626,9 +626,16 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### THE EDITOR, 2026-08-20 — D743–D760. Read this first, then the wave below it
+#### THE EDITOR, 2026-08-20 — D743–D767. Read this first, then the wave below it
 
-**Two passes, and the second one rewrote parts of the first.** D743–D754 made the editor show what
+**Three passes.** The third came back from playing the second and is D761–D767: a box round several
+nodes with duplicate and take-out on it, the pan moved to the middle button, the palette grown to
+the whole vocabulary, one spelling of a path — and **a fault in `clip_script.cpp` that had been
+there for fifteen months**, which the palette found on its first press: an explicit empty `{ }` was
+read as a braceless child, so `rotate { } x=0` swallowed its own key and ran into the next
+statement. Nothing in `clips/` writes an empty pair, which is why nothing had ever found it.
+
+**Two passes before that, and the second one rewrote parts of the first.** D743–D754 made the editor show what
 you chose, its code and its wires. D755–D760 is what came back from looking at it: colour that means
 something, a caret that was drawn on the inverted condition, a scroll bar that is a control, and a
 visual view you can build in rather than only read.

@@ -423,8 +423,10 @@ private:
         read_keys(node);
         if (takes_many(node.head) || takes_one(node.head)) {
             read_block(node);
-            if (node.inputs.empty() && takes_one(node.head)) {
-                // `shell walls 0.1` without braces, which reads better for one child.
+            if (node.inputs.empty() && !node.has_block && takes_one(node.head)) {
+                // `shell walls 0.1` without braces, which reads better for one child. Only where
+                // there were no braces at all: an explicit empty pair means the author has said
+                // where the children go, and taking the next word as one swallows a key.
                 const Token at_start = peek();
                 const usize was = at_;
                 u32 child = 0;
@@ -613,10 +615,21 @@ void Reader::statement() {
     // reference into a growing vector is a dangling reference one line later.
     const u32 index = begin_statement(head_token);
 
+    // Where the name a statement binds is written, so a copy can be given one of its own.
+    const auto note_name = [&](u32 at, const Token& token) {
+        out_.nodes[at].name_line = token.line;
+        out_.nodes[at].name_column = token.column;
+        out_.nodes[at].name_length = static_cast<u32>(token.text.size());
+    };
+
     if (head == "let") {
         const Token& name = take();
         const std::string bound = name.text;
         out_.nodes[index].name = bound;
+        note_name(index, name);
+        const u32 name_line = name.line;
+        const u32 name_column = name.column;
+        const u32 name_length = static_cast<u32>(name.text.size());
         if (!done() && peek().text == "=") ++at_;
         u32 value = 0;
         if (expression(value)) {
@@ -626,6 +639,9 @@ void Reader::statement() {
             ClipNode expr = out_.nodes[value];
             const bool tail = (value + 1 == out_.nodes.size());
             expr.name = bound;
+            expr.name_line = name_line;
+            expr.name_column = name_column;
+            expr.name_length = name_length;
             expr.statement = true;
             expr.line = head_token.line;
             expr.column = head_token.column;
@@ -655,7 +671,9 @@ void Reader::statement() {
     }
 
     if (head == "material") {
-        out_.nodes[index].name = take().text;
+        const Token& name = take();
+        out_.nodes[index].name = name.text;
+        note_name(index, name);
         out_.nodes[index].carries = ClipCarries::Material;
         read_keys(out_.nodes[index]);
         materials_[out_.nodes[index].name] = index;
@@ -691,6 +709,7 @@ void Reader::statement() {
     if (head == "param") {
         const Token& name = take();
         out_.nodes[index].name = name.text;
+        note_name(index, name);
         parameters_[name.text] = index;
         read_positional(out_.nodes[index]);
         read_keys(out_.nodes[index]);
@@ -1102,6 +1121,30 @@ std::string add_clip_node(std::vector<std::string>& lines, const ClipGraph& grap
         if (material.empty()) return "declare a material first -- a coat has to paint with one";
         made = material;
         statement = "paint " + material;
+    } else if (head == "weather") {
+        // A weathering names its kind before its amount, and `desert` is the one every clip that
+        // has any starts with.
+        made = "desert";
+        statement = "weather desert " + body;
+    } else if (head == "solid" || head == "region") {
+        // These NAME an expression, and one written bare does not merely fail to parse — the
+        // parser looks past the end of the line for its expression and finds the next statement.
+        // So it is written with something to name, and refused when there is nothing: the same
+        // shape as a coat needing a material.
+        std::string shape;
+        for (const ClipNode& node : graph.nodes) {
+            if (node.statement && !node.name.empty() && node.carries == ClipCarries::Shape) {
+                shape = node.name;
+            }
+        }
+        if (shape.empty()) return "make a shape first -- " + head + " has to name one";
+        made = shape;
+        statement = head + " " + shape;
+    } else if (head == "metre" || head == "meter" || head == "bounds" || head == "origin" ||
+               head == "variation") {
+        // A statement that binds no name and takes only numbers.
+        made = head;
+        statement = head + " " + body;
     } else {
         made = free_name(graph, head);
         statement = "let " + made + " = " + body;
@@ -1119,9 +1162,10 @@ std::string add_clip_node(std::vector<std::string>& lines, const ClipGraph& grap
         }
         if (node.line > 0 && node.line - 1 < at) at = node.line - 1;
     }
-    if (head == "material" || head == "param") {
-        // Except these two, which everything else reads: they go at the top, under whatever
-        // settings the file opens with.
+    if (head == "material" || head == "param" || head == "metre" || head == "meter" ||
+        head == "bounds" || head == "origin") {
+        // Except these, which everything else reads or which the file opens with: they go at the
+        // top, under whatever is already there.
         at = 0;
         for (const ClipNode& node : graph.nodes) {
             if (node.head == "metre" || node.head == "meter" || node.head == "bounds" ||
@@ -1163,66 +1207,301 @@ std::string delete_clip_node(std::vector<std::string>& lines, const ClipGraph& g
     return {};
 }
 
+std::string delete_clip_nodes(std::vector<std::string>& lines, const ClipGraph& graph,
+                              const std::vector<u32>& nodes) {
+    if (nodes.empty()) return "nothing chosen";
+    if (nodes.size() == 1) return delete_clip_node(lines, graph, nodes.front());
+
+    std::vector<bool> going(graph.nodes.size(), false);
+    u32 statements = 0;
+    for (u32 node : nodes) {
+        if (node >= graph.nodes.size()) continue;
+        if (!graph.nodes[node].statement) continue;
+        going[node] = true;
+        ++statements;
+    }
+    if (statements == 0) {
+        return "those are written inside other things -- delete the lines in the script";
+    }
+
+    // Used by something that is STAYING. A thing read only by others in the same selection is going
+    // with them, so counting every reader — which is what asking one at a time does — would refuse
+    // to take out a group that is perfectly self-contained.
+    u32 held = 0;
+    for (usize i = 0; i < graph.nodes.size(); ++i) {
+        if (going[i]) continue;
+        for (u32 input : graph.nodes[i].inputs) {
+            if (input < going.size() && going[input]) ++held;
+        }
+    }
+    if (held > 0) {
+        return std::to_string(held) + (held == 1 ? " thing outside this is" : " things outside this are") +
+               " still made of it";
+    }
+
+    // Bottom up, so taking one out cannot move the ones still to go.
+    std::vector<u32> order;
+    for (usize i = 0; i < going.size(); ++i) {
+        if (going[i]) order.push_back(static_cast<u32>(i));
+    }
+    std::sort(order.begin(), order.end(), [&](u32 a, u32 b) {
+        return graph.nodes[a].line > graph.nodes[b].line;
+    });
+    for (u32 node : order) {
+        const ClipNode& one = graph.nodes[node];
+        if (one.line == 0 || one.line > lines.size()) continue;
+        const usize first = one.line - 1;
+        const usize last = std::min<usize>(one.last_line, lines.size());
+        if (last <= first) continue;
+        lines.erase(lines.begin() + static_cast<isize>(first),
+                    lines.begin() + static_cast<isize>(last));
+    }
+    if (lines.empty()) lines.push_back({});
+    return {};
+}
+
+std::string duplicate_clip_nodes(std::vector<std::string>& lines, const ClipGraph& graph,
+                                 const std::vector<u32>& nodes, std::vector<std::string>& made) {
+    made.clear();
+    if (nodes.empty()) return "nothing chosen";
+
+    // In the order they were written, so a copied material still comes before the copied coat that
+    // paints with it, and two copied coats keep their order — which is the whole of what a paint
+    // stack is (`20-clip-forge.md` §2: each one paints over the last).
+    std::vector<u32> order;
+    for (u32 node : nodes) {
+        if (node >= graph.nodes.size()) continue;
+        const ClipNode& one = graph.nodes[node];
+        if (!one.statement || one.name.empty() || one.name_length == 0) continue;
+        order.push_back(node);
+    }
+    if (order.empty()) return "nothing here can be copied on its own";
+    std::sort(order.begin(), order.end(),
+              [&](u32 a, u32 b) { return graph.nodes[a].line < graph.nodes[b].line; });
+
+    // A name for each, decided before any line is written, because the second copy has to be able
+    // to see the first one's name to avoid it.
+    std::vector<std::string> taken;
+    for (const ClipNode& node : graph.nodes) {
+        if (!node.name.empty()) taken.push_back(node.name);
+    }
+    std::map<std::string, std::string> renamed;
+    for (u32 node : order) {
+        const std::string& was = graph.nodes[node].name;
+        std::string want;
+        // An underscore and a number, because a name with a space in it is not a name.
+        for (u32 nth = 2; nth < 1000; ++nth) {
+            want = was + "_" + std::to_string(nth);
+            if (std::find(taken.begin(), taken.end(), want) == taken.end()) break;
+        }
+        taken.push_back(want);
+        renamed[was] = want;
+        made.push_back(want);
+    }
+
+    // One replacement list per line: where to write, how much to cover, and what to put there.
+    struct Patch {
+        u32 line = 0;
+        u32 column = 0;
+        u32 length = 0;
+        std::string text;
+    };
+
+    std::vector<std::string> written;
+    for (u32 node : order) {
+        const ClipNode& one = graph.nodes[node];
+        if (one.line == 0 || one.line > lines.size()) continue;
+        const u32 last = std::min<u32>(one.last_line, static_cast<u32>(lines.size()));
+        if (last < one.line) continue;
+
+        std::vector<Patch> patches;
+        patches.push_back(Patch{one.name_line, one.name_column, one.name_length, renamed[one.name]});
+        for (const ClipLink& link : one.links) {
+            if (!link.named || link.from >= graph.nodes.size()) continue;
+            const auto to = renamed.find(graph.nodes[link.from].name);
+            if (to == renamed.end()) continue;   // it points outside the copy: it keeps pointing there
+            // The span covers the whole of `key=name` where there is a key, so the key comes back
+            // with it — erasing `where=` and leaving the name behind is a document that stops
+            // parsing.
+            const std::string text = link.key.empty() ? to->second : (link.key + "=" + to->second);
+            patches.push_back(Patch{link.line, link.column, link.length, text});
+        }
+
+        for (u32 line = one.line; line <= last; ++line) {
+            std::string text = without_placement(lines[line - 1]);
+            std::vector<Patch> here;
+            for (const Patch& patch : patches) {
+                if (patch.line == line) here.push_back(patch);
+            }
+            // Right to left, so a replacement never moves the column of one still to be applied.
+            std::sort(here.begin(), here.end(),
+                      [](const Patch& a, const Patch& b) { return a.column > b.column; });
+            for (const Patch& patch : here) {
+                if (patch.column + patch.length > text.size()) continue;
+                text.replace(patch.column, patch.length, patch.text);
+            }
+            if (line == one.line) {
+                // Half a cell down and across from the original, so the copy is a thing you can see
+                // and take hold of rather than a thing exactly under what you copied.
+                char marker[64];
+                std::snprintf(marker, sizeof(marker), "  %s %.1f %.1f", kPlacedMarker,
+                              static_cast<f64>(one.at_x + 0.5f), static_cast<f64>(one.at_y + 0.5f));
+                text += marker;
+            }
+            written.push_back(text);
+        }
+    }
+    if (written.empty()) return "nothing here can be copied on its own";
+
+    // After the last line of the last thing copied. Nothing outside reads the new names, so the one
+    // ordering that matters is among the copies themselves, and that is the order they were written
+    // in above.
+    usize at = 0;
+    for (u32 node : order) at = std::max<usize>(at, graph.nodes[node].last_line);
+    at = std::min(at, lines.size());
+    lines.insert(lines.begin() + static_cast<isize>(at), written.begin(), written.end());
+    return {};
+}
+
 std::string clip_node_template(const std::string& head) {
-    // Every one of these is a shape somebody can SEE the moment it is made: a metre-ish box at the
-    // origin rather than a point, a grain at a size that shows on a wall rather than at nought.
+    // Every one of these is something somebody can SEE the moment it is made: a metre-ish shape at
+    // the origin rather than a point, a grain at a size that shows on a wall rather than at nought.
     // A palette that makes invisible things is a palette a player presses once.
+    //
+    // **It is the whole vocabulary now**, not the third of it the first pass offered. `20-clip-forge
+    // .md` §2 is the list and this is that list with a default beside each word; anything missing
+    // here is a word the language does not have.
     static const std::map<std::string, std::string> kTemplates = {
+        // --- solids -----------------------------------------------------------------------
         {"box", "box -0.5 0 -0.5  0.5 1 0.5"},
         {"sphere", "sphere 0 0.5 0 r=0.5"},
         {"cylinder", "cylinder 0 0.5 0 r=0.4 h=1"},
         {"capsule", "capsule 0 0.2 0  0 1 0 r=0.2"},
         {"cone", "cone 0 0 0 r=0.5 h=1"},
         {"torus", "torus 0 0.5 0 ring=0.5 tube=0.15 axis=y"},
+        {"arc", "arc 0 0.5 0 ring=0.5 tube=0.1 axis=y from=0 to=0.5"},
         {"prism", "prism 0 0.5 0 r=0.5 h=1 sides=6"},
-        {"stairs", "stairs 0 0 0  1 1 1 run=0.3 rise=0.18"},
         {"plane", "plane 0 1 0 0"},
+        {"tetra", "tetra 0 0.5 0 r=0.5"},
+        {"cube", "cube 0 0.5 0 r=0.5"},
+        {"octa", "octa 0 0.5 0 r=0.5"},
+        {"dodeca", "dodeca 0 0.5 0 r=0.5"},
+        {"icosa", "icosa 0 0.5 0 r=0.5"},
+        {"wedge", "wedge -0.5 0 -0.5  0.5 1 0.5 rise=y run=x"},
+        {"stairs", "stairs 0 0 0  1 1 1 run=0.3 rise=0.18"},
+        {"spiral", "spiral 0 0 0 r=0.3 tighten=0.7 tube=0.05 turns=2 axis=y"},
+        {"branch", "branch 0 0 0 h=1.4 r=0.06 levels=4 count=3 spread=0.11 lean=0.3 seed=7"},
+        // --- the mouldings, each a section between two corners ----------------------------
+        {"fillet", "fillet 0 0  0.06 0.06 -0.5 0.5"},
+        {"ovolo", "ovolo 0 0  0.06 0.06 -0.5 0.5"},
+        {"cavetto", "cavetto 0 0  0.06 0.06 -0.5 0.5"},
+        {"bead", "bead 0 0  0.06 0.06 -0.5 0.5"},
+        {"astragal", "astragal 0 0  0.06 0.06 -0.5 0.5"},
+        {"scotia", "scotia 0 0  0.08 0.1 -0.5 0.5"},
+        {"cyma", "cyma 0 0  0.08 0.1 -0.5 0.5"},
+        {"cyma_reversa", "cyma_reversa 0 0  0.08 0.1 -0.5 0.5"},
+        // --- combining ---------------------------------------------------------------------
         {"union", "union { }"},
         {"difference", "difference { }"},
         {"intersection", "intersection { }"},
+        // --- moving the point ---------------------------------------------------------------
         {"translate", "translate { } 0 0 0"},
         {"rotate", "rotate { } x=0 y=0 z=0"},
         {"scale", "scale { } 1 1 1"},
         {"mirror", "mirror { } axis=x"},
         {"repeat", "repeat { } 1 1 1"},
         {"around", "around { } count=6 axis=y"},
+        {"scatter", "scatter { } x=0.15 z=0.15 nx=8 nz=8 jitter=0.4 turn=0.5"},
+        {"twist", "twist { } by=0.1 axis=y"},
+        {"bend", "bend { } by=0.1 axis=y"},
+        // --- changing the answer --------------------------------------------------------------
         {"shell", "shell { } thickness=0.1"},
         {"round", "round { } by=0.05"},
         {"offset", "offset { } by=0"},
         {"displace", "displace { } amount=0.02"},
+        // No `axis=` on this one: a key AFTER positional numbers is read by neither this reader
+        // nor the parser, both of which take the keys first, and y is the default anyway.
+        {"revolve", "revolve { } 0 0 0"},
+        // --- patterns --------------------------------------------------------------------------
         {"fbm", "fbm size=0.2 octaves=4 seed=1"},
         {"noise", "noise size=0.2 seed=1"},
         {"ridged", "ridged size=0.25 octaves=3 seed=1"},
+        {"rasp", "rasp size=0.05 depth=1 seed=1"},
         {"cells", "cells size=0.2 seed=1"},
+        {"cell_edge", "cell_edge size=0.2 seed=1"},
         {"sine", "sine axis=x period=0.5"},
+        {"waves", "waves axis=y period=0.5"},
         {"checker", "checker 0.25 0.25 0.25"},
+        {"stripes", "stripes axis=x period=0.25 duty=0.5"},
         {"bricks", "bricks length=0.3 height=0.12 mortar=0.02 facing=z"},
+        {"axis", "axis of=y"},
+        {"distance", "distance 0 0 0"},
+        {"constant", "constant 0"},
+        // --- what the shape is doing here ------------------------------------------------------
+        {"occlusion", "occlusion { } r=0.2"},
+        {"curvature", "curvature { } r=0.1"},
+        {"facing", "facing { } axis=y"},
+        // --- arithmetic on values ---------------------------------------------------------------
+        {"add", "add { }"},
+        {"multiply", "multiply { }"},
+        {"min", "min { }"},
+        {"max", "max { }"},
+        {"blend", "blend { } by=0.5"},
+        {"remap", "remap { } 0 1 0 1"},
+        {"abs", "abs { }"},
+        {"negate", "negate { }"},
+        {"step", "step { } at=0.5"},
+        {"smoothstep", "smoothstep { } 0.4 0.6"},
+        {"clamp", "clamp { } 0 1"},
+        {"power", "power { } by=2"},
+        // --- what the document says about itself ------------------------------------------------
+        {"metre", "32"},
+        {"bounds", "-2 0 -2  2 3 2"},
+        {"origin", "0 0 0"},
+        {"variation", "colour=0.03 rough=0.05 seed=1"},
+        {"weather", "0.4"},
         {"material", "rgb=180,180,180 rough=200"},
         {"param", "1"},
         {"paint", ""},
+        {"solid", ""},
+        {"region", ""},
     };
     const auto found = kTemplates.find(head);
     if (found == kTemplates.end()) return {};
-    if (head == "paint") return "paint";   // has no body of its own, and is not "no such thing"
+    // Three of them have no body of their own and are assembled by `add_clip_node`. Handing back
+    // the head rather than nothing is what keeps "there is no such thing" a different answer from
+    // "there is nothing to write after it" — trap 7, in a palette.
+    if (found->second.empty()) return head;
     return found->second;
 }
 
 const std::vector<ClipPaletteGroup>& clip_palette() {
-    // Six groups, because the vocabulary is ninety words and a list of ninety is a list nobody
-    // reads. These are `20-clip-forge.md` §2's own groupings, cut to what a player reaches for —
-    // anything not here is still writable in the script view, which is the more powerful of the two
-    // views deliberately (`23-shell-and-libraries.md` §5c).
+    // Grouped, because the vocabulary is eighty words and a list of eighty is a list nobody reads.
+    // These are `20-clip-forge.md` §2's own groupings, and **everything the language has is in one
+    // of them** — the first pass offered thirty-one and the rest were reachable only by typing,
+    // which is a palette that teaches a player the language is smaller than it is.
     static const std::vector<ClipPaletteGroup> kGroups = {
-        {"shape", {"box", "sphere", "cylinder", "capsule", "cone", "torus", "prism", "stairs"}},
+        {"shape",
+         {"box", "sphere", "cylinder", "capsule", "cone", "torus", "arc", "prism", "plane", "tetra",
+          "cube", "octa", "dodeca", "icosa", "wedge", "stairs", "spiral", "branch"}},
+        {"moulding",
+         {"fillet", "ovolo", "cavetto", "bead", "astragal", "scotia", "cyma", "cyma_reversa"}},
         {"join", {"union", "difference", "intersection"}},
-        {"move", {"translate", "rotate", "scale", "mirror", "repeat", "around"}},
-        {"change", {"shell", "round", "offset", "displace"}},
-        {"pattern", {"fbm", "noise", "ridged", "cells", "sine", "checker", "bricks"}},
-        {"document", {"material", "paint", "param"}},
+        {"move",
+         {"translate", "rotate", "scale", "mirror", "repeat", "around", "scatter", "twist", "bend"}},
+        {"change", {"shell", "round", "offset", "displace", "revolve"}},
+        {"pattern",
+         {"fbm", "noise", "ridged", "rasp", "cells", "cell_edge", "sine", "waves", "checker",
+          "stripes", "bricks", "axis", "distance", "constant"}},
+        {"number",
+         {"add", "multiply", "min", "max", "blend", "remap", "abs", "negate", "step", "smoothstep",
+          "clamp", "power", "occlusion", "curvature", "facing"}},
+        {"document",
+         {"metre", "bounds", "param", "material", "paint", "weather", "variation", "origin", "solid",
+          "region"}},
     };
     return kGroups;
 }
-
 
 u32 clip_number_decimals(const std::string& as_written) {
     const usize point = as_written.find('.');

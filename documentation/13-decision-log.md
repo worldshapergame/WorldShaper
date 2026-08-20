@@ -15370,3 +15370,50 @@ box against cell: 68324 boxes settled solid and 47943 empty over 2567288 cells; 
 - **The palette is thirty-one heads of about ninety.** The rest are still writable in the script
   view, which `23-shell-and-libraries.md` §5c says is the more powerful of the two views
   deliberately.
+
+## D761–D767 — a box round several, a menu that opens on nothing, and a fault fifteen months old
+
+*Reported directly on 2026-08-20, from playing the editor of D755–D760: **"sometimes i cant right
+click to add something like if i delete the main facility clip i cant add anything after that even
+by right clicking because it wont show the right click menu, make it so that you can box select
+nodes and duplicate them by right clicking your selection or delete them all, box select is by
+holding left click and make panning be by holding middle click instead, theres also some
+inconsistencies by picking a file to edit and it being named the same as a previous file etc, i also
+think some nodes are missing from the right click add nodes menu"**. Five things, and the third of
+them turned out to be a fault in the clip PARSER rather than in the editor.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D761 | **An empty document takes a right-click, and that is the one gesture that must work when there is nothing there** | trap | The branch that draws *nothing here yet — right-click to add something* drew the menu and never opened one. So a document emptied of its last node could not be added to at all — and the way to empty one is to take out the single `include` line a world is made of, which is the first thing a player does to a world. **The sentence on the screen was telling them to do a thing the screen would not do.** One `if`, and the general shape is worth more than the fix: an empty state is the state where every affordance has to work, because it is the only one with nothing else to press |
+| D762 | **A box drawn over the canvas chooses several, and panning moves to the middle button** | user | Explorer's gesture for the third time in this interface, and the library's (D446), for the reason it gives: an interface that spends its novelty budget on *selecting things* has spent it in the worst possible place. The left button was the pan, and a canvas cannot answer one gesture with two things, so the pan is the middle button — which does nothing else anywhere in this interface, so nothing was given up for it. Ctrl adds one to the choice or takes it out again; a right-click on something already chosen KEEPS the choice, so *take out 4* is one gesture, and on anything else it chooses that one first, because a menu about a thing you did not point at acts on the wrong node. All of that is D482's own rule one window along. **A drag carries everything chosen**, at the offsets they already had: choosing four things and then moving one out from under the other three is not what a box round four things meant |
+| D763 | **Copying a set keeps the wiring AMONG it; taking a set out is not the same question asked several times** | — | Duplicating `plinth` and `all = union { plinth }` has to give a second union made of the SECOND plinth — otherwise what comes back is one new shape and one new name for the old one, and moving it moves the original. Anything referenced from outside the set keeps pointing at the original, which is the other half of the same rule. It is done by SPAN and not by text search: the reader records where a node's own name is written and where each of its wires is, so `where=grain` comes back as `where=grain_2` rather than losing the key it was attached to. And a delete refuses only when something **outside** the set still reads one of them — asking one at a time refuses to take out a group that is perfectly self-contained, which is most groups |
+| D764 | **The palette is the whole vocabulary** | user | It offered thirty-one heads of about eighty, and the rest were reachable only by typing — which teaches a player the language is smaller than it is. Eight groups now, `20-clip-forge.md` §2's own, and a test walks every head in every group: writes it into a document, re-reads it, and requires it to come back as the node it says it is. That test is what found D765 |
+| D765 | **An explicit empty `{ }` is not a braceless child, and it never was** | trap | `Parser::call` falls back to the braceless one-child form — `shell walls 0.1` — when the block comes back empty, and it decided that from `parts.empty()`. So `rotate { } x=0 y=0 z=0` took the fallback too: `x` was read as the child, the key was swallowed, and what was left of the line ran into the statement after it. **Nothing in `clips/` writes an empty pair, which is why fifteen months of clips never found it** — and the editor's palette writes one for every one-child node it makes, so it found it on the first press. `block()` reports whether it saw a `{` at all, which is a different question from whether it came back with anything: trap 7 again, in a parser rather than in a counter. The graph reader carried the same bug from the same reasoning and is fixed beside it |
+| D766 | **One spelling of a path, and the folder in the name when the name is not enough** | trap | `clips/sampler.clip`, `clips\sampler.clip` and `C:/.../clips/sampler.clip` are one file and three different `path` objects, and everything in the editor that asks *is this the one already open* compared them for equality. So opening the file already open threw away the caret and the layout as though it were a different document, `is_shipped` answered from a relative path and got it wrong, and *this one is waiting to be saved* could name the file that was already there. One spelling, at the one door every document comes through. Beside it: the header said the file's STEM, so `facility/doors.clip` and a player's own `doors.wsclip` were both `doors` — the folder comes with the name whenever the file is not directly on a shelf, which is the case the two are told apart in |
+| D767 | **A stray `WorldShaper.exe` was running while these were measured, and the figures were re-taken** | trap | `LNK1168: cannot open bin\WorldShaper.exe for writing` on a build, and the process behind it had been up since 21:18:50 with **1,396 CPU-seconds**. That is CLAUDE.md's own rule — *`Get-Process WorldShaper` before a run costs nothing* — self-inflicted for the second time in two days. Everything below was re-taken with the count verified at zero immediately before each run, and it **held**: 0.060 against 0.060, 0.217 against 0.215, 0.287 against 0.284. Recorded anyway, because "the figures were taken beside a stray and turned out fine" is a different statement from "the figures were taken", and only one of them is true here |
+
+### What it costs, re-measured with the machine verified clean
+
+| what is on screen | mean | worst |
+|---|---|---|
+| nothing open | 0.060 / 0.060 | 0.062 |
+| the editor, **visual**, over a 1,602-line 702-node fragment, a node chosen | 0.217 / 0.217 | 0.222 |
+| the editor, **script**, coloured, over the same | 0.287 (five samples: 0.286, 0.301, 0.287, 0.287, 0.287) | 0.292, with one run in five spiking to 0.585 |
+
+Against the `shell` pass's own 0.6 ms budget. The one 0.585 is a single frame in five runs and is
+recorded rather than averaged away, because `09-performance-budgets.md` §9 judges frame time at the
+99th and not at the average.
+
+**And the gate is unmoved**, which is what D765's change to `clip_script.cpp` had to be checked
+against — it is a change to the parser every clip in the game is read by:
+
+```
+scene: 4 chunks, 1429596 solid voxels, 10018 of 10018 nodes sharpened, content efeb39a93c369a2d, shape d41424c8236d15ac
+box against cell: 68324 boxes settled solid and 47943 empty over 2567288 cells; 0 filled that are air and 0 cleared that are matter
+```
+
+### And one instrument, for the state a box-select exists to produce
+
+`--editor-node` takes a comma-separated list now. A choice of SEVERAL changes the drawing and the
+whole of the menu, and without a way to ask for one no photograph ever shows it — which is
+`14-ui-style.md`'s own rule about the tool previews, and the reason `--title-shot` exists at all.

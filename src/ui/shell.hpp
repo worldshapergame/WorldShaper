@@ -29,6 +29,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/types.hpp"
@@ -225,10 +226,11 @@ public:
     // `--editor-view script|visual`: which of the two views is showing. The visual one is the one
     // nothing could photograph, which is the same argument `--title-shot` is made of.
     bool open_editor_view(std::string_view which);
-    // `--editor-node NAME`: choose a node by the name the document bound it to, which is the only
-    // way a run with no hand on the mouse can put the parameters panel on screen. Without it the
-    // whole left-hand half of this feature is a screen nothing automated ever looks at.
-    bool choose_node(std::string_view name);
+    // `--editor-node NAME[,NAME...]`: choose one node, or several, by the names the document bound
+    // them to. The only way a run with no hand on the mouse can put the parameters panel on screen —
+    // and, with a list, the only way it can photograph a choice of several, which is the one state
+    // a dragged box exists to produce.
+    bool choose_node(std::string_view names);
     // `--editor-add box`: put a new node in the open document, by the same path the palette takes.
     // One path rather than two, so that what a scripted run photographs is what a press does — and
     // so the whole of "the visual view CHANGES the document" is reachable without a hand on the
@@ -288,6 +290,10 @@ private:
     // Choose a node by index, keeping the key and the index in step. `ClipGraph::kNone` is
     // "nothing", and everything that selects goes through here so the two cannot disagree.
     void choose(u32 index);
+    // Choose several at once — what a dragged box produces. The first is the primary, so the
+    // left-hand window still has one node to be about.
+    void choose_many(const std::vector<u32>& indices);
+    bool is_chosen(u32 index) const;
     // Which node covers a line of the document, innermost first. It is the whole of the link
     // between the two views: the statement the caret is in is the box that is lit over there, and
     // the box you double-click is the line the caret goes to.
@@ -306,6 +312,11 @@ private:
     // it, then the clips the game ships with. Empty when it is nowhere, which is a world whose
     // parts have been deleted and is a thing that has happened three times.
     std::filesystem::path follow_include(const std::string& named) const;
+    // One spelling of a path, so "is this the file already open" has an answer. See the cpp.
+    std::filesystem::path same_file(const std::filesystem::path& path) const;
+    // What to call a file on screen: its own name, and the folder too when that is what tells it
+    // apart from another of the same name.
+    std::string shown_name(const std::filesystem::path& path) const;
     // The selection follows the library into the editor: choosing something and opening the editor
     // is how a player asks to edit it, and an editor that then says "open something first" has
     // asked the question they just answered.
@@ -418,6 +429,11 @@ private:
     // the name beside it. An index alone would be a different node by the time a drag's second
     // frame arrived, because the graph is re-read on the frame the drag writes.
     std::string chosen_node_;
+    // Everything chosen, by the same keys, and the primary is the first of them. A selection of
+    // one is the ordinary case and is what the parameters window on the left is about; a selection
+    // of several is what a dragged box makes, and is what *duplicate* and *take out* act on.
+    std::vector<std::string> chosen_nodes_;
+    std::vector<u32> chosen_set_;
     // And what that key resolved to in the graph as it stands, worked out once when the graph is
     // re-read. Three separate places wanted it every frame — the panel on the left, the box drawn
     // lit on the right, and the test that decides which of the two the left-hand window is — and
@@ -449,6 +465,10 @@ private:
     f32 drag_grab_y_ = 0.0f;
     f32 drag_at_x_ = 0.0f;
     f32 drag_at_y_ = 0.0f;
+    // The rest of the choice, and where each of them sits relative to the one in hand. Choosing
+    // four things and then moving one of them out from under the other three is not what a box
+    // round four things meant.
+    std::vector<std::pair<u32, std::pair<f32, f32>>> drag_with_;
     // The wire being drawn, out of this box and toward the pointer.
     u32 wiring_from_ = 0xFFFFFFFFu;
 
@@ -464,7 +484,7 @@ private:
     std::string range_node_;
 
     std::string document() const;
-    void open_document(const std::filesystem::path& path);
+    void open_document(const std::filesystem::path& raw);
     void save_document();
     void edit_keys(const InputState& input);
     // Ask for the verdict again. Not at once: see `reparse` in the cpp for why a parse on every

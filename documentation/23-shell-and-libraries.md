@@ -412,7 +412,9 @@ interface has.
 
 #### Getting about, and changing it
 
-- **Zoom and pan.** The wheel zooms about the pointer; a drag on the empty canvas moves the picture.
+- **Zoom and pan.** The wheel zooms about the pointer; a drag with the MIDDLE button moves the
+  picture (D762 — the left one is what a box-select needs, and a canvas cannot answer one gesture
+  with two things).
   A document **opens readable rather than complete** (D760): fitting a fifty-box clip into a docked
   panel is 38%, which is a size at which every name is a smudge, so it opens at no less than 80% —
   centred when it fits, at the left when it does not, because the left is what everything else is
@@ -422,6 +424,18 @@ interface has.
   somebody opens laid out the way you left it. §4's rule is that nothing in the game may keep state
   about a file that the file does not carry, and a layout is state about a file. It is taken out of
   the built world's cache key, for the reason D462 gives about the author tag.
+- **A box drawn over the canvas chooses several** (D762), which is Explorer's gesture and the
+  library's for the same reason §4 gives. Ctrl adds one or takes it out; a right-click on something
+  already chosen keeps the choice, so *take out 4* is one gesture; and a drag carries everything
+  chosen at the offsets they already had. **Duplicate keeps the wiring among the copies** (D763): a
+  copied union is made of the copied shape, and anything referenced from outside keeps pointing at
+  the original.
+- **The palette is the whole vocabulary** (D764) — eight groups, `20-clip-forge.md` §2's own, and a
+  test walks every head in every one of them.
+- **Right-clicking an EMPTY document opens the palette too** (D761). That is the one gesture that
+  has to work when there is nothing on screen, and it was the one that did not: the way to empty a
+  document is to take out the single `include` a world is made of, which is the first thing a player
+  does to a world.
 - **Drag out of a box's right-hand tab and onto another to join them**; press a left-hand tab to cut
   that wire; right-click for the palette, and for *take out*. Each is a line of the file being
   rewritten (D757), and **each refusal says what it is** — a ring cannot be built, a `box` is not
@@ -565,8 +579,8 @@ double-clicking a world builds it and the world is torn down on the way back out
 | Cold start to the title | **543 ms** | 3 s (`09-performance-budgets.md` §8) |
 | Enter the facility from the library | **0.84 s**, at the detail the clip asked for | 5 s |
 | The interface, at 2560×1440, with two full-height windows docked | **0.26 ms** mean, 1.09 ms worst | 0.6 ms |
-| The editor's **visual** view over a 1,602-line, 702-node fragment, with a node's parameters beside it | **0.216 ms** mean, 0.220 worst | 0.6 ms |
-| The editor's **script** view, coloured, over the same | **0.285 ms** mean, 0.318 worst | 0.6 ms |
+| The editor's **visual** view over a 1,602-line, 702-node fragment, with a node's parameters beside it | **0.217 ms** mean, 0.222 worst | 0.6 ms |
+| The editor's **script** view, coloured, over the same | **0.287 ms** mean, 0.292 worst (one run in five spikes to 0.585) | 0.6 ms |
 
 The script view being the expensive one is the figure worth explaining, and it is the colouring: a
 line was one mark and is now a mark per run of one kind. A 1,602-line fragment costs what a

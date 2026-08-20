@@ -1778,7 +1778,7 @@ void Shell::open_editor(const std::filesystem::path& path) {
     dock_.set_open(window_worlds_, true);
     give_editor_room();
     tab_ = 2;
-    if (path != editing_) open_document(path);
+    if (same_file(path) != editing_) open_document(path);
     waiting_.clear();
 }
 
@@ -1813,17 +1813,28 @@ std::string Shell::add_node(std::string_view head) {
     return why;
 }
 
-bool Shell::choose_node(std::string_view name) {
+bool Shell::choose_node(std::string_view names) {
     refresh_graph();
-    for (usize i = 0; i < graph_.nodes.size(); ++i) {
-        if (graph_.nodes[i].name == name) {
-            choose(static_cast<u32>(i));
-            view_ = 1;
-            open_settings();
-            return true;
+    // A comma-separated list, so a choice of SEVERAL — which is what a dragged box makes, and which
+    // changes the drawing and the whole of the menu — is a thing a scripted run can put on screen.
+    // Without it the one state a box-select exists to produce is a state no photograph ever shows.
+    std::vector<u32> want;
+    usize at = 0;
+    while (at <= names.size()) {
+        const usize comma = names.find(',', at);
+        const std::string_view one =
+            names.substr(at, (comma == std::string_view::npos) ? std::string_view::npos : comma - at);
+        for (usize i = 0; i < graph_.nodes.size(); ++i) {
+            if (graph_.nodes[i].name == one) want.push_back(static_cast<u32>(i));
         }
+        if (comma == std::string_view::npos) break;
+        at = comma + 1;
     }
-    return false;
+    if (want.empty()) return false;
+    choose_many(want);
+    view_ = 1;
+    open_settings();
+    return true;
 }
 
 // Where an `include` points, by the rule the game itself resolves one with (D494): beside the file
@@ -1848,7 +1859,7 @@ std::filesystem::path Shell::follow_include(const std::string& named) const {
 void Shell::follow_selection() {
     const std::vector<Entry> chosen = selection();
     if (chosen.size() != 1 || chosen.front().folder) return;
-    if (chosen.front().path == editing_) return;
+    if (same_file(chosen.front().path) == editing_) return;
     if (dirty_) {
         // Nothing is thrown away and nothing pops up. The editor says which file is waiting and
         // opens it the moment this one is saved — which is one press, on the button that is
@@ -1878,7 +1889,23 @@ void Shell::refresh_graph() {
     // The one place the key is turned back into an index. A node that has gone — its line deleted,
     // its name typed over — deselects itself here, which is the only sane thing to do with a
     // selection whose subject no longer exists.
+    // Every key back to an index, once. A node that has gone — its line deleted, its name typed
+    // over — drops out of the selection here, which is the only sane thing to do with a choice
+    // whose subject no longer exists.
+    chosen_set_.clear();
+    std::vector<std::string> still;
+    for (const std::string& key : chosen_nodes_) {
+        const u32 at = graph_.find(key);
+        if (at == ClipGraph::kNone) continue;
+        chosen_set_.push_back(at);
+        still.push_back(key);
+    }
+    chosen_nodes_ = still;
     chosen_index_ = chosen_node_.empty() ? ClipGraph::kNone : graph_.find(chosen_node_);
+    if (chosen_index_ == ClipGraph::kNone && !chosen_set_.empty()) {
+        chosen_index_ = chosen_set_.front();
+        chosen_node_ = chosen_nodes_.front();
+    }
     lay_out_graph();
     // And how far the script view has to be able to travel sideways. Measured here rather than in
     // the draw, because it is a pass over every line of the document and the draw happens sixty
@@ -1892,11 +1919,35 @@ void Shell::refresh_graph() {
 void Shell::choose(u32 index) {
     if (index >= graph_.nodes.size()) {
         chosen_node_.clear();
+        chosen_nodes_.clear();
+        chosen_set_.clear();
         chosen_index_ = ClipGraph::kNone;
         return;
     }
     chosen_node_ = ClipGraph::key_of(graph_.nodes[index]);
+    chosen_nodes_.assign(1, chosen_node_);
+    chosen_set_.assign(1, index);
     chosen_index_ = index;
+}
+
+void Shell::choose_many(const std::vector<u32>& indices) {
+    chosen_nodes_.clear();
+    chosen_set_.clear();
+    for (u32 index : indices) {
+        if (index >= graph_.nodes.size()) continue;
+        chosen_nodes_.push_back(ClipGraph::key_of(graph_.nodes[index]));
+        chosen_set_.push_back(index);
+    }
+    if (chosen_set_.empty()) {
+        choose(ClipGraph::kNone);
+        return;
+    }
+    chosen_index_ = chosen_set_.front();
+    chosen_node_ = chosen_nodes_.front();
+}
+
+bool Shell::is_chosen(u32 index) const {
+    return std::find(chosen_set_.begin(), chosen_set_.end(), index) != chosen_set_.end();
 }
 
 bool Shell::a_node_is_selected() const {
@@ -2066,7 +2117,7 @@ void Shell::draw_editor_tab(const Rect& rect) {
         const Rect name{bar.x0 + cell + metrics.px(5.0f), bar.y0, save.x0 - metrics.px(4.0f),
                         bar.y1};
         ui_.draw().push_clip(name);
-        ui_.label(name, editing_.stem().string() + (dirty_ ? " *" : ""), Align::Left, kBold);
+        ui_.label(name, shown_name(editing_) + (dirty_ ? " *" : ""), Align::Left, kBold);
         ui_.draw().pop_clip();
         // The one sentence in this interface is the tooltip, and this is where it earns its place:
         // a built-in cannot be saved and there is nothing on a row that could say so wordlessly.
@@ -2081,9 +2132,9 @@ void Shell::draw_editor_tab(const Rect& rect) {
 
     // The one line the unsaved case needs. Not a dialog: what it says is which file is waiting, and
     // the button that answers it is the tick above.
-    if (!waiting_.empty() && waiting_ != editing_) {
+    if (!waiting_.empty() && same_file(waiting_) != editing_) {
         const Rect row = column.next(metrics.px(16.0f));
-        ui_.label(row, waiting_.stem().string() + " opens when this is saved", Align::Left, kPlain,
+        ui_.label(row, shown_name(waiting_) + " opens when this is saved", Align::Left, kPlain,
                   0.75f);
     }
 
@@ -2372,6 +2423,19 @@ void Shell::draw_visual_view(const Rect& page) {
     if (graph_.nodes.empty()) {
         ui_.label(Rect{canvas.x0, canvas.y0, canvas.x1, canvas.y0 + metrics.row()},
                   "nothing here yet - right-click to add something", Align::Left, kPlain, 0.55f);
+        // **And the right-click has to WORK here**, which it did not: this branch drew the menu and
+        // never opened one, so a document emptied of its last node — delete the one `include` line
+        // a world is made of, which is exactly what a player does first — could not be added to at
+        // all. Reported directly. The way back into a document is the one gesture that must work
+        // when there is nothing in it.
+        if (canvas.holds(ui_.pointer_x(), ui_.pointer_y()) && !ui_.any_menu_open() &&
+            ui_.right_pressed_in(canvas)) {
+            menu_about_ = ClipGraph::kNone;
+            palette_group_ = -1;
+            menu_x_ = 0.0f;
+            menu_y_ = 0.0f;
+            ui_.open_menu(id_of("editor.graph.menu"), ui_.pointer_x(), ui_.pointer_y());
+        }
         draw_graph_menu(canvas);
         return;
     }
@@ -2424,12 +2488,17 @@ void Shell::draw_visual_view(const Rect& page) {
         }
     }
 
-    // --- panning ------------------------------------------------------------------------------
-    if (dragging_graph_ && ui_.input().mouse_left) {
+    // --- panning, on the MIDDLE button --------------------------------------------------------
+    //
+    // It was the left one, which is the button a box-select needs, and a canvas cannot answer one
+    // gesture with two things. Asked for directly. The middle button does nothing else anywhere in
+    // this interface, so nothing was given up for it.
+    if (over_canvas && ui_.input().mouse_middle) dragging_graph_ = true;
+    if (dragging_graph_ && ui_.input().mouse_middle) {
         graph_pan_x_ += ui_.input().mouse_dx;
         graph_pan_y_ += ui_.input().mouse_dy;
     }
-    if (!ui_.input().mouse_left) dragging_graph_ = false;
+    if (!ui_.input().mouse_middle) dragging_graph_ = false;
 
     const auto box_of = [&](usize i) {
         f32 lx = graph_x_[i];
@@ -2437,6 +2506,12 @@ void Shell::draw_visual_view(const Rect& page) {
         if (dragging_node_ == i) {
             lx = drag_at_x_;
             ly = drag_at_y_;
+        } else if (dragging_node_ < graph_.nodes.size()) {
+            for (const auto& along : drag_with_) {
+                if (along.first != i) continue;
+                lx = drag_at_x_ + along.second.first;
+                ly = drag_at_y_ + along.second.second;
+            }
         }
         const f32 x = canvas.x0 + graph_pan_x_ + lx * cell_w;
         const f32 y = canvas.y0 + graph_pan_y_ + ly * cell_h;
@@ -2508,7 +2583,8 @@ void Shell::draw_visual_view(const Rect& page) {
             box.x0 > canvas.x1) {
             continue;
         }
-        const bool chosen = (static_cast<u32>(i) == chosen_index_);
+        const bool chosen = is_chosen(static_cast<u32>(i));
+        const bool primary = (static_cast<u32>(i) == chosen_index_);
         const bool over = box.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
         if (over && wiring_from_ < graph_.nodes.size() && wiring_from_ != i) {
             dropped_on = static_cast<u32>(i);
@@ -2519,8 +2595,8 @@ void Shell::draw_visual_view(const Rect& page) {
         // and the first version without it drew blue names over green wires, which came out
         // magenta and read as a third colour that means nothing.
         ui_.draw().glass(box, 1.0f);
-        ui_.draw().ink(box, chosen ? 0.24f : (over ? 0.15f : 0.10f));
-        ui_.draw().edge(box, chosen ? 0.95f : (caret_node == i ? 0.55f : 0.25f),
+        ui_.draw().ink(box, chosen ? (primary ? 0.26f : 0.20f) : (over ? 0.15f : 0.10f));
+        ui_.draw().edge(box, chosen ? (primary ? 0.95f : 0.75f) : (caret_node == i ? 0.55f : 0.25f),
                         chosen ? 2.0f : 1.0f);
 
         ui_.draw().push_clip(box);
@@ -2595,13 +2671,32 @@ void Shell::draw_visual_view(const Rect& page) {
         if (over && !ui_.any_menu_open()) {
             if (ui_.right_pressed_in(box)) {
                 hit_a_node = true;
-                choose(static_cast<u32>(i));
+                // On something already chosen it KEEPS the choice, so *take out 4* is one gesture;
+                // on anything else it chooses that one first, because a menu about a thing you did
+                // not point at acts on the wrong node. The library's own rule (D482), and it has to
+                // be the same rule or the two menus mean different things.
+                if (!is_chosen(static_cast<u32>(i))) choose(static_cast<u32>(i));
                 menu_about_ = static_cast<u32>(i);
                 palette_group_ = -1;
                 ui_.open_menu(id_of("editor.graph.menu"), ui_.pointer_x(), ui_.pointer_y());
             } else if (ui_.pressed_in(box) && wiring_from_ >= graph_.nodes.size()) {
                 hit_a_node = true;
-                choose(static_cast<u32>(i));
+                if (ui_.input().is_down(Key::Ctrl)) {
+                    // Ctrl adds one to the choice or takes it out again, which is what it does in
+                    // the library and in every file manager the player has already used.
+                    std::vector<u32> want = chosen_set_;
+                    const auto at = std::find(want.begin(), want.end(), static_cast<u32>(i));
+                    if (at == want.end()) {
+                        want.push_back(static_cast<u32>(i));
+                    } else {
+                        want.erase(at);
+                    }
+                    choose_many(want);
+                    open_settings();
+                    ui_.sound().say(Cue::Step);
+                    continue;
+                }
+                if (!is_chosen(static_cast<u32>(i))) choose(static_cast<u32>(i));
                 // A node's parameters are a parameters window (§5c), so choosing one opens the
                 // left-hand side on it — which is the whole reason the two families exist.
                 open_settings();
@@ -2639,6 +2734,16 @@ void Shell::draw_visual_view(const Rect& page) {
                     drag_at_y_ = graph_y_[i];
                     drag_grab_x_ = layout_x(ui_.pointer_x()) - drag_at_x_;
                     drag_grab_y_ = layout_y(ui_.pointer_y()) - drag_at_y_;
+                    // Everything else chosen comes along, at the offset it already had. Choosing
+                    // four things and moving one of them out from under the other three is not what
+                    // a box round four things meant.
+                    drag_with_.clear();
+                    for (u32 other : chosen_set_) {
+                        if (other == i || other >= graph_.nodes.size()) continue;
+                        if (!graph_.nodes[other].statement) continue;
+                        drag_with_.emplace_back(other, std::pair<f32, f32>{graph_x_[other] - drag_at_x_,
+                                                                          graph_y_[other] - drag_at_y_});
+                    }
                 }
             }
         }
@@ -2655,9 +2760,15 @@ void Shell::draw_visual_view(const Rect& page) {
             // Written ONCE, on the release. Writing it every frame of a drag would rewrite the line
             // sixty times a second and re-read the document with it, which is a millisecond a frame
             // spent on a number nobody has finished choosing.
-            if (place_clip_node(lines_, graph_.nodes[moved], drag_at_x_, drag_at_y_)) {
-                document_changed({});
+            bool wrote = place_clip_node(lines_, graph_.nodes[moved], drag_at_x_, drag_at_y_);
+            for (const auto& along : drag_with_) {
+                if (along.first >= graph_.nodes.size()) continue;
+                wrote |= place_clip_node(lines_, graph_.nodes[along.first],
+                                         drag_at_x_ + along.second.first,
+                                         drag_at_y_ + along.second.second);
             }
+            drag_with_.clear();
+            if (wrote) document_changed({});
         }
     } else {
         dragging_node_ = ClipGraph::kNone;
@@ -2674,19 +2785,45 @@ void Shell::draw_visual_view(const Rect& page) {
     }
     if (!ui_.input().mouse_left) wiring_from_ = ClipGraph::kNone;
 
-    // A press on the empty canvas is *nothing selected*, and the start of a pan. Both, because they
-    // are the same gesture until the hand moves.
-    if (over_canvas && !hit_a_node && !ui_.any_menu_open()) {
-        if (ui_.right_pressed_in(canvas)) {
-            menu_about_ = ClipGraph::kNone;
-            palette_group_ = -1;
-            menu_x_ = layout_x(ui_.pointer_x());
-            menu_y_ = layout_y(ui_.pointer_y());
-            ui_.open_menu(id_of("editor.graph.menu"), ui_.pointer_x(), ui_.pointer_y());
-        } else if (ui_.pressed_in(canvas) && wiring_from_ >= graph_.nodes.size()) {
-            choose(ClipGraph::kNone);
-            dragging_graph_ = true;
+    // --- a box drawn over the canvas, which is what chooses several ---------------------------
+    //
+    // Explorer's gesture, and the library's (D446), for the third time and for the same reason: an
+    // interface that spends its novelty budget on *selecting things* has spent it in the worst
+    // possible place. The band may only START where a press did not land on a node, on a tab or on
+    // a wire being drawn — after that it holds the pointer itself.
+    const bool may_band = !hit_a_node && dragging_node_ >= graph_.nodes.size() &&
+                          wiring_from_ >= graph_.nodes.size() && !ui_.any_menu_open() &&
+                          !dragging_graph_;
+    Rect band{};
+    bool band_done = false;
+    if (may_band && ui_.band(id_of("editor.graph.band"), canvas, band, band_done)) {
+        std::vector<u32> inside;
+        for (usize i = 0; i < graph_.nodes.size(); ++i) {
+            const Rect box = box_of(i);
+            if (box.x1 < band.x0 || box.x0 > band.x1 || box.y1 < band.y0 || box.y0 > band.y1) {
+                continue;
+            }
+            inside.push_back(static_cast<u32>(i));
         }
+        // Recomputed from the box every frame rather than accumulated, so dragging the band back
+        // over a node takes it out again. An accumulating band can only ever choose more.
+        choose_many(inside);
+        if (band_done) {
+            if (chosen_set_.empty()) {
+                ui_.close_menu();
+            } else {
+                open_settings();
+                ui_.sound().say(Cue::Step);
+            }
+        }
+    }
+
+    if (over_canvas && !hit_a_node && !ui_.any_menu_open() && ui_.right_pressed_in(canvas)) {
+        menu_about_ = ClipGraph::kNone;
+        palette_group_ = -1;
+        menu_x_ = layout_x(ui_.pointer_x());
+        menu_y_ = layout_y(ui_.pointer_y());
+        ui_.open_menu(id_of("editor.graph.menu"), ui_.pointer_x(), ui_.pointer_y());
     }
 
     draw_graph_menu(canvas);
@@ -2704,22 +2841,43 @@ void Shell::draw_graph_menu(const Rect& canvas) {
     if (!ui_.menu_open(id)) return;
     (void)canvas;
 
+    enum class Act : u32 { Script, CutWires, Duplicate, TakeOut, Group, Head };
+    std::vector<Act> acts;
     std::vector<Ui::MenuItem> items;
     std::vector<std::string> labels;
 
     const bool about_a_node = menu_about_ < graph_.nodes.size();
+    // What the menu is ABOUT, fixed the moment it opens: reading the choice every frame is how a
+    // menu comes to act on something else by the time an item is pressed (D488, the same fault one
+    // window along).
+    const std::vector<u32> about = about_a_node ? chosen_set_ : std::vector<u32>{};
+    const std::string many = (about.size() > 1) ? (" " + std::to_string(about.size())) : "";
+
     if (about_a_node) {
-        const ClipNode& node = graph_.nodes[menu_about_];
+        bool any_wires = false;
+        bool any_statement = false;
+        for (u32 node : about) {
+            if (node >= graph_.nodes.size()) continue;
+            if (!graph_.nodes[node].inputs.empty()) any_wires = true;
+            if (graph_.nodes[node].statement) any_statement = true;
+        }
         labels.push_back("show in the script");
-        items.push_back({Icon::Editor, labels.back(), true});
-        labels.push_back(node.inputs.empty() ? "cut every wire" : "cut every wire");
-        items.push_back({Icon::Close, labels.back(), !node.inputs.empty()});
-        labels.push_back("take out");
-        items.push_back({Icon::Delete, labels.back(), node.statement});
+        items.push_back({Icon::Editor, labels.back(), about.size() == 1});
+        acts.push_back(Act::Script);
+        labels.push_back("duplicate" + many);
+        items.push_back({Icon::Duplicate, labels.back(), any_statement});
+        acts.push_back(Act::Duplicate);
+        labels.push_back("cut every wire");
+        items.push_back({Icon::Close, labels.back(), any_wires});
+        acts.push_back(Act::CutWires);
+        labels.push_back("take out" + many);
+        items.push_back({Icon::Delete, labels.back(), any_statement});
+        acts.push_back(Act::TakeOut);
     } else if (palette_group_ < 0) {
         for (const ClipPaletteGroup& group : clip_palette()) {
             labels.push_back(group.name);
             items.push_back({Icon::New, labels.back(), true});
+            acts.push_back(Act::Group);
         }
     } else {
         const std::vector<ClipPaletteGroup>& groups = clip_palette();
@@ -2728,64 +2886,118 @@ void Shell::draw_graph_menu(const Rect& canvas) {
             for (const std::string& head : groups[which].heads) {
                 labels.push_back(head);
                 items.push_back({Icon::New, labels.back(), true});
+                acts.push_back(Act::Head);
             }
         }
     }
     for (usize i = 0; i < items.size(); ++i) items[i].label = labels[i];
 
     const i32 picked = ui_.menu(id, items.data(), static_cast<u32>(items.size()));
-    if (picked < 0) return;
+    if (picked < 0 || static_cast<usize>(picked) >= acts.size()) return;
     const usize at = static_cast<usize>(picked);
 
-    if (about_a_node) {
-        const u32 node = menu_about_;
-        menu_about_ = ClipGraph::kNone;
-        if (node >= graph_.nodes.size()) return;
-        if (at == 0) {
-            caret_line_ = (graph_.nodes[node].line > 0) ? graph_.nodes[node].line - 1 : 0;
+    switch (acts[at]) {
+        case Act::Script: {
+            menu_about_ = ClipGraph::kNone;
+            if (about.empty() || about.front() >= graph_.nodes.size()) return;
+            const ClipNode& node = graph_.nodes[about.front()];
+            caret_line_ = (node.line > 0) ? node.line - 1 : 0;
             caret_column_ = 0;
             caret_moved_ = true;
             view_ = 0;
             ui_.sound().say(Cue::Open);
-        } else if (at == 1) {
-            // Backwards, so that taking one out cannot move the ones still to go.
-            std::string why;
-            for (usize k = graph_.nodes[node].links.size(); k-- > 0;) {
-                const std::string one =
-                    disconnect_clip_node(lines_, graph_, node, static_cast<u32>(k));
-                if (!one.empty() && why.empty()) why = one;
-                if (one.empty()) {
-                    dirty_ = true;
-                    graph_stale_ = true;
+            return;
+        }
+        case Act::Duplicate: {
+            menu_about_ = ClipGraph::kNone;
+            std::vector<std::string> made;
+            const std::string why = duplicate_clip_nodes(lines_, graph_, about, made);
+            document_changed(why);
+            if (!why.empty()) return;
+            // The copies are what is chosen now, so the next thing a hand does — drag them
+            // somewhere, change a number — is about the thing that was just made.
+            std::vector<u32> fresh;
+            for (const std::string& name : made) {
+                for (usize i = 0; i < graph_.nodes.size(); ++i) {
+                    if (graph_.nodes[i].name == name) fresh.push_back(static_cast<u32>(i));
                 }
             }
-            refresh_graph();
-            reparse_soon();
-            if (!why.empty()) {
-                say(why, 3.0);
-            } else {
+            choose_many(fresh);
+            say(made.size() == 1 ? ("copied to " + made.front())
+                                 : ("copied " + std::to_string(made.size())),
+                2.5);
+            return;
+        }
+        case Act::CutWires: {
+            menu_about_ = ClipGraph::kNone;
+            // Backwards through each node's own wires, so taking one out cannot move the ones still
+            // to go; and the nodes themselves in any order, because a wire is written inside the
+            // thing that reads it and no two of them share a line.
+            std::string why;
+            bool cut = false;
+            for (u32 node : about) {
+                if (node >= graph_.nodes.size()) continue;
+                for (usize k = graph_.nodes[node].links.size(); k-- > 0;) {
+                    const std::string one =
+                        disconnect_clip_node(lines_, graph_, node, static_cast<u32>(k));
+                    if (one.empty()) {
+                        cut = true;
+                    } else if (why.empty()) {
+                        why = one;
+                    }
+                }
+            }
+            if (cut) {
+                dirty_ = true;
+                graph_stale_ = true;
+                refresh_graph();
+                reparse_soon();
                 ui_.sound().say(Cue::Commit);
             }
-        } else if (at == 2) {
-            document_changed(delete_clip_node(lines_, graph_, node));
+            if (!why.empty()) say(why, 3.0);
+            return;
         }
-        return;
+        case Act::TakeOut:
+            menu_about_ = ClipGraph::kNone;
+            document_changed(delete_clip_nodes(lines_, graph_, about));
+            return;
+        case Act::Group:
+            // A kind was chosen: the same menu, one level in, where it already is.
+            palette_group_ = picked;
+            ui_.open_menu(id, ui_.pointer_x(), ui_.pointer_y());
+            return;
+        case Act::Head: {
+            const std::vector<ClipPaletteGroup>& groups = clip_palette();
+            const usize which = static_cast<usize>(palette_group_);
+            palette_group_ = -1;
+            if (which >= groups.size() || at >= groups[which].heads.size()) return;
+            // Through the same one path a scripted run takes, so the thing a photograph proves is
+            // the thing a press does.
+            if (add_node(groups[which].heads[at]).empty()) open_settings();
+            return;
+        }
     }
+}
 
-    if (palette_group_ < 0) {
-        // A kind was chosen: the same menu, one level in, where it already is.
-        palette_group_ = picked;
-        ui_.open_menu(id, ui_.pointer_x(), ui_.pointer_y());
-        return;
+
+// What to call the file on screen.
+//
+// The stem alone, until the stem is not enough: a building's parts are `facility/doors.clip` and a
+// player's own copy is `doors.wsclip`, and a header that says `doors` for both is a header that
+// cannot answer *which one am I editing*. So the folder comes with it whenever the file is not
+// directly on a shelf — which is the case the two are told apart in, and the only one that needs
+// the extra word.
+std::string Shell::shown_name(const std::filesystem::path& path) const {
+    const std::string stem = path.stem().string();
+    const std::filesystem::path folder = path.parent_path();
+    if (folder.empty()) return stem;
+    const std::string in = folder.filename().string();
+    // A shelf's own name is not worth saying: `clips/sampler` is `sampler`.
+    for (const Kind& kind : shipped_kinds()) {
+        if (in == kind.folder) return stem;
     }
-
-    const std::vector<ClipPaletteGroup>& groups = clip_palette();
-    const usize which = static_cast<usize>(palette_group_);
-    palette_group_ = -1;
-    if (which >= groups.size() || at >= groups[which].heads.size()) return;
-    // Through the same one path a scripted run takes, so the thing a photograph proves is the thing
-    // a press does.
-    if (add_node(groups[which].heads[at]).empty()) open_settings();
+    if (in.empty()) return stem;
+    return in + "/" + stem;
 }
 
 // A node's parameters, on the left, while its node is selected.
@@ -2993,7 +3205,22 @@ std::string Shell::document() const {
     return text;
 }
 
-void Shell::open_document(const std::filesystem::path& path) {
+// The same file, spelled the one way.
+//
+// `clips/sampler.clip`, `clips\\sampler.clip` and `C:/.../clips/sampler.clip` are one file and
+// three different `path` objects, and everything in this editor that asks *is this the one already
+// open* was comparing them for equality. So opening the file already open threw away the caret and
+// the layout as though it were a different document, `is_shipped` answered from a relative path and
+// got it wrong, and *this one is waiting to be saved* could name the file that was already there.
+// One spelling, at the one door every document comes through.
+std::filesystem::path Shell::same_file(const std::filesystem::path& path) const {
+    std::error_code error;
+    const std::filesystem::path settled = std::filesystem::weakly_canonical(path, error);
+    return (error || settled.empty()) ? path.lexically_normal() : settled;
+}
+
+void Shell::open_document(const std::filesystem::path& raw) {
+    const std::filesystem::path path = same_file(raw);
     editing_ = path;
     editing_shipped_ = library_.is_shipped(path);
     lines_.clear();
@@ -3084,7 +3311,7 @@ void Shell::save_document() {
     ui_.sound().say(Cue::Commit);
     // Whatever was chosen while this one had unsaved changes opens now. Nothing was thrown away
     // and nothing had to be answered: the file that was waiting is the one the player picked.
-    if (!waiting_.empty() && waiting_ != editing_) {
+    if (!waiting_.empty() && same_file(waiting_) != editing_) {
         const std::filesystem::path next = waiting_;
         waiting_.clear();
         open_document(next);

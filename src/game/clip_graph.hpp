@@ -143,6 +143,12 @@ struct ClipNode {
     u32 line = 0;         // where its head is, 1-based
     u32 last_line = 0;    // and the last line it covers
     u32 column = 0;       // where its head starts on that line
+    // And where the name it is BOUND to is written — the word after `let`, or after `material` or
+    // `param`. A copy has to be given a name of its own, and that means knowing which bytes the old
+    // one occupies rather than searching the line for a word that may appear in it twice.
+    u32 name_line = 0;
+    u32 name_column = 0;
+    u32 name_length = 0;
     // And where it ENDS: one past its last token. What a hoist cuts and a delete removes.
     u32 end_line = 0;
     u32 end_column = 0;
@@ -298,6 +304,23 @@ std::string add_clip_node(std::vector<std::string>& lines, const ClipGraph& grap
 // Take a statement out. Refused while anything is still made of it, because a document with a
 // dangling name in it is one the player has to repair by hand.
 std::string delete_clip_node(std::vector<std::string>& lines, const ClipGraph& graph, u32 node);
+
+// Take a SET out, which is not the same question asked several times: a thing used only by others
+// in the same set is going with them, so it is not "still made of" anything that will survive.
+// Refused only when something OUTSIDE the set still reads one of them.
+std::string delete_clip_nodes(std::vector<std::string>& lines, const ClipGraph& graph,
+                              const std::vector<u32>& nodes);
+
+// Copy a set of statements, keeping the wiring AMONG them.
+//
+// That is the whole of why this is not a copy of some lines. Duplicating `let a` and `let b = union
+// { a }` has to give a second `b` made of the second `a` — otherwise what comes back is one new
+// shape and one new name for the old one, and moving it moves the original. Anything referenced
+// from outside the set keeps pointing at the original, which is the other half of the same rule.
+//
+// `made` comes back holding the new names, in the order they were written.
+std::string duplicate_clip_nodes(std::vector<std::string>& lines, const ClipGraph& graph,
+                                 const std::vector<u32>& nodes, std::vector<std::string>& made);
 
 // What a new node of this head is written as, before its name. Empty for a head with no template,
 // which is what the palette is built from.

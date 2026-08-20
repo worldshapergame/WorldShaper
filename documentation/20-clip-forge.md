@@ -113,6 +113,14 @@ and at nearly every voxel twenty-nine of them are answering about something metr
 box round each, the union asks how far the point is from the *box* and only evaluates the child
 if that could beat what it already has.
 
+**And one thing was wrong in the parser for fifteen months, found by writing a shape nobody writes
+by hand** (D765). A one-child operation falls back to the braceless form — `shell walls 0.1` — when
+its `{ }` comes back empty, and it decided that from *the block is empty* rather than from *there
+was no block*. So `rotate { } x=0 y=0 z=0` read `x` as its child, swallowed the key, and ran what
+was left of the line into the statement after it. Nothing in `clips/` writes an empty pair of
+braces, which is exactly why nothing found it — and the editor's palette writes one for every
+one-child node it makes, so it found it on the first press.
+
 Both were wrong first and measurably so:
 
 - the box test skipped children *inside* a solid, where the box distance is zero and the child's
