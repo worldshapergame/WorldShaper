@@ -117,6 +117,14 @@ public:
     // anything else that eats characters — the script view, which is not a widget — asks out loud.
     bool wants_text_input() const { return typing_ != 0 || asked_for_text_; }
     void request_text_input() { asked_for_text_ = true; }
+    // Put the caret in a field without a click, with what is in it already chosen.
+    //
+    // D773 asked for a thing that ASKS: *new things should always prompt you to title them
+    // immediately.* A field that appears on a row and then waits to be clicked does not ask — it
+    // waits to be noticed and then aimed at, which is the same as not asking. The only callers are
+    // the ones making something new: a file on a shelf, a part on the canvas.
+    void type_into(u64 id, const std::string& value);
+    bool typing_into(u64 id) const { return typing_ == id; }
 
     // --- surfaces ---------------------------------------------------------------------------
     //

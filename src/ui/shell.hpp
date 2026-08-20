@@ -394,6 +394,7 @@ private:
     // 0 nothing, 1 a clip, 2 a material. What it is called is asked for at once (D773).
     u32 making_ = 0;
     std::string making_buffer_;
+    bool making_focus_ = false;   // put the caret in it on the frame it appears
     // What the part menu is offering, captured when it opens: a listing re-read every frame is a
     // menu whose third item is a different file by the time it is pressed (D488).
     std::vector<std::filesystem::path> part_choices_;

@@ -15588,3 +15588,11 @@ row. Fifteen sliders is fifteen sliders wherever they are drawn.
 **843 test cases, 21,248,638 assertions.** `--editor-open NAME` opens a box from a scripted run,
 because an open box is a different picture, a different layout and several more controls, and a
 state nothing automated can reach is a state nothing automated ever checks (D460).
+
+## D789 — a field that asks has the caret in it
+
+*A one-line correction to D773 and D784, found by reading the code back rather than by playing it.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D789 | **`Ui::type_into` puts the caret in a field without a click** | correction | D773 said *new things should always prompt you to title them immediately*, and both places that do it — the row a new file appears on, and the row that names a new part on the canvas — put a field there and then waited to be clicked. A field that waits to be noticed and then aimed at is not a prompt; it is a rename control that happens to be open. Now the caret is in it with the placeholder name **chosen**, so the first key typed is the name rather than the first letter of `untitledporch` |

@@ -881,6 +881,15 @@ bool Ui::number(u64 id, const Rect& rect, const Number& about, f64& value) {
     return changed;
 }
 
+void Ui::type_into(u64 id, const std::string& value) {
+    typing_ = id;
+    buffer_ = value;
+    caret_ = buffer_.size();
+    // Chosen, so the first key typed replaces `untitled` rather than making `untitledporch`.
+    buffer_all_selected_ = true;
+    caret_since_ = seconds_;
+}
+
 bool Ui::field(u64 id, const Rect& rect, std::string& value, std::string_view placeholder,
                std::string_view hint) {
     const bool over = hovering(id, rect);

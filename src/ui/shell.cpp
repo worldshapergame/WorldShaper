@@ -1671,6 +1671,9 @@ void Shell::make_new_file() {
     library_.refresh(true);
     renaming_ = name + shipped_kinds()[kind_].extension;
     rename_buffer_ = name;
+    // And the caret is IN it, with `untitled` chosen, so the first key typed is the name. A field
+    // that has to be clicked before it takes a letter is a field that waits to be noticed.
+    ui_.type_into(id_of("library.rename.field"), name);
     ui_.sound().say(Cue::Commit);
 }
 
@@ -3785,6 +3788,10 @@ void Shell::draw_part_naming(const Rect& canvas) {
                    canvas.y0 + metrics.px(8.0f) + metrics.row()};
     ui_.panel(Rect{row.x0 - metrics.px(4.0f), row.y0 - metrics.px(4.0f), row.x1 + metrics.px(4.0f),
                    row.y1 + metrics.px(4.0f)});
+    if (making_focus_) {
+        making_focus_ = false;
+        ui_.type_into(id_of("editor.graph.naming"), std::string());
+    }
     if (ui_.field(id_of("editor.graph.naming"), row, making_buffer_,
                   making_ == 1 ? "what is the clip called?" : "what is the material called?")) {
         const u32 kind = making_;
@@ -3984,6 +3991,7 @@ void Shell::draw_graph_menu(const Rect& canvas) {
             palette_group_ = -1;
             making_ = static_cast<u32>(args[at]);
             making_buffer_.clear();
+            making_focus_ = true;
             ui_.sound().say(Cue::Open);
             return;
         case Act::TakePart: {
