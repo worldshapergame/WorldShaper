@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <unordered_map>
 #include <vector>
@@ -36,7 +37,69 @@ constexpr u32 kMagic = 0x57534357u;   // "WSCW"
 // been read compatibly whatever anybody wanted: a version 5 file has no mode byte, so every field
 // after the key sits at a different offset, and a reader that guessed at the mode would not fail —
 // it would misread a whole world as a difference, or a difference as a whole world.
-constexpr u32 kVersion = 6u;
+// 7 — R11j: the file is a JOURNAL, so a save after a save writes only what changed since it. Not
+// read compatibly, and this one could not be: version 6 has its payload where version 7 has a
+// fixed-size header, so an old file read as a new one would take the tag count for a journal
+// length. An old file is refused by the version check and the world is rebuilt, which is what the
+// version field has always been for here.
+constexpr u32 kVersion = 7u;
+
+// ---------------------------------------------------------------------------------------
+// R11j — the shape of the file
+//
+//   [ header, 64 bytes ][ journal ]
+//
+// and nothing else; the file is exactly `64 + journal_bytes` long, which is the first thing the
+// reader checks. The journal is a run of segments laid end to end:
+//
+//   [ Full ][ Directory ]                                  a first write
+//   [ Full ][ Directory ][ Increment ][ Directory ] ...     and every save after it
+//
+// A `Full` segment is a whole world. An `Increment` says what changed since everything before it:
+// the chunks whose bytes moved, the blocks of the region list that moved, and the metadata if any
+// of it did. A `Directory` is the writer's own note to the next writer — a hash per chunk, a hash
+// per block of region list, one for the metadata — so the next save can work out what to append
+// without reading a word of the payload. The reader skips it.
+//
+// Replaying the journal gives the world the last save had, which is the whole promise: a file
+// written incrementally reads back as the same world as one written whole.
+// ---------------------------------------------------------------------------------------
+
+constexpr u32 kSegmentMagic = 0x53435357u;   // "WSCS"
+constexpr usize kHeaderBytes = 64;
+constexpr usize kSegmentHeaderBytes = 16;
+
+// D701's fourth field, in a format that no longer renames a temporary into place. `running` is
+// written before the first byte of an append and cleared only when the file is whole again, so a
+// write cut off by a closed lid leaves a header every reader here refuses.
+constexpr u8 kStateRunning = 0u;
+constexpr u8 kStateDone = 1u;
+
+constexpr u32 kSegmentFull = 0u;
+constexpr u32 kSegmentIncrement = 1u;
+constexpr u32 kSegmentDirectory = 2u;
+
+// How many leaves of the ladder share one hash in the directory.
+//
+// The region list is the one piece of metadata that is not small — the estate's is six hundred
+// thousand leaves and eighty-one bytes each — and it changes on every save by construction, since
+// a save happens BECAUSE nodes were sharpened. Restating it whole would put fifty megabytes in
+// every increment and leave the bank exactly as expensive as it was.
+//
+// What makes a block work is that the leaf list is stable by index: the ladder replaces the node
+// it split with its first child and appends the other seven, so a save touches the block holding
+// the split and the block at the end, and nothing in between. A thousand leaves to a block is
+// eighty kilobytes of restatement for one sharpened node, which is small enough not to matter and
+// large enough that the per-block hash costs nothing to keep.
+constexpr u32 kRegionsPerBlock = 1024u;
+
+// When the journal is rewritten whole rather than appended to.
+//
+// Without a bound the file creeps: a chunk rewritten fifty times is in the file fifty times, and
+// the dead copies are never read but are always carried. Rewriting once the journal has doubled
+// makes the file at most about twice the world and makes the amortised cost of a save the cost of
+// what changed — the rewrite is paid once per doubling, not once per save.
+constexpr u32 kMaxSegments = 4096u;
 
 // A brick, exactly as it is held. No canonical form, no re-encode: the whole reason this file
 // exists is that it can be read faster than the world can be rebuilt, and a normalisation pass
@@ -172,6 +235,213 @@ struct Cursor {
     }
 };
 
+// Every part of a payload is preceded by its own length, so a reader that wants to SKIP a part —
+// which is most of what replaying a journal is — does not have to be able to parse it. Without
+// that, finding out where the metadata ends means interning every tag in it, and the reader would
+// intern the same tags once per segment to reach the chunks.
+usize open_part(std::vector<u8>& out) {
+    const usize at = out.size();
+    put_pod(out, static_cast<u64>(0));
+    return at;
+}
+
+void close_part(std::vector<u8>& out, usize at) {
+    const u64 bytes = static_cast<u64>(out.size() - at - sizeof(u64));
+    std::memcpy(out.data() + at, &bytes, sizeof(bytes));
+}
+
+// The bytes of one part, and where it is. Zero length means "this segment does not restate it",
+// which is not the same as an empty one — every part written here has at least a count in it.
+const u8* take_part(Cursor& in, usize& bytes) {
+    const u64 length = in.pod<u64>();
+    if (!in.ok) return nullptr;
+    const u8* at = in.take(static_cast<usize>(length));
+    if (!in.ok) return nullptr;
+    bytes = static_cast<usize>(length);
+    return at;
+}
+
+// --------------------------------------------------------------------------------------
+// R11j: the header, and what makes a torn one detectable
+// --------------------------------------------------------------------------------------
+
+struct CacheHeader {
+    u64 key = 0;
+    u8 mode = 0;
+    u8 state = kStateRunning;
+    u32 segments = 0;
+    u64 journal_bytes = 0;
+    u64 directory_at = 0;   // where the live directory segment starts, absolute
+    u64 base_bytes = 0;     // what the journal was immediately after the last whole write
+    u64 generation = 0;     // saves so far, for the log
+};
+
+// A hash over every field, so a header half-written by a machine going to sleep is not read as a
+// header. Sixty-four bytes is one sector on every disk anybody runs this on and a torn write of it
+// is not supposed to be possible — but "not supposed to be possible" is how a cache ends up
+// pointing a reader at a journal length that was never written, and the cure is eight bytes.
+u64 header_check(const CacheHeader& head) {
+    u64 value = hash_mix(kMagic);
+    value = hash_combine(value, kVersion);
+    value = hash_combine(value, head.key);
+    value = hash_combine(value, static_cast<u64>(head.mode));
+    value = hash_combine(value, static_cast<u64>(head.state));
+    value = hash_combine(value, static_cast<u64>(head.segments));
+    value = hash_combine(value, head.journal_bytes);
+    value = hash_combine(value, head.directory_at);
+    value = hash_combine(value, head.base_bytes);
+    value = hash_combine(value, head.generation);
+    return value;
+}
+
+void encode_header(u8 out[kHeaderBytes], const CacheHeader& head) {
+    std::memset(out, 0, kHeaderBytes);
+    const u32 magic = kMagic;
+    const u32 version = kVersion;
+    const u64 check = header_check(head);
+    std::memcpy(out + 0, &magic, sizeof(magic));
+    std::memcpy(out + 4, &version, sizeof(version));
+    std::memcpy(out + 8, &head.key, sizeof(head.key));
+    out[16] = head.mode;
+    out[17] = head.state;
+    std::memcpy(out + 20, &head.segments, sizeof(head.segments));
+    std::memcpy(out + 24, &head.journal_bytes, sizeof(head.journal_bytes));
+    std::memcpy(out + 32, &head.directory_at, sizeof(head.directory_at));
+    std::memcpy(out + 40, &head.base_bytes, sizeof(head.base_bytes));
+    std::memcpy(out + 48, &head.generation, sizeof(head.generation));
+    std::memcpy(out + 56, &check, sizeof(check));
+}
+
+bool decode_header(const u8* data, usize size, CacheHeader& out) {
+    if (data == nullptr || size < kHeaderBytes) return false;
+    u32 magic = 0, version = 0;
+    std::memcpy(&magic, data + 0, sizeof(magic));
+    std::memcpy(&version, data + 4, sizeof(version));
+    if (magic != kMagic || version != kVersion) return false;
+    std::memcpy(&out.key, data + 8, sizeof(out.key));
+    out.mode = data[16];
+    out.state = data[17];
+    std::memcpy(&out.segments, data + 20, sizeof(out.segments));
+    std::memcpy(&out.journal_bytes, data + 24, sizeof(out.journal_bytes));
+    std::memcpy(&out.directory_at, data + 32, sizeof(out.directory_at));
+    std::memcpy(&out.base_bytes, data + 40, sizeof(out.base_bytes));
+    std::memcpy(&out.generation, data + 48, sizeof(out.generation));
+    u64 check = 0;
+    std::memcpy(&check, data + 56, sizeof(check));
+    if (check != header_check(out)) return false;
+    if (out.mode != static_cast<u8>(WorldCacheMode::Whole) &&
+        out.mode != static_cast<u8>(WorldCacheMode::EditOnly)) {
+        return false;
+    }
+    return true;
+}
+
+// --------------------------------------------------------------------------------------
+// R11j: the directory — what the next writer needs and the reader does not
+// --------------------------------------------------------------------------------------
+
+struct DirectoryChunk {
+    i64 x = 0, y = 0, z = 0;
+    u64 hash = 0;
+};
+
+struct CacheDirectory {
+    std::vector<DirectoryChunk> chunks;
+    u32 regions = 0;
+    std::vector<u64> region_blocks;
+    u64 meta_hash = 0;
+};
+
+void write_directory(std::vector<u8>& out, const CacheDirectory& dir) {
+    put_pod(out, static_cast<u32>(dir.chunks.size()));
+    for (const DirectoryChunk& chunk : dir.chunks) {
+        put_pod(out, chunk.x);
+        put_pod(out, chunk.y);
+        put_pod(out, chunk.z);
+        put_pod(out, chunk.hash);
+    }
+    put_pod(out, dir.regions);
+    put_pod(out, static_cast<u32>(dir.region_blocks.size()));
+    for (u64 hash : dir.region_blocks) put_pod(out, hash);
+    put_pod(out, dir.meta_hash);
+}
+
+bool read_directory(Cursor& in, CacheDirectory& out) {
+    const u32 chunks = in.pod<u32>();
+    if (!in.ok) return false;
+    out.chunks.resize(chunks);
+    for (u32 i = 0; i < chunks && in.ok; ++i) {
+        out.chunks[i].x = in.pod<i64>();
+        out.chunks[i].y = in.pod<i64>();
+        out.chunks[i].z = in.pod<i64>();
+        out.chunks[i].hash = in.pod<u64>();
+    }
+    if (!in.ok) return false;
+    out.regions = in.pod<u32>();
+    const u32 blocks = in.pod<u32>();
+    if (!in.ok) return false;
+    out.region_blocks.resize(blocks);
+    for (u32 i = 0; i < blocks && in.ok; ++i) out.region_blocks[i] = in.pod<u64>();
+    out.meta_hash = in.pod<u64>();
+    return in.ok;
+}
+
+// --------------------------------------------------------------------------------------
+// The region list, by block
+// --------------------------------------------------------------------------------------
+
+u64 hash_region(u64 value, const CachedRegion& region) {
+    for (i64 v : region.key) value = hash_combine(value, static_cast<u64>(v));
+    value = hash_combine(value, static_cast<u64>(region.level));
+    for (f64 v : region.low) {
+        u64 bits = 0;
+        std::memcpy(&bits, &v, sizeof(bits));
+        value = hash_combine(value, bits);
+    }
+    for (f64 v : region.high) {
+        u64 bits = 0;
+        std::memcpy(&bits, &v, sizeof(bits));
+        value = hash_combine(value, bits);
+    }
+    value = hash_combine(value, static_cast<u64>(static_cast<u32>(region.applied_per_metre)));
+    value = hash_combine(value, region.done ? 1ull : 0ull);
+    return value;
+}
+
+u32 region_blocks_for(u32 count) { return (count + kRegionsPerBlock - 1) / kRegionsPerBlock; }
+
+std::vector<u64> region_block_hashes(const std::vector<CachedRegion>& regions) {
+    const u32 count = static_cast<u32>(regions.size());
+    std::vector<u64> out(region_blocks_for(count), 0);
+    for (u32 block = 0; block < static_cast<u32>(out.size()); ++block) {
+        const u32 from = block * kRegionsPerBlock;
+        const u32 to = std::min<u32>(from + kRegionsPerBlock, count);
+        u64 value = hash_mix(to - from);
+        for (u32 i = from; i < to; ++i) value = hash_region(value, regions[i]);
+        out[block] = value;
+    }
+    return out;
+}
+
+void write_region(std::vector<u8>& out, const CachedRegion& region) {
+    for (i64 v : region.key) put_pod(out, v);
+    put_pod(out, region.level);
+    for (f64 v : region.low) put_pod(out, v);
+    for (f64 v : region.high) put_pod(out, v);
+    put_pod(out, region.applied_per_metre);
+    put_pod(out, static_cast<u8>(region.done ? 1u : 0u));
+}
+
+bool read_region(Cursor& in, CachedRegion& region) {
+    for (i64& v : region.key) v = in.pod<i64>();
+    region.level = in.pod<u32>();
+    for (f64& v : region.low) v = in.pod<f64>();
+    for (f64& v : region.high) v = in.pod<f64>();
+    region.applied_per_metre = in.pod<i32>();
+    region.done = in.pod<u8>() != 0u;
+    return in.ok;
+}
+
 // --------------------------------------------------------------------------------------
 // R11f: what "the same as what the clip builds" means, brick by brick.
 // --------------------------------------------------------------------------------------
@@ -298,6 +568,445 @@ bool box_contains(const CachedEditBox& outer, const CachedEditBox& inner) {
 // not overflow the range walk below.
 i64 chunk_index_of(i64 voxel) { return chunk_of(voxel); }
 
+// --------------------------------------------------------------------------------------
+// The metadata block: everything about a world that is not its voxels
+// --------------------------------------------------------------------------------------
+
+// Written in ONE canonical order, and that is not a tidiness rule.
+//
+// Two of these lists come out of hash maps — the lamps out of `World::for_each_chunk`, the ledger
+// out of `MatterLedger::totals` — and a hash map hands them over in whatever order it likes, which
+// differs between two runs over the same world. Left alone, that makes the metadata block hash
+// differently every launch, so a save that changed NOTHING still restates it, and the file grows a
+// segment every time somebody opens the world. Sorting costs a few hundred comparisons and turns
+// "nothing changed" into a write of nought bytes.
+void write_meta_block(std::vector<u8>& out, const WorldCache& cache) {
+    // Tags and properties, by name, so a build that registers them in a different order is
+    // rejected by the reader rather than silently mismatched.
+    put_pod(out, static_cast<u32>(cache.tags->count()));
+    for (u32 i = 0; i < cache.tags->count(); ++i) {
+        const std::string name(cache.tags->name(i));
+        put_pod(out, static_cast<u32>(name.size()));
+        out.insert(out.end(), name.begin(), name.end());
+    }
+    put_pod(out, static_cast<u32>(cache.properties->count()));
+    for (u32 i = 0; i < cache.properties->count(); ++i) {
+        const PropertyInfo& info = cache.properties->info(i);
+        put_pod(out, static_cast<u32>(info.name.size()));
+        out.insert(out.end(), info.name.begin(), info.name.end());
+        put_pod(out, static_cast<u8>(info.type));
+        put_pod(out, static_cast<u8>(info.domain));
+        put_pod(out, info.default_value.bits);
+    }
+
+    // The type table, as three arrays. Visual records are fixed-size and go out in one block;
+    // behaviour records carry variable-length tag overflow and properties, and there are a
+    // handful of them, so they are written one at a time.
+    const std::vector<VisualRecord>& visuals = cache.types->visuals();
+    put_pod(out, static_cast<u32>(visuals.size()));
+    {
+        const usize at = out.size();
+        out.resize(at + visuals.size() * sizeof(VisualRecord));
+        std::memcpy(out.data() + at, visuals.data(), visuals.size() * sizeof(VisualRecord));
+    }
+
+    const std::vector<BehaviourRecord>& behaviours = cache.types->behaviours();
+    put_pod(out, static_cast<u32>(behaviours.size()));
+    for (const BehaviourRecord& record : behaviours) {
+        put_pod(out, record.material);
+        put_pod(out, record.script);
+        const u64* words = record.tags.fast_words();
+        for (u32 w = 0; w < kFastTagWords; ++w) put_pod(out, words[w]);
+        put_pod(out, static_cast<u32>(record.tags.overflow().size()));
+        for (TagId tag : record.tags.overflow()) put_pod(out, tag);
+        put_pod(out, static_cast<u32>(record.properties.size()));
+        for (const PropertyMap::Entry& entry : record.properties.entries()) {
+            put_pod(out, entry.id);
+            put_pod(out, entry.value.bits);
+        }
+    }
+
+    const std::vector<VoxelType>& types = cache.types->types();
+    put_pod(out, static_cast<u32>(types.size()));
+    {
+        const usize at = out.size();
+        out.resize(at + types.size() * sizeof(VoxelType));
+        std::memcpy(out.data() + at, types.data(), types.size() * sizeof(VoxelType));
+    }
+
+    put_pod(out, static_cast<u32>(cache.materials.size()));
+    for (VoxelTypeId id : cache.materials) put_pod(out, id);
+
+    // Which materials the despeckler may touch. Taken once over the whole clip and unobtainable
+    // from anything a resuming run has to hand -- see CachedStipple. The flag goes out separately
+    // from the list because "asked, and nothing had specks" and "never asked" are different
+    // answers and the reader has to be able to tell them apart.
+    put_pod(out, static_cast<u8>(cache.stipple_taken ? 1u : 0u));
+    put_pod(out, static_cast<u32>(cache.stipple.size()));
+    {
+        std::vector<const CachedStipple*> order;
+        order.reserve(cache.stipple.size());
+        for (const CachedStipple& entry : cache.stipple) order.push_back(&entry);
+        std::sort(order.begin(), order.end(),
+                  [](const CachedStipple* a, const CachedStipple* b) { return a->type < b->type; });
+        for (const CachedStipple* entry : order) {
+            put_pod(out, entry->type);
+            put_pod(out, static_cast<u8>(entry->may_despeckle ? 1u : 0u));
+        }
+    }
+
+    // Where the lamps are, so a loaded world does not have to be read again to find them. R9g,
+    // and the same argument as the ledger below: rediscovering them is the order of work this file
+    // exists to skip.
+    put_pod(out, static_cast<u32>(cache.emitters.size()));
+    {
+        std::vector<const CachedEmitters*> order;
+        order.reserve(cache.emitters.size());
+        for (const CachedEmitters& chunk : cache.emitters) order.push_back(&chunk);
+        std::sort(order.begin(), order.end(),
+                  [](const CachedEmitters* a, const CachedEmitters* b) {
+                      return chunk_coord_less(ChunkCoord{a->chunk_x, a->chunk_y, a->chunk_z},
+                                              ChunkCoord{b->chunk_x, b->chunk_y, b->chunk_z});
+                  });
+        for (const CachedEmitters* chunk : order) {
+            put_pod(out, chunk->chunk_x);
+            put_pod(out, chunk->chunk_y);
+            put_pod(out, chunk->chunk_z);
+            put_pod(out, static_cast<u32>(chunk->cells.size()));
+            for (const EmissiveCell& cell : chunk->cells) put_pod(out, cell);
+        }
+    }
+
+    // The ledger's running totals. Recomputing them means counting every voxel in the world,
+    // which is the same order of work the cache exists to skip.
+    if (cache.ledger != nullptr) {
+        put_pod(out, static_cast<u32>(cache.ledger->totals().size()));
+        std::vector<std::pair<VoxelTypeId, i64>> totals(cache.ledger->totals().begin(),
+                                                        cache.ledger->totals().end());
+        std::sort(totals.begin(), totals.end(),
+                  [](const std::pair<VoxelTypeId, i64>& a, const std::pair<VoxelTypeId, i64>& b) {
+                      return a.first < b.first;
+                  });
+        for (const auto& entry : totals) {
+            put_pod(out, entry.first);
+            put_pod(out, entry.second);
+        }
+    } else {
+        put_pod(out, 0u);
+    }
+}
+
+// The metadata as read, before any of it is put anywhere. Kept apart from the WorldCache because
+// the edit-only path has to decide what to do about the type table BETWEEN reading it and adopting
+// it, and because a journal only ever applies the LAST metadata block it finds — applying every
+// one of them would intern the tags once per segment and add the ledger's totals up again each
+// time.
+struct MetaIn {
+    std::vector<VisualRecord> visuals;
+    std::vector<BehaviourRecord> behaviours;
+    std::vector<VoxelType> types;
+    std::vector<VoxelTypeId> materials;
+    bool stipple_taken = false;
+    std::vector<CachedStipple> stipple;
+    std::vector<CachedEmitters> emitters;
+    std::vector<std::pair<VoxelTypeId, i64>> ledger;
+};
+
+bool read_meta_block(Cursor& in, const WorldCache& cache, MetaIn& out) {
+    const u32 tag_count = in.pod<u32>();
+    if (!in.ok) return false;
+    for (u32 i = 0; i < tag_count && in.ok; ++i) {
+        const u32 length = in.pod<u32>();
+        const u8* text = in.take(length);
+        if (!in.ok) return false;
+        if (cache.tags->intern(std::string(reinterpret_cast<const char*>(text), length)) != i) {
+            return false;
+        }
+    }
+    const u32 property_count = in.pod<u32>();
+    if (!in.ok) return false;
+    for (u32 i = 0; i < property_count && in.ok; ++i) {
+        const u32 length = in.pod<u32>();
+        const u8* text = in.take(length);
+        if (!in.ok) return false;
+        const auto type = static_cast<PropertyType>(in.pod<u8>());
+        const auto domain = static_cast<PropertyDomain>(in.pod<u8>());
+        const PropertyValue value{in.pod<u64>()};
+        if (cache.properties->define(std::string(reinterpret_cast<const char*>(text), length), type,
+                                     domain, value) != i) {
+            return false;
+        }
+    }
+    if (!in.ok) return false;
+
+    const u32 visual_count = in.pod<u32>();
+    if (!in.ok) return false;
+    out.visuals.resize(visual_count);
+    {
+        const u8* p = in.take(visual_count * sizeof(VisualRecord));
+        if (!in.ok) return false;
+        std::memcpy(out.visuals.data(), p, visual_count * sizeof(VisualRecord));
+    }
+
+    const u32 behaviour_count = in.pod<u32>();
+    if (!in.ok) return false;
+    out.behaviours.assign(behaviour_count, BehaviourRecord{});
+    for (BehaviourRecord& record : out.behaviours) {
+        record.material = in.pod<u32>();
+        record.script = in.pod<u32>();
+        for (u32 w = 0; w < kFastTagWords; ++w) {
+            const u64 word = in.pod<u64>();
+            for (u32 bit = 0; bit < 64; ++bit) {
+                if ((word >> bit) & 1u) record.tags.add(w * 64 + bit);
+            }
+        }
+        const u32 overflow = in.pod<u32>();
+        for (u32 i = 0; i < overflow && in.ok; ++i) record.tags.add(in.pod<u32>());
+        const u32 entries = in.pod<u32>();
+        for (u32 i = 0; i < entries && in.ok; ++i) {
+            const PropertyId id = in.pod<u32>();
+            record.properties.set(id, PropertyValue{in.pod<u64>()});
+        }
+        if (!in.ok) return false;
+    }
+
+    const u32 type_count = in.pod<u32>();
+    if (!in.ok) return false;
+    out.types.resize(type_count);
+    {
+        const u8* p = in.take(type_count * sizeof(VoxelType));
+        if (!in.ok) return false;
+        std::memcpy(out.types.data(), p, type_count * sizeof(VoxelType));
+    }
+
+    const u32 material_count = in.pod<u32>();
+    if (!in.ok) return false;
+    out.materials.clear();
+    out.materials.reserve(material_count);
+    for (u32 i = 0; i < material_count && in.ok; ++i) out.materials.push_back(in.pod<u32>());
+    if (!in.ok) return false;
+
+    out.stipple_taken = in.pod<u8>() != 0u;
+    const u32 stipple_count = in.pod<u32>();
+    if (!in.ok) return false;
+    out.stipple.clear();
+    out.stipple.reserve(stipple_count);
+    for (u32 i = 0; i < stipple_count && in.ok; ++i) {
+        CachedStipple entry;
+        entry.type = in.pod<u32>();
+        entry.may_despeckle = in.pod<u8>() != 0u;
+        out.stipple.push_back(entry);
+    }
+    if (!in.ok) return false;
+
+    const u32 emitter_chunks = in.pod<u32>();
+    if (!in.ok) return false;
+    out.emitters.clear();
+    out.emitters.reserve(emitter_chunks);
+    for (u32 i = 0; i < emitter_chunks && in.ok; ++i) {
+        CachedEmitters chunk;
+        chunk.chunk_x = in.pod<i64>();
+        chunk.chunk_y = in.pod<i64>();
+        chunk.chunk_z = in.pod<i64>();
+        const u32 cell_count = in.pod<u32>();
+        if (!in.ok) return false;
+        chunk.cells.reserve(cell_count);
+        for (u32 c = 0; c < cell_count && in.ok; ++c) chunk.cells.push_back(in.pod<EmissiveCell>());
+        out.emitters.push_back(std::move(chunk));
+    }
+    if (!in.ok) return false;
+
+    const u32 ledger_count = in.pod<u32>();
+    if (!in.ok) return false;
+    out.ledger.clear();
+    out.ledger.reserve(ledger_count);
+    for (u32 i = 0; i < ledger_count && in.ok; ++i) {
+        const VoxelTypeId type = in.pod<u32>();
+        const i64 total = in.pod<i64>();
+        out.ledger.emplace_back(type, total);
+    }
+    return in.ok;
+}
+
+// Every live brick of a chunk, as the file holds them. Returns how many there were.
+u32 write_chunk_bricks(std::vector<u8>& out, const Chunk& chunk) {
+    const u32 axis = static_cast<u32>(kChunkBricks);
+    u32 bricks = 0;
+    for (u32 bz = 0; bz < axis; ++bz) {
+        for (u32 by = 0; by < axis; ++by) {
+            for (u32 bx = 0; bx < axis; ++bx) {
+                const Brick* brick = chunk.brick(bx, by, bz);
+                if (!brick_is_live(brick)) continue;
+                put_pod(out, brick_slot(bx, by, bz));
+                write_brick_raw(out, *brick);
+                ++bricks;
+            }
+        }
+    }
+    return bricks;
+}
+
+// What a whole-world write has to put in the file, and what it can leave where it is.
+//
+// The comparison is over the ENCODED BYTES of a chunk rather than over `Chunk::content_hash`, and
+// the difference matters in both directions. Content hashing decodes all sixteen million voxels of
+// a chunk to answer, which is the order of work the cache exists to avoid; encoding is a memcpy of
+// what is already held and has to be done anyway for the chunks that DID change. And a byte hash
+// cannot say "unchanged" about a chunk that is not — two identical byte strings decode to the same
+// voxels by construction — where the reverse mistake, calling a re-encoded but identical chunk
+// changed, costs a rewrite of that chunk and nothing else.
+struct ChunkPlan {
+    u32 written = 0;
+    u32 left_alone = 0;
+    u32 bricks = 0;
+    std::vector<DirectoryChunk> directory;   // every live chunk, whether written now or before
+    std::vector<ChunkCoord> dropped;
+};
+
+// Straight into the journal, and a chunk that turns out to be already there is rolled back off the
+// end of it. There is no scratch buffer and no second copy: the first whole write of a finished
+// estate is several hundred megabytes, and holding two of it to decide what to keep would cost
+// more than the write.
+ChunkPlan write_changed_chunks(std::vector<u8>& out, const World& world,
+                               const CacheDirectory* was) {
+    ChunkPlan plan;
+    std::unordered_map<ChunkCoord, u64, ChunkCoordHash> before;
+    if (was != nullptr) {
+        before.reserve(was->chunks.size() * 2 + 1);
+        for (const DirectoryChunk& chunk : was->chunks) {
+            before.emplace(ChunkCoord{chunk.x, chunk.y, chunk.z}, chunk.hash);
+        }
+    }
+
+    for (const ChunkCoord& coord : world.sorted_chunk_coords()) {
+        const Chunk* chunk = world.chunk(coord);
+        if (!chunk_is_live(chunk)) continue;
+
+        const usize record_at = out.size();
+        put_pod(out, coord.x);
+        put_pod(out, coord.y);
+        put_pod(out, coord.z);
+        const usize count_at = out.size();
+        put_pod(out, static_cast<u32>(0));
+        const usize bricks_at = out.size();
+        const u32 bricks = write_chunk_bricks(out, *chunk);
+        std::memcpy(out.data() + count_at, &bricks, sizeof(bricks));
+        const u64 hash = hash_bytes(out.data() + bricks_at, out.size() - bricks_at);
+        plan.directory.push_back(DirectoryChunk{coord.x, coord.y, coord.z, hash});
+
+        const auto found = before.find(coord);
+        const bool already_there = found != before.end() && found->second == hash;
+        if (found != before.end()) before.erase(found);
+        if (already_there) {
+            out.resize(record_at);
+            ++plan.left_alone;
+            continue;
+        }
+        ++plan.written;
+        plan.bricks += bricks;
+    }
+
+    // Whatever the file had and the world no longer does. Said out loud in the increment, because
+    // a journal that only ever adds would bring a demolished outbuilding back on the next load.
+    plan.dropped.reserve(before.size());
+    for (const auto& [coord, hash] : before) plan.dropped.push_back(coord);
+    std::sort(plan.dropped.begin(), plan.dropped.end(), chunk_coord_less);
+    return plan;
+}
+
+// One segment, opened where the journal now ends and closed once its payload is in.
+usize open_segment(std::vector<u8>& journal) {
+    const usize at = journal.size();
+    put_pod(journal, kSegmentMagic);
+    put_pod(journal, static_cast<u32>(0));
+    put_pod(journal, static_cast<u64>(0));
+    return at;
+}
+
+void close_segment(std::vector<u8>& journal, usize at, u32 kind) {
+    const u64 bytes = static_cast<u64>(journal.size() - at);
+    std::memcpy(journal.data() + at + 4, &kind, sizeof(kind));
+    std::memcpy(journal.data() + at + 8, &bytes, sizeof(bytes));
+}
+
+struct SegmentSpan {
+    u32 kind = 0;
+    const u8* data = nullptr;
+    usize size = 0;
+};
+
+// Walking the journal is the only structural check the reader makes before it trusts anything:
+// every segment must carry the magic, must fit inside what the header claims, and the last one
+// must end exactly where the journal does. A file whose append was cut short fails all three.
+bool walk_journal(const u8* blob, usize blob_size, const CacheHeader& head,
+                  std::vector<SegmentSpan>& out) {
+    if (kHeaderBytes + head.journal_bytes != blob_size) return false;
+    usize at = kHeaderBytes;
+    const usize end = kHeaderBytes + static_cast<usize>(head.journal_bytes);
+    for (u32 i = 0; i < head.segments; ++i) {
+        if (at + kSegmentHeaderBytes > end) return false;
+        u32 magic = 0, kind = 0;
+        u64 bytes = 0;
+        std::memcpy(&magic, blob + at + 0, sizeof(magic));
+        std::memcpy(&kind, blob + at + 4, sizeof(kind));
+        std::memcpy(&bytes, blob + at + 8, sizeof(bytes));
+        if (magic != kSegmentMagic) return false;
+        if (bytes < kSegmentHeaderBytes || at + static_cast<usize>(bytes) > end) return false;
+        out.push_back(SegmentSpan{kind, blob + at + kSegmentHeaderBytes,
+                                  static_cast<usize>(bytes) - kSegmentHeaderBytes});
+        at += static_cast<usize>(bytes);
+    }
+    return at == end;
+}
+
+// The header a file has to have for the next save to be an append rather than a rewrite.
+bool open_for_append(const std::string& path, u64 key, CacheHeader& head, CacheDirectory& dir) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error) return false;
+
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return false;
+    u8 raw[kHeaderBytes];
+    if (!file.read(reinterpret_cast<char*>(raw), kHeaderBytes)) return false;
+    if (!decode_header(raw, kHeaderBytes, head)) return false;
+    if (head.key != key) return false;
+    if (head.state != kStateDone) return false;
+    if (head.mode != static_cast<u8>(WorldCacheMode::Whole)) return false;
+    if (head.segments >= kMaxSegments) return false;
+    if (static_cast<u64>(size) != kHeaderBytes + head.journal_bytes) return false;
+    // Past a doubling the journal is rewritten whole rather than grown further. See kMaxSegments.
+    if (head.base_bytes == 0 || head.journal_bytes >= 2 * head.base_bytes) return false;
+
+    if (head.directory_at < kHeaderBytes ||
+        head.directory_at + kSegmentHeaderBytes > kHeaderBytes + head.journal_bytes) {
+        return false;
+    }
+    file.seekg(static_cast<std::streamoff>(head.directory_at));
+    u8 segment[kSegmentHeaderBytes];
+    if (!file.read(reinterpret_cast<char*>(segment), kSegmentHeaderBytes)) return false;
+    u32 magic = 0, kind = 0;
+    u64 bytes = 0;
+    std::memcpy(&magic, segment + 0, sizeof(magic));
+    std::memcpy(&kind, segment + 4, sizeof(kind));
+    std::memcpy(&bytes, segment + 8, sizeof(bytes));
+    if (magic != kSegmentMagic || kind != kSegmentDirectory) return false;
+    // The directory is always the last thing in the journal, which is what makes the next append
+    // able to find it in one seek.
+    if (bytes < kSegmentHeaderBytes ||
+        head.directory_at + bytes != kHeaderBytes + head.journal_bytes) {
+        return false;
+    }
+    std::vector<u8> body(static_cast<usize>(bytes) - kSegmentHeaderBytes);
+    if (!body.empty() &&
+        !file.read(reinterpret_cast<char*>(body.data()),
+                   static_cast<std::streamsize>(body.size()))) {
+        return false;
+    }
+    Cursor in{body.data(), body.size(), 0, true};
+    return read_directory(in, dir);
+}
+
 }  // namespace
 
 u64 world_cache_key(const std::string& source_text, i32 voxels_per_metre, u64 build_stamp) {
@@ -380,166 +1089,146 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
     // is meant to be saving.
     const u64 began = now_ns();
 
-    std::vector<u8> out;
-    out.reserve(1u << 24);
-    put_pod(out, kMagic);
-    put_pod(out, kVersion);
-    put_pod(out, key);
-    // Whole world or difference, said in the header rather than worked out from what follows. See
-    // WorldCacheMode: an empty payload means opposite things in the two modes.
-    put_pod(out, static_cast<u8>(edit_only ? WorldCacheMode::EditOnly : WorldCacheMode::Whole));
+    std::vector<u8> meta;
+    meta.reserve(1u << 16);
+    write_meta_block(meta, cache);
+    const u64 meta_hash = hash_bytes(meta.data(), meta.size());
+    const std::vector<u64> blocks = region_block_hashes(cache.regions);
 
-    // Tags and properties, by name, so a build that registers them in a different order is
-    // rejected by the reader rather than silently mismatched.
-    put_pod(out, static_cast<u32>(cache.tags->count()));
-    for (u32 i = 0; i < cache.tags->count(); ++i) {
-        const std::string name(cache.tags->name(i));
-        put_pod(out, static_cast<u32>(name.size()));
-        out.insert(out.end(), name.begin(), name.end());
-    }
-    put_pod(out, static_cast<u32>(cache.properties->count()));
-    for (u32 i = 0; i < cache.properties->count(); ++i) {
-        const PropertyInfo& info = cache.properties->info(i);
-        put_pod(out, static_cast<u32>(info.name.size()));
-        out.insert(out.end(), info.name.begin(), info.name.end());
-        put_pod(out, static_cast<u8>(info.type));
-        put_pod(out, static_cast<u8>(info.domain));
-        put_pod(out, info.default_value.bits);
-    }
+    // Can this be an append? Only a whole-world file that this build wrote, that was finished, and
+    // whose journal has not yet doubled. Everything else is a rewrite, which is also what the very
+    // first save is.
+    CacheHeader was{};
+    CacheDirectory before;
+    bool append = false;
+    if (!edit_only) append = open_for_append(path, key, was, before);
 
-    // The type table, as three arrays. Visual records are fixed-size and go out in one block;
-    // behaviour records carry variable-length tag overflow and properties, and there are a
-    // handful of them, so they are written one at a time.
-    const std::vector<VisualRecord>& visuals = cache.types->visuals();
-    put_pod(out, static_cast<u32>(visuals.size()));
-    {
-        const usize at = out.size();
-        out.resize(at + visuals.size() * sizeof(VisualRecord));
-        std::memcpy(out.data() + at, visuals.data(), visuals.size() * sizeof(VisualRecord));
-    }
-
-    const std::vector<BehaviourRecord>& behaviours = cache.types->behaviours();
-    put_pod(out, static_cast<u32>(behaviours.size()));
-    for (const BehaviourRecord& record : behaviours) {
-        put_pod(out, record.material);
-        put_pod(out, record.script);
-        const u64* words = record.tags.fast_words();
-        for (u32 w = 0; w < kFastTagWords; ++w) put_pod(out, words[w]);
-        put_pod(out, static_cast<u32>(record.tags.overflow().size()));
-        for (TagId tag : record.tags.overflow()) put_pod(out, tag);
-        put_pod(out, static_cast<u32>(record.properties.size()));
-        for (const PropertyMap::Entry& entry : record.properties.entries()) {
-            put_pod(out, entry.id);
-            put_pod(out, entry.value.bits);
-        }
-    }
-
-    const std::vector<VoxelType>& types = cache.types->types();
-    put_pod(out, static_cast<u32>(types.size()));
-    {
-        const usize at = out.size();
-        out.resize(at + types.size() * sizeof(VoxelType));
-        std::memcpy(out.data() + at, types.data(), types.size() * sizeof(VoxelType));
-    }
-
-    put_pod(out, static_cast<u32>(cache.materials.size()));
-    for (VoxelTypeId id : cache.materials) put_pod(out, id);
-
-    // Which boxes of the ladder have been sharpened. See CachedRegion: this is what makes a
-    // half-built world worth keeping instead of a trap.
-    put_pod(out, static_cast<u32>(cache.regions.size()));
-    for (const CachedRegion& region : cache.regions) {
-        for (i64 v : region.key) put_pod(out, v);
-        put_pod(out, region.level);
-        for (f64 v : region.low) put_pod(out, v);
-        for (f64 v : region.high) put_pod(out, v);
-        put_pod(out, region.applied_per_metre);
-        put_pod(out, static_cast<u8>(region.done ? 1u : 0u));
-    }
-
-    // Which materials the despeckler may touch. Taken once over the whole clip and unobtainable
-    // from anything a resuming run has to hand -- see CachedStipple. The flag goes out separately
-    // from the list because "asked, and nothing had specks" and "never asked" are different
-    // answers and the reader has to be able to tell them apart.
-    put_pod(out, static_cast<u8>(cache.stipple_taken ? 1u : 0u));
-    put_pod(out, static_cast<u32>(cache.stipple.size()));
-    for (const CachedStipple& entry : cache.stipple) {
-        put_pod(out, entry.type);
-        put_pod(out, static_cast<u8>(entry.may_despeckle ? 1u : 0u));
-    }
-
-    // Where the lamps are, so a loaded world does not have to be read again to find them. R9g,
-    // and the same argument as the ledger below: rediscovering them is the order of work this file
-    // exists to skip.
-    put_pod(out, static_cast<u32>(cache.emitters.size()));
-    for (const CachedEmitters& chunk : cache.emitters) {
-        put_pod(out, chunk.chunk_x);
-        put_pod(out, chunk.chunk_y);
-        put_pod(out, chunk.chunk_z);
-        put_pod(out, static_cast<u32>(chunk.cells.size()));
-        for (const EmissiveCell& cell : chunk.cells) put_pod(out, cell);
-    }
-
-    // The ledger's running totals. Recomputing them means counting every voxel in the world,
-    // which is the same order of work the cache exists to skip.
-    if (cache.ledger != nullptr) {
-        put_pod(out, static_cast<u32>(cache.ledger->totals().size()));
-        for (const auto& entry : cache.ledger->totals()) {
-            put_pod(out, entry.first);
-            put_pod(out, entry.second);
-        }
-    } else {
-        put_pod(out, 0u);
-    }
-
-    // Chunks: every voxel, or only what the clip would not put there.
-    const u32 axis = static_cast<u32>(kChunkBricks);
     u32 written_bricks = 0;
     u32 cleared_bricks = 0;
     u32 kept_bricks = 0;
-    if (!edit_only) {
-        const std::vector<ChunkCoord> coords = cache.world->sorted_chunk_coords();
-        u32 live = 0;
-        for (const ChunkCoord& coord : coords) {
-            if (chunk_is_live(cache.world->chunk(coord))) ++live;
-        }
-        put_pod(out, live);
-        for (const ChunkCoord& coord : coords) {
-            const Chunk* chunk = cache.world->chunk(coord);
-            if (!chunk_is_live(chunk)) continue;
-            put_pod(out, coord.x);
-            put_pod(out, coord.y);
-            put_pod(out, coord.z);
+    u32 fingerprinted = 0;
+    u32 region_blocks_written = static_cast<u32>(blocks.size());
+    ChunkPlan plan;
+    // The journal's new tail, built once and written once. Everything below goes straight into it
+    // rather than into a payload that is then copied into a segment that is then copied into a
+    // file: the first whole write of a finished estate is several hundred megabytes and each of
+    // those copies would be another one of it in memory.
+    std::vector<u8> payload;
+    payload.reserve(1u << 22);
+    const usize segment = open_segment(payload);
+    u32 kind = kSegmentFull;
 
-            const usize count_at = out.size();
-            put_pod(out, 0u);
-            u32 bricks = 0;
-            for (u32 bz = 0; bz < axis; ++bz) {
-                for (u32 by = 0; by < axis; ++by) {
-                    for (u32 bx = 0; bx < axis; ++bx) {
-                        const Brick* brick = chunk->brick(bx, by, bz);
-                        if (!brick_is_live(brick)) continue;
-                        put_pod(out, brick_slot(bx, by, bz));
-                        write_brick_raw(out, *brick);
-                        ++bricks;
-                    }
+    if (!edit_only) {
+        const bool meta_moved = !append || before.meta_hash != meta_hash;
+        std::vector<u32> moved_blocks;
+        for (u32 block = 0; block < static_cast<u32>(blocks.size()); ++block) {
+            if (!append || block >= before.region_blocks.size() ||
+                before.region_blocks[block] != blocks[block]) {
+                moved_blocks.push_back(block);
+            }
+        }
+        const bool regions_moved =
+            !append || !moved_blocks.empty() ||
+            before.regions != static_cast<u32>(cache.regions.size());
+        kind = append ? kSegmentIncrement : kSegmentFull;
+        region_blocks_written = regions_moved ? static_cast<u32>(moved_blocks.size()) : 0u;
+
+        {
+            const usize part = open_part(payload);
+            if (meta_moved) payload.insert(payload.end(), meta.begin(), meta.end());
+            close_part(payload, part);
+        }
+        {
+            const usize part = open_part(payload);
+            if (!append) {
+                // A whole world states the leaf set outright; the blocks are then implicit, a
+                // thousand leaves at a time, and every increment after this one names the ones it
+                // moves.
+                put_pod(payload, static_cast<u32>(cache.regions.size()));
+                for (const CachedRegion& region : cache.regions) write_region(payload, region);
+            } else if (regions_moved) {
+                put_pod(payload, static_cast<u32>(cache.regions.size()));
+                put_pod(payload, static_cast<u32>(moved_blocks.size()));
+                for (u32 block : moved_blocks) {
+                    const u32 from = block * kRegionsPerBlock;
+                    const u32 to = std::min<u32>(from + kRegionsPerBlock,
+                                                 static_cast<u32>(cache.regions.size()));
+                    put_pod(payload, block);
+                    put_pod(payload, to - from);
+                    const usize span = open_part(payload);
+                    for (u32 i = from; i < to; ++i) write_region(payload, cache.regions[i]);
+                    close_part(payload, span);
                 }
             }
-            std::memcpy(out.data() + count_at, &bricks, sizeof(bricks));
-            written_bricks += bricks;
+            close_part(payload, part);
         }
-        if (written != nullptr) written->bricks_written = written_bricks;
+        {
+            const usize part = open_part(payload);
+            const usize count_at = payload.size();
+            put_pod(payload, static_cast<u32>(0));
+            plan = write_changed_chunks(payload, *cache.world, append ? &before : nullptr);
+            std::memcpy(payload.data() + count_at, &plan.written, sizeof(plan.written));
+            close_part(payload, part);
+            written_bricks = plan.bricks;
+        }
+        if (append) {
+            const usize part = open_part(payload);
+            put_pod(payload, static_cast<u32>(plan.dropped.size()));
+            for (const ChunkCoord& coord : plan.dropped) {
+                put_pod(payload, coord.x);
+                put_pod(payload, coord.y);
+                put_pod(payload, coord.z);
+            }
+            close_part(payload, part);
+        }
+
+        // NOTHING HAS CHANGED SINCE THE LAST SAVE, so nothing is written.
+        //
+        // This is not a micro-optimisation, it is D721's own waste: a resumed run reaches the
+        // fixed point again with `refine_saved_regions_` back at nought, decides the world is
+        // worth keeping, and rewrites hundreds of megabytes to say exactly what the file already
+        // said. The file is the authority on whether that is true, and it answers in a hash per
+        // chunk.
+        if (append && !meta_moved && !regions_moved && plan.written == 0 && plan.dropped.empty()) {
+            WS_LOG_INFO("cache",
+                        "'{}' already holds this world -- {} chunks, {} leaves, nothing written "
+                        "({:.0f} ms to find out)",
+                        path, plan.left_alone, cache.regions.size(), ns_to_ms(now_ns() - began));
+            if (written != nullptr) {
+                written->incremental = true;
+                written->unchanged = true;
+                written->chunks_left_alone = plan.left_alone;
+                written->region_blocks_total = static_cast<u32>(blocks.size());
+                written->file_bytes = kHeaderBytes + was.journal_bytes;
+            }
+            return true;
+        }
     } else {
         // ---- R11f: the difference from what the clip builds ---------------------------------
-        //
+        {
+            const usize part = open_part(payload);
+            payload.insert(payload.end(), meta.begin(), meta.end());
+            close_part(payload, part);
+        }
+        {
+            const usize part = open_part(payload);
+            put_pod(payload, static_cast<u32>(cache.regions.size()));
+            for (const CachedRegion& region : cache.regions) write_region(payload, region);
+            close_part(payload, part);
+        }
+
         // What was edited, if the writer was told. Separate flag, empty list: see
         // WorldCache::edits_named. Written before the difference because it is what decides how
         // much of the difference there is.
-        put_pod(out, static_cast<u8>(cache.edits_named ? 1u : 0u));
-        put_pod(out, static_cast<u32>(cache.edited.size()));
-        for (const CachedEditBox& box : cache.edited) {
-            for (i64 v : box.low) put_pod(out, v);
-            for (i64 v : box.high) put_pod(out, v);
+        {
+            const usize part = open_part(payload);
+            put_pod(payload, static_cast<u8>(cache.edits_named ? 1u : 0u));
+            put_pod(payload, static_cast<u32>(cache.edited.size()));
+            for (const CachedEditBox& box : cache.edited) {
+                for (i64 v : box.low) put_pod(payload, v);
+                for (i64 v : box.high) put_pod(payload, v);
+            }
+            close_part(payload, part);
         }
 
         // The fingerprint of the baseline this difference was taken against, chunk by chunk.
@@ -551,12 +1240,17 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
         // world, because a mismatch that can be NAMED is a mismatch somebody can diagnose, and
         // because the reader can then say how much of the world it disagrees about.
         const std::vector<ChunkCoord> base_live = live_chunk_coords(*cache.baseline);
-        put_pod(out, static_cast<u32>(base_live.size()));
-        for (const ChunkCoord& coord : base_live) {
-            put_pod(out, coord.x);
-            put_pod(out, coord.y);
-            put_pod(out, coord.z);
-            put_pod(out, cache.baseline->chunk_hash(coord));
+        fingerprinted = static_cast<u32>(base_live.size());
+        {
+            const usize part = open_part(payload);
+            put_pod(payload, static_cast<u32>(base_live.size()));
+            for (const ChunkCoord& coord : base_live) {
+                put_pod(payload, coord.x);
+                put_pod(payload, coord.y);
+                put_pod(payload, coord.z);
+                put_pod(payload, cache.baseline->chunk_hash(coord));
+            }
+            close_part(payload, part);
         }
 
         // Every chunk either world has anything in, in one order.
@@ -576,12 +1270,6 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
         // chunk in the list and was written nowhere. The file came back saying nothing about it,
         // "the file does not mention it" means "leave the clip's answer alone", and the day the
         // clip grows something there the swing is filled in.
-        //
-        // What it costs is two bytes a brick over the boxes a person actually named, in chunks
-        // that hold nothing: an empty chunk with a chisel-sized box in it is a handful of slots.
-        // A chunk that ends up with no clearings and no writes is skipped further down exactly as
-        // before, so an over-large box in empty space still writes nothing per brick it does not
-        // reach.
         //
         // Bounded, because a box is somebody else's number: a `fill` from a console covers as many
         // chunks as it likes and this list is walked once per chunk. Past the bound the empty
@@ -627,17 +1315,23 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
                 gone.push_back(coord);
             }
         }
-        put_pod(out, static_cast<u32>(gone.size()));
-        for (const ChunkCoord& coord : gone) {
-            put_pod(out, coord.x);
-            put_pod(out, coord.y);
-            put_pod(out, coord.z);
+        {
+            const usize part = open_part(payload);
+            put_pod(payload, static_cast<u32>(gone.size()));
+            for (const ChunkCoord& coord : gone) {
+                put_pod(payload, coord.x);
+                put_pod(payload, coord.y);
+                put_pod(payload, coord.z);
+            }
+            close_part(payload, part);
         }
 
+        const usize changed_part = open_part(payload);
         u32 changed_chunks = 0;
-        const usize changed_at = out.size();
-        put_pod(out, 0u);
+        const usize changed_at = payload.size();
+        put_pod(payload, 0u);
 
+        const u32 axis = static_cast<u32>(kChunkBricks);
         std::vector<const CachedEditBox*> reaching;
         std::vector<u16> clears;
         std::vector<u8> writes;
@@ -713,22 +1407,18 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
             }
             if (clears.empty() && writes.empty()) continue;
 
-            put_pod(out, coord.x);
-            put_pod(out, coord.y);
-            put_pod(out, coord.z);
-            put_pod(out, static_cast<u32>(clears.size()));
-            for (u16 slot : clears) put_pod(out, slot);
-            put_pod(out, write_count);
-            out.insert(out.end(), writes.begin(), writes.end());
+            put_pod(payload, coord.x);
+            put_pod(payload, coord.y);
+            put_pod(payload, coord.z);
+            put_pod(payload, static_cast<u32>(clears.size()));
+            for (u16 slot : clears) put_pod(payload, slot);
+            put_pod(payload, write_count);
+            payload.insert(payload.end(), writes.begin(), writes.end());
             ++changed_chunks;
         }
-        std::memcpy(out.data() + changed_at, &changed_chunks, sizeof(changed_chunks));
-        if (written != nullptr) {
-            written->bricks_written = written_bricks;
-            written->bricks_cleared = cleared_bricks;
-            written->bricks_left_to_the_clip = kept_bricks;
-            written->chunks_fingerprinted = static_cast<u32>(base_live.size());
-        }
+        std::memcpy(payload.data() + changed_at, &changed_chunks, sizeof(changed_chunks));
+        close_part(payload, changed_part);
+
         WS_LOG_INFO("cache",
                     "'{}' as the clip plus its edits: {} bricks written, {} cleared, {} left to "
                     "the clip; {} chunks fingerprinted, {} edit boxes named{}",
@@ -737,72 +1427,176 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
                     cache.edits_named ? "" : " (nobody said what was edited)");
     }
 
-    // Written under a temporary name and renamed, so an interrupted run leaves the previous
-    // cache intact rather than a half-file that passes its own header check.
-    const std::string temporary = path + ".part";
-    {
-        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+    // The segment, and the directory that follows it, as one block of bytes to put on disk.
+    close_segment(payload, segment, kind);
+    const u64 segment_bytes = static_cast<u64>(payload.size());
+
+    CacheDirectory now;
+    now.chunks = plan.directory;
+    now.regions = static_cast<u32>(cache.regions.size());
+    now.region_blocks = blocks;
+    now.meta_hash = meta_hash;
+    const u64 directory_at =
+        append ? kHeaderBytes + was.journal_bytes + segment_bytes : kHeaderBytes + segment_bytes;
+    const usize directory_segment = open_segment(payload);
+    write_directory(payload, now);
+    close_segment(payload, directory_segment, kSegmentDirectory);
+    std::vector<u8>& tail = payload;
+
+    CacheHeader head;
+    head.key = key;
+    head.mode = static_cast<u8>(edit_only ? WorldCacheMode::EditOnly : WorldCacheMode::Whole);
+    head.state = kStateDone;
+    head.segments = append ? was.segments + 2 : 2;
+    head.journal_bytes = (append ? was.journal_bytes : 0) + static_cast<u64>(tail.size());
+    head.directory_at = directory_at;
+    head.base_bytes = append ? was.base_bytes : segment_bytes;
+    head.generation = was.generation + 1;
+
+    u8 raw[kHeaderBytes];
+    const u64 total = kHeaderBytes + head.journal_bytes;
+
+    if (append) {
+        // ---- the append, and the two moments it can be interrupted at -----------------------
+        //
+        // `running` goes down first, so a machine that sleeps between here and the last line
+        // leaves a file every reader refuses rather than one that reads back as a world with a
+        // segment missing from the end of it. D701's distinction, in the one place a format that
+        // no longer renames a temporary into place could lose it.
+        std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
         if (!file) {
-            WS_LOG_WARN("cache", "could not open '{}' for writing", temporary);
+            WS_LOG_WARN("cache", "could not open '{}' to append to", path);
             return false;
         }
-        file.write(reinterpret_cast<const char*>(out.data()),
-                   static_cast<std::streamsize>(out.size()));
+        CacheHeader marker = was;
+        marker.state = kStateRunning;
+        encode_header(raw, marker);
+        file.seekp(0);
+        file.write(reinterpret_cast<const char*>(raw), kHeaderBytes);
+        file.flush();
         if (!file) {
-            WS_LOG_WARN("cache", "could not write '{}'", temporary);
+            WS_LOG_WARN("cache", "could not mark '{}' as being written", path);
+            return false;
+        }
+
+        file.seekp(static_cast<std::streamoff>(kHeaderBytes + was.journal_bytes));
+        file.write(reinterpret_cast<const char*>(tail.data()),
+                   static_cast<std::streamsize>(tail.size()));
+        file.flush();
+        if (!file) {
+            WS_LOG_WARN("cache", "could not append to '{}'", path);
+            return false;
+        }
+        encode_header(raw, head);
+        file.seekp(0);
+        file.write(reinterpret_cast<const char*>(raw), kHeaderBytes);
+        file.flush();
+        const bool ok = static_cast<bool>(file);
+        file.close();
+        if (!ok) {
+            WS_LOG_WARN("cache", "could not finish '{}'", path);
+            return false;
+        }
+        // Anything past the journal is a tail from an older, longer file, and the reader refuses a
+        // file that is not exactly as long as its header says. Only ever shrinks the file.
+        std::error_code error;
+        const auto size = std::filesystem::file_size(path, error);
+        if (!error && size > total) {
+            std::error_code trim;
+            std::filesystem::resize_file(path, total, trim);
+            if (trim) {
+                WS_LOG_WARN("cache", "could not trim '{}' to {} bytes", path, total);
+                return false;
+            }
+        }
+    } else {
+        // Written under a temporary name and renamed, so an interrupted run leaves the previous
+        // cache intact rather than a half-file that passes its own header check.
+        encode_header(raw, head);
+        const std::string temporary = path + ".part";
+        {
+            std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+            if (!file) {
+                WS_LOG_WARN("cache", "could not open '{}' for writing", temporary);
+                return false;
+            }
+            file.write(reinterpret_cast<const char*>(raw), kHeaderBytes);
+            file.write(reinterpret_cast<const char*>(tail.data()),
+                       static_cast<std::streamsize>(tail.size()));
+            if (!file) {
+                WS_LOG_WARN("cache", "could not write '{}'", temporary);
+                return false;
+            }
+        }
+        std::remove(path.c_str());
+        if (std::rename(temporary.c_str(), path.c_str()) != 0) {
+            WS_LOG_WARN("cache", "could not rename '{}' into place", temporary);
             return false;
         }
     }
-    std::remove(path.c_str());
-    if (std::rename(temporary.c_str(), path.c_str()) != 0) {
-        WS_LOG_WARN("cache", "could not rename '{}' into place", temporary);
-        return false;
+
+    const u64 put_down = append ? static_cast<u64>(tail.size()) : total;
+    if (written != nullptr) {
+        written->bricks_written = written_bricks;
+        written->bricks_cleared = cleared_bricks;
+        written->bricks_left_to_the_clip = kept_bricks;
+        written->chunks_fingerprinted = fingerprinted;
+        written->incremental = append;
+        written->chunks_written = plan.written;
+        written->chunks_left_alone = plan.left_alone;
+        written->chunks_dropped = static_cast<u32>(plan.dropped.size());
+        written->region_blocks_written = region_blocks_written;
+        written->region_blocks_total = static_cast<u32>(blocks.size());
+        written->bytes_written = put_down;
+        written->file_bytes = total;
     }
-    WS_LOG_INFO("cache", "wrote '{}' ({} MB in {:.0f} ms)", path, out.size() / (1024 * 1024),
+    WS_LOG_INFO("cache", "wrote '{}' ({} MB in {:.0f} ms)", path, put_down / (1024 * 1024),
                 ns_to_ms(now_ns() - began));
+    if (!edit_only) {
+        WS_LOG_INFO("cache",
+                    "  {}: {} bytes for {} chunks written and {} left where they were, {} dropped; "
+                    "{} leaves; the file is {} bytes in {} segments",
+                    append ? "appended" : "whole", put_down, plan.written, plan.left_alone,
+                    plan.dropped.size(), cache.regions.size(), total, head.segments);
+    }
     return true;
 }
 
 // Does the file on disk belong to this key, without reading the file.
 //
-// Sixteen bytes rather than six hundred megabytes. The caller uses it to decide whether a cached
+// Sixty-four bytes rather than six hundred megabytes. The caller uses it to decide whether a cached
 // world is dead and should be deleted, and reading a third of a gigabyte off a disk to answer that
 // would cost more than the rebuild it is trying to avoid announcing.
+//
+// A file left `running` by an interrupted append answers NO, which is the whole point of the field:
+// the caller deletes it and the world is rebuilt, rather than a partial journal being loaded as a
+// world.
 bool world_cache_matches(const std::string& path, u64 key) {
     std::ifstream file(path, std::ios::binary);
     if (!file) return false;
-    u32 magic = 0, version = 0;
-    u64 stored = 0;
-    file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-    file.read(reinterpret_cast<char*>(&version), sizeof(version));
-    file.read(reinterpret_cast<char*>(&stored), sizeof(stored));
-    if (!file) return false;
-    return magic == kMagic && version == kVersion && stored == key;
+    u8 raw[kHeaderBytes];
+    if (!file.read(reinterpret_cast<char*>(raw), kHeaderBytes)) return false;
+    CacheHeader head;
+    if (!decode_header(raw, kHeaderBytes, head)) return false;
+    if (head.state != kStateDone) return false;
+    return head.key == key;
 }
 
-// The seventeenth byte, and a caller has to have it before it commits to anything.
+// The mode byte, and a caller has to have it before it commits to anything.
 //
 // An edit-only file cannot be opened without the world its clip builds, and building that world is
 // the expensive thing the caller is deciding about. Discovering the requirement inside the read —
 // after the type table, after the region list — leaves the caller holding a failure it could have
-// been told about for seventeen bytes.
+// been told about for sixty-four bytes.
 bool world_cache_mode_of(const std::string& path, WorldCacheMode& out) {
     std::ifstream file(path, std::ios::binary);
     if (!file) return false;
-    u32 magic = 0, version = 0;
-    u64 stored = 0;
-    u8 mode = 0;
-    file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-    file.read(reinterpret_cast<char*>(&version), sizeof(version));
-    file.read(reinterpret_cast<char*>(&stored), sizeof(stored));
-    file.read(reinterpret_cast<char*>(&mode), sizeof(mode));
-    if (!file) return false;
-    if (magic != kMagic || version != kVersion) return false;
-    if (mode != static_cast<u8>(WorldCacheMode::Whole) &&
-        mode != static_cast<u8>(WorldCacheMode::EditOnly)) {
-        return false;
-    }
-    out = static_cast<WorldCacheMode>(mode);
+    u8 raw[kHeaderBytes];
+    if (!file.read(reinterpret_cast<char*>(raw), kHeaderBytes)) return false;
+    CacheHeader head;
+    if (!decode_header(raw, kHeaderBytes, head)) return false;
+    if (head.state != kStateDone) return false;
+    out = static_cast<WorldCacheMode>(head.mode);
     return true;
 }
 
@@ -810,24 +1604,35 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file) return false;
     const std::streamsize size = file.tellg();
-    if (size <= 0) return false;
+    if (size <= 0 || static_cast<usize>(size) < kHeaderBytes) return false;
     file.seekg(0);
 
     std::vector<u8> blob(static_cast<usize>(size));
     if (!file.read(reinterpret_cast<char*>(blob.data()), size)) return false;
 
-    Cursor in{blob.data(), blob.size(), 0, true};
-    if (in.pod<u32>() != kMagic) return false;
-    if (in.pod<u32>() != kVersion) return false;
-    if (in.pod<u64>() != key) return false;   // built from different source; not an error
+    CacheHeader head;
+    if (!decode_header(blob.data(), blob.size(), head)) return false;
+    if (head.key != key) return false;   // built from different source; not an error
 
-    const u8 stored_mode = in.pod<u8>();
-    if (!in.ok) return false;
-    if (stored_mode != static_cast<u8>(WorldCacheMode::Whole) &&
-        stored_mode != static_cast<u8>(WorldCacheMode::EditOnly)) {
+    // D701, and it is the one thing about this format that is not an optimisation. A write that
+    // began and did not finish leaves `running` here, and a journal cut off mid-append leaves the
+    // file longer or shorter than the header says. Either is refused rather than read: a cache
+    // that is refused is rebuilt, and a partial journal read as a whole world is a building with
+    // holes in it that says it is finished.
+    if (head.state != kStateDone) {
+        WS_LOG_WARN("cache", "'{}' was being written when it was last touched; not loading it",
+                    path);
         return false;
     }
-    cache.mode = static_cast<WorldCacheMode>(stored_mode);
+    std::vector<SegmentSpan> segments;
+    if (!walk_journal(blob.data(), blob.size(), head, segments)) {
+        WS_LOG_WARN("cache", "'{}' does not hold the {} segments its header claims; not loading it",
+                    path, head.segments);
+        return false;
+    }
+    if (segments.empty() || segments[0].kind != kSegmentFull) return false;
+
+    cache.mode = static_cast<WorldCacheMode>(head.mode);
     cache.baseline_agreed = true;
     cache.baseline_chunks_differing = 0;
     // Refused rather than muddled through. A difference applied over nothing is a building
@@ -841,67 +1646,226 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         return false;
     }
 
-    const u32 tag_count = in.pod<u32>();
-    for (u32 i = 0; i < tag_count && in.ok; ++i) {
-        const u32 length = in.pod<u32>();
-        const u8* text = in.take(length);
-        if (!in.ok) return false;
-        if (cache.tags->intern(std::string(reinterpret_cast<const char*>(text), length)) != i) {
-            return false;
-        }
-    }
-    const u32 property_count = in.pod<u32>();
-    for (u32 i = 0; i < property_count && in.ok; ++i) {
-        const u32 length = in.pod<u32>();
-        const u8* text = in.take(length);
-        if (!in.ok) return false;
-        const auto type = static_cast<PropertyType>(in.pod<u8>());
-        const auto domain = static_cast<PropertyDomain>(in.pod<u8>());
-        const PropertyValue value{in.pod<u64>()};
-        if (cache.properties->define(
-                std::string(reinterpret_cast<const char*>(text), length), type, domain, value) !=
-            i) {
-            return false;
-        }
-    }
-    if (!in.ok) return false;
+    // ---- pass one: what the journal finally says ------------------------------------------
+    //
+    // Where the last metadata block is, which region blocks are live, and which segment each
+    // chunk's bricks came from. Applied rather than replayed, because replaying would intern the
+    // tags once per segment and add the ledger's totals up again every time.
+    const u8* meta_at = nullptr;
+    usize meta_size = 0;
+    u32 region_count = 0;
+    std::vector<const u8*> block_at;
+    std::vector<usize> block_size;
+    std::vector<u32> block_len;
 
-    const u32 visual_count = in.pod<u32>();
-    std::vector<VisualRecord> visuals(visual_count);
-    {
-        const u8* p = in.take(visual_count * sizeof(VisualRecord));
-        if (!in.ok) return false;
-        std::memcpy(visuals.data(), p, visual_count * sizeof(VisualRecord));
-    }
+    struct ChunkSrc {
+        const u8* data = nullptr;
+        usize size = 0;
+        u32 bricks = 0;
+        const u8* clears = nullptr;
+        u32 clear_count = 0;
+    };
+    std::unordered_map<ChunkCoord, ChunkSrc, ChunkCoordHash> live;
+    std::vector<ChunkCoord> emptied;
 
-    const u32 behaviour_count = in.pod<u32>();
-    std::vector<BehaviourRecord> behaviours(behaviour_count);
-    for (BehaviourRecord& record : behaviours) {
-        record.material = in.pod<u32>();
-        record.script = in.pod<u32>();
-        for (u32 w = 0; w < kFastTagWords; ++w) {
-            const u64 word = in.pod<u64>();
-            for (u32 bit = 0; bit < 64; ++bit) {
-                if ((word >> bit) & 1u) record.tags.add(w * 64 + bit);
+    const auto set_region_count = [&](u32 count) {
+        region_count = count;
+        const u32 want = region_blocks_for(count);
+        block_at.resize(want, nullptr);
+        block_size.resize(want, 0);
+        block_len.resize(want, 0);
+    };
+
+    // Walking one chunk's bricks to find where the record ends, without decoding any of them.
+    const auto span_of_bricks = [&](Cursor& in, u32 bricks, const u8*& data, usize& bytes) -> bool {
+        const usize begin = in.at;
+        for (u32 b = 0; b < bricks; ++b) {
+            in.take(sizeof(u16));
+            if (!in.ok) return false;
+            const usize span = brick_span(in.data + in.at, in.size - in.at);
+            if (span == 0) return false;
+            in.take(span);
+            if (!in.ok) return false;
+        }
+        data = in.data + begin;
+        bytes = in.at - begin;
+        return true;
+    };
+
+    // The edit-only parts, filled in below and used after the baseline has been laid down.
+    std::vector<ChunkCoord> expect;
+    std::vector<u64> expect_hash;
+    const u8* gone_at = nullptr;
+    usize gone_size = 0;
+    const u8* changed_at = nullptr;
+    usize changed_size = 0;
+
+    for (const SegmentSpan& segment : segments) {
+        if (segment.kind == kSegmentDirectory) continue;   // the writer's note to the next writer
+        Cursor in{segment.data, segment.size, 0, true};
+
+        if (cache.mode == WorldCacheMode::EditOnly) {
+            if (segment.kind != kSegmentFull) return false;
+            meta_at = take_part(in, meta_size);
+            if (meta_at == nullptr) return false;
+            usize bytes = 0;
+            const u8* regions = take_part(in, bytes);
+            if (regions == nullptr) return false;
+            {
+                Cursor r{regions, bytes, 0, true};
+                const u32 count = r.pod<u32>();
+                if (!r.ok) return false;
+                set_region_count(count);
+                for (u32 block = 0; block < static_cast<u32>(block_at.size()); ++block) {
+                    const u32 from = block * kRegionsPerBlock;
+                    const u32 to = std::min<u32>(from + kRegionsPerBlock, count);
+                    block_at[block] = regions + r.at;
+                    block_len[block] = to - from;
+                    for (u32 i = from; i < to; ++i) {
+                        CachedRegion ignored;
+                        if (!read_region(r, ignored)) return false;
+                    }
+                    block_size[block] = static_cast<usize>(regions + r.at - block_at[block]);
+                }
+            }
+            const u8* edits = take_part(in, bytes);
+            if (edits == nullptr) return false;
+            {
+                Cursor e{edits, bytes, 0, true};
+                cache.edits_named = e.pod<u8>() != 0u;
+                const u32 boxes = e.pod<u32>();
+                if (!e.ok) return false;
+                cache.edited.clear();
+                cache.edited.reserve(boxes);
+                for (u32 i = 0; i < boxes && e.ok; ++i) {
+                    CachedEditBox box;
+                    for (i64& v : box.low) v = e.pod<i64>();
+                    for (i64& v : box.high) v = e.pod<i64>();
+                    cache.edited.push_back(box);
+                }
+                if (!e.ok) return false;
+            }
+            const u8* fingerprint = take_part(in, bytes);
+            if (fingerprint == nullptr) return false;
+            {
+                Cursor f{fingerprint, bytes, 0, true};
+                const u32 count = f.pod<u32>();
+                if (!f.ok) return false;
+                expect.resize(count);
+                expect_hash.resize(count);
+                for (u32 i = 0; i < count && f.ok; ++i) {
+                    expect[i].x = f.pod<i64>();
+                    expect[i].y = f.pod<i64>();
+                    expect[i].z = f.pod<i64>();
+                    expect_hash[i] = f.pod<u64>();
+                }
+                if (!f.ok) return false;
+            }
+            gone_at = take_part(in, gone_size);
+            if (gone_at == nullptr) return false;
+            changed_at = take_part(in, changed_size);
+            if (changed_at == nullptr) return false;
+            continue;
+        }
+
+        // ---- a whole world, and the increments over it --------------------------------------
+        if (segment.kind != kSegmentFull && segment.kind != kSegmentIncrement) return false;
+        usize bytes = 0;
+        const u8* block = take_part(in, bytes);
+        if (block == nullptr) return false;
+        if (bytes > 0) {
+            meta_at = block;
+            meta_size = bytes;
+        } else if (segment.kind == kSegmentFull) {
+            return false;   // a whole world with no type table in it is not a world
+        }
+
+        const u8* regions = take_part(in, bytes);
+        if (regions == nullptr) return false;
+        if (segment.kind == kSegmentFull) {
+            Cursor r{regions, bytes, 0, true};
+            const u32 count = r.pod<u32>();
+            if (!r.ok) return false;
+            set_region_count(count);
+            for (u32 index = 0; index < static_cast<u32>(block_at.size()); ++index) {
+                const u32 from = index * kRegionsPerBlock;
+                const u32 to = std::min<u32>(from + kRegionsPerBlock, count);
+                block_at[index] = regions + r.at;
+                block_len[index] = to - from;
+                for (u32 i = from; i < to; ++i) {
+                    CachedRegion ignored;
+                    if (!read_region(r, ignored)) return false;
+                }
+                block_size[index] = static_cast<usize>(regions + r.at - block_at[index]);
+            }
+        } else if (bytes > 0) {
+            Cursor r{regions, bytes, 0, true};
+            const u32 count = r.pod<u32>();
+            const u32 moved = r.pod<u32>();
+            if (!r.ok) return false;
+            set_region_count(count);
+            for (u32 i = 0; i < moved; ++i) {
+                const u32 index = r.pod<u32>();
+                const u32 length = r.pod<u32>();
+                if (!r.ok) return false;
+                usize span = 0;
+                const u8* at = take_part(r, span);
+                if (at == nullptr) return false;
+                if (index >= block_at.size()) return false;
+                block_at[index] = at;
+                block_size[index] = span;
+                block_len[index] = length;
             }
         }
-        const u32 overflow = in.pod<u32>();
-        for (u32 i = 0; i < overflow && in.ok; ++i) record.tags.add(in.pod<u32>());
-        const u32 entries = in.pod<u32>();
-        for (u32 i = 0; i < entries && in.ok; ++i) {
-            const PropertyId id = in.pod<u32>();
-            record.properties.set(id, PropertyValue{in.pod<u64>()});
+
+        const u8* chunks = take_part(in, bytes);
+        if (chunks == nullptr) return false;
+        {
+            Cursor c{chunks, bytes, 0, true};
+            const u32 count = c.pod<u32>();
+            if (!c.ok) return false;
+            for (u32 i = 0; i < count; ++i) {
+                ChunkCoord coord;
+                coord.x = c.pod<i64>();
+                coord.y = c.pod<i64>();
+                coord.z = c.pod<i64>();
+                const u32 bricks = c.pod<u32>();
+                if (!c.ok) return false;
+                ChunkSrc src;
+                src.bricks = bricks;
+                if (!span_of_bricks(c, bricks, src.data, src.size)) return false;
+                live[coord] = src;
+            }
         }
-        if (!in.ok) return false;
+
+        if (segment.kind == kSegmentIncrement) {
+            const u8* dropped = take_part(in, bytes);
+            if (dropped == nullptr) return false;
+            Cursor d{dropped, bytes, 0, true};
+            const u32 count = d.pod<u32>();
+            if (!d.ok) return false;
+            for (u32 i = 0; i < count && d.ok; ++i) {
+                ChunkCoord coord;
+                coord.x = d.pod<i64>();
+                coord.y = d.pod<i64>();
+                coord.z = d.pod<i64>();
+                if (!d.ok) return false;
+                live.erase(coord);
+                emptied.push_back(coord);
+            }
+            if (!d.ok) return false;
+        }
     }
 
-    const u32 type_count = in.pod<u32>();
-    std::vector<VoxelType> types(type_count);
+    if (meta_at == nullptr) return false;
+
+    // ---- pass two: put it where it goes ----------------------------------------------------
+    MetaIn meta;
     {
-        const u8* p = in.take(type_count * sizeof(VoxelType));
-        if (!in.ok) return false;
-        std::memcpy(types.data(), p, type_count * sizeof(VoxelType));
+        Cursor in{meta_at, meta_size, 0, true};
+        if (!read_meta_block(in, cache, meta)) return false;
     }
+
     // ---- R11f data-loss case 2: the baseline's ids and the file's ids ----------------------
     //
     // `adopt` REPLACES the type table, and in edit-only mode that table is not the only thing in
@@ -915,33 +1879,29 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
     // interning is driven by the order the sampler meets materials, and the sampler meets them in
     // the order the camera asked for boxes. Two runs of one clip from two cameras can hand back
     // the same world with the ids permuted, which is the case this reader was written assuming
-    // could not happen. (The test file's own note said as much: "this is an assumption, not a
-    // guarantee".)
+    // could not happen.
     //
     // So the file's table is authoritative -- its brick payloads are written in its own ids -- and
     // the BASELINE is moved to meet it. Records the file has no equivalent for are appended rather
     // than dropped, because a clip that has grown a material since the file was written is the
     // ordinary reason for the tables to differ, and dropping it would take the new matter's colour
     // with it.
-    //
-    // Costs nothing when the tables agree, which is nearly always: the check below is one pass
-    // over the reading run's own table comparing records, and it stops at the first difference.
     std::vector<VoxelTypeId> type_remap;
     bool types_moved = false;
     if (cache.mode == WorldCacheMode::EditOnly && cache.types->type_count() > 0) {
         const VoxelTypeTable& mine = *cache.types;
         const u32 old_count = mine.type_count();
         const auto file_visual = [&](const VoxelType& t) -> const VisualRecord* {
-            return (t.visual < visuals.size()) ? &visuals[t.visual] : nullptr;
+            return (t.visual < meta.visuals.size()) ? &meta.visuals[t.visual] : nullptr;
         };
         const auto file_behaviour = [&](const VoxelType& t) -> const BehaviourRecord* {
-            return (t.behaviour < behaviours.size()) ? &behaviours[t.behaviour] : nullptr;
+            return (t.behaviour < meta.behaviours.size()) ? &meta.behaviours[t.behaviour] : nullptr;
         };
 
-        bool identical = old_count <= types.size();
+        bool identical = old_count <= meta.types.size();
         for (u32 i = 0; identical && i < old_count; ++i) {
-            const VisualRecord* v = file_visual(types[i]);
-            const BehaviourRecord* b = file_behaviour(types[i]);
+            const VisualRecord* v = file_visual(meta.types[i]);
+            const BehaviourRecord* b = file_behaviour(meta.types[i]);
             identical = v != nullptr && b != nullptr && *v == mine.visual_of(i) &&
                         *b == mine.behaviour_of(i);
         }
@@ -949,17 +1909,17 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         if (!identical) {
             std::unordered_map<u64, std::vector<u32>> visual_by_hash;
             std::unordered_map<u64, std::vector<u32>> behaviour_by_hash;
-            for (u32 i = 0; i < static_cast<u32>(visuals.size()); ++i) {
-                visual_by_hash[visuals[i].content_hash()].push_back(i);
+            for (u32 i = 0; i < static_cast<u32>(meta.visuals.size()); ++i) {
+                visual_by_hash[meta.visuals[i].content_hash()].push_back(i);
             }
-            for (u32 i = 0; i < static_cast<u32>(behaviours.size()); ++i) {
-                behaviour_by_hash[behaviours[i].content_hash()].push_back(i);
+            for (u32 i = 0; i < static_cast<u32>(meta.behaviours.size()); ++i) {
+                behaviour_by_hash[meta.behaviours[i].content_hash()].push_back(i);
             }
             std::unordered_map<u64, u32> type_by_pair;
-            type_by_pair.reserve(types.size() * 2 + 1);
-            for (u32 i = 0; i < static_cast<u32>(types.size()); ++i) {
-                type_by_pair.emplace((static_cast<u64>(types[i].visual) << 32) | types[i].behaviour,
-                                     i);
+            type_by_pair.reserve(meta.types.size() * 2 + 1);
+            for (u32 i = 0; i < static_cast<u32>(meta.types.size()); ++i) {
+                type_by_pair.emplace(
+                    (static_cast<u64>(meta.types[i].visual) << 32) | meta.types[i].behaviour, i);
             }
 
             type_remap.resize(old_count);
@@ -969,36 +1929,36 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
                 u32 visual_id = kAirVisual;
                 bool found = false;
                 for (u32 candidate : visual_by_hash[want_visual.content_hash()]) {
-                    if (visuals[candidate] == want_visual) {
+                    if (meta.visuals[candidate] == want_visual) {
                         visual_id = candidate;
                         found = true;
                         break;
                     }
                 }
                 if (!found) {
-                    visual_id = static_cast<u32>(visuals.size());
-                    visuals.push_back(want_visual);
+                    visual_id = static_cast<u32>(meta.visuals.size());
+                    meta.visuals.push_back(want_visual);
                     visual_by_hash[want_visual.content_hash()].push_back(visual_id);
                 }
                 u32 behaviour_id = kAirBehaviour;
                 found = false;
                 for (u32 candidate : behaviour_by_hash[want_behaviour.content_hash()]) {
-                    if (behaviours[candidate] == want_behaviour) {
+                    if (meta.behaviours[candidate] == want_behaviour) {
                         behaviour_id = candidate;
                         found = true;
                         break;
                     }
                 }
                 if (!found) {
-                    behaviour_id = static_cast<u32>(behaviours.size());
-                    behaviours.push_back(want_behaviour);
+                    behaviour_id = static_cast<u32>(meta.behaviours.size());
+                    meta.behaviours.push_back(want_behaviour);
                     behaviour_by_hash[want_behaviour.content_hash()].push_back(behaviour_id);
                 }
                 const u64 pair = (static_cast<u64>(visual_id) << 32) | behaviour_id;
                 auto slot = type_by_pair.find(pair);
                 if (slot == type_by_pair.end()) {
-                    const u32 fresh = static_cast<u32>(types.size());
-                    types.push_back(VoxelType{visual_id, behaviour_id});
+                    const u32 fresh = static_cast<u32>(meta.types.size());
+                    meta.types.push_back(VoxelType{visual_id, behaviour_id});
                     slot = type_by_pair.emplace(pair, fresh).first;
                 }
                 type_remap[i] = slot->second;
@@ -1009,64 +1969,35 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
                             "'{}' was written against a type table interned in another order than "
                             "this run's; moving the clip's world onto the file's {} types before "
                             "laying the edits over it",
-                            path, types.size());
+                            path, meta.types.size());
             }
         }
     }
 
-    cache.types->adopt(std::move(visuals), std::move(behaviours), std::move(types));
+    cache.types->adopt(std::move(meta.visuals), std::move(meta.behaviours), std::move(meta.types));
+    cache.materials = std::move(meta.materials);
+    cache.stipple_taken = meta.stipple_taken;
+    cache.stipple = std::move(meta.stipple);
+    cache.emitters = std::move(meta.emitters);
 
-    const u32 material_count = in.pod<u32>();
-    cache.materials.clear();
-    for (u32 i = 0; i < material_count && in.ok; ++i) cache.materials.push_back(in.pod<u32>());
-
-    const u32 region_count = in.pod<u32>();
+    // The region list, block by block. A block nobody restated is still the one the base segment
+    // laid down, which is the whole of what makes an increment cheap.
     cache.regions.clear();
-    if (!in.ok) return false;
     cache.regions.reserve(region_count);
-    for (u32 i = 0; i < region_count && in.ok; ++i) {
-        CachedRegion region;
-        for (i64& v : region.key) v = in.pod<i64>();
-        region.level = in.pod<u32>();
-        for (f64& v : region.low) v = in.pod<f64>();
-        for (f64& v : region.high) v = in.pod<f64>();
-        region.applied_per_metre = in.pod<i32>();
-        region.done = in.pod<u8>() != 0u;
-        cache.regions.push_back(region);
+    for (u32 index = 0; index < static_cast<u32>(block_at.size()); ++index) {
+        if (block_at[index] == nullptr) return false;
+        const u32 from = index * kRegionsPerBlock;
+        const u32 to = std::min<u32>(from + kRegionsPerBlock, region_count);
+        if (block_len[index] != to - from) return false;
+        Cursor r{block_at[index], block_size[index], 0, true};
+        for (u32 i = from; i < to; ++i) {
+            CachedRegion region;
+            if (!read_region(r, region)) return false;
+            cache.regions.push_back(region);
+        }
     }
-    if (!in.ok) return false;
+    if (cache.regions.size() != region_count) return false;
 
-    cache.stipple_taken = in.pod<u8>() != 0u;
-    const u32 stipple_count = in.pod<u32>();
-    cache.stipple.clear();
-    if (!in.ok) return false;
-    cache.stipple.reserve(stipple_count);
-    for (u32 i = 0; i < stipple_count && in.ok; ++i) {
-        CachedStipple entry;
-        entry.type = in.pod<u32>();
-        entry.may_despeckle = in.pod<u8>() != 0u;
-        cache.stipple.push_back(entry);
-    }
-    if (!in.ok) return false;
-
-    const u32 emitter_chunks = in.pod<u32>();
-    cache.emitters.clear();
-    if (!in.ok) return false;
-    cache.emitters.reserve(emitter_chunks);
-    for (u32 i = 0; i < emitter_chunks && in.ok; ++i) {
-        CachedEmitters chunk;
-        chunk.chunk_x = in.pod<i64>();
-        chunk.chunk_y = in.pod<i64>();
-        chunk.chunk_z = in.pod<i64>();
-        const u32 cell_count = in.pod<u32>();
-        if (!in.ok) return false;
-        chunk.cells.reserve(cell_count);
-        for (u32 c = 0; c < cell_count && in.ok; ++c) chunk.cells.push_back(in.pod<EmissiveCell>());
-        cache.emitters.push_back(std::move(chunk));
-    }
-    if (!in.ok) return false;
-
-    const u32 ledger_count = in.pod<u32>();
     // The totals in the file are the WHOLE world's, taken after the edits, in both modes. On the
     // edit-only path the caller has already built the clip's world into the baseline and charged
     // its ledger for every voxel of it, so adding these on top would count the building twice and
@@ -1074,14 +2005,11 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
     // accounting with it, which is correct here and only here: this is a load, and a load is
     // exactly the moment a ledger has no history worth keeping.
     if (cache.mode == WorldCacheMode::EditOnly && cache.ledger != nullptr) cache.ledger->clear();
-    for (u32 i = 0; i < ledger_count && in.ok; ++i) {
-        const VoxelTypeId type = in.pod<u32>();
-        const i64 total = in.pod<i64>();
+    for (const auto& [type, total] : meta.ledger) {
         if (cache.ledger != nullptr && total > 0) {
             cache.ledger->record_bulk(kAir, type, static_cast<u64>(total), MatterReason::Load);
         }
     }
-    if (!in.ok) return false;
 
     // Chunks. Created on this thread — the world's map is not safe to insert into from several —
     // and then filled in parallel, because once a chunk exists it is an independent object.
@@ -1095,7 +2023,6 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         u32 bricks = 0;
     };
     std::vector<Pending> pending;
-    std::vector<ChunkCoord> emptied;
 
     // Every brick of a chunk taken back to air, through the route that unlinks it. Not a
     // convenience: a brick left allocated with nothing in it is `world_has` claiming matter the
@@ -1115,46 +2042,12 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
     };
 
     if (cache.mode == WorldCacheMode::EditOnly) {
-        // ---- R11f: the difference, and the world it is a difference from --------------------
-        cache.edits_named = in.pod<u8>() != 0u;
-        const u32 edit_boxes = in.pod<u32>();
-        cache.edited.clear();
-        if (!in.ok) return false;
-        cache.edited.reserve(edit_boxes);
-        for (u32 i = 0; i < edit_boxes && in.ok; ++i) {
-            CachedEditBox box;
-            for (i64& v : box.low) v = in.pod<i64>();
-            for (i64& v : box.high) v = in.pod<i64>();
-            cache.edited.push_back(box);
-        }
-        if (!in.ok) return false;
-
-        // Is the world about to be written over the world this difference was cut out of? Asked
-        // before anything is applied, and asked chunk by chunk so the answer can be a NUMBER --
-        // "the baseline disagrees" is not diagnosable and "9 of 74 chunks disagree" is.
-        const u32 fingerprint = in.pod<u32>();
-        if (!in.ok) return false;
-        std::vector<ChunkCoord> expect(fingerprint);
-        std::vector<u64> expect_hash(fingerprint);
-        for (u32 i = 0; i < fingerprint && in.ok; ++i) {
-            expect[i].x = in.pod<i64>();
-            expect[i].y = in.pod<i64>();
-            expect[i].z = in.pod<i64>();
-            expect_hash[i] = in.pod<u64>();
-        }
-        if (!in.ok) return false;
-
         // THE BASELINE BECOMES THE WORLD FIRST, and then it is moved onto the file's type table
         // if the two were interned in different orders -- both before a single hash is compared.
         //
         // The order matters and it used to be the other way round. A permuted type table changes
         // every chunk hash in the baseline, so the check would report the whole world in
-        // disagreement and blame the clip for a difference that is only a numbering. Worse, the
-        // report would be the only sign of it: the read went ahead, and what came back was the
-        // building in somebody else's materials. See the type-table block above.
-        //
-        // Pointing `baseline` at `world` is the ordinary path and the difference lands in place; a
-        // separate baseline is copied, which costs a world and is the caller's choice to make.
+        // disagreement and blame the clip for a difference that is only a numbering.
         if (cache.baseline != cache.world) {
             cache.baseline->for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
                 if (chunk.empty()) return;
@@ -1167,6 +2060,7 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         // is a pool to go wide on. One byte of answer per chunk rather than an atomic: the ranges
         // are disjoint and the sum is trivial afterwards.
         const u64 verify_began = now_ns();
+        const u32 fingerprint = static_cast<u32>(expect.size());
         std::vector<u8> disagrees(fingerprint, 0u);
         const auto verify = [&](usize from, usize to) {
             for (usize i = from; i < to; ++i) {
@@ -1209,78 +2103,68 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
                     ns_to_ms(now_ns() - verify_began), fingerprint);
 
         // Chunks the clip fills and the saved world does not.
-        const u32 gone_count = in.pod<u32>();
-        if (!in.ok) return false;
-        for (u32 i = 0; i < gone_count && in.ok; ++i) {
-            ChunkCoord coord;
-            coord.x = in.pod<i64>();
-            coord.y = in.pod<i64>();
-            coord.z = in.pod<i64>();
-            if (!in.ok) return false;
-            if (!cache.world->has_chunk(coord)) continue;
-            strip_chunk(cache.world->chunk_for_write(coord));
-            emptied.push_back(coord);
-        }
-        if (!in.ok) return false;
-
-        const u32 changed = in.pod<u32>();
-        if (!in.ok) return false;
-        pending.reserve(changed);
-        for (u32 i = 0; i < changed && in.ok; ++i) {
-            ChunkCoord coord;
-            coord.x = in.pod<i64>();
-            coord.y = in.pod<i64>();
-            coord.z = in.pod<i64>();
-            const u32 clear_count = in.pod<u32>();
-            if (!in.ok) return false;
-            const u8* clears = in.take(clear_count * sizeof(u16));
-            if (!in.ok) return false;
-            const u32 bricks = in.pod<u32>();
-            if (!in.ok) return false;
-
-            const usize begin = in.at;
-            for (u32 b = 0; b < bricks; ++b) {
-                in.take(sizeof(u16));
-                if (!in.ok) return false;
-                const usize span = brick_span(blob.data() + in.at, in.size - in.at);
-                if (span == 0) return false;
-                in.take(span);
-                if (!in.ok) return false;
+        {
+            Cursor g{gone_at, gone_size, 0, true};
+            const u32 count = g.pod<u32>();
+            if (!g.ok) return false;
+            for (u32 i = 0; i < count && g.ok; ++i) {
+                ChunkCoord coord;
+                coord.x = g.pod<i64>();
+                coord.y = g.pod<i64>();
+                coord.z = g.pod<i64>();
+                if (!g.ok) return false;
+                if (!cache.world->has_chunk(coord)) continue;
+                strip_chunk(cache.world->chunk_for_write(coord));
+                emptied.push_back(coord);
             }
-            pending.push_back({&cache.world->chunk_for_write(coord), coord, clears, clear_count,
-                               blob.data() + begin, in.at - begin, bricks});
+            if (!g.ok) return false;
         }
-        if (!in.ok) return false;
+
+        Cursor c{changed_at, changed_size, 0, true};
+        const u32 changed = c.pod<u32>();
+        if (!c.ok) return false;
+        pending.reserve(changed);
+        for (u32 i = 0; i < changed; ++i) {
+            ChunkCoord coord;
+            coord.x = c.pod<i64>();
+            coord.y = c.pod<i64>();
+            coord.z = c.pod<i64>();
+            const u32 clear_count = c.pod<u32>();
+            if (!c.ok) return false;
+            const u8* clears = c.take(clear_count * sizeof(u16));
+            if (!c.ok) return false;
+            const u32 bricks = c.pod<u32>();
+            if (!c.ok) return false;
+            const u8* data = nullptr;
+            usize bytes = 0;
+            if (!span_of_bricks(c, bricks, data, bytes)) return false;
+            pending.push_back({&cache.world->chunk_for_write(coord), coord, clears, clear_count,
+                               data, bytes, bricks});
+        }
     } else {
         // A whole-world file says nothing at all about what was edited, which is not the same as
         // saying nothing was. Trap 7, one more time: leave the claim unmade.
         cache.edits_named = false;
         cache.edited.clear();
 
-        const u32 chunk_count = in.pod<u32>();
-        pending.reserve(chunk_count);
-        for (u32 i = 0; i < chunk_count && in.ok; ++i) {
-            ChunkCoord coord;
-            coord.x = in.pod<i64>();
-            coord.y = in.pod<i64>();
-            coord.z = in.pod<i64>();
-            const u32 bricks = in.pod<u32>();
-            if (!in.ok) return false;
-
-            // Walk the bricks once to find where this chunk's payload ends, without decoding them.
-            const usize begin = in.at;
-            for (u32 b = 0; b < bricks; ++b) {
-                in.take(sizeof(u16));
-                if (!in.ok) return false;
-                const usize span = brick_span(blob.data() + in.at, in.size - in.at);
-                if (span == 0) return false;
-                in.take(span);
-                if (!in.ok) return false;
-            }
-            pending.push_back({&cache.world->chunk_for_write(coord), coord, nullptr, 0,
-                               blob.data() + begin, in.at - begin, bricks});
+        // A chunk the journal dropped after writing it. The world being read into is normally
+        // empty, so there is nothing to undo; when it is not, the chunk is stripped rather than
+        // left holding what an earlier segment put there.
+        for (const ChunkCoord& coord : emptied) {
+            if (!cache.world->has_chunk(coord)) continue;
+            strip_chunk(cache.world->chunk_for_write(coord));
         }
-        if (!in.ok) return false;
+
+        std::vector<ChunkCoord> order;
+        order.reserve(live.size());
+        for (const auto& [coord, src] : live) order.push_back(coord);
+        std::sort(order.begin(), order.end(), chunk_coord_less);
+        pending.reserve(order.size());
+        for (const ChunkCoord& coord : order) {
+            const ChunkSrc& src = live[coord];
+            pending.push_back({&cache.world->chunk_for_write(coord), coord, nullptr, 0, src.data,
+                               src.size, src.bricks});
+        }
     }
 
     const auto fill = [&](usize from, usize to) {

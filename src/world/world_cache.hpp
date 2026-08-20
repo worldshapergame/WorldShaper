@@ -316,13 +316,64 @@ struct WorldCacheWritten {
     u32 bricks_cleared = 0;             // bricks said to be air against a clip that fills them
     u32 bricks_left_to_the_clip = 0;    // derived, and therefore not in the file at all
     u32 chunks_fingerprinted = 0;
+
+    // ---- R11j: what an INCREMENTAL write did, which is a different question ----------------
+    //
+    // The three counts above are about the clip: how much of the world the file did not have to
+    // carry because the clip carries it. These are about the FILE ON DISK: how much of it this
+    // write had to touch, given that most of it was already right. A save that appends nothing at
+    // all is the interesting case and it has to be visible as a number, or "we made banking
+    // cheaper" is a claim rather than a measurement.
+    bool incremental = false;           // appended to what was there, rather than rewritten whole
+    bool unchanged = false;             // the file already held this world; nothing was written
+    u32 chunks_written = 0;             // chunks this write put in the file
+    u32 chunks_left_alone = 0;          // chunks already in the file, byte for byte, and skipped
+    u32 chunks_dropped = 0;             // chunks the file had and the world no longer has
+    u32 region_blocks_written = 0;      // of region_blocks_total
+    u32 region_blocks_total = 0;
+    u64 bytes_written = 0;              // what this write actually put on disk
+    u64 file_bytes = 0;                 // what the file is afterwards
 };
 
-// Writes to a temporary beside the target and renames, so a run interrupted mid-write leaves the
-// old cache intact rather than a truncated one that looks valid.
+// Writes the world to `path`.
+//
+// # A save after a save writes only what has changed — R11j
+//
+// This used to write the whole file every time, and D721 turned that from a cost paid once at the
+// end of a build into a cost paid EVERY TWO MINUTES for the length of one: the whole-world pass
+// banks what it has built so a stopped load resumes, and the estate's world is 54 MB today and
+// several hundred when it is finished. A multi-hundred-megabyte rewrite of mostly-unchanged data,
+// on the main thread, with the loading screen up, is not a bank — it is a stall with a good
+// reason.
+//
+// So the file is a JOURNAL. The first write lays down a whole world; every write after it appends
+// a segment holding only what differs from what the file already says — the chunks whose bytes
+// changed, the region blocks that moved, and the metadata if any of it did. A chunk nobody
+// touched since the last save is not written again. The reader replays the segments in order, so
+// **a file written incrementally holds exactly the world a file written whole would**, which is
+// the gate this is judged on and the only promise that matters.
+//
+// Two things bound it. The journal is rewritten whole once it has grown past twice the size of the
+// last whole write, so the file cannot creep; and a save that finds NOTHING changed writes nothing
+// at all and says so — which is the D721 waste where a resumed run rewrote hundreds of megabytes
+// to say exactly what the file already said.
+//
+// # And an interrupted write is still refused
+//
+// D701's fourth field, kept true through a format that no longer renames a temporary into place.
+// The header carries `running` from the moment an append begins and `done` only when the file is
+// whole again, and it carries the exact length the journal is supposed to be. A write cut off by a
+// closed lid leaves one or both wrong, and every reader here — `read_world_cache`,
+// `world_cache_matches`, `world_cache_mode_of` — refuses such a file rather than reading the part
+// of it that landed. A refused cache is rebuilt; a half-read one is a world with holes in it that
+// claims to be whole.
+//
+// A first write, and any write that rebuilds the journal, still goes to a temporary beside the
+// target and is renamed, so it cannot damage the file it replaces.
 //
 // Writes every voxel when `cache.baseline` is null, and the difference from that baseline when it
-// is not. See WorldCache::baseline.
+// is not. See WorldCache::baseline. An edit-only file is never appended to: it is a difference
+// from a clip rather than a record of a build, it is small by construction, and it is written once.
 bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache,
                        WorldCacheWritten* written = nullptr);
 
