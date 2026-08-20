@@ -2271,13 +2271,10 @@ void Shell::draw_script_view(const Rect& page) {
         const f32 wide = std::max(metrics.px(28.0f),
                                   track.width() * room / std::max(room, script_wide_));
         const f32 travel = std::max(1.0f, track.width() - wide);
-        const u64 bar = id_of("editor.script.across");
         if (ui_.pressed_in(track)) {
-            ui_.claim(track);
             script_pan_x_ =
                 std::clamp((ui_.pointer_x() - track.x0 - wide * 0.5f) / travel, 0.0f, 1.0f) * across;
         }
-        (void)bar;
         ui_.draw().ink(track, 0.07f);
         const f32 at = track.x0 + travel * (script_pan_x_ / across);
         ui_.draw().ink(Rect{at, track.y0, at + wide, track.y1}, 0.30f);
