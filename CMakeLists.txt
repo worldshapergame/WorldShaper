@@ -213,6 +213,7 @@ target_include_directories(ws_clipcheck PRIVATE src)
 set(WS_TEST_SOURCES_HEADLESS
     tests/test_main.cpp
     tests/test_field.cpp
+    tests/test_field_block.cpp
     tests/test_cuts.cpp
     tests/test_clip_script.cpp
     tests/test_weathering.cpp
