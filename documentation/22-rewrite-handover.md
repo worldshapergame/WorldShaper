@@ -639,7 +639,7 @@ now**, and every one of these is a flag away from what it did before.
 
 **The gate every one of them was held to, and the one to run before believing anything here:**
 ```
-buildin\WorldShaper.exe --no-title --world clips/sampler.clip --full-load --no-coarse-paste --no-clip-cache --cycle 20 --max-seconds 200
+build\bin\WorldShaper.exe --no-title --world clips/sampler.clip --full-load --no-coarse-paste --no-clip-cache --cycle 20 --max-seconds 200
 ```
 must say `1430104 solid voxels, content d0d5f84c685be847`. `test.bat` is green end to end — 748 of
 748, the headless audit, the node pool's GPU mirror, and R11a's agreement check on the facility.
