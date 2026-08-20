@@ -3212,6 +3212,11 @@ private:
     // the button; a cut-short pass leaves the ladder standing so it carries on from wherever the
     // player is.
     bool build_the_whole_world();
+    // Open the way in, once, and record when. See the call sites and D730: the offer waits for the
+    // world to be THERE, so that pressing `play now` hands the player a building rather than a sky.
+    // Idempotent, because three different paths through `build_world` reach the point where the
+    // world exists and only the first of them should set the clock.
+    void offer_the_way_in();
     // The two lengths its bar is made of: how far out the world is finished, and how far it has to
     // go. See `build_the_whole_world` for why the bar is a distance and not a node count.
     f64 frontier_of_the_build() const;
@@ -6328,6 +6333,23 @@ bool Application::refine_node_of(const NodeKey& key, RefineNode& out) const {
 
 // Eight children in the parent's place. The list is the ladder's whole state, so this is the only
 // thing that ever adds to it.
+void Application::offer_the_way_in() {
+    // Once. Three paths through `build_world` reach a world that exists -- a cache hit, the
+    // up-front paste, and `--no-coarse-paste` where there is nothing to wait for -- and only the
+    // first to arrive should set the clock this is measured against.
+    if (load_could_enter_ns_ != 0) return;
+    // Recorded whether or not the offer is made, because it is the number the request was about --
+    // "how long before a player could stop watching" -- and a scripted run, which is the only kind
+    // that can be repeated, is exactly the run that is never offered one.
+    load_could_enter_ns_ = now_ns();
+    progress_.offer_early_entry();
+    // `--enter-now` presses it HERE rather than waiting for the drawing thread to notice, and the
+    // difference is not cosmetic: the screen draws thirty times a second, so a load whose remaining
+    // work is shorter than a frame would finish before the press landed and the scripted arm would
+    // silently be the control arm. A test that sometimes takes the other arm is worse than no test.
+    if (options_.enter_now) progress_.ask_to_enter();
+}
+
 void Application::apply_slack_ceiling() {
     if (!options_.slack_ceiling) return;
     refine_plan_.prune_slack = 0.0;
@@ -7418,17 +7440,23 @@ void Application::build_world() {
         const bool offer_a_way_in =
             !options_.no_early_entry &&
             (!options_.scripted() || options_.enter_now || !options_.loading_shot.empty());
-        // Recorded whether or not the offer is made, because it is the number the request was
-        // about — "how long before a player could stop watching" — and a scripted run, which is
-        // the only kind that can be repeated, is exactly the run that is never offered one.
-        load_could_enter_ns_ = now_ns();
-        if (offer_a_way_in) progress_.offer_early_entry();
-        // `--enter-now` presses it HERE rather than waiting for the drawing thread to notice,
-        // and the difference is not cosmetic: the screen draws thirty times a second, so a load
-        // whose remaining work is shorter than a frame would finish before the press landed and
-        // the scripted arm would silently be the control arm. A test that sometimes takes the
-        // other arm is worse than no test.
-        if (options_.enter_now) progress_.ask_to_enter();
+        // THE OFFER IS NOT MADE HERE ANY MORE, and D730 is a photograph of why.
+        //
+        // It used to be: the earliest point at which everything below could be rebuilt by the
+        // ladder, which was the condition R11i chose. What the photograph shows is what that
+        // condition leaves out. `--enter-now` pressed at this line, and thirty frames later the
+        // screen is **empty sky** — ten seconds later it is empty sky with a sliver of floor. The
+        // button was honest about the ladder and silent about the wait, and *"nodes load so slow
+        // if you click enter prematurely that the world is mostly empty"* is that, reported.
+        //
+        // So the offer waits for the up-front build, which is what puts the WHOLE clip into the
+        // world (D722, on again at half-metre voxels). It is 5.4 s cold on the estate and about a
+        // tenth of a second on a world that comes back from the cache, and after it the button's
+        // promise is one a player can act on: press it and you are standing in the whole building.
+        //
+        // `--no-coarse-paste` is the one arm where there is nothing to wait for, and there the
+        // offer is made here exactly as it was.
+        if (offer_a_way_in && options_.no_coarse_paste) offer_the_way_in();
 
         // A world already built from exactly this text, at exactly this resolution, is worth more
         // than the ability to build it again. Two hundred million field evaluations do not fit in
@@ -7600,6 +7628,10 @@ void Application::build_world() {
                     resume_refinement(std::move(script), cache, cache_path, key, coarse, bake_path,
                                       bake_key);
                 }
+                // The world is HERE, so the way in opens. On this path that is a tenth of a
+                // second rather than the cold build's five, and it is the path every launch after
+                // the first takes. See `offer_the_way_in` and D730.
+                if (offer_a_way_in) offer_the_way_in();
                 const WorldStats cached_stats = world_.stats();
                 clock.lap("open the saved world");
                 WS_LOG_INFO("world", "'{}' loaded from cache in {:.0f} ms [t+{:.0f} ms]: {} chunks, {} solid "
@@ -7791,6 +7823,10 @@ void Application::build_world() {
                 coarse);
             const u64 pasted_at = now_ns();
             if (stamped.chunks_left_empty && !options_.no_coarse_paste) world_.compact();
+            // AND THE WAY IN OPENS HERE, because this is the line after which there is a world to
+            // enter. Everything above it was a clip; below it the whole building is in the world at
+            // the coarse grain, and `play now` hands the player that rather than a sky. D730.
+            if (offer_a_way_in) offer_the_way_in();
             // The whole up-front chain as one step, because that is what the button skips and a
             // breakdown is only worth having if the thing a flag removes is a line in it.
             clock.lap("build the world up front");

@@ -144,7 +144,7 @@ Fixed-size pools sized at startup from detected memory. Zero runtime GPU allocat
 | Event | Budget |
 |---|---|
 | Cold start to main menu | ≤ 3 s |
-| **`play now` offered** | **≤ 5 s (T0: ≤ 8 s)** — this is the "enter a world" budget, and it is now measured to the button rather than to the frame loop. See below |
+| **`play now` offered** | **≤ 5 s (T0: ≤ 8 s)** — measured to the button rather than to the frame loop. **The cold estate is 5.6 s and is over this row**; from the cache it is 0.15 s, which is every launch after the first. D730 |
 | Enter a world, by pressing it | ≤ 0.5 s from the press to the first frame |
 | **The whole world present** | **≤ 10 s** — the coarse up-front build, measured at 8.5 s on the estate (D722) |
 | Finish the whole world at authored detail | **no budget: it is linear in how much clip there is** |
@@ -158,6 +158,12 @@ Fixed-size pools sized at startup from detected memory. Zero runtime GPU allocat
 row a player feels as "the world is there". Taking it to the detail it was authored at is the ladder's
 own work and has no budget, because it is linear in how much building there is and nothing in the
 engine can shorten it — twelve levers are measured across D683 and D722 and the best is 1.3x.
+
+**And the button is only offered once there is a world to enter (D730).** It used to be offered at
+the earliest point the ladder could rebuild everything below it, which is a true statement about the
+ladder and says nothing about time: pressing it thirty frames in gave **empty sky**, and ten seconds
+in gave empty sky with a sliver of floor. A button offering that is not a way in, it is a way out of
+the loading screen. So the offer waits for the up-front build — 5.6 s cold, 0.15 s from the cache.
 
 **Why "enter a world" is measured to the button now.** From 2026-08-20 a load does not end when a
 frame can be drawn; it ends when the ladder has taken every node of the clip to the detail it was

@@ -13993,3 +13993,75 @@ blocking is no longer blocked.
 | D729 | **It moves ONCE and then holds** | honesty | D721 reported a drift from what it could see; runs 2, 3 and 4 agree |
 | D729 | **And not on every clip** — `mirror_hall` is identical cold and resumed | measurement | Only where a re-sampled leaf mints variation records |
 | D729 | **`shape_hash` makes two resumed runs comparable** | instrument | The half that survives a re-interned table, keyed identically to the other so they cannot disagree about what was looked at |
+
+---
+
+## D730 — `play now` was offered before there was anything to enter, and the photograph is the entry
+
+**2026-08-20.** D722 put the whole clip back into the world before the ladder starts, and reported
+the estate present in five and a half seconds. **That was only ever true for a player who waited.**
+
+### The photograph
+
+`--enter-now` presses the button the moment it is offered. Thirty frames after that press, on the
+estate:
+
+**Empty sky.** Not a coarse world, not a blocky one — nothing at all, horizon to horizon. Six hundred
+frames later, ten seconds in, empty sky with a sliver of floor at the bottom of the screen and two
+specks on it.
+
+*"nodes load so slow if you click enter prematurely that the world is mostly empty"* is that, and it
+was still true after the change that was supposed to answer it. **The coarse build only helped the
+people who did not press the button.**
+
+### Why
+
+The offer was made at the earliest point where everything below it could be rebuilt by the ladder —
+R11i's condition, and it is a true statement about the ladder. What it leaves out is TIME. Below that
+line is the up-front build, which is what puts the whole clip into the world, and pressing the button
+skips it: `stop_for_button` cancels the sample and the paste both, and the ladder then builds outward
+from where the player stands at about five metres a minute.
+
+So the button was honest about what could be rebuilt and silent about how long that takes, and the
+difference between those two is the whole of the complaint.
+
+### The offer waits for the world now
+
+`offer_the_way_in()` is called where a world exists rather than where one could eventually be
+rebuilt, and there are exactly three such places:
+
+- **the cache hit** — the world comes back complete, and this is the path every launch after the
+  first takes;
+- **after the up-front paste** — the whole building is in at half-metre voxels;
+- **`--no-coarse-paste`**, the control arm, where there is nothing to wait for and the offer is made
+  exactly where it always was.
+
+It is idempotent, because only the first arrival should set the clock the number is measured against.
+
+**Measured, estate:**
+
+| | the way in opens at | what pressing it gives |
+|---|---|---|
+| before | **t+97 ms** | empty sky, and still empty ten seconds later |
+| after, cold | **t+5,559 ms** | the whole building, 291 chunks, 576 M solid voxels |
+| after, from the cache | **t+153 ms** | the same, and this is every launch after the first |
+
+**A hundred and fifty-three milliseconds on the path a player actually takes**, and five and a half
+seconds exactly once per clip per machine. The budget row in `09-performance-budgets.md` said the way
+in should open within five seconds; the cold estate is 5.6, which is over it, and the entry says so
+rather than moving the line.
+
+### What it cost, and it is worth saying
+
+A player who wants to be in the world in the first five seconds of a COLD launch can no longer do
+that — the button is not there yet, and the bar is. That is deliberate: a button offering an empty
+sky is not a way in, it is a way out of the loading screen, and those are different things. The
+world is what makes it a way in.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D730 | **The button was offered before there was a world** | fault | Thirty frames after pressing it: empty sky. Six hundred frames: empty sky and a sliver of floor |
+| D730 | **The offer waits for a world to exist** | decision | Three places one does: a cache hit, the up-front paste, and the arm with no up-front paste |
+| D730 | **t+153 ms on the path every launch after the first takes** | measurement | 5.6 s cold, once per clip per machine |
+| D730 | **Over the five-second budget on a cold estate, and said rather than moved** | honesty | 5,559 ms against a row that asks for 5,000 |
+| D730 | **A button offering an empty sky is not a way IN** | decision | It is a way out of the loading screen, and the two are different things |
