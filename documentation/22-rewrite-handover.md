@@ -621,6 +621,37 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### THE ARITHMETIC ON 100x, so that the next session does not start by hoping
+
+Asked for directly and it is worth being exact about rather than optimistic. The estate at the
+detail it was authored at is about **a million leaf nodes with matter**, each 512 cells, so roughly
+**512 million cells**, and each cell walks about **632 nodes of the expression** (D722, measured).
+A hundred times faster than today is the whole estate in about seven seconds, which is 73 million
+cells a second, which on ten cores at 3 GHz is **about 400 cycles a cell — for a 632-node walk.**
+Under a cycle a node visit, including the memory it touches.
+
+**So 100x is not reachable by evaluating this field per cell on this CPU, by any means, and no
+amount of care about the evaluator changes that.** D683 measured seven levers, D722 five more and
+D724 the twelfth; the best of the twelve is 1.3x and the block evaluator is 1.78x. They are worth
+having and they compound, and they are not a hundred.
+
+**The three things with the arithmetic to support a hundred, in order of how much headroom they
+actually have:**
+
+1. **The card.** An RTX 5060 Ti is roughly **eighty times** ten CPU cores in raw floating point, and
+   the card sampler currently measures **0.80x** of them (D722) — about one per cent of the hardware.
+   That is not a small gap to close, it is a factor of eighty sitting unused, and it is the only
+   place in this engine where the headroom is bigger than the ask. Whatever is wrong there —
+   divergence in the per-point cull, the dispatch cap `FieldSampler::kSafeBoxes` leaving the card
+   idle, the field walked out of global memory — is worth more than every CPU lever put together.
+   D677, D678, D681 and D691 are the history and none of them asked why the card is at one per cent.
+2. **Not evaluating it per cell.** Pruning the expression per box was measured at 2% (D683), but that
+   was pruning to the SAMPLE box. Compiling a small expression per REGION and evaluating that is a
+   different question and nobody has measured it.
+3. **Precompute**, which is already built and already reaches it: a finished world reads back in
+   400 ms. That is what `--bake-world` and the shipped `.world` are for, and it is the only
+   mechanism in the engine that produces the number today.
+
 #### IN FLIGHT, 2026-08-20: four agents at the one lever D722 says is left
 
 **The user asked for the speed-up, was told what twelve measured levers came to, and said "ok do
