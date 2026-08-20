@@ -228,20 +228,21 @@ struct Options {
     bool full_load_asked = false;   // ...by name, which is what lets a scripted run take this arm
     // ...and HOW FINELY the whole world is built, which is a second question and a much larger one.
     //
-    // OFF, so the pass takes every node to the detail its own distance justifies -- the ladder's
-    // own rule, with nothing left out for facing away or being hidden. What that produces is a
-    // world with no holes in it anywhere: the far side of the estate is THERE, at the size it
-    // actually subtends, rather than absent until somebody looks at it. That is the complaint
-    // D701's photograph is of, and it is what this flag off is enough to answer.
+    // ON, and the user settled it in one sentence on 2026-08-20: *"btw i meant by complete
+    // everything at full resolution"*.
     //
-    // ON -- `--full-load-authored` -- takes every node to the clip's own detail instead, three
-    // centimetres everywhere including the campanile a hundred metres away. It is the literal
-    // whole world and it is measured in hours: this machine spent twenty minutes reaching a radius
-    // of about twelve metres, at 128 nodes a batch and roughly five batches a second, and the node
-    // list was still growing. D686 and D701 both arrive at the same place from the other side.
+    // So the whole-world pass takes every node to the CLIP'S OWN detail -- three centimetres
+    // everywhere, including the campanile a hundred metres away -- rather than to the detail its
+    // own distance happens to justify. Complete means complete.
     //
-    // The two are the same pass with one term changed, so the arm is a flag rather than a mode.
-    bool full_load_authored = false;
+    // `--no-full-load-authored` is the other arm and it is what shipped for the few hours between
+    // D721 and this: every node at the detail its distance justifies, which is a world with no
+    // holes in it but not a world at one resolution. It is still the right arm for a machine in a
+    // hurry, and it is what the loading screen falls back to if this is turned off.
+    //
+    // What it costs is the whole of D722's problem and is why that entry exists. The two are the
+    // same pass with one term changed, so the arm is a flag rather than a mode.
+    bool full_load_authored = true;
     // ---- what a node costs asked ALONE against asked inside its ancestor's box -------------
     //
     // The one number the whole "sample in boxes instead of node by node" question turns on, and
@@ -1340,6 +1341,10 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         options.full_load = true;
         options.full_load_asked = true;
         options.full_load_authored = true;
+    } else if (arg == "--no-full-load-authored") {
+        // The control arm: every node at the detail its own distance justifies. Does NOT turn the
+        // pass off -- `--no-full-load` is that -- because they are two different questions.
+        options.full_load_authored = false;
     } else if (arg == "--no-clip-cache") {
         options.no_clip_cache = true;
     } else if (arg == "--no-paste-pool") {
@@ -1870,9 +1875,11 @@ void print_help() {
         "                        launch did before 2026-08-20, and the control arm\n"
         "  --full-load           finish the whole world before entering it, by name -- which is\n"
         "                        what a scripted run needs, being offered none otherwise\n"
-        "  --full-load-authored  ...and take every node to the CLIP's detail rather than to the\n"
-        "                        detail its distance justifies. The literal whole world, and it is\n"
-        "                        hours on the estate. Implies --full-load\n"
+        "  --no-full-load-authored  build every node at the detail its own distance justifies\n"
+        "                        rather than at the clip's own. A world with no holes in it but not\n"
+        "                        one at a single resolution, and much the faster of the two\n"
+        "  --full-load-authored  the default: every node at the CLIP's own detail, everywhere.\n"
+        "                        Complete means complete. Implies --full-load\n"
         "  --serial-pipelines    compile the six pipelines one after another and wait for each,\n"
         "                        which is what every load did before R11i. The control arm\n"
         "  --loading-shot FILE   photograph the LOADING SCREEN after --loading-shot-frame N of\n"
@@ -5344,14 +5351,18 @@ bool Application::build_the_whole_world() {
     refine_everything_ = true;
     full_load_running_ = true;
     WS_LOG_INFO("load",
-                "finishing the whole world before entering it: {} nodes, everywhere rather than "
-                "where the camera happens to point, {}. `play now` ends this at any moment and "
+                "taking the whole world to full resolution before entering it: {} nodes, "
+                "everywhere rather than where the camera happens to point, {}. The world is "
+                "already all THERE -- the up-front build put it in at metre {} -- so what this "
+                "raises is its detail and not its extent. `play now` ends it at any moment and "
                 "keeps every voxel already built",
                 refine_regions_.size(),
                 options_.full_load_authored
                     ? std::string("every one of them at the clip's own metre ") +
-                          std::to_string(refine_authored_) + " (--full-load-authored: hours)"
-                    : std::string("each at the detail its own distance justifies"));
+                          std::to_string(refine_authored_)
+                    : std::string("each at the detail its own distance justifies "
+                                  "(--no-full-load-authored)"),
+                coarse_build_pasted_ ? refine_coarse_per_metre_ : 0);
 
     // HOW FAR OUT THE WORLD IS FINISHED, which is the bar, and it is NOT the node count.
     //
@@ -5488,9 +5499,9 @@ bool Application::build_the_whole_world() {
     const WorldStats now = world_.stats();
     if (finished) {
         WS_LOG_INFO("load",
-                    "the whole world is built in {:.0f} ms: {} chunks, {} solid voxels, content "
-                    "{:016x} -- and it is in the cache, so the next launch of this clip reads it "
-                    "back instead",
+                    "the whole world is at full resolution in {:.0f} ms: {} chunks, {} solid "
+                    "voxels, content {:016x} -- and it is in the cache, so the next launch of this "
+                    "clip reads it back instead",
                     spent, now.chunks, now.solid_voxels, world_.content_hash());
         return true;
     }
@@ -5503,10 +5514,11 @@ bool Application::build_the_whole_world() {
         if (box.done) ++done;
     }
     WS_LOG_INFO("load",
-                "left the whole-world build after {:.0f} ms ({}): the world is finished for "
-                "{:.1f} m around the player of the {:.1f} m the clip reaches, {} of {} nodes "
-                "built, {} solid voxels in {} chunks, content {:016x}. Nothing is dropped -- the "
-                "ladder carries on from where the player is standing",
+                "left the whole-world build after {:.0f} ms ({}): the world is at the clip's own "
+                "detail for {:.1f} m around the player of the {:.1f} m it reaches -- the rest of "
+                "it is THERE and coarser, not missing -- {} of {} nodes built, {} solid voxels in "
+                "{} chunks, content {:016x}. Nothing is dropped: the ladder carries on from where "
+                "the player is standing",
                 spent, why_not, frontier_of_the_build(), reach, done, refine_regions_.size(),
                 now.solid_voxels, now.chunks, world_.content_hash());
     return false;
