@@ -253,3 +253,195 @@ TEST_CASE("a random edit storm never breaks an invariant") {
     }
     CHECK(chunk.solid_voxels() == solid);
 }
+
+// ---- R12d: which of a chunk's bricks are a person's work ---------------------------------------
+//
+// The premise of R12 is that the card can rebuild the base world out of the field, so the CPU need
+// only keep the difference. Everything below is about the boundary that makes that possible: the
+// sampler writing field-derived matter must mark nothing, and an edit must mark exactly what it
+// touched. Wrong in the first direction marks the whole world and the stage buys nothing; wrong in
+// the second loses somebody's building.
+
+TEST_CASE("the sampler marks nothing") {
+    // Every writer that existed before R12d comes through the default, and the default is Field.
+    // This is the case that has to be exactly right: the ladder pastes the whole facility through
+    // brick_for_write, and if any of that were claimed there would be nothing left to derive.
+    Chunk chunk;
+    for (u32 i = 0; i < 64; ++i) chunk.set(i * 4, i, i * 2, 1 + (i % 7));
+    chunk.brick_for_write(31, 31, 31).fill(9);
+    chunk.brick_for_write(0, 1, 2, WriteOrigin::Field).set(0, 0, 0, 3);
+
+    CHECK(chunk.edited_bricks() == 0);
+    CHECK(chunk.erased_bricks() == 0);
+    CHECK_FALSE(chunk.any_edits());
+    CHECK_FALSE(chunk.brick_edited(31, 31, 31));
+    CHECK(chunk.validate());
+}
+
+TEST_CASE("an edit marks the brick it landed in and nothing else") {
+    Chunk chunk;
+    // A field-built neighbourhood: four bricks along one row.
+    for (u32 bx = 0; bx < 4; ++bx) chunk.brick_for_write(bx, 0, 0).fill(2);
+    REQUIRE(chunk.brick_count() == 4);
+    REQUIRE(chunk.edited_bricks() == 0);
+
+    // One voxel, changed by a person, in the second brick.
+    CHECK(chunk.set(9, 1, 1, 5, WriteOrigin::Edit));
+
+    CHECK(chunk.edited_bricks() == 1);
+    CHECK(chunk.any_edits());
+    CHECK(chunk.brick_edited(1, 0, 0));
+    CHECK_FALSE(chunk.brick_edited(0, 0, 0));
+    CHECK_FALSE(chunk.brick_edited(2, 0, 0));
+    CHECK_FALSE(chunk.brick_edited(3, 0, 0));
+    CHECK(chunk.validate());
+
+    // The field writing over the same brick afterwards does not UNmark it. It has no way to know
+    // the difference between its own matter and a person's, which is the whole reason the flag is
+    // set at the write and never derived from the contents.
+    chunk.brick_for_write(1, 0, 0).fill(2);
+    CHECK(chunk.brick_edited(1, 0, 0));
+    CHECK(chunk.edited_bricks() == 1);
+    CHECK(chunk.validate());
+}
+
+TEST_CASE("a person's write is a claim on the brick whether or not it changed anything") {
+    // The same rule edit_boxes_from_ops is written to (world_cache.hpp): somebody's hands being
+    // here is a fact about the op, not about its result. A chisel swing that met air inside a brick
+    // they built still says the brick is theirs.
+    Chunk chunk;
+    chunk.brick_for_write(2, 2, 2).fill(4);
+    REQUIRE(chunk.edited_bricks() == 0);
+
+    CHECK_FALSE(chunk.set(16, 16, 16, 4, WriteOrigin::Edit));   // already that material
+    CHECK(chunk.edited_bricks() == 1);
+    CHECK(chunk.brick_edited(2, 2, 2));
+
+    // But a swing where there is no brick at all allocates nothing and claims nothing. Carving
+    // through open sky must stay free -- otherwise flying with the tool held down would materialise
+    // a brick, and a bitmap, per step.
+    Chunk sky;
+    for (u32 i = 0; i < 64; ++i) CHECK_FALSE(sky.set(i, 0, 0, kAir, WriteOrigin::Edit));
+    CHECK(sky.brick_count() == 0);
+    CHECK_FALSE(sky.any_edits());
+    CHECK(sky.validate());
+}
+
+TEST_CASE("a carve that empties a brick leaves the slot claimed") {
+    // The commonest edit there is, and the one a flag ON a brick cannot survive: the last voxel
+    // goes, the brick is unlinked -- it has to be, an empty brick left allocated is a lump the
+    // marcher draws and can never build (D348, D620) -- and the hole is then indistinguishable
+    // from sky nobody ever touched. Which means the next re-sample fills the doorway back in.
+    Chunk chunk;
+    chunk.brick_for_write(5, 6, 7).fill(3);
+    REQUIRE(chunk.brick_count() == 1);
+
+    for (u32 z = 0; z < 8; ++z) {
+        for (u32 y = 0; y < 8; ++y) {
+            for (u32 x = 0; x < 8; ++x) {
+                chunk.set(5 * 8 + x, 6 * 8 + y, 7 * 8 + z, kAir, WriteOrigin::Edit);
+            }
+        }
+    }
+
+    CHECK(chunk.brick_count() == 0);          // the brick went, as it must
+    CHECK(chunk.edited_bricks() == 0);        // and its flag went with it
+    CHECK(chunk.erased_bricks() == 1);        // ...into the slot
+    CHECK(chunk.any_edits());
+    CHECK(chunk.brick_edited(5, 6, 7));       // which is what the re-sample asks
+    CHECK(chunk.brick_erased(5, 6, 7));
+    CHECK(chunk.validate());
+
+    // And a brick the FIELD emptied leaves nothing behind. This is the other half of the boundary
+    // and it is what stops a world going to sky being one enormous claim.
+    Chunk theirs;
+    theirs.brick_for_write(1, 1, 1).fill(3);
+    for (u32 i = 0; i < 512; ++i) theirs.set(8 + (i % 8), 8 + ((i / 8) % 8), 8 + (i / 64), kAir);
+    CHECK(theirs.brick_count() == 0);
+    CHECK(theirs.erased_bricks() == 0);
+    CHECK_FALSE(theirs.any_edits());
+    CHECK(theirs.validate());
+}
+
+TEST_CASE("a slot is either a live brick or an erased one, never both") {
+    // The two records describe the same fact, so they must never describe the same slot. Writing
+    // into a hole a person cut moves the claim out of the erased set and onto the brick -- which is
+    // the better record, because it travels with the contents through a save and a re-encode.
+    Chunk chunk;
+    chunk.brick_for_write(3, 3, 3).fill(2);
+    for (u32 i = 0; i < 512; ++i) {
+        chunk.set(24 + (i % 8), 24 + ((i / 8) % 8), 24 + (i / 64), kAir, WriteOrigin::Edit);
+    }
+    REQUIRE(chunk.erased_bricks() == 1);
+    REQUIRE(chunk.brick_count() == 0);
+
+    // Even the FIELD writing there inherits the claim, and that direction is deliberate: it
+    // over-claims a brick, where the other way round loses the hole.
+    chunk.brick_for_write(3, 3, 3, WriteOrigin::Field).fill(6);
+    CHECK(chunk.erased_bricks() == 0);
+    CHECK(chunk.edited_bricks() == 1);
+    CHECK(chunk.brick_edited(3, 3, 3));
+    CHECK(chunk.validate());
+}
+
+TEST_CASE("compacting a chunk keeps the claims exact") {
+    // compact() frees empty bricks through a different descent from the one an edit takes, and a
+    // count maintained on some of the ways out and not the rest reads as success on the rest
+    // (trap 27). So the sweep has to funnel through the same place.
+    Chunk chunk;
+    chunk.brick_for_write(0, 0, 0, WriteOrigin::Edit).fill(1);
+    chunk.brick_for_write(9, 4, 17, WriteOrigin::Edit).fill(1);
+    chunk.brick_for_write(31, 31, 31).fill(1);
+    REQUIRE(chunk.edited_bricks() == 2);
+
+    // Emptied behind the chunk's back, which is exactly what a bulk writer does and what compact
+    // exists to clean up after.
+    chunk.brick_for_write(9, 4, 17).fill(kAir);
+    chunk.brick_for_write(31, 31, 31).fill(kAir);
+    chunk.compact();
+
+    CHECK(chunk.brick_count() == 1);
+    CHECK(chunk.edited_bricks() == 1);
+    CHECK(chunk.erased_bricks() == 1);        // the edited one; the field's leaves nothing
+    CHECK(chunk.brick_edited(9, 4, 17));
+    CHECK_FALSE(chunk.brick_edited(31, 31, 31));
+    CHECK(chunk.brick_edited(0, 0, 0));
+    CHECK(chunk.validate());
+}
+
+TEST_CASE("validate catches a flag set behind the chunk's back") {
+    // `edited_bricks_` is a second index over the same population as the flags on the bricks, and a
+    // redundant pair is only as true as the worse of the two -- D345 and D358 are a session lost to
+    // exactly that, with no check that would have caught it. This is that check.
+    Chunk chunk;
+    chunk.brick_for_write(1, 2, 3).fill(5);
+    REQUIRE(chunk.validate());
+
+    chunk.brick_for_write(1, 2, 3).set_edited(true);   // the door nothing is supposed to use
+    CHECK_FALSE(chunk.validate());
+
+    chunk.brick_for_write(1, 2, 3).set_edited(false);
+    CHECK(chunk.validate());
+}
+
+TEST_CASE("a chunk with no edits answers for all 32,768 of its slots at once") {
+    // The query is per brick and there are 32,768 slots in a chunk. any_edits() is what makes
+    // asking affordable at all: one comparison, and the answer for the whole chunk.
+    Chunk chunk;
+    for (u32 i = 0; i < 200; ++i) chunk.brick_for_write(i % 32, (i / 32) % 32, i / 1024).fill(1);
+    CHECK_FALSE(chunk.any_edits());
+    for (u32 bx = 0; bx < 32; ++bx) CHECK_FALSE(chunk.brick_edited(bx, 0, 0));
+
+    chunk.brick_for_write(17, 0, 0, WriteOrigin::Edit);
+    CHECK(chunk.any_edits());
+    u32 marked = 0;
+    for (u32 bz = 0; bz < 32; ++bz) {
+        for (u32 by = 0; by < 32; ++by) {
+            for (u32 bx = 0; bx < 32; ++bx) {
+                if (chunk.brick_edited(bx, by, bz)) ++marked;
+            }
+        }
+    }
+    CHECK(marked == 1);
+    CHECK(chunk.validate());
+}

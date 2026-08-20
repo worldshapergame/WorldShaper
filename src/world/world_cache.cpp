@@ -42,7 +42,18 @@ constexpr u32 kMagic = 0x57534357u;   // "WSCW"
 // fixed-size header, so an old file read as a new one would take the tag count for a journal
 // length. An old file is refused by the version check and the world is rebuilt, which is what the
 // version field has always been for here.
-constexpr u32 kVersion = 7u;
+// 8 — R12d: WHO wrote a brick. A bit in each brick's tag byte says a person's work is in it, and
+// each chunk carries the list of brick slots a person EMPTIED — the carve, which has no brick left
+// to hold a flag. Both are provenance and neither is a voxel, so a version 7 file decodes to
+// exactly the same world; what it cannot say is which of that world is derivable, and a reader
+// that guessed would guess "none of it", which turns every carving back into base world on the
+// first reload. That is the failure R12d exists to prevent, so it is a version bump and not a
+// tolerated absence. **Bumped rather than smuggled in**: the tag bit alone would have been
+// invisible to a version 7 reader in the worst way — 0x80 | 2 is not a tag it knows, so it would
+// refuse the brick and lose the chunk — and the erased list changes the framing of a chunk record,
+// which an old reader would walk straight past the end of. The key already carries `build_stamp`,
+// so a file from another build never loads anyway; the version is what says so honestly.
+constexpr u32 kVersion = 8u;
 
 // ---------------------------------------------------------------------------------------
 // R11j — the shape of the file
@@ -130,6 +141,13 @@ constexpr u32 kMaxSegments = 4096u;
 // A brick, exactly as it is held. No canonical form, no re-encode: the whole reason this file
 // exists is that it can be read faster than the world can be rebuilt, and a normalisation pass
 // over sixty million voxels is most of what it is trying to avoid.
+//
+// R12d rides in the top bit of the tag byte. A brick's form is three values and will never be more
+// than a handful, so the byte had seven spare bits and the flag costs nothing — no second list, no
+// second pass, and a brick that is written at all carries who wrote it. Version 8; see kVersion
+// for why an old reader must not be allowed to try.
+constexpr u8 kBrickEditedBit = 0x80u;
+
 void write_brick_raw(std::vector<u8>& out, const Brick& brick) {
     const auto put_u32 = [&out](u32 value) {
         out.push_back(static_cast<u8>(value));
@@ -137,9 +155,10 @@ void write_brick_raw(std::vector<u8>& out, const Brick& brick) {
         out.push_back(static_cast<u8>(value >> 16));
         out.push_back(static_cast<u8>(value >> 24));
     };
+    const u8 edited = (kEditTracking && brick.edited()) ? kBrickEditedBit : u8{0};
 
     if (brick.uniform()) {
-        out.push_back(0u);
+        out.push_back(static_cast<u8>(0u | edited));
         put_u32(brick.uniform_value());
         return;
     }
@@ -152,7 +171,7 @@ void write_brick_raw(std::vector<u8>& out, const Brick& brick) {
     if (brick.form() != Brick::Form::Direct) {
         const std::vector<VoxelTypeId>& palette = brick.palette_data();
         const std::vector<u8>& indices = brick.index_data();
-        out.push_back(2u);
+        out.push_back(static_cast<u8>(2u | edited));
         out.push_back(static_cast<u8>(brick.index_bits()));
         put_u32(static_cast<u32>(palette.size()));
         for (VoxelTypeId type : palette) put_u32(type);
@@ -162,22 +181,29 @@ void write_brick_raw(std::vector<u8>& out, const Brick& brick) {
 
     VoxelTypeId decoded[kBrickVoxels];
     brick.decode(decoded);
-    out.push_back(1u);
+    out.push_back(static_cast<u8>(1u | edited));
     const usize at = out.size();
     out.resize(at + sizeof(decoded));
     std::memcpy(out.data() + at, decoded, sizeof(decoded));
 }
 
+// Whether the brick written at `data` is a person's work. The caller needs this BEFORE it asks the
+// chunk for somewhere to put the brick, because the chunk is what keeps the count and the only way
+// in is `brick_for_write`'s origin — see Brick::set_edited on why not the other door.
+bool brick_was_edited(const u8* data) { return (data[0] & kBrickEditedBit) != 0; }
+
 // How many bytes the brick written at `data` occupies, without decoding it. Used to find where
 // one chunk's payload ends so the chunks can then be filled in parallel.
 usize brick_span(const u8* data, usize available) {
     if (available < 1) return 0;
-    if (data[0] == 0u) return (available >= 5) ? 5 : 0;
-    if (data[0] == 1u) {
+    // The top bit is the R12d flag and says nothing about the length; the form is the rest.
+    const u8 tag = static_cast<u8>(data[0] & ~kBrickEditedBit);
+    if (tag == 0u) return (available >= 5) ? 5 : 0;
+    if (tag == 1u) {
         const usize span = 1 + kBrickVoxels * sizeof(VoxelTypeId);
         return (available >= span) ? span : 0;
     }
-    if (data[0] != 2u || available < 6) return 0;
+    if (tag != 2u || available < 6) return 0;
     const u32 bits = data[1];
     if (bits != 1 && bits != 2 && bits != 4 && bits != 8) return 0;
     u32 palette_size = 0;
@@ -190,8 +216,9 @@ usize brick_span(const u8* data, usize available) {
 usize read_brick_raw(const u8* data, usize available, Brick& brick) {
     const usize span = brick_span(data, available);
     if (span == 0) return 0;
+    const u8 tag = static_cast<u8>(data[0] & ~kBrickEditedBit);
 
-    if (data[0] == 0u) {
+    if (tag == 0u) {
         u32 value = 0;
         std::memcpy(&value, data + 1, sizeof(value));
         brick.fill(value);
@@ -199,7 +226,7 @@ usize read_brick_raw(const u8* data, usize available, Brick& brick) {
     }
 
     VoxelTypeId decoded[kBrickVoxels];
-    if (data[0] == 1u) {
+    if (tag == 1u) {
         std::memcpy(decoded, data + 1, sizeof(decoded));
         brick.assign(decoded);
         return span;
@@ -900,6 +927,33 @@ u32 write_chunk_bricks(std::vector<u8>& out, const Chunk& chunk) {
     return bricks;
 }
 
+// The brick slots a person EMPTIED — R12d, and the half a flag on a brick cannot carry, because
+// there is no brick left to carry it.
+//
+// A carve takes the last voxel out of a brick, the brick is unlinked (it must be: an empty brick
+// left allocated is a lump the marcher draws and can never build, D348/D620), and the hole is then
+// indistinguishable from sky nobody ever touched. Written as two bytes a slot, and only for the
+// chunks that have any — a world nobody has carved writes one zero per chunk.
+u32 write_chunk_erased(std::vector<u8>& out, const Chunk& chunk) {
+    const usize count_at = out.size();
+    put_pod(out, static_cast<u32>(0));
+    if (!kEditTracking || chunk.erased_bricks() == 0) return 0;
+
+    const u32 axis = static_cast<u32>(kChunkBricks);
+    u32 count = 0;
+    for (u32 bz = 0; bz < axis; ++bz) {
+        for (u32 by = 0; by < axis; ++by) {
+            for (u32 bx = 0; bx < axis; ++bx) {
+                if (!chunk.brick_erased(bx, by, bz)) continue;
+                put_pod(out, brick_slot(bx, by, bz));
+                ++count;
+            }
+        }
+    }
+    std::memcpy(out.data() + count_at, &count, sizeof(count));
+    return count;
+}
+
 // What a whole-world write has to put in the file, and what it can leave where it is.
 //
 // The comparison is over the ENCODED BYTES of a chunk rather than over `Chunk::content_hash`, and
@@ -945,6 +999,10 @@ ChunkPlan write_changed_chunks(std::vector<u8>& out, const World& world,
         const usize bricks_at = out.size();
         const u32 bricks = write_chunk_bricks(out, *chunk);
         std::memcpy(out.data() + count_at, &bricks, sizeof(bricks));
+        // Inside the hashed range on purpose: a chunk whose only change since the last save is a
+        // brick somebody carved away has no bricks that moved, and if the erased list sat outside
+        // the hash the increment would call it unchanged and the carve would not be banked.
+        write_chunk_erased(out, *chunk);
         const u64 hash = hash_span(out.data() + bricks_at, out.size() - bricks_at);
         plan.directory.push_back(DirectoryChunk{coord.x, coord.y, coord.z, hash});
 
@@ -1424,7 +1482,14 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
                         const Brick* theirs = (base != nullptr) ? base->brick(bx, by, bz) : nullptr;
                         const bool mine_live = brick_is_live(mine);
                         const bool theirs_live = brick_is_live(theirs);
-                        if (!mine_live && !theirs_live && reaching.empty()) continue;
+                        // R12d, and it is the same guarantee `named` gives one level coarser: the
+                        // chunk itself knows this slot was emptied by a person, whether or not any
+                        // box was named and whether or not the clip agrees about it today. The
+                        // early-out below would drop it, so it is asked for here.
+                        const bool erased = kEditTracking && chunk != nullptr &&
+                                            chunk->erased_bricks() != 0 &&
+                                            chunk->brick_erased(bx, by, bz);
+                        if (!mine_live && !theirs_live && reaching.empty() && !erased) continue;
 
                         bool named = false;
                         if (!reaching.empty()) {
@@ -1442,7 +1507,15 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
                         }
 
                         if (mine_live) {
-                            if (!named && theirs_live && bricks_identical(*mine, *theirs)) {
+                            // R12d closes the same hole `named` does, from inside the world rather
+                            // than from the op log. A brick somebody carved and filled back in with
+                            // the clip's own stone agrees with the clip TODAY and would be left out
+                            // — and comes back as whatever the clip says the day the clip moves,
+                            // with no record a person ever chose it. The brick knows; ask it, so
+                            // guarantee no longer depends on a writer having been handed the boxes.
+                            const bool owned = kEditTracking && mine->edited();
+                            if (!named && !owned && theirs_live &&
+                                bricks_identical(*mine, *theirs)) {
                                 ++kept_bricks;   // the clip's own answer; not written at all
                                 continue;
                             }
@@ -1453,7 +1526,7 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
                             write_brick_raw(writes, *mine);
                             ++write_count;
                             ++written_bricks;
-                        } else if (theirs_live || named) {
+                        } else if (theirs_live || named || erased) {
                             // Air, said rather than left out. `theirs_live` is the carve that took
                             // away matter the clip puts back, and `named` is the same carve
                             // through air the clip happens to agree about today -- which costs two
@@ -1748,6 +1821,8 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         u32 bricks = 0;
         const u8* clears = nullptr;
         u32 clear_count = 0;
+        const u8* erased = nullptr;   // R12d: brick slots a person emptied; two bytes each
+        u32 erased_count = 0;
     };
     std::unordered_map<ChunkCoord, ChunkSrc, ChunkCoordHash> live;
     std::vector<ChunkCoord> emptied;
@@ -1923,6 +1998,12 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
                 ChunkSrc src;
                 src.bricks = bricks;
                 if (!span_of_bricks(c, bricks, src.data, src.size)) return false;
+                // R12d, and it frames the rest of the record: the erased list is the last thing in
+                // a chunk and the next chunk begins after it.
+                src.erased_count = c.pod<u32>();
+                if (!c.ok) return false;
+                src.erased = c.take(src.erased_count * sizeof(u16));
+                if (!c.ok) return false;
                 live[coord] = src;
             }
         }
@@ -2110,6 +2191,8 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         const u8* data = nullptr;
         usize size = 0;
         u32 bricks = 0;
+        const u8* erased = nullptr;   // R12d: slots a person emptied; whole-world form
+        u32 erased_count = 0;
     };
     std::vector<Pending> pending;
 
@@ -2252,7 +2335,7 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         for (const ChunkCoord& coord : order) {
             const ChunkSrc& src = live[coord];
             pending.push_back({&cache.world->chunk_for_write(coord), coord, nullptr, 0, src.data,
-                               src.size, src.bricks});
+                               src.size, src.bricks, src.erased, src.erased_count});
         }
     }
 
@@ -2268,9 +2351,19 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
                 const u32 bx = (slot >> 10) & 31u;
                 const u32 by = (slot >> 5) & 31u;
                 const u32 bz = slot & 31u;
-                if (job.chunk->brick(bx, by, bz) == nullptr) continue;
-                job.chunk->brick_for_write(bx, by, bz).fill(kAir);
-                job.chunk->drop_brick_if_empty(bx, by, bz);
+                if (job.chunk->brick(bx, by, bz) != nullptr) {
+                    job.chunk->brick_for_write(bx, by, bz).fill(kAir);
+                    job.chunk->drop_brick_if_empty(bx, by, bz);
+                }
+                // R12d, and AFTER the brick has gone, so the chunk never holds a slot that is both
+                // live and erased — which `validate` refuses, and rightly: it would be the two
+                // records of the same fact disagreeing.
+                //
+                // A clearing in an edit-only file IS a carve, by construction: it is there because
+                // the clip puts matter where the saved world has none, or because a named edit box
+                // reached it. So the slot comes back knowing a person emptied it, which is what
+                // stops the next re-sample filling the doorway back in.
+                if (kEditTracking) job.chunk->mark_brick_erased(bx, by, bz);
             }
             usize at = 0;
             for (u32 b = 0; b < job.bricks; ++b) {
@@ -2280,8 +2373,21 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
                 const u32 bx = (slot >> 10) & 31u;
                 const u32 by = (slot >> 5) & 31u;
                 const u32 bz = slot & 31u;
+                // Read before `at` moves, and asked of the FILE rather than of the brick: the flag
+                // has to go in through `brick_for_write`, because the chunk is what keeps the count
+                // and a flag set behind its back is a second index nobody maintains.
+                const WriteOrigin origin = (kEditTracking && brick_was_edited(job.data + at))
+                                               ? WriteOrigin::Edit
+                                               : WriteOrigin::Field;
                 at += read_brick_raw(job.data + at, job.size - at,
-                                     job.chunk->brick_for_write(bx, by, bz));
+                                     job.chunk->brick_for_write(bx, by, bz, origin));
+            }
+            // The slots a person emptied, in the whole-world form. There is no brick to carry the
+            // flag, so the chunk carries the slot.
+            for (u32 e = 0; e < job.erased_count; ++e) {
+                u16 slot = 0;
+                std::memcpy(&slot, job.erased + e * sizeof(u16), sizeof(slot));
+                job.chunk->mark_brick_erased((slot >> 10) & 31u, (slot >> 5) & 31u, slot & 31u);
             }
             job.chunk->mark_modified();
         }

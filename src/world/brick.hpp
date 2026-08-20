@@ -75,6 +75,35 @@ public:
     bool uniform() const { return form_ == Form::Uniform; }
     VoxelTypeId uniform_value() const { return uniform_; }
 
+    // DOES A PERSON'S WORK LIVE IN THESE 512 VOXELS? — R12d.
+    //
+    // Nothing about the contents. A brick the sampler wrote and a brick a player built by hand out
+    // of the same material are identical voxel for voxel, hash the same both ways and encode the
+    // same; the only thing that separates them is who wrote them, and that is a fact that has to
+    // be recorded at the write or lost for ever. It is what makes the base world derivable: a
+    // brick reading false is one the clip can regenerate and therefore one storage need not keep,
+    // and a brick reading true is somebody's building.
+    //
+    // Deliberately NOT part of content_hash, shape_hash or operator==. Those three answer "is this
+    // the same world", which is a question about voxels, and every gate in the repository is built
+    // on them — a provenance bit leaking into one would move the world's identity without moving
+    // one voxel. It is not part of `bytes()` either, and that is honest rather than a rounding:
+    // the bool sits in the padding after `form_`, so `sizeof(Brick)` does not move.
+    //
+    // The contents changing does not clear it and must not: `fill`, `assign`, `compact` and
+    // `set` all leave it alone. A player who carves a niche and fills it back in still owns that
+    // brick. What clears it is the brick being freed and handed back out, which is `Chunk`'s job.
+    bool edited() const { return edited_; }
+
+    // GO THROUGH THE CHUNK, not through here, on anything a chunk owns.
+    //
+    // `Chunk` keeps a count of how many of its bricks read true, so that a chunk with none can be
+    // answered whole without touching 32,768 slots. Setting the flag behind the chunk's back
+    // leaves that count wrong, which is a redundant pair of indexes disagreeing — trap 13, the one
+    // that took a session in D345/D358. `Chunk::brick_for_write(bx, by, bz, WriteOrigin::Edit)`
+    // is the way in; `Chunk::validate` re-derives the count and fails if anything took this door.
+    void set_edited(bool value) { edited_ = value; }
+
     // 512 bits, one per voxel, set where the voxel is not air. Always valid, including
     // for uniform bricks (where it is synthesised on demand).
     // Every voxel, in index order. The form is decided once for the whole brick rather than
@@ -146,6 +175,9 @@ private:
     void refresh_occupancy();
 
     Form form_ = Form::Uniform;
+    // Beside `form_` deliberately: both are one byte and `uniform_` is four, so this sits in
+    // padding that was already there and `sizeof(Brick)` does not move. R12d costs no memory.
+    bool edited_ = false;
     VoxelTypeId uniform_ = kAir;
     std::vector<VoxelTypeId> palette_;
     std::vector<u8> indices_;              // bit-packed, bits_for(form_) per voxel

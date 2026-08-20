@@ -68,11 +68,44 @@ u64 Op::content_hash() const {
     return hash_combine(h, static_cast<u64>(z1));
 }
 
+// R12d — AND THIS IS WHERE THE FLAG IS SET, on all three of the paths below.
+//
+// **An op is not always a person, and assuming it was is a mistake this made and the suite
+// caught.** The obvious reading is that `apply_op` IS the edit path — the chisel, a paste, an undo
+// — while the ladder's re-sample goes through `paste_clip` and the cache through
+// `read_world_cache`. That is
+// true of the game and false of the machinery: the same op record is how terrain is created in the
+// first place, and marking those `Edit` claimed **1,204 bricks of 1,204** in a world nobody had
+// touched. A world entirely claimed is a world with nothing left to derive, which is R12's payoff
+// deleted in one line, and it is silent — every voxel is right, every hash agrees, and only the
+// file size says anything at all.
+//
+// So it is taken from the op's own `reason` rather than from where the call came from.
+// `Generation` is terrain being made for the first time and `Load` is a world being deserialised;
+// both are the world's own description restating itself, and both are recoverable without a
+// record. Everything else — a player, a machine, the simulation moving matter about — is not, and
+// nothing outside this world can put it back.
+//
+// There are three ways a brick is written below (whole from air, whole over something, and a
+// sub-box) and every one of them has to say so, because a counter set on some of the paths and not
+// the rest reads as success on the rest — trap 27, and here it would read as "nobody edited this"
+// over somebody's building.
+constexpr WriteOrigin origin_of(MatterReason reason) {
+    switch (reason) {
+        case MatterReason::Generation:
+        case MatterReason::Load:
+            return WriteOrigin::Field;
+        default:
+            return WriteOrigin::Edit;
+    }
+}
+
 OpResult apply_op(World& world, const Op& op, MatterLedger& ledger) {
     OpResult result;
 
     Op box = op;
     box.normalise();
+    const WriteOrigin origin = origin_of(box.reason);
 
     std::vector<Brick::TypeCount> histogram;   // reused across bricks
 
@@ -138,7 +171,8 @@ OpResult apply_op(World& world, const Op& op, MatterLedger& ledger) {
                                 // Nothing here is solid, so a solid-only write has no work.
                                 if (box.mask == WriteMask::OntoSolid) continue;
                                 if (whole_brick) {
-                                    chunk.brick_for_write(bux, buy, buz).fill(box.type);
+                                    chunk.brick_for_write(bux, buy, buz, origin)
+                                        .fill(box.type);
                                     ledger.record_bulk(kAir, box.type, kBrickVoxels, box.reason,
                                                        box.player);
                                     result.voxels_changed += kBrickVoxels;
@@ -168,7 +202,8 @@ OpResult apply_op(World& world, const Op& op, MatterLedger& ledger) {
                                                        box.reason, box.player);
                                     result.voxels_changed += entry.count;
                                 }
-                                chunk.brick_for_write(bux, buy, buz).fill(box.type);
+                                chunk.brick_for_write(bux, buy, buz, origin)
+                                    .fill(box.type);
                                 // Erasing a whole brick is the commonest way one empties,
                                 // and it is the one the chunk cannot see for itself: this
                                 // goes around set() to avoid 512 read-modify-writes. An
@@ -179,7 +214,7 @@ OpResult apply_op(World& world, const Op& op, MatterLedger& ledger) {
                                 continue;
                             }
 
-                            Brick& brick = chunk.brick_for_write(bux, buy, buz);
+                            Brick& brick = chunk.brick_for_write(bux, buy, buz, origin);
                             const u32 changed = brick.fill_range(
                                 static_cast<u32>(blo[0] & 7), static_cast<u32>(blo[1] & 7),
                                 static_cast<u32>(blo[2] & 7), static_cast<u32>(bhi[0] & 7),

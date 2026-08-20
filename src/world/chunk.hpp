@@ -27,14 +27,19 @@ public:
 
     // Voxel coordinates local to the chunk, 0–255 on each axis.
     VoxelTypeId get(u32 x, u32 y, u32 z) const;
-    bool set(u32 x, u32 y, u32 z, VoxelTypeId type);
+    bool set(u32 x, u32 y, u32 z, VoxelTypeId type, WriteOrigin origin = WriteOrigin::Field);
 
     // Brick coordinates, 0–31 on each axis. Null means "entirely air"; there is no
     // allocated brick and nothing to read.
     const Brick* brick(u32 bx, u32 by, u32 bz) const;
 
     // Allocates the brick and the path down to it if they do not exist yet.
-    Brick& brick_for_write(u32 bx, u32 by, u32 bz);
+    //
+    // `origin` is R12d and it is the only way the flag is ever set. The default is `Field`, so
+    // every writer that existed before R12d — the ladder's paste, the cache reader, a test
+    // fixture — keeps exactly the behaviour it had, and the edit path opts in by naming itself.
+    // See WriteOrigin for why that direction and not the other.
+    Brick& brick_for_write(u32 bx, u32 by, u32 bz, WriteOrigin origin = WriteOrigin::Field);
 
     bool empty() const { return brick_count_ == 0; }
     u32 brick_count() const { return brick_count_; }
@@ -48,6 +53,47 @@ public:
     u32 node_count() const;
     u64 solid_voxels() const;
     usize bytes() const;
+
+    // ---- R12d: how much of this chunk is a person's work, and how much is derivable -------
+    //
+    // The stage's whole premise is that the card can rebuild the base world out of the field, so
+    // the CPU need only keep the difference. The question a caller asks is per BRICK — may the
+    // sampler write here — and it has to be answerable per CHUNK first, because a chunk is 32,768
+    // brick slots and the overwhelming majority of them are nobody's work. `any_edits()` is the
+    // whole-chunk answer and it is O(1): a chunk that is false is one nothing has to be checked
+    // inside.
+
+    // Live bricks holding a player's work. Maintained by every path that marks, allocates or frees
+    // one, and re-derived and compared by `validate()` — a count kept beside the thing it counts
+    // is a redundant pair of indexes, and a redundant pair is only as true as the worse of the two
+    // (D345, D358).
+    u32 edited_bricks() const { return edited_bricks_; }
+
+    // Brick slots a player's edit EMPTIED, where there is now no brick at all.
+    //
+    // This is the half that a flag on the brick cannot hold, and it is the commonest edit there
+    // is. Carve a doorway and the bricks it passed through lose their last voxel; they are then
+    // unlinked, because an empty brick left allocated is `world_has` claiming matter the world
+    // does not have and the marcher draws a cube it can never build (D348, D620). The flag goes
+    // with the brick, and the hole is indistinguishable from sky nobody has ever touched — so the
+    // next time the ladder sharpens that region the field fills the doorway back in.
+    //
+    // A bit per slot, 32,768 of them, allocated the first time one is needed and not before: a
+    // world nobody has carved pays nothing, and a chunk somebody has carved pays four kilobytes
+    // against the several hundred its bricks cost.
+    u32 erased_bricks() const { return erased_count_; }
+    bool brick_erased(u32 bx, u32 by, u32 bz) const;
+
+    // Is this brick slot a person's work — either a live brick they built in, or one they emptied?
+    // This is the question the re-sample asks before it writes.
+    bool brick_edited(u32 bx, u32 by, u32 bz) const;
+
+    // Anything at all in this chunk, live or erased. O(1), and the point of the counts.
+    bool any_edits() const { return edited_bricks_ != 0 || erased_count_ != 0; }
+
+    // Says a slot was emptied by an edit, for a caller that took the matter out some way the chunk
+    // could not see — the cache reader laying down a saved carve is the one that needs it.
+    void mark_brick_erased(u32 bx, u32 by, u32 bz);
 
     // Frees bricks that have become entirely air, then frees the nodes left with no
     // children. A sweep of the whole chunk: for bulk writers that fill or assign a brick
@@ -109,15 +155,26 @@ private:
     void unlink_brick(u32 bx, u32 by, u32 bz, const u32 path[kChunkDepth], u32 index);
     u32 allocate_node();
     u32 allocate_brick();
-    void free_brick(u32 index);
+    // `bx/by/bz` so that a brick holding a person's work can leave a mark where it stood. Every
+    // path that gives a brick up goes through here, which is what makes the erased set exact —
+    // trap 27's cure, one funnel rather than a count kept on some of the ways out.
+    void free_brick(u32 index, u32 bx, u32 by, u32 bz);
     void free_node(u32 index);
-    bool prune(u32 node_index, u32 depth);          // true when the node became empty
+    // The same descent as everything else, but carrying the brick coordinate down with it: a
+    // pruned brick has to be able to say WHERE it was, and prune walks node indices.
+    bool prune(u32 node_index, u32 depth, u32 bx, u32 by, u32 bz);   // true when it became empty
+    void set_erased(u32 bx, u32 by, u32 bz, bool value);
 
     std::vector<Node> nodes_;
     std::vector<Brick> bricks_;
     std::vector<u32> free_nodes_;
     std::vector<u32> free_bricks_;
+    // 32,768 bits, one per brick slot, empty until the first edit empties a brick. See
+    // erased_bricks().
+    std::vector<u64> erased_;
     u32 brick_count_ = 0;
+    u32 edited_bricks_ = 0;
+    u32 erased_count_ = 0;
     u64 revision_ = 0;
 };
 

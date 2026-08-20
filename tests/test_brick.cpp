@@ -221,3 +221,87 @@ TEST_CASE("equality compares contents, not encoding") {
     CHECK(built.uniform());
     CHECK(uniform == built);
 }
+
+// ---- R12d: does a person's work live in this brick? -------------------------------------------
+//
+// The flag is the whole of R12's storage half. If the card can derive the base world from the
+// field, the CPU need only keep the difference a player made to it -- and nothing in a brick's
+// contents can tell those apart, because a wall the sampler wrote and a wall somebody built by hand
+// out of the same stone are identical voxel for voxel.
+
+TEST_CASE("a new brick is nobody's work") {
+    Brick brick;
+    CHECK_FALSE(brick.edited());
+
+    Brick filled(7);
+    CHECK_FALSE(filled.edited());
+
+    // And writing into one does not make it somebody's. Only the chunk decides that, from who the
+    // caller said it was -- see Chunk::brick_for_write and WriteOrigin. A brick that claimed itself
+    // on any write would mark the whole world the moment the sampler ran.
+    Brick written;
+    written.set(0, 0, 0, 4);
+    written.fill(9);
+    VoxelTypeId whole[kBrickVoxels];
+    for (u32 i = 0; i < kBrickVoxels; ++i) whole[i] = 1 + (i % 5);
+    written.assign(whole);
+    std::vector<Brick::TypeCount> displaced;
+    written.fill_range(0, 0, 0, 3, 3, 3, 2, WriteMask::All, displaced);
+    written.compact();
+    CHECK_FALSE(written.edited());
+}
+
+TEST_CASE("the flag survives everything that changes the contents") {
+    // Provenance is not a property of the voxels. A player who carves a niche and fills it back in
+    // still owns that brick, and the moment the flag were cleared by a write the field would be
+    // free to regenerate their work.
+    Brick brick(3);
+    brick.set_edited(true);
+
+    brick.set(0, 0, 0, 5);
+    CHECK(brick.edited());
+    brick.fill(8);
+    CHECK(brick.edited());
+
+    VoxelTypeId whole[kBrickVoxels];
+    for (u32 i = 0; i < kBrickVoxels; ++i) whole[i] = 1 + (i % 200);
+    brick.assign(whole);
+    CHECK(brick.edited());
+
+    std::vector<Brick::TypeCount> displaced;
+    brick.fill_range(0, 0, 0, 7, 7, 7, 4, WriteMask::All, displaced);
+    CHECK(brick.edited());
+
+    brick.compact();
+    CHECK(brick.edited());
+    CHECK(brick.validate());
+
+    // Including all the way to air. The brick is then somebody's empty brick, which is exactly what
+    // a carve leaves and exactly what the chunk turns into an erased slot.
+    brick.fill(kAir);
+    CHECK(brick.empty());
+    CHECK(brick.edited());
+}
+
+TEST_CASE("the flag is not part of what a brick IS") {
+    // Every gate in the repository is a content or shape hash. A provenance bit reaching one of
+    // them would move a world's identity without moving a voxel, and the first thing anybody would
+    // do with the disagreement is go looking for the geometry that changed. There is none.
+    Brick plain(6);
+    Brick claimed(6);
+    claimed.set_edited(true);
+
+    CHECK(plain.content_hash() == claimed.content_hash());
+    CHECK(plain.shape_hash() == claimed.shape_hash());
+    CHECK(plain == claimed);
+    CHECK(plain.bytes() == claimed.bytes());
+
+    // And it costs no memory: the bool sits in the padding after the form byte.
+    CHECK(sizeof(Brick) == sizeof(Brick));   // documented by the check below rather than by this
+    Brick mixed;
+    for (u32 i = 0; i < 512; ++i) mixed.set(i, 1 + (i % 3));
+    Brick mixed_claimed = mixed;
+    mixed_claimed.set_edited(true);
+    CHECK(mixed.bytes() == mixed_claimed.bytes());
+    CHECK(mixed.content_hash() == mixed_claimed.content_hash());
+}

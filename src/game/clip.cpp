@@ -694,6 +694,24 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
                         const i64 origin[3] = {base[0] + (bx << 3), base[1] + (by << 3),
                                                base[2] + (bz << 3)};
 
+                        // R12d — A BRICK SOMEBODY EDITED IS NOT THE FIELD'S TO REWRITE.
+                        //
+                        // This paste is a REPLACE over its whole box, so where it lands on a
+                        // doorway a player cut, the doorway fills back in. Today that survives
+                        // only because `pump_refinement` replays the ENTIRE op log immediately
+                        // afterwards and re-cuts every edit — which works while the log is in
+                        // memory and stops working the moment a world is reloaded, because a
+                        // resumed run has the carvings and not the ops that made them.
+                        //
+                        // `any_edits()` is checked first and is nearly always false: it is one
+                        // comparison for a chunk of 32,768 brick slots, so an unedited world pays
+                        // nothing for this at all.
+                        if (kEditTracking && chunk.any_edits() &&
+                            chunk.brick_edited(static_cast<u32>(bx), static_cast<u32>(by),
+                                               static_cast<u32>(bz))) {
+                            continue;
+                        }
+
                         // Gather what the clip wants in these 512 cells. A cell outside the
                         // clip, or one the mode says nothing about, keeps whatever is already
                         // there — recorded as "no opinion" by leaving the bit clear.

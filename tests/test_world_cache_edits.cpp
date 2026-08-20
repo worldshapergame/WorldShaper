@@ -601,17 +601,24 @@ TEST_CASE("a hand-placed voxel that agrees with the clip survives, when it was n
         CHECK(read.world.get(20, 20, 20) == read.stone);   // the person's stone, kept
     }
     {
-        // And the same file without the naming. THIS IS THE DOCUMENTED LOSS, asserted so that it
-        // is a decision somebody made rather than a surprise: a brick that agrees with the clip
-        // and is not named comes back as the clip now builds it.
+        // And the same file without the naming. THIS USED TO BE THE DOCUMENTED LOSS: a brick that
+        // agrees with the clip and is not named came back as the clip now builds it, asserted here
+        // so that it was a decision somebody made rather than a surprise.
+        //
+        // **R12d closes it, and from the other end.** The brick itself now records that a person
+        // wrote it — `Chunk::brick_for_write` takes a `WriteOrigin` and `apply_op` passes one — so
+        // the writer no longer has to be HANDED the boxes to know. Naming still buys something (a
+        // box covers slots the person's write never reached, which is the swing through air two
+        // cases below), but the commonest form of this loss no longer depends on anybody
+        // remembering to name anything.
         Side read;
         read.make_types();
         build_clip_world(read.world, read.ledger, read.stone, read.wood, /*flavour=*/true);
         WorldCache in = read.handle();
         in.baseline = &read.world;
         REQUIRE(read_world_cache(bare_file.path, key, in, nullptr));
-        CHECK(read.world.get(20, 20, 20) == read.wood);    // the clip's, not the person's
-        CHECK_FALSE(in.baseline_agreed);                   // and the reader said so
+        CHECK(read.world.get(20, 20, 20) == read.stone);   // theirs, kept, with nothing named
+        CHECK_FALSE(in.baseline_agreed);                   // and the reader still said so
     }
 }
 
@@ -1155,4 +1162,186 @@ TEST_CASE("the facility, both ways" * doctest::skip()) {
     CHECK(back_whole.content_hash() == edited.content_hash());
     CHECK(back_diff.content_hash() == edited.content_hash());
     CHECK(diff.bytes() < whole.bytes());
+}
+
+// ---- R12d: the carve, saved, reloaded, and RE-SAMPLED -----------------------------------------
+//
+// This is the gate the stage is judged on and it is four steps, none of which is worth anything
+// without the ones after it. A player carves a doorway. The world is written to a file and read
+// back into a fresh one. The ladder then sharpens that region again — which pastes the clip's own
+// answer over the box as a REPLACE — and the doorway has to still be there.
+//
+// The step that is easy to miss is the last. In the running game the re-fill is repaired a
+// different way: `pump_refinement` replays the ENTIRE op log immediately after every paste, so the
+// field wins for a moment and the cut is made again. That works while the ops are in memory and
+// stops working the moment a world is reloaded, because a resumed run has the carvings and not the
+// ops that made them. A brick that knows whose it is needs neither.
+namespace {
+
+// The box a person cuts, and it is deliberately a whole brick plus a bite out of its neighbour: one
+// slot empties completely (which unlinks the brick, so the flag on it has nowhere to live) and one
+// only partly (which keeps its brick, so the flag does). Those are two different mechanisms and a
+// carve that only exercised one would pass with the other broken.
+constexpr i64 kCarveLow[3] = {0, 0, 0};
+constexpr i64 kCarveHigh[3] = {11, 7, 7};
+
+u64 air_in_carve(const World& world) {
+    u64 air = 0;
+    for (i64 z = kCarveLow[2]; z <= kCarveHigh[2]; ++z) {
+        for (i64 y = kCarveLow[1]; y <= kCarveHigh[1]; ++y) {
+            for (i64 x = kCarveLow[0]; x <= kCarveHigh[0]; ++x) {
+                if (world.get(x, y, z) == kAir) ++air;
+            }
+        }
+    }
+    return air;
+}
+
+// Every brick in the world that says a person's work is in it, and every slot that says a person
+// emptied it. The count is the evidence: "the carve survived" and "everything got marked, so of
+// course it did" look identical from the carve alone.
+void claims_in(const World& world, u64& bricks, u64& erased, u64& live_bricks) {
+    bricks = 0;
+    erased = 0;
+    live_bricks = 0;
+    world.for_each_chunk([&](const ChunkCoord&, const Chunk& chunk) {
+        bricks += chunk.edited_bricks();
+        erased += chunk.erased_bricks();
+        live_bricks += chunk.brick_count();
+    });
+}
+
+}  // namespace
+
+TEST_CASE("R12d: a carve survives a save, a reload and a re-sample") {
+    Scratch file("ws_test_r12d_carve.world");
+    const u64 key = world_cache_key("a clip", 32, 71);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.clip_world, wrote.clip_ledger, wrote.stone, wrote.wood);
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+
+    // Nothing is claimed by the clip building itself. This is the boundary, and it is checked
+    // before the carve rather than after, because a world already fully claimed would pass every
+    // assertion below for the wrong reason.
+    u64 claimed = 0;
+    u64 erased = 0;
+    u64 live = 0;
+    claims_in(wrote.world, claimed, erased, live);
+    REQUIRE(live > 0);
+    REQUIRE(claimed == 0);
+    REQUIRE(erased == 0);
+
+    apply_op(wrote.world,
+             Op::fill_box(9, 1, kCarveLow[0], kCarveLow[1], kCarveLow[2], kCarveHigh[0],
+                          kCarveHigh[1], kCarveHigh[2], kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+
+    const u64 carved_air = air_in_carve(wrote.world);
+    const u64 carved_shape = wrote.world.shape_hash();
+    REQUIRE(carved_air == 12u * 8u * 8u);
+
+    claims_in(wrote.world, claimed, erased, live);
+    // One brick per slot the box reached and not one more: 8x8x8 at the origin went entirely and
+    // is an erased slot; the half-brick beside it kept its brick and carries the flag.
+    CHECK(claimed == 1);
+    CHECK(erased == 1);
+    CHECK(wrote.world.validate());
+
+    // Written WITHOUT naming a single box, deliberately. R11f's answer to this was the op log, and
+    // the op log is what a reloaded world does not have; the point of R12d is that the world can
+    // answer for itself.
+    WorldCache out = wrote.handle();
+    out.baseline = &wrote.clip_world;
+    REQUIRE_FALSE(out.edits_named);
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    Side read;
+    read.make_types();
+    build_clip_world(read.clip_world, read.clip_ledger, read.stone, read.wood);
+    build_clip_world(read.world, read.ledger, read.stone, read.wood);
+    WorldCache in = read.handle();
+    in.baseline = &read.world;
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+    CHECK(in.baseline_agreed);
+
+    // SHAPE, not content. A reload re-interns the type table and `content` moves legitimately with
+    // it; `shape` is which cells hold matter and survives that (D729).
+    CHECK(read.world.shape_hash() == carved_shape);
+    CHECK(air_in_carve(read.world) == carved_air);
+    CHECK(read.world.validate());
+
+    // And the bookkeeping came back with it, which is the thing a version 7 file could not say.
+    u64 back_claimed = 0;
+    u64 back_erased = 0;
+    u64 back_live = 0;
+    claims_in(read.world, back_claimed, back_erased, back_live);
+    CHECK(back_claimed == claimed);
+    CHECK(back_erased == erased);
+
+    // ---- and now the ladder sharpens that region again ------------------------------------
+    //
+    // Exactly what `pump_refinement` does: the clip's own answer for the box, stamped as a REPLACE.
+    // Taken out of the clip world with `capture_clip`, so it is the field's answer and not a
+    // hand-written one.
+    const Clip again = capture_clip(read.clip_world, kCarveLow[0] - 8, kCarveLow[1] - 8,
+                                    kCarveLow[2] - 8, kCarveHigh[0] + 8, kCarveHigh[1] + 8,
+                                    kCarveHigh[2] + 8);
+    REQUIRE(again.solid_count() > 0);
+    paste_clip(read.world, read.ledger, again, kCarveLow[0] - 8, kCarveLow[1] - 8,
+               kCarveLow[2] - 8, PasteMode::Replace, MatterReason::PlayerPlace, 1);
+
+    CHECK(air_in_carve(read.world) == carved_air);      // the doorway is still a doorway
+    CHECK(read.world.shape_hash() == carved_shape);     // and nothing else moved either
+    CHECK(read.world.validate());
+
+    // The re-sample must not have claimed anything for itself. It wrote real matter into bricks
+    // all around the carve and every one of those is still the clip's to rebuild.
+    u64 after_claimed = 0;
+    u64 after_erased = 0;
+    u64 after_live = 0;
+    claims_in(read.world, after_claimed, after_erased, after_live);
+    CHECK(after_claimed == claimed);
+    CHECK(after_erased == erased);
+}
+
+TEST_CASE("R12d: a whole-world file carries who wrote each brick") {
+    // The other form of the file. An edit-only file says what differs from a clip; a whole-world
+    // one says everything, and until version 8 "everything" did not include this.
+    Scratch file("ws_test_r12d_whole.world");
+    const u64 key = world_cache_key("a clip", 32, 73);
+
+    Side wrote;
+    wrote.make_types();
+    build_clip_world(wrote.world, wrote.ledger, wrote.stone, wrote.wood);
+    apply_op(wrote.world,
+             Op::fill_box(9, 1, kCarveLow[0], kCarveLow[1], kCarveLow[2], kCarveHigh[0],
+                          kCarveHigh[1], kCarveHigh[2], kAir, MatterReason::PlayerBreak),
+             wrote.ledger);
+    u64 claimed = 0;
+    u64 erased = 0;
+    u64 live = 0;
+    claims_in(wrote.world, claimed, erased, live);
+    REQUIRE(claimed == 1);
+    REQUIRE(erased == 1);
+
+    WorldCache out = wrote.handle();   // no baseline: every voxel, as this file has always been
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    Side read;
+    read.make_types();
+    WorldCache in = read.handle();
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+    CHECK(in.mode == WorldCacheMode::Whole);
+    CHECK(read.world.shape_hash() == wrote.world.shape_hash());
+
+    u64 back_claimed = 0;
+    u64 back_erased = 0;
+    u64 back_live = 0;
+    claims_in(read.world, back_claimed, back_erased, back_live);
+    CHECK(back_claimed == claimed);
+    CHECK(back_erased == erased);
+    CHECK(back_live == live);
+    CHECK(read.world.validate());
 }
