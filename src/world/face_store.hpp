@@ -44,6 +44,7 @@
 #include "core/dirty_set.hpp"
 #include "core/hash.hpp"
 #include "core/types.hpp"
+#include "world/level.hpp"
 
 namespace ws {
 
@@ -63,6 +64,16 @@ inline constexpr u32 kFaceTombstone = 0xFFFFFFFEu;
 inline constexpr u32 kFaceCount = 6;
 
 // A face, identified the way the marcher already identifies it.
+//
+// R8a: `level` is SIGNED and carried in a `u32` as two's complement — see `world/level.hpp`. **This
+// is the structure where a negative level is actually STORED**, and it is what R8's plan means by
+// "signed levels through `NodeKey`, the descent and the face key": the node pool holds no record
+// finer than a brick, so a sub-voxel cell has no slot, but it very much has a FACE, and that face
+// has light of its own that has to live somewhere and survive the camera turning away.
+//
+// A face at level -1 is one of the four half-voxel faces on a voxel's side. It is claimed, found,
+// swept and evicted by exactly the paths a level-3 face is; nothing here special-cases it, and the
+// tests in `test_face_store.cpp` are what say so rather than this comment.
 struct FaceKey {
     i64 x = 0;
     i64 y = 0;
@@ -73,6 +84,7 @@ struct FaceKey {
         return x == other.x && y == other.y && z == other.z && level == other.level &&
                face == other.face;
     }
+    constexpr i32 signed_level() const { return level_signed(level); }
 };
 
 // Thirty-two bits, over the coordinate truncated exactly as the record stores it, so the shader
@@ -81,6 +93,12 @@ struct FaceKey {
 //
 // A false match needs two faces 2^32 apart at one level, and the probe compares the stored
 // coordinate anyway.
+//
+// R8a: `k.level << 3` is a shift of the two's-complement WORD, so level -1 tags as 0xFFFFFFF8 and
+// level 3 tags as 0x18 exactly as it always did. The top three bits fall off the end, which puts
+// levels 2^29 apart in the same bucket — and the shallowest of those is 536,870,912, against an
+// addressing floor of -32 and a ceiling of 24. The shader computes the identical word from an
+// identical `uint(level)`; see the hunk for `node_face_lookup` in this change's report.
 struct FaceKeyHash {
     usize operator()(const FaceKey& k) const noexcept {
         return static_cast<usize>(hash_lattice32(static_cast<i32>(k.x), static_cast<i32>(k.y),
@@ -161,10 +179,19 @@ inline constexpr u32 kFaceAmbientIdle = 1u << 29;
 inline constexpr u32 kFaceLampIdle = 1u << 28;
 constexpr bool face_live(const GpuFace& f) { return (f.packed & (kFaceLive << 16)) != 0; }
 
+// R8a: the level goes into the bottom byte as an ordinary two's-complement byte, so level -1 lands
+// as 0xFF and level 3 lands as 0x03 exactly as it always did. Nothing about the packing moved and
+// nothing needed a bias — the byte for every level this engine has ever claimed a face at is what it
+// was, and `face_level` is what reads a negative one back out.
 constexpr u32 pack_face(u32 level, u32 face, u32 flags) {
     return (level & 0xFFu) | ((face & 0xFFu) << 8) | ((flags & 0xFFu) << 16);
 }
-constexpr u32 face_level(const GpuFace& f) { return f.packed & 0xFFu; }
+// SIGN-EXTENDED out of that byte, so a sub-voxel face reads back the level it was claimed at rather
+// than 255. It returns the two's-complement WORD rather than an `i32` so that it can be compared
+// against a `FaceKey::level` directly — which `find` does, on every probe — and so that main.cpp's
+// `faces by level` histogram, which tests `level < 16`, keeps its bounds check by construction.
+constexpr u32 face_level(const GpuFace& f) { return level_word(level_from_byte(f.packed)); }
+constexpr i32 face_level_signed(const GpuFace& f) { return level_from_byte(f.packed); }
 constexpr u32 face_direction(const GpuFace& f) { return (f.packed >> 8) & 0xFFu; }
 constexpr u32 face_flags(const GpuFace& f) { return (f.packed >> 16) & 0xFFu; }
 
@@ -246,8 +273,12 @@ constexpr f32 face_lobe_bins_wanted(u32 rough_byte) {
 // The distance is the caller's, and in the shader it is deliberately the distance to the face's
 // COARSE PATCH rather than to the face itself — see face_worklist.comp for why, and D599 for what
 // happens when it is not.
-constexpr f32 face_coverage_pixels(u32 level, f32 distance_voxels, f32 pixel_angle) {
-    const f32 extent = static_cast<f32>(1u << level);
+//
+// R8a made `level` signed, and the only line that changes is the extent: `1u << level` cannot say
+// "half a voxel", and `level_extent_f32` can. Every power of two it returns is exact in a float, so
+// a face at level 3 gets the same 8.0 it always got and the arithmetic below is untouched.
+constexpr f32 face_coverage_pixels(i32 level, f32 distance_voxels, f32 pixel_angle) {
+    const f32 extent = level_extent_f32(level);
     const f32 reach = distance_voxels > extent ? distance_voxels : extent;
     const f32 angle = pixel_angle > 1e-9f ? pixel_angle : 1e-9f;
     const f32 across = extent / (reach * angle);

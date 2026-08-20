@@ -66,6 +66,7 @@
 #include "core/dirty_set.hpp"
 #include "core/types.hpp"
 #include "world/gpu_brick.hpp"
+#include "world/level.hpp"
 #include "world/world.hpp"
 
 namespace ws {
@@ -74,8 +75,9 @@ class VoxelTypeTable;
 
 inline constexpr u32 kNoNode = 0xFFFFFFFFu;
 
-// A brick is the leaf. Eight voxels a side, which is level 3.
-inline constexpr u32 kLeafLevel = 3;
+// A brick is the leaf. Eight voxels a side, which is level 3. **Moved to `world/level.hpp` by R8a**,
+// because the face store needs the same floor and neither file owns it; it is still spelt
+// `kLeafLevel` and still means what it meant.
 
 // The coarsest node the pool will build. Level 24 is 16.7 million voxels a side — 524 km — which
 // is past anything a 64-bit voxel world is asked to draw at once, and the tree is sparse so the
@@ -156,7 +158,7 @@ inline constexpr f64 kSubPixelAngle = kLadderSplitAt / kLadderCellsPerSide;
 // erode past level 7 would take the very node those rays land on.
 inline constexpr u32 kMarcherMaxDetail = 7;
 
-// The finest node level a ray at this distance will ever descend to.
+// The finest node level a ray at this distance will ever descend to, SIGNED — R8a.
 //
 // `floor(log2(footprint))`, done with bit_width rather than std::log2 so it cannot round the other
 // way from the shader's `floor` on a boundary value -- 16.0 must answer 4 and 15.999 must answer 3,
@@ -166,14 +168,47 @@ inline constexpr u32 kMarcherMaxDetail = 7;
 // reaching the node has travelled at least that far, so its own footprint is at least this one and
 // its own target is at least this level. Erring the other way -- centre distance, or the far face --
 // would evict nodes rays still address.
-inline u32 subpixel_finest_level(f64 distance_voxels, f64 pixel_angle) {
+//
+// # `infinite` is the whole of R8a, and this is the only place the clamp lives
+//
+// With it FALSE the answer floors at `kLeafLevel` and this function is, line for line, what
+// `subpixel_finest_level` was before R8a: a footprint of one voxel or less answers three, and every
+// build before this one took that branch on every call. With it TRUE the floor comes off both ends —
+// a footprint of an eighth of a voxel answers -3, and a camera 10 cm from a wall answers -8 — and
+// nothing else in the arithmetic moves.
+//
+// The `> 1.0` branch is kept whole rather than folded into the general case on purpose. It is the
+// path the shipped arm takes, so it executes the same instructions it always did and a difference in
+// the world hash cannot be hiding in a rewrite of it. `std::ilogb` is only ever reached below one
+// voxel, which is a place no build before R8a could go.
+inline i32 marcher_finest_level(f64 distance_voxels, f64 pixel_angle, bool infinite) {
     const f64 footprint = distance_voxels * pixel_angle;
+    const i32 floor_level = infinite ? kFinestLevel : static_cast<i32>(kLeafLevel);
     // Also the NaN guard: a comparison against NaN is false, so a camera that has not been set
     // answers "keep everything".
-    if (!(footprint > 1.0)) return kLeafLevel;
-    const u32 level = static_cast<u32>(std::bit_width(static_cast<u64>(footprint))) - 1u;
-    if (level < kLeafLevel) return kLeafLevel;
-    return (level > kMarcherMaxDetail) ? kMarcherMaxDetail : level;
+    if (!(footprint > 1.0)) {
+        if (!infinite || !(footprint > 0.0)) return floor_level;
+        // `ilogb` READS the exponent rather than computing a logarithm, so `floor(log2(x))` below a
+        // voxel is exact the same way `bit_width` is exact above one: 0.125 answers -3 and 0.1249
+        // answers -4, with no rounding for two machines to disagree about on the boundary itself.
+        const i32 level = std::ilogb(footprint);
+        return (level < floor_level) ? floor_level : level;
+    }
+    const i32 level = static_cast<i32>(std::bit_width(static_cast<u64>(footprint))) - 1;
+    if (level < floor_level) return floor_level;
+    return (level > static_cast<i32>(kMarcherMaxDetail)) ? static_cast<i32>(kMarcherMaxDetail)
+                                                         : level;
+}
+
+// R2b's own reading of the rule: unsigned, floored at the leaf, and unchanged by R8a.
+//
+// It keeps its name, its type and its tests because R2b's rule is about what the pool STORES, and
+// the finest stored node is a brick in both arms — see `level.hpp` for why nothing below one is ever
+// written to a record. One implementation, so the two cannot drift apart: trap 13 is two indexes
+// answering one question, and this stage adds a second reading of exactly the quantity D674 lost an
+// evening to.
+inline u32 subpixel_finest_level(f64 distance_voxels, f64 pixel_angle) {
+    return static_cast<u32>(marcher_finest_level(distance_voxels, pixel_angle, false));
 }
 
 // Where the proximity sweep anchors itself. 64 voxels is two metres.
@@ -215,6 +250,9 @@ enum RequestSource : u8 {
     kRequestSourceCount = 4,
 };
 
+// A node, at any level. `level` is SIGNED and carried in a `u32` as two's complement -- see
+// `world/level.hpp`, which is the whole of the convention and the reason the field is not an `i32`.
+// Read it with `level_signed(key.level)` and never compare or shift it raw.
 struct NodeKey {
     i64 x = 0;
     i64 y = 0;
@@ -223,6 +261,7 @@ struct NodeKey {
     bool operator==(const NodeKey& other) const {
         return x == other.x && y == other.y && z == other.z && level == other.level;
     }
+    constexpr i32 signed_level() const { return level_signed(level); }
 };
 
 struct NodeKeyHash {
@@ -234,8 +273,25 @@ struct NodeKeyHash {
 // Which node at `level` contains a voxel. Arithmetic shift, not division: a voxel at -1 belongs
 // to node -1, not node 0. Getting this wrong puts every negative coordinate one node out, which
 // is the same trap `chunk_of` documents.
+//
+// R8a: below level 0 the shift runs the OTHER WAY, and the question changes shape with it. A voxel
+// does not sit inside a cell finer than itself -- it CONTAINS 8^k of them -- so what comes back is
+// the corner cell, the one at the voxel's own low corner, which is the cell `node_key_of` at level 0
+// would have named scaled down. That makes the two directions each other's inverse: shifting the
+// answer back up by the same amount returns the voxel it came from, at any depth.
 constexpr NodeKey node_key_of(i64 x, i64 y, i64 z, u32 level) {
-    return NodeKey{x >> level, y >> level, z >> level, level};
+    const i32 at = level_signed(level);
+    if (at >= 0) return NodeKey{x >> at, y >> at, z >> at, level};
+    return NodeKey{x << -at, y << -at, z << -at, level};
+}
+
+// The voxel a cell lies in, for a key at or below level 0. The other direction of the same shift,
+// named because it is the question the child source actually asks: R8b's chain is seeded from the
+// VOXEL and stepped down by octant, so every sub-voxel read starts here.
+constexpr NodeKey voxel_of_key(const NodeKey& key) {
+    const i32 at = key.signed_level();
+    if (at >= 0) return NodeKey{key.x << at, key.y << at, key.z << at, 0};
+    return NodeKey{key.x >> -at, key.y >> -at, key.z >> -at, 0};
 }
 
 // Which of its parent's eight children a node is. x fastest, matching brick and cell order
@@ -436,16 +492,61 @@ constexpr VariationChildren variation_children(u32 parent_hash, u32 parent_colou
 // What a walk down the hashed source found, at whatever sub-voxel depth it was asked for.
 //
 // `depth` is levels BELOW a voxel: 0 is the voxel itself, 1 is a cell 1.5625 cm across, k is
-// 3.125/2^k cm. It is a plain count rather than a signed level because R8a -- signed levels
-// through `NodeKey`, the descent and the face key -- is not built yet, and inventing half of it
-// here would leave two ideas of what a negative level means. When R8a lands this becomes
-// `-level` and nothing else about the source changes.
+// 3.125/2^k cm.
+//
+// **R8a has landed and this comment used to promise what happens then**: it said `depth` was a plain
+// count rather than a signed level only because there was no signed level to put it in, and that
+// when R8a arrived it would become `-level`. It has, and `signed_level()` below is that -- the count
+// is KEPT as the field because it is what the chain walk counts down, and the level is what the key,
+// the descent and the face all speak. One quantity, two spellings, and the conversion in one place
+// rather than a `-` written out at each call site.
 struct VariationSample {
     bool matter = false;
     VoxelTypeId type = kAir;
     u32 colour = 0;    // rgba8, alpha carried down from the voxel's own coverage
     u32 hash = 0;      // this cell's chain seed, which is what its own children come from
     u32 depth = 0;
+    constexpr i32 signed_level() const { return -static_cast<i32>(depth); }
+};
+
+// ---- R8e: `--infinite-detail`, off by default --------------------------------------------------
+//
+// The mode that unclamps. It ships OFF and this is where that is written down, as a compile-time
+// constant rather than as a literal in the budget, because `src/app/main.cpp` does not carry the
+// flag yet -- the integrator owns that file and the hunk is in this change's report. Until it does,
+// this constant is the only way in, and it is defaulted to the behaviour of every build before R8a
+// so that a tree with this change in it draws exactly what a tree without it drew.
+//
+// The gate R8e is judged on is three sentences, from `21-renderer-rewrite.md`:
+//
+//   standing 10 cm from a wall costs within 30% of standing 2 m from it;
+//   resident bytes stay bounded by resolution;
+//   a carved sub-voxel edit survives a save and reload.
+//
+// The second holds by construction and `test_node_pool.cpp` pins it: nothing below a brick is ever
+// stored, so descending to level -8 over a box of world moves `stats().total_bytes` by nought. The
+// first is a ratio of two timings and cannot be settled on a machine running seven agents at once.
+// The third needs `world/serialize.*`, which this change does not own and does not touch.
+inline constexpr bool kInfiniteDetailDefault = false;
+
+// What a descent BELOW a voxel found. R8a's third quantity, after the key and the level.
+//
+// It is not a `NodeFind`, and the difference is the point rather than an inconvenience. `NodeFind`
+// answers about a SLOT -- "here is the record, at this level" -- and there is no record below a
+// brick to answer with. This answers about CONTENT: what a ray arriving at that cell would draw,
+// derived on the spot from the voxel the cell is in and the chain of octants down to it.
+//
+// `derived` says which of the two happened, and it is separate from `matter` for the reason trap 7
+// gives at every level of this engine: "nothing is here" and "I could not go there" must never be
+// the same answer. With `--infinite-detail` off, a sub-voxel key answers `derived = false` and the
+// content of its VOXEL, which is a stand-in and exactly what a build without this mode draws.
+struct SubVoxelFind {
+    bool matter = false;
+    bool derived = false;
+    i32 level = 0;          // the level answered at, which is the level asked for
+    VoxelTypeId type = kAir;
+    u32 colour = 0;         // rgba8
+    u32 hash = 0;           // this cell's chain seed, which is what its own children come from
 };
 
 // What the GPU sees. Thirty-two bytes, one cache line per two nodes.
@@ -521,7 +622,16 @@ inline constexpr u32 kNodeTransmissive = 1u << 3;   // something under here lets
 // to be visible for a descent to answer WANTED at all.
 inline constexpr u32 kNodeSeeded = 1u << 4;
 
+// The raw level byte, and NOUGHT IS THE SENTINEL: a free slot is `GpuNode{}` and reads as level
+// nought, which is this pool's spelling of "the world has this and I have not built it". Every
+// caller that tests `node_level(n) == 0` is asking whether the slot is live, and R8a leaves all of
+// them alone -- see `world/level.hpp` for why that sentinel is still safe with signed levels, and it
+// is one sentence: the pool stores no node finer than a brick, in either arm.
 constexpr u32 node_level(const GpuNode& n) { return n.packed & 0xFFu; }
+// ...and the same byte read as a signed level. Defensive rather than used by the pool -- no record
+// it writes ever carries a level below three -- and here so that a reader of this file does not have
+// to work out from the packing whether it could.
+constexpr i32 node_level_signed(const GpuNode& n) { return level_from_byte(n.packed); }
 constexpr u32 node_flags(const GpuNode& n) { return (n.packed >> 8) & 0xFFu; }
 constexpr u32 node_child_mask(const GpuNode& n) { return (n.packed >> 16) & 0xFFu; }
 constexpr u32 pack_node(u32 level, u32 flags, u32 child_mask) {
@@ -773,6 +883,26 @@ struct NodePoolBudget {
     bool hashed_variation = false;
     u32 variation_seed = kVariationSeed;
     f32 variation_colour = kVariationColour;
+
+    // ---- R8e: `--infinite-detail`, and it ships OFF --------------------------------------------
+    //
+    // Off is the arm every build before this one ran, so leaving the flag out IS the control and the
+    // two arms are one binary (D407). It defaults from `kInfiniteDetailDefault` rather than from a
+    // literal so that a reader who wants to know which way it ships has one place to look.
+    //
+    // **What it changes, exactly.** The clamp at `max(level, kLeafLevel)` comes off the descent
+    // TARGET: `marcher_finest_for` answers a negative level, `locate_below` answers what is there,
+    // and a face may be claimed at one. What it does NOT change is what the pool stores — no record
+    // finer than a brick is written in either arm, which is why R8e's second gate ("resident bytes
+    // stay bounded by resolution") holds by construction here rather than by a policy that could be
+    // wrong. Everything below a voxel is derived by R8b's child source and costs nothing.
+    //
+    // **And it changes nothing on screen until the shader has it.** The descent that would DRAW a
+    // sub-voxel cell is `node_march` in `shaders/node.glsl`, which clamps its own target the same
+    // way and is a file this stage was not allowed to edit. So with the flag on today the picture is
+    // identical and the CPU answers a question nothing is yet asking — which is Stage 2's order and
+    // R8b's own: the structure is compared against the world before the renderer walks it.
+    bool infinite_detail = kInfiniteDetailDefault;
 };
 
 // What changed this frame and must be copied to the GPU.
@@ -1167,6 +1297,40 @@ public:
     u64 variation_fingerprint(const World& world, const i64 lo[3], const i64 hi[3], i64 stride,
                               u32 depth, u64* cells_out = nullptr) const;
 
+    // ---- R8a and R8e -----------------------------------------------------------------------------
+
+    // Which arm the mode is running, after the budget has had its say. Read by the tests and by
+    // anything that prints a figure whose meaning depends on it.
+    bool infinite_detail() const { return infinite_detail_; }
+
+    // The finest level a ray at this node's distance can address, SIGNED and mode-aware.
+    //
+    // `subpixel_finest_for` is the same question floored at the leaf, and it stays exactly as it was
+    // because R2b's rule is about stored nodes. This is the one the DESCENT asks: with the mode off
+    // it can never answer below `kLeafLevel`, and with it on a node 10 cm away answers -8.
+    i32 marcher_finest_for(const NodeKey& key) const;
+
+    // What is at a cell below a voxel, read the way the shader will read it.
+    //
+    // `key.level` must be 0 or below; a key above it is answered as the voxel it contains, which is
+    // the honest answer rather than an assertion -- the caller asked about a cell coarser than the
+    // thing this can talk about.
+    //
+    // The voxel itself is read through `mirror_voxel`, which is the pool's own walk -- entry hash,
+    // descent, child mask, leaf payload -- so this is not a second reader that could agree with
+    // itself about a walk nobody checked. Below the voxel the answer comes from R8b's chain, one mix
+    // per octant, and nothing is allocated, uploaded or remembered.
+    SubVoxelFind locate_below(const NodeKey& key) const;
+
+    // How many bytes the pool is holding that are finer than a brick. Nought, always, in both arms.
+    //
+    // A counter that can only ever read nought looks like a waste of a line until you ask what it is
+    // FOR, which is R8e's second gate: "resident bytes stay bounded by resolution". That claim is
+    // made by construction here -- no record below `kLeafLevel` is ever written -- and a claim made
+    // by construction is worth exactly as much as an instrument that would notice if it stopped
+    // being true. This is that instrument, and it walks the array rather than trusting a total.
+    u64 sub_voxel_bytes() const;
+
 private:
     struct Resident {
         u32 slot = kNoNode;
@@ -1258,7 +1422,12 @@ private:
     bool node_is_subpixel(const GpuNode& node) const;
     // The box the two above measure to, in voxels, and the distance from the camera to its nearest
     // point. One place, so the sweep and the request path cannot disagree about where a node is.
-    f64 distance_to_box(i64 x, i64 y, i64 z, u32 level) const;
+    //
+    // R8a made `level` signed. At or above nought the arithmetic is the integer shift it always was,
+    // byte for byte; below it the box is a FRACTION of a voxel and there is no integer to shift, so
+    // that branch works in f64. The split is deliberate: the shipped arm runs the same instructions
+    // it always did, and a difference in a measured figure cannot be hiding in a rewrite of it.
+    f64 distance_to_box(i64 x, i64 y, i64 z, i32 level) const;
 
     // R8b. The depth-0 sample: a voxel's own colour and the seed its children come from. Takes the
     // type rather than reading it, because the mirror gets it from the POOL and the fingerprint
@@ -1428,6 +1597,12 @@ private:
     u32 seed_cell_level_ = kClipSeedCellLevel;
     bool seed_live_ = false;
     NodeSeedReport seed_report_;
+
+    // ---- R8e -------------------------------------------------------------------------------------
+    // Read once at `create` and logged, on the same terms as R2b's and R8b's arms: a policy that can
+    // be switched has to say which way it was switched, or a table of numbers taken over two runs
+    // means nothing (D621).
+    bool infinite_detail_ = kInfiniteDetailDefault;
 
     // ---- R8b ------------------------------------------------------------------------------------
     bool hashed_variation_ = false;

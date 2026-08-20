@@ -799,3 +799,130 @@ TEST_CASE("matte stone earns no sharp class however much of the screen it fills"
     CHECK(face_bins_earned(8, face_coverage_pixels(0, 192.0f, 0.00175f)) < 144.0f);
     CHECK(face_bins_earned(8, face_coverage_pixels(0, 32.0f, 0.00175f)) > 144.0f);
 }
+
+// ==================================================================================================
+// R8a — the face key, below the voxel
+//
+// This is where a signed level is actually STORED. The node pool holds no record finer than a brick,
+// so a sub-voxel cell has no slot — but it has a FACE, and that face has light of its own that has
+// to survive the camera turning away, which is what this table is for.
+//
+// Nothing in the store special-cases a negative level, and that is the claim being tested rather
+// than an argument for not testing it: the level goes into the bottom byte as an ordinary two's
+// complement, `face_level` sign-extends it back out, and every path — claim, find, sweep, evict,
+// validate — walks the same lines it walks for a brick.
+//
+// The failure this rules out is the exact one `kFaceLive` was added for, one level down. A packed
+// word of nought was read as a free slot until a live face at level 0 collided with it; a level of
+// -1 puts 0xFF in that byte, which cannot collide with nought and CAN collide with 255 if anything
+// ever reads the byte unsigned. `find` compares `face_level(face) == key.level`, so a `face_level`
+// that did not sign-extend would answer 255 against a key's 0xFFFFFFFF, every probe would miss, and
+// every sub-voxel face would be claimed fresh on every frame with the light of none of them kept.
+// ==================================================================================================
+
+TEST_CASE("a face below the voxel packs, reads back and is found") {
+    // Every level from the brick down to the addressing floor, through the byte and out again.
+    for (i32 level = static_cast<i32>(kLeafLevel); level >= kFinestLevel; --level) {
+        GpuFace face{};
+        face.packed = pack_face(level_word(level), 2u, kFaceLive);
+        REQUIRE(face_level_signed(face) == level);
+        REQUIRE(face_level(face) == level_word(level));
+        REQUIRE(face_direction(face) == 2u);
+        REQUIRE(face_live(face));
+    }
+    // The bytes for every level a face has ever been claimed at are what they always were.
+    CHECK(pack_face(3u, 0u, 0u) == pack_face(level_word(3), 0u, 0u));
+    CHECK((pack_face(level_word(-1), 0u, 0u) & 0xFFu) == 0xFFu);
+
+    FaceStore store = make_store();
+    const FaceKey fine{100, -7, 3, level_word(-4), 1};
+    bool was_new = false;
+    const u32 slot = store.claim(fine, 1, &was_new);
+    REQUIRE(slot != kNoFace);
+    REQUIRE(was_new);
+    CHECK(store.find(fine) == slot);
+    CHECK(store.claim(fine, 2, &was_new) == slot);
+    CHECK(!was_new);
+    CHECK(face_level_signed(store.faces()[slot]) == -4);
+    CHECK(store.validate());
+}
+
+TEST_CASE("a sub-voxel face and the brick face over it are different faces") {
+    // The whole point of a signed level in the key. A store that folded the two together would hand
+    // one record's light to the other, and the picture would be a wall whose grain lit as one lump.
+    FaceStore store = make_store();
+    const FaceKey brick{9, 9, 9, kLeafLevel, 0};
+    const FaceKey cell{9, 9, 9, level_word(-3), 0};
+    const FaceKey other_cell{9, 9, 9, level_word(-4), 0};
+    const FaceKey other_face{9, 9, 9, level_word(-3), 1};
+
+    const u32 a = store.claim(brick, 1);
+    const u32 b = store.claim(cell, 1);
+    const u32 c = store.claim(other_cell, 1);
+    const u32 d = store.claim(other_face, 1);
+    REQUIRE(a != kNoFace);
+    REQUIRE(b != kNoFace);
+    REQUIRE(c != kNoFace);
+    REQUIRE(d != kNoFace);
+    CHECK(a != b);
+    CHECK(b != c);
+    CHECK(b != d);
+    CHECK(store.find(brick) == a);
+    CHECK(store.find(cell) == b);
+    CHECK(store.find(other_cell) == c);
+    CHECK(store.find(other_face) == d);
+    CHECK(store.stats().faces == 4);
+    CHECK(store.validate());
+}
+
+TEST_CASE("a sub-voxel face is swept and evicted by the ordinary rule") {
+    // Not a special case, which is the claim. `sweep` rebuilds a key from the record to find its
+    // bucket, so a level that did not survive the round trip would leave the entry standing over a
+    // freed slot -- a face that cannot be found and cannot be reclaimed, which is the hole the
+    // tombstone exists to prevent arriving through the key instead of through the table.
+    FaceStore store = make_store(64, 4);
+    const FaceKey cell{5, 5, 5, level_word(-2), 3};
+    const u32 slot = store.claim(cell, 1);
+    REQUIRE(slot != kNoFace);
+    REQUIRE(store.stats().faces == 1);
+
+    for (u64 frame = 2; frame <= 40; ++frame) store.evict_cold(frame);
+    CHECK(store.stats().faces == 0);
+    CHECK(store.find(cell) == kNoFace);
+    CHECK(store.validate());
+
+    // ...and it comes back into a working table rather than into a run somebody cut in half.
+    const u32 again = store.claim(cell, 41);
+    REQUIRE(again != kNoFace);
+    CHECK(store.find(cell) == again);
+    CHECK(store.validate());
+
+    // A face a pixel keeps reading survives, at a sub-voxel level as at any other.
+    const FaceKey kept{6, 6, 6, level_word(-5), 0};
+    const u32 kept_slot = store.claim(kept, 41);
+    REQUIRE(kept_slot != kNoFace);
+    for (u64 frame = 42; frame <= 80; ++frame) {
+        store.touch(kept_slot, frame);
+        store.evict_cold(frame);
+    }
+    CHECK(store.find(kept) == kept_slot);
+}
+
+TEST_CASE("a face below the voxel covers fewer pixels, by the square of how much finer it is") {
+    // `face_coverage_pixels` is what decides how many outgoing directions a face has EARNED, and it
+    // used to compute its extent with `1u << level` -- which cannot say "half a voxel" and, given a
+    // level of -1 as an unsigned, would have said 2^4294967295.
+    const f32 angle = 0.00175f;
+    const f32 voxel = face_coverage_pixels(0, 32.0f, angle);
+    CHECK(face_coverage_pixels(-1, 32.0f, angle) == doctest::Approx(voxel * 0.25f));
+    CHECK(face_coverage_pixels(-2, 32.0f, angle) == doctest::Approx(voxel * 0.0625f));
+    CHECK(face_coverage_pixels(-8, 32.0f, angle) > 0.0f);
+    // The levels this engine already claims faces at are untouched, which is the half that keeps
+    // R4b's measured bin counts where they were.
+    CHECK(face_coverage_pixels(3, 32.0f, angle) == doctest::Approx(voxel * 64.0f));
+
+    // And the rule the coverage feeds still reads the same sentence at a sub-voxel level: a face
+    // nobody has many pixels on is given few directions, however sharp its material is.
+    CHECK(face_bins_earned(8, face_coverage_pixels(-4, 32.0f, angle)) <
+          face_bins_earned(8, face_coverage_pixels(0, 32.0f, angle)));
+}

@@ -1058,7 +1058,9 @@ struct VariationFixture {
     VoxelTypeId stone = kAir;
     VoxelTypeId brass = kAir;
 
-    explicit VariationFixture(bool source_on, u32 seed = kVariationSeed) {
+    // `infinite` is R8e's arm. It defaults to the shipped one, so every test written before R8a
+    // keeps the pool it always had and the two arms are one binary and one flag (D407).
+    explicit VariationFixture(bool source_on, u32 seed = kVariationSeed, bool infinite = false) {
         VisualRecord grey{};
         grey.red = 128; grey.green = 130; grey.blue = 126;
         stone = types.intern(grey, BehaviourRecord{});
@@ -1073,6 +1075,7 @@ struct VariationFixture {
         budget.proximity_voxels = 0;
         budget.hashed_variation = source_on;
         budget.variation_seed = seed;
+        budget.infinite_detail = infinite;
         pool.create(budget, types);
     }
 
@@ -1773,4 +1776,318 @@ TEST_CASE("a pool that was seeded settles on the same tree as one that never was
     CHECK(seeded.pool.stale_masks(seeded.world) == 0);
     CHECK(seeded.pool.stale_leaves(seeded.world) == 0);
     CHECK(seeded.pool.validate());
+}
+
+// ==================================================================================================
+// R8a — signed levels, and R8e — `--infinite-detail`
+//
+// A level is nought at the voxel and goes DOWN from there: -1 is a sixteenth of a metre, -k is
+// 3.125/2^k centimetres. Everything below is about the two halves of that being true separately:
+//
+//   the ADDRESSING works below nought — a key names a cell, the descent terminates on one, and the
+//   arithmetic in the two directions is each other's inverse;
+//
+//   the STORAGE does not follow it down. The pool holds no record finer than a brick in either arm,
+//   which is why R8e's "resident bytes stay bounded by resolution" is true by construction rather
+//   than by a policy that could be wrong — and a claim made by construction is worth exactly what an
+//   instrument that would notice it stopping being true is worth. That is what `sub_voxel_bytes` is.
+//
+// Every residency assertion here is made twice, once on each arm, because a gate that cannot fail is
+// not a gate (D621) and because the whole of R8e is a flag.
+// ==================================================================================================
+
+TEST_CASE("a key names a cell below the voxel, and the two directions are each other's inverse") {
+    // The shift runs the other way below nought and that is the whole of the arithmetic. Getting it
+    // wrong is the quiet kind: `node_key_of` at level -3 would answer the voxel's own coordinate,
+    // every cell in a voxel would collide, and nothing anywhere would say so.
+    for (i32 level = 0; level >= kFinestLevel; --level) {
+        const i64 span = i64{1} << -level;
+        for (i64 v : {i64{0}, i64{1}, i64{7}, i64{-1}, i64{-9}, i64{1000}}) {
+            const NodeKey cell = node_key_of(v, v + 1, v - 1, level_word(level));
+            REQUIRE(cell.signed_level() == level);
+            REQUIRE(cell.x == v * span);
+            REQUIRE(cell.y == (v + 1) * span);
+            REQUIRE(cell.z == (v - 1) * span);
+            // ...and straight back up. This is the property the descent leans on: a ray holding a
+            // sub-voxel coordinate has to be able to say which voxel it is in, and be right about it
+            // either side of the origin.
+            const NodeKey back = voxel_of_key(cell);
+            REQUIRE(back.x == v);
+            REQUIRE(back.y == v + 1);
+            REQUIRE(back.z == v - 1);
+        }
+    }
+
+    // The negative side, spelled out, because this is `chunk_of`'s trap one level down: an
+    // arithmetic shift puts cell -1 in voxel -1, and a division would put it in voxel 0.
+    CHECK(voxel_of_key(NodeKey{-1, -1, -1, level_word(-1)}).x == -1);
+    CHECK(voxel_of_key(NodeKey{-2, -2, -2, level_word(-1)}).x == -1);
+    CHECK(voxel_of_key(NodeKey{-3, -3, -3, level_word(-1)}).x == -2);
+    CHECK(node_key_of(-1, -1, -1, level_word(-1)).x == -2);   // the corner cell of voxel -1
+}
+
+TEST_CASE("a level below nought survives being packed, hashed and compared") {
+    // The convention `world/level.hpp` sets out, asked of the three things that actually carry a
+    // level: the key's own word, the packed byte, and the key hash.
+    for (i32 level = 24; level >= kFinestLevel; --level) {
+        REQUIRE(level_signed(level_word(level)) == level);
+        REQUIRE(level_from_byte(pack_node(level_word(level), 0, 0)) == level);
+    }
+    // The bytes for every level this engine has ever built are what they always were, which is the
+    // half of the convention that keeps the world hash still.
+    CHECK(pack_node(level_word(3), 0, 0) == pack_node(3u, 0, 0));
+    CHECK(pack_node(level_word(14), 0, 0) == pack_node(14u, 0, 0));
+    CHECK((pack_node(level_word(-1), 0, 0) & 0xFFu) == 0xFFu);
+    CHECK((pack_node(level_word(-2), 0, 0) & 0xFFu) == 0xFEu);
+
+    // Two keys at the same coordinate and different levels are different keys, above and below the
+    // voxel alike. A hash that folded a negative level to the same word as a positive one would put
+    // a sub-voxel cell in its own voxel's bucket and the probe would then compare equal.
+    const NodeKeyHash hash;
+    CHECK(hash(NodeKey{5, 6, 7, level_word(-1)}) != hash(NodeKey{5, 6, 7, level_word(1)}));
+    CHECK(hash(NodeKey{5, 6, 7, level_word(-1)}) != hash(NodeKey{5, 6, 7, 0u}));
+    CHECK(!(NodeKey{5, 6, 7, level_word(-1)} == NodeKey{5, 6, 7, level_word(-2)}));
+}
+
+TEST_CASE("the marcher's clamp comes off only with --infinite-detail, and only below a voxel") {
+    // The rule R8a takes apart. `node_march` targets `max(floor(log2(footprint)) + dither,
+    // kLeafLevel)` and the dither is never negative, so the clamp at the leaf is what stops a ray
+    // ever addressing anything finer. With the mode on, the floor is the ADDRESSING floor instead.
+    const f64 angle = kSubPixelAngle;
+
+    // OFF: no distance, however small, answers below the leaf. Swept rather than sampled, because a
+    // clamp that fires at one distance and not another is exactly the shape D674 lost an evening to.
+    for (i32 centimetre = 0; centimetre <= 5000; ++centimetre) {
+        const f64 voxels = static_cast<f64>(centimetre) * 0.32;   // 32 voxels a metre
+        REQUIRE(marcher_finest_level(voxels, angle, false) >= static_cast<i32>(kLeafLevel));
+    }
+
+    // ON: below one voxel of footprint the answer is `floor(log2(footprint))`, exactly.
+    CHECK(marcher_finest_level(1.0 / angle, angle, true) == 0);          // a footprint of one voxel
+    CHECK(marcher_finest_level(0.5 / angle, angle, true) == -1);
+    CHECK(marcher_finest_level(0.125 / angle, angle, true) == -3);
+    CHECK(marcher_finest_level(0.1 / angle, angle, true) == -4);         // log2 0.1 is -3.32
+
+    // Nothing, and NaN, answer "keep everything" -- which is the floor of the arm being asked, and
+    // not the same number on the two. That is the guard doing its job rather than a disagreement:
+    // on the shipped arm the finest anything can address is the leaf, so "keep everything" is the
+    // leaf; with the clamp off it is the addressing floor. Both mean "evict nothing", because the
+    // rule that reads this asks `level < finest` and no level is below its own floor.
+    CHECK(marcher_finest_level(0.0, angle, false) == static_cast<i32>(kLeafLevel));
+    CHECK(marcher_finest_level(0.0, angle, true) == kFinestLevel);
+
+    // Once a pixel's footprint covers a BRICK the two arms are the same function, and that is what
+    // makes this a mode rather than a rewrite: nothing a build before R8a ever measured can have
+    // moved.
+    //
+    // A brick and not a voxel, and the difference is the clamp itself: the old floor was
+    // `kLeafLevel`, which is eight voxels, so the arms part company anywhere a footprint is under
+    // eight -- 125 m at this angle, not 15.6. Writing "above a voxel" here would have been a
+    // plausible sentence that the sweep below immediately disproves, which is why it is a sweep.
+    const i32 brick_metre = 125;   // 4,000 voxels x 0.002 = 8.0, the first footprint that is a brick
+    REQUIRE(static_cast<f64>(brick_metre) * 32.0 * angle >= 8.0);
+    REQUIRE(static_cast<f64>(brick_metre - 1) * 32.0 * angle < 8.0);
+    for (i32 metre = brick_metre; metre <= 5000; ++metre) {
+        const f64 voxels = static_cast<f64>(metre) * 32.0;
+        REQUIRE(marcher_finest_level(voxels, angle, true) ==
+                marcher_finest_level(voxels, angle, false));
+    }
+
+    // ...and between one voxel of footprint and one brick, they differ by exactly the clamp: the
+    // mode answers `floor(log2(footprint))` and the shipped arm answers the leaf.
+    for (i32 metre = 16; metre < brick_metre; ++metre) {
+        const f64 voxels = static_cast<f64>(metre) * 32.0;
+        const i32 free_answer = marcher_finest_level(voxels, angle, true);
+        REQUIRE(free_answer >= 0);
+        REQUIRE(free_answer < static_cast<i32>(kLeafLevel));
+        REQUIRE(marcher_finest_level(voxels, angle, false) == static_cast<i32>(kLeafLevel));
+    }
+    // ...and R2b's own reading is that function with the clamp on, at every distance including the
+    // ones where the arms part company. This is the line that says R8a did not move R2b.
+    for (i32 metre = 1; metre <= 5000; ++metre) {
+        const f64 voxels = static_cast<f64>(metre) * 32.0;
+        REQUIRE(subpixel_finest_level(voxels, angle) ==
+                static_cast<u32>(marcher_finest_level(voxels, angle, false)));
+    }
+
+    // The gate's own picture: 10 cm from a wall against 2 m from it. Five levels apart with the mode
+    // on, and the same level -- the brick -- with it off, which is the clamp being the whole of the
+    // difference between "a wall gets finer as you walk up to it" and "a wall stops at a brick".
+    CHECK(marcher_finest_level(0.10 * 32.0, angle, true) == -8);
+    CHECK(marcher_finest_level(2.00 * 32.0, angle, true) == -3);
+    CHECK(marcher_finest_level(0.10 * 32.0, angle, false) == static_cast<i32>(kLeafLevel));
+    CHECK(marcher_finest_level(2.00 * 32.0, angle, false) == static_cast<i32>(kLeafLevel));
+}
+
+TEST_CASE("the pool's own descent target follows the flag, and the control arm's does not") {
+    // The same question asked of a pool rather than of a free function, because the flag is read
+    // once at `create` and a test that only ever calls the free function is testing arithmetic
+    // nobody wired up.
+    VariationFixture on(true, kVariationSeed, true);
+    VariationFixture off(true, kVariationSeed, false);
+    CHECK(on.pool.infinite_detail());
+    CHECK(!off.pool.infinite_detail());
+
+    for (VariationFixture* f : {&on, &off}) {
+        f->fill_box(0, 0, 0, 15, 15, 15, f->stone);
+        f->want_box(0, 0, 0, 15, 15, 15);
+        f->serve(1);
+    }
+
+    // A brick a metre from a camera at the origin. At the shipped pixel angle that is a footprint of
+    // 0.064 voxels, so `floor(log2)` is -4 -- and the mode is the whole of whether the pool will say
+    // so or answer the leaf.
+    const NodeKey a_metre_out = node_key_of(32, 0, 0, kLeafLevel);
+    CHECK(on.pool.marcher_finest_for(a_metre_out) == -4);
+    CHECK(off.pool.marcher_finest_for(a_metre_out) == static_cast<i32>(kLeafLevel));
+
+    // The brick the camera is standing in: distance nought, so both arms answer their own floor.
+    const NodeKey near_brick = node_key_of(0, 0, 3, kLeafLevel);
+    CHECK(on.pool.marcher_finest_for(near_brick) == kFinestLevel);
+    CHECK(off.pool.marcher_finest_for(near_brick) == static_cast<i32>(kLeafLevel));
+
+    // R2b's own reading is unchanged on BOTH arms, and that is deliberate rather than incidental:
+    // its rule is about what is stored, the finest stored node is a brick either way, and a mode
+    // that quietly moved the residency policy would be R8e paying for itself with R2b's measured
+    // table.
+    CHECK(on.pool.subpixel_finest_for(near_brick) == kLeafLevel);
+    CHECK(off.pool.subpixel_finest_for(near_brick) == kLeafLevel);
+}
+
+TEST_CASE("nothing finer than a brick is ever stored, on either arm") {
+    // R8e's second gate: "resident bytes stay bounded by resolution". Asked of the array rather than
+    // of the policy that is supposed to keep it true (trap 26 -- a counter the rule increments as it
+    // works agrees with the rule however wrong the rule is).
+    VariationFixture deep(true, kVariationSeed, true);
+    deep.fill_box(0, 0, 0, 31, 31, 31, deep.stone);
+
+    // Ask for cells six levels below the voxel, over the whole box. A pool that grew a record per
+    // sub-voxel cell would need 8^6 of them per voxel and would have run out of everything long
+    // before this returns.
+    for (u64 frame = 1; frame <= 8; ++frame) {
+        for (i64 z = 0; z < 32; z += 8) {
+            for (i64 y = 0; y < 32; y += 8) {
+                for (i64 x = 0; x < 32; x += 8) {
+                    deep.pool.request(node_key_of(x, y, z, level_word(-6)));
+                }
+            }
+        }
+        deep.serve(frame);
+    }
+    CHECK(deep.pool.sub_voxel_bytes() == 0);
+    CHECK(deep.pool.validate());
+    // ...and the key really is unfindable, which is the truthful answer rather than a hole: there is
+    // no record, and `locate_below` is what answers about the content there.
+    CHECK(deep.pool.find(node_key_of(0, 0, 0, level_word(-6))) == kNoNode);
+
+    // A request below the brick is a request FOR the brick, and it lands on the same brick a leaf
+    // request would have. This is the one that would have caught the interesting failure: `key.x` at
+    // level -6 is sixty-four times `key.x` at level 0, so a descent that used the raw coordinate
+    // would build a brick a long way away and every audit would agree with it.
+    VariationFixture leafwise(true, kVariationSeed, true);
+    leafwise.fill_box(0, 0, 0, 31, 31, 31, leafwise.stone);
+    for (u64 frame = 1; frame <= 8; ++frame) {
+        for (i64 z = 0; z < 32; z += 8) {
+            for (i64 y = 0; y < 32; y += 8) {
+                for (i64 x = 0; x < 32; x += 8) {
+                    leafwise.pool.request(node_key_of(x, y, z, kLeafLevel));
+                }
+            }
+        }
+        leafwise.serve(frame);
+    }
+    for (i64 z = 0; z < 32; z += 8) {
+        for (i64 y = 0; y < 32; y += 8) {
+            for (i64 x = 0; x < 32; x += 8) {
+                REQUIRE(deep.pool.find(node_key_of(x, y, z, kLeafLevel)) != kNoNode);
+            }
+        }
+    }
+    CHECK(deep.pool.stats().leaves == leafwise.pool.stats().leaves);
+    CHECK(deep.pool.stats().total_bytes == leafwise.pool.stats().total_bytes);
+
+    // And the control arm holds the same tree from the same requests, which is what says the mode
+    // changes the descent's TARGET and not what the pool decided to keep.
+    VariationFixture shipped(true, kVariationSeed, false);
+    shipped.fill_box(0, 0, 0, 31, 31, 31, shipped.stone);
+    for (u64 frame = 1; frame <= 8; ++frame) {
+        for (i64 z = 0; z < 32; z += 8) {
+            for (i64 y = 0; y < 32; y += 8) {
+                for (i64 x = 0; x < 32; x += 8) {
+                    shipped.pool.request(node_key_of(x, y, z, level_word(-6)));
+                }
+            }
+        }
+        shipped.serve(frame);
+    }
+    CHECK(shipped.pool.sub_voxel_bytes() == 0);
+    CHECK(shipped.pool.stats().total_bytes == deep.pool.stats().total_bytes);
+}
+
+TEST_CASE("a cell below a voxel answers what is there, and says which source answered") {
+    VariationFixture on(true, kVariationSeed, true);
+    on.fill_box(0, 0, 0, 15, 15, 15, on.stone);
+    on.want_box(0, 0, 0, 15, 15, 15);
+    on.serve(1);
+
+    // Level 0 is the voxel, and it must answer exactly what `mirror_voxel` answers. Two readers of
+    // one question is trap 13; there is one reader, and this says so rather than assuming it.
+    for (i64 v = 0; v < 16; v += 3) {
+        const SubVoxelFind at = on.pool.locate_below(NodeKey{v, v, v, 0u});
+        REQUIRE(at.level == 0);
+        REQUIRE(at.matter);
+        REQUIRE(at.type == on.stone);
+        REQUIRE(!at.derived);   // a voxel is not derived from anything
+        REQUIRE(at.hash == on.pool.mirror_variation(v, v, v, 0).hash);
+    }
+
+    // Below it, the answer is the child source's and says so. The depth-k walk and the level -k walk
+    // are the same walk: R8b's own comment promised that `depth` becomes `-level` when R8a lands,
+    // and this is what makes that a fact rather than a plan.
+    for (u32 depth : {1u, 3u, 8u, 20u}) {
+        const i64 span = i64{1} << depth;
+        const NodeKey cell{5 * span + 1, 6 * span + 2, 7 * span + 3,
+                           level_word(-static_cast<i32>(depth))};
+        const SubVoxelFind found = on.pool.locate_below(cell);
+        const VariationSample walked = on.pool.mirror_variation(cell.x, cell.y, cell.z, depth);
+        REQUIRE(found.level == -static_cast<i32>(depth));
+        REQUIRE(found.matter == walked.matter);
+        REQUIRE(found.colour == walked.colour);
+        REQUIRE(found.hash == walked.hash);
+        REQUIRE(found.derived);
+        REQUIRE(walked.signed_level() == found.level);
+    }
+
+    // Air has nothing below it at any depth, which is the shape rule: this source varies the
+    // material and never the silhouette, so the eight children of air are air.
+    const SubVoxelFind nothing =
+        on.pool.locate_below(NodeKey{i64{64} << 4, i64{64} << 4, i64{64} << 4, level_word(-4)});
+    CHECK(!nothing.matter);
+    CHECK(!nothing.derived);
+
+    // Past the addressing floor the answer is the floor, and it SAYS so rather than clamping in
+    // silence. `kFinestLevel` bounds the coordinate and not the source -- R8b's chain has no
+    // sub-voxel coordinate in it at all -- and a caller that asked too deep can see that it did.
+    const SubVoxelFind floored =
+        on.pool.locate_below(NodeKey{0, 0, 0, level_word(kFinestLevel - 5)});
+    CHECK(floored.level == kFinestLevel);
+
+    // The control arm for the SOURCE, which is a different flag from the mode. With the grain off,
+    // a sub-voxel cell reads its voxel's own colour: same shape, no grain, and `derived` false --
+    // "nothing to derive" and "nowhere to derive it from" told apart, which is trap 7.
+    VariationFixture grainless(false, kVariationSeed, true);
+    grainless.fill_box(0, 0, 0, 15, 15, 15, grainless.stone);
+    grainless.want_box(0, 0, 0, 15, 15, 15);
+    grainless.serve(1);
+    const SubVoxelFind flat =
+        grainless.pool.locate_below(NodeKey{5 * 8 + 1, 6 * 8 + 2, 7 * 8 + 3, level_word(-3)});
+    CHECK(flat.matter);
+    CHECK(!flat.derived);
+    CHECK(flat.colour == grainless.pool.locate_below(NodeKey{5, 6, 7, 0u}).colour);
+
+    // ...and with it on the grain is actually there, at the same cell. A test that only checked the
+    // two arms ran would pass on a source that returned the parent's colour on both.
+    const SubVoxelFind grained =
+        on.pool.locate_below(NodeKey{5 * 8 + 1, 6 * 8 + 2, 7 * 8 + 3, level_word(-3)});
+    CHECK(grained.colour != on.pool.locate_below(NodeKey{5, 6, 7, 0u}).colour);
 }

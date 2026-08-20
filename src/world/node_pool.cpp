@@ -160,6 +160,19 @@ void NodePool::create(const NodePoolBudget& budget, const VoxelTypeTable& types)
     seed_live_ = false;
     seed_report_ = NodeSeedReport{};
 
+    // R8e's arm, on the same terms and for the same reason. Logged before R8b's line because the
+    // two read together: the mode is what asks for a level below the voxel, and the child source is
+    // what answers there.
+    infinite_detail_ = budget_.infinite_detail;
+    WS_LOG_INFO("pool",
+                "R8e infinite detail is {}; a descent target below the brick is {}, and the finest "
+                "level a key can name is {} ({:.3g} m)",
+                infinite_detail_ ? "ON" : "OFF -- control arm",
+                infinite_detail_ ? "answered from the child source" : "clamped at the leaf, as before",
+                infinite_detail_ ? kFinestLevel : static_cast<i32>(kLeafLevel),
+                level_span_voxels(infinite_detail_ ? kFinestLevel : static_cast<i32>(kLeafLevel)) /
+                    static_cast<f64>(kVoxelsPerMetre));
+
     // R8b's arm, on the same terms and for the same reason.
     hashed_variation_ = budget_.hashed_variation;
     variation_seed_ = budget_.variation_seed;
@@ -256,17 +269,32 @@ void NodePool::index_world(const World& world) {
 }
 
 bool NodePool::world_has(const World& world, const NodeKey& key) const {
-    if (key.level >= 8) return occupied_.find(key) != occupied_.end();
+    const i32 at = key.signed_level();
+    if (at >= 8) return occupied_.find(key) != occupied_.end();
+
+    // R8a. Below the brick the WORLD has no finer statement to make, and that is a fact about the
+    // data model rather than a shortcut: a cell inside a voxel is matter exactly when its voxel is,
+    // which is R8b's own rule ("it varies the MATERIAL and not the SHAPE") and not a second one. So
+    // the question is answered for the brick the cell is in, which is where the world's finest
+    // occupancy actually lives.
+    //
+    // Without this the line below shifts by a negative amount, which is undefined behaviour rather
+    // than a wrong answer -- and `1u << (level - kLeafLevel)` with `level` at -1 is a shift of
+    // 4294967292, which on x86 is a shift of 28 and on nothing at all is what anybody meant.
+    if (at < static_cast<i32>(kLeafLevel)) {
+        const i32 down = static_cast<i32>(kLeafLevel) - at;
+        return world_has(world, NodeKey{key.x >> down, key.y >> down, key.z >> down, kLeafLevel});
+    }
 
     // Inside a chunk the octree answers directly, and the walk below level 8 is bounded by the
     // brick positions the node covers — which is only reached when the chunk exists at all.
-    const i64 vx = key.x << key.level;
-    const i64 vy = key.y << key.level;
-    const i64 vz = key.z << key.level;
+    const i64 vx = key.x << at;
+    const i64 vy = key.y << at;
+    const i64 vz = key.z << at;
     const Chunk* chunk = world.chunk(chunk_coord_of(vx, vy, vz));
     if (chunk == nullptr) return false;
 
-    const u32 span = 1u << (key.level - kLeafLevel);
+    const u32 span = 1u << (static_cast<u32>(at) - kLeafLevel);
     const u32 bx0 = static_cast<u32>((vx >> 3) & 31);
     const u32 by0 = static_cast<u32>((vy >> 3) & 31);
     const u32 bz0 = static_cast<u32>((vz >> 3) & 31);
@@ -310,9 +338,15 @@ u32 NodePool::find(const NodeKey& key) const {
 
     // The ancestor that lives in the table: the node itself when it is coarse enough, otherwise
     // the one at kEntryLevel containing it.
-    const u32 enter_level = std::max(key.level, kEntryLevel);
-    const u32 up = enter_level - key.level;
-    const NodeKey enter{key.x >> up, key.y >> up, key.z >> up, enter_level};
+    //
+    // R8a: the maximum and the shift are SIGNED. An unsigned `max` over a level of -3 answers
+    // 4294967293, and the shift that follows is then a shift of nothing at all -- so this is the
+    // first of the places R8a's brief means by "the descent's termination has to stop assuming".
+    // For every level nought and above it is the arithmetic it always was.
+    const i32 want = key.signed_level();
+    const i32 enter_at = std::max(want, static_cast<i32>(kEntryLevel));
+    const i32 up = enter_at - want;
+    const NodeKey enter{key.x >> up, key.y >> up, key.z >> up, level_word(enter_at)};
 
     const usize capacity = entries_.size();
     const usize bucket = entry_bucket(enter, capacity);
@@ -327,16 +361,20 @@ u32 NodePool::find(const NodeKey& key) const {
             break;
         }
     }
-    if (slot == kNoNode || key.level == enter_level) return slot;
+    if (slot == kNoNode || want == enter_at) return slot;
 
     // Then straight down by octant. No hash, no search: the child index is arithmetic.
-    for (u32 level = enter_level; level > key.level; --level) {
+    //
+    // A key below the brick walks this loop too and stops at the leaf, because the leaf test below
+    // fires first -- so `find` on a sub-voxel key answers kNoNode, which is the truth: the pool
+    // holds no such record and never will. `locate_below` is what answers about the content there.
+    for (i32 level = enter_at; level > want; --level) {
         const GpuNode& node = nodes_[slot];
         // A leaf's `children` is a leaf id, not a slot. Descending into it would read some
         // unrelated node and call it geometry.
         if ((node_flags(node) & kNodeLeaf) != 0) return kNoNode;
         if (node.children == kNoNode) return kNoNode;
-        const u32 shift = level - 1 - key.level;
+        const i32 shift = level - 1 - want;
         const u32 octant = octant_of(key.x >> shift, key.y >> shift, key.z >> shift);
         if ((node_child_mask(node) & (1u << octant)) == 0) return kNoNode;   // empty
         slot = node.children + octant;
@@ -355,9 +393,12 @@ NodeFind NodePool::locate(const NodeKey& key) const {
     NodeFind result;
     if (entries_.empty()) return result;
 
-    const u32 enter_level = std::max(key.level, kEntryLevel);
-    const u32 up = enter_level - key.level;
-    const NodeKey enter{key.x >> up, key.y >> up, key.z >> up, enter_level};
+    // R8a. Signed, for the reason `find` gives above: an unsigned maximum over a level below nought
+    // answers four billion and every shift after it is nonsense.
+    const i32 want = key.signed_level();
+    const i32 enter_at = std::max(want, static_cast<i32>(kEntryLevel));
+    const i32 up = enter_at - want;
+    const NodeKey enter{key.x >> up, key.y >> up, key.z >> up, level_word(enter_at)};
 
     const usize capacity = entries_.size();
     const usize bucket = entry_bucket(enter, capacity);
@@ -375,17 +416,21 @@ NodeFind NodePool::locate(const NodeKey& key) const {
     if (slot == kNoNode) {
         // Nothing at the entry level. The world may still have something here — the pool simply
         // has no root for it — so this is a request, not empty space.
-        result.level = enter_level;
+        result.level = level_word(enter_at);
         result.wanted = true;
         return result;
     }
 
     result.slot = slot;
-    result.level = enter_level;
-    for (u32 level = enter_level; level > key.level; --level) {
+    result.level = level_word(enter_at);
+    // A key below the brick walks this loop and stops at the leaf, reporting `kLeafLevel` and NOT
+    // `wanted` -- which is the truthful answer about the node tree in both arms: this is as fine as
+    // a record gets, and there is nothing to ask for. What is BELOW that leaf is content rather than
+    // a record, and `locate_below` is what answers about it.
+    for (i32 level = enter_at; level > want; --level) {
         const GpuNode& node = nodes_[result.slot];
         if ((node_flags(node) & kNodeLeaf) != 0) return result;   // as fine as it gets
-        const u32 shift = level - 1 - key.level;
+        const i32 shift = level - 1 - want;
         const u32 octant = octant_of(key.x >> shift, key.y >> shift, key.z >> shift);
         if ((node_child_mask(node) & (1u << octant)) == 0) {
             // Empty, and empty at a known size: the whole cell one level down holds nothing, so a
@@ -406,7 +451,7 @@ NodeFind NodePool::locate(const NodeKey& key) const {
             return result;
         }
         result.slot = child;
-        result.level = level - 1;
+        result.level = level_word(level - 1);
     }
     return result;
 }
@@ -1195,7 +1240,21 @@ void NodePool::fold_children(u32 slot) {
 // what D149 measured and threw away. Until then it draws nothing and is reported as wanted, so
 // the picture fills in from coarse to fine as the requests are served.
 u32 NodePool::build_shell(const World& world, const NodeKey& key, u32& budget) {
-    if (key.level == kLeafLevel) return build_leaf(world, key, budget);
+    // R8a. It used to read `== kLeafLevel`, and a termination that tests one exact value stops being
+    // a termination the moment the ladder can step past it -- which is the whole of what "the
+    // descent has to stop assuming a level is non-negative" means.
+    //
+    // A key BELOW the brick is answered with the brick that contains it, which is not a rescue but
+    // the rule: the pool stores no record finer than a leaf in either arm (see `world/level.hpp`),
+    // so a request for a sub-voxel cell is a request for the brick it is in. `refine` clamps its
+    // target the same way and says so at more length; this is here so the two cannot disagree if
+    // some later caller reaches this function directly.
+    const i32 at = key.signed_level();
+    if (at <= static_cast<i32>(kLeafLevel)) {
+        const i32 up = static_cast<i32>(kLeafLevel) - at;
+        return build_leaf(world,
+                          NodeKey{key.x >> up, key.y >> up, key.z >> up, kLeafLevel}, budget);
+    }
     if (budget == 0) return kNoNode;
 
     const u32 slot = allocate_node();
@@ -1240,15 +1299,39 @@ u32 NodePool::refine(const World& world, const NodeKey& key, u32 root_slot, u32&
     u32 slot = root_slot;
     chain[depth++] = slot;
 
+    // ---- R8a: where the descent's clamp actually lives, now that a level can be negative ---------
+    //
+    // The clamp R8a takes OFF is the MARCHER's: `node_march` targets `max(level, kLeafLevel)` and
+    // `marcher_finest_for` is what stops doing that with `--infinite-detail` on. This one is a
+    // different statement and it stays in both arms: **the pool stores no node finer than a brick.**
+    //
+    // Below a leaf there is nothing to build. A brick already holds levels 2, 1 and 0 as its own
+    // 8³ voxels, and everything under level 0 is DERIVED by R8b's child source rather than written
+    // to a record -- which is why R8e's "resident bytes stay bounded by resolution" is true by
+    // construction here instead of being a policy that could be wrong.
+    //
+    // So a request for a sub-voxel cell is a request for the brick it is in, and the key is
+    // re-expressed at that level before anything below uses its coordinates. Getting that wrong is
+    // the interesting failure: `key.x` at level -3 is eight times `key.x` at level 0, so descending
+    // with the raw coordinate would build a brick eight blocks away and every audit would agree
+    // with it, because nothing else in the pool knows what level the caller meant.
+    const i32 asked = key.signed_level();
+    const i32 target = std::max(asked, static_cast<i32>(kLeafLevel));
+    const NodeKey want = (asked >= target)
+                             ? key
+                             : NodeKey{key.x >> (target - asked), key.y >> (target - asked),
+                                       key.z >> (target - asked), level_word(target)};
+
     // R2b: the finest level anything at this node's distance can address. Computed once for the
     // whole descent rather than per level -- every node on the chain contains the requested one, so
     // its box is at least as near, and a per-level answer would only ever be coarser.
-    const u32 finest = subpixel_rule_ ? subpixel_finest_for(key) : kLeafLevel;
+    const i32 finest = subpixel_rule_ ? static_cast<i32>(subpixel_finest_for(want))
+                                      : static_cast<i32>(kLeafLevel);
     // True when the descent stopped because of the rule rather than because it arrived, which is
     // the one case whose fold has to be skipped. See below, and `fold_children`.
     bool stopped_subpixel = false;
 
-    for (u32 level = kEntryLevel; level > key.level; --level) {
+    for (i32 level = static_cast<i32>(kEntryLevel); level > target; --level) {
         const GpuNode& node = nodes_[slot];
         if ((node_flags(node) & kNodeLeaf) != 0) break;
 
@@ -1275,8 +1358,8 @@ u32 NodePool::refine(const World& world, const NodeKey& key, u32 root_slot, u32&
             break;
         }
 
-        const u32 shift = level - 1 - key.level;
-        const u32 octant = octant_of(key.x >> shift, key.y >> shift, key.z >> shift);
+        const i32 shift = level - 1 - target;
+        const u32 octant = octant_of(want.x >> shift, want.y >> shift, want.z >> shift);
         if ((node_child_mask(node) & (1u << octant)) == 0) break;   // genuinely empty
 
         if (nodes_[slot].children == kNoNode) {
@@ -1288,7 +1371,8 @@ u32 NodePool::refine(const World& world, const NodeKey& key, u32 root_slot, u32&
 
         const u32 child = nodes_[slot].children + octant;
         if (node_level(nodes_[child]) == 0) {
-            const NodeKey child_key{key.x >> shift, key.y >> shift, key.z >> shift, level - 1};
+            const NodeKey child_key{want.x >> shift, want.y >> shift, want.z >> shift,
+                                    level_word(level - 1)};
             const u32 built = build_shell(world, child_key, budget);
             if (built == kNoNode) break;
             // Built into a slot of its own and then MOVED here, so both ends change: the
@@ -1461,27 +1545,67 @@ void NodePool::touch_slot(u32 slot) {
 // node has travelled at least this far, so its footprint is at least `this * pixel_angle` and its
 // descent target is at least the level that implies. Measuring to the centre would let a node be
 // declared unaddressable while rays are addressing its near face.
-f64 NodePool::distance_to_box(i64 x, i64 y, i64 z, u32 level) const {
+f64 NodePool::distance_to_box(i64 x, i64 y, i64 z, i32 level) const {
     if (!camera_known_) return 0.0;
-    const i64 span = i64{1} << level;
-    const i64 lo[3] = {x << level, y << level, z << level};
+    f64 low[3];
+    f64 high[3];
+    if (level >= 0) {
+        // Unchanged, deliberately. This is the branch the shipped arm takes on every call, so it
+        // runs the integer arithmetic it always ran and a moved figure cannot be hiding in a rewrite.
+        const i64 span = i64{1} << level;
+        const i64 lo[3] = {x << level, y << level, z << level};
+        for (u32 axis = 0; axis < 3; ++axis) {
+            low[axis] = static_cast<f64>(lo[axis]);
+            high[axis] = static_cast<f64>(lo[axis] + span);
+        }
+    } else {
+        // R8a. Below a voxel the box is a FRACTION of one and there is no integer to shift, so this
+        // half works in f64 throughout. Every power of two from 2^-32 up is exact in a double, and
+        // the coordinate at level -k is at most 2^k times the voxel's -- which is why `kFinestLevel`
+        // is a bound on the ADDRESS and is set where the two together still fit.
+        const f64 span = level_span_voxels(level);
+        for (u32 axis = 0; axis < 3; ++axis) {
+            const i64 coord = (axis == 0) ? x : (axis == 1) ? y : z;
+            low[axis] = static_cast<f64>(coord) * span;
+            high[axis] = low[axis] + span;
+        }
+    }
     f64 sum = 0.0;
     for (u32 axis = 0; axis < 3; ++axis) {
-        const f64 low = static_cast<f64>(lo[axis]);
-        const f64 high = static_cast<f64>(lo[axis] + span);
         const f64 at = camera_voxel_[axis];
-        const f64 gap = (at < low) ? (low - at) : ((at > high) ? (at - high) : 0.0);
+        const f64 gap = (at < low[axis]) ? (low[axis] - at)
+                                         : ((at > high[axis]) ? (at - high[axis]) : 0.0);
         sum += gap * gap;
     }
     return std::sqrt(sum);
 }
 
 u32 NodePool::subpixel_finest_for(const NodeKey& key) const {
-    const u32 finest = subpixel_finest_level(distance_to_box(key.x, key.y, key.z, key.level),
-                                             pixel_angle_);
+    const u32 finest =
+        subpixel_finest_level(distance_to_box(key.x, key.y, key.z, key.signed_level()),
+                              pixel_angle_);
     // The margin is slack in the KEEP direction -- more levels held, not fewer -- so it can only
     // ever make the rule quieter. A margin that could evict more would be a second policy.
     return (finest > kLeafLevel + subpixel_margin_) ? finest - subpixel_margin_ : kLeafLevel;
+}
+
+// R8a and R8e. The same question, signed and unclamped, and the one the DESCENT asks.
+//
+// It is a second function rather than a widening of `subpixel_finest_for` because the two are asking
+// about different things and conflating them is trap 13. `subpixel_finest_for` is about what the
+// pool STORES, floors at the brick in both arms, and must keep answering exactly what it answered
+// before R8a or R2b's whole measured table moves under it. This is about what a RAY can address, and
+// with the mode on that goes below the voxel.
+//
+// The margin is applied the same way and in the same direction -- slack towards keeping -- so that
+// there is one idea of what `--subpixel-margin` means rather than two.
+i32 NodePool::marcher_finest_for(const NodeKey& key) const {
+    const i32 finest =
+        marcher_finest_level(distance_to_box(key.x, key.y, key.z, key.signed_level()), pixel_angle_,
+                             infinite_detail_);
+    const i32 floor_level = infinite_detail_ ? kFinestLevel : static_cast<i32>(kLeafLevel);
+    const i32 slack = finest - static_cast<i32>(subpixel_margin_);
+    return (slack > floor_level) ? slack : floor_level;
 }
 
 bool NodePool::node_is_subpixel(const GpuNode& node) const {
@@ -1492,6 +1616,61 @@ bool NodePool::node_is_subpixel(const GpuNode& node) const {
     // has to pass THROUGH to reach anything at all.
     if (level == 0 || level >= kEntryLevel || level >= kMarcherMaxDetail) return false;
     return level < subpixel_finest_for(NodeKey{node.x, node.y, node.z, level});
+}
+
+// ---- R8a and R8e: below the voxel --------------------------------------------------------------
+//
+// The whole of what a sub-voxel address answers, and it allocates nothing. `mirror_variation` is the
+// walk -- `mirror_voxel` for the voxel, then one hash mix per octant down -- and this is the front
+// door on it in the language the descent and the face key speak: a signed level rather than a
+// positive depth. R8b's own comment promised exactly this conversion and no more.
+SubVoxelFind NodePool::locate_below(const NodeKey& key) const {
+    SubVoxelFind out{};
+    const i32 asked = key.signed_level();
+
+    // Two clamps, and they are different questions.
+    //
+    // Above the voxel there is nothing sub-voxel to say, so the answer is the VOXEL the key contains
+    // -- honest rather than refused, because the chain would have been seeded from it anyway.
+    //
+    // Below `kFinestLevel` the ADDRESS runs out of bits, and a shift by more than 63 is undefined
+    // rather than deep. So the key is re-expressed at the floor and the level it answers at says so:
+    // the caller gets a coarser cell and can see that it did, which is the one thing a silent clamp
+    // never gives anybody.
+    const i32 at = (asked > 0) ? 0 : ((asked < kFinestLevel) ? kFinestLevel : asked);
+    const i32 up = at - asked;   // 0 unless a clamp fired
+    const i64 sx = (up > 0) ? (key.x >> up) : (key.x << -up);
+    const i64 sy = (up > 0) ? (key.y >> up) : (key.y << -up);
+    const i64 sz = (up > 0) ? (key.z >> up) : (key.z << -up);
+    out.level = at;
+
+    const VariationSample cell = mirror_variation(sx, sy, sz, static_cast<u32>(-at));
+    out.matter = cell.matter;
+    out.type = cell.type;
+    out.colour = cell.colour;
+    out.hash = cell.hash;
+    // Derived only when there was something to derive AND a source to derive it from. With
+    // `--hashed-variation` off the chain is not walked at all and the cell reads its voxel's own
+    // colour -- a stand-in parent, which is exactly what a build without the source draws, and
+    // trap 7's distinction one more time: "no grain" and "no source" must not be the same answer.
+    out.derived = cell.matter && at < 0 && hashed_variation_;
+    return out;
+}
+
+// R8e's second gate, asked of the array rather than of a policy. Must be nought in both arms.
+u64 NodePool::sub_voxel_bytes() const {
+    u64 bytes = 0;
+    for (u32 slot = 0; slot < next_free_; ++slot) {
+        const GpuNode& node = nodes_[slot];
+        if (node_level(node) == 0) continue;   // a free slot, not a node
+        if (node_level_signed(node) >= static_cast<i32>(kLeafLevel)) continue;
+        bytes += sizeof(GpuNode);
+        if ((node_flags(node) & kNodeLeaf) != 0 && node.children != kNoNode &&
+            node.children < leaves_.size()) {
+            bytes += kBrickWords * sizeof(u64) + leaf_payload_size_[node.children];
+        }
+    }
+    return bytes;
 }
 
 // ---- the eviction instrument -------------------------------------------------------------------
@@ -1579,9 +1758,11 @@ void NodePool::note_eviction(const GpuNode& node, u64 frame, u32 slot) {
 }
 
 void NodePool::touch(const NodeKey& key) {
-    const u32 enter_level = std::max(key.level, kEntryLevel);
-    const u32 up = enter_level - key.level;
-    const NodeKey root{key.x >> up, key.y >> up, key.z >> up, enter_level};
+    // R8a: signed, so a sub-voxel key touches the ROOT it lives under rather than a root four
+    // billion levels up that no table has ever held.
+    const i32 enter_at = std::max(key.signed_level(), static_cast<i32>(kEntryLevel));
+    const i32 up = enter_at - key.signed_level();
+    const NodeKey root{key.x >> up, key.y >> up, key.z >> up, level_word(enter_at)};
     const auto it = live_.find(root);
     if (it != live_.end()) it->second.last_wanted = touch_frame_;
 }
@@ -1635,10 +1816,16 @@ void NodePool::refresh_box(const World& world, u32 slot, const NodeKey& key, con
     }
 
     const GpuNode& node = nodes_[slot];
+    // R8a: signed, and the unsigned form was the dangerous shape rather than a wrong answer today.
+    // `key.level > kLeafLevel` read unsigned is TRUE for every level below nought, so a key that
+    // ever reached here from below would descend into a run that does not exist. It cannot today --
+    // this walks the pool's own records and the pool stores nothing finer than a brick -- and a
+    // guard whose safety depends on a fact stated three files away is a guard worth spelling.
+    const i32 at = key.signed_level();
     const bool has_children = (node_flags(node) & kNodeLeaf) == 0 && node.children != kNoNode &&
-                              key.level > kLeafLevel;
+                              at > static_cast<i32>(kLeafLevel);
     if (has_children) {
-        const u32 child_level = key.level - 1;
+        const u32 child_level = level_word(at - 1);
         const u32 children = node.children;
         for (u32 octant = 0; octant < 8; ++octant) {
             const NodeKey child_key{(key.x << 1) | static_cast<i64>(octant & 1),
@@ -1940,6 +2127,10 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
                 if (static_cast<u32>(frame) - churn->second.frame <= kChurnWindow) {
                     ++batch_.churned;
                     ++churn_;
+                    // R8a: the unsigned compare is the guard rather than an oversight. A level below
+                    // nought reads as four billion here, which fails `< 32` and cannot index out of
+                    // bounds -- and a sub-voxel request has no histogram bucket to go in, because
+                    // nothing below a brick is ever evicted and so nothing below one can churn.
                     if (key.level < 32) ++churn_per_level_[key.level];
                     if (key.level == kLeafLevel) {
                         churn_fill_sum_ += churn->second.fill;
@@ -1952,9 +2143,12 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
             }
         }
 
-        const u32 enter_level = std::max(key.level, kEntryLevel);
-        const u32 up = enter_level - key.level;
-        const NodeKey root{key.x >> up, key.y >> up, key.z >> up, enter_level};
+        // R8a: signed. A sub-voxel request names the entry root it lives under, exactly as a leaf
+        // request does, and the arithmetic below is the same shift with a larger `up`.
+        const i32 asked_at = key.signed_level();
+        const i32 enter_at = std::max(asked_at, static_cast<i32>(kEntryLevel));
+        const i32 up = enter_at - asked_at;
+        const NodeKey root{key.x >> up, key.y >> up, key.z >> up, level_word(enter_at)};
 
         const auto it = live_.find(root);
         if (it != live_.end()) {
@@ -1964,7 +2158,7 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
             // stopped here, so a tree that had been budget-limited on the frame it was created
             // never filled in — 15,470 reports a frame at frame 120, for ever, with `built` at
             // nought because nothing new was being rooted. A request is for a NODE, not a root.
-            if (key.level < kEntryLevel) {
+            if (asked_at < static_cast<i32>(kEntryLevel)) {
                 if (budget > 0) {
                     refine(world, key, it->second.slot, budget);
                     ++batch_.built;
@@ -2020,7 +2214,7 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
             continue;
         }
         live_.emplace(root, Resident{slot, frame, 0});
-        if (key.level < kEntryLevel) refine(world, key, slot, budget);
+        if (asked_at < static_cast<i32>(kEntryLevel)) refine(world, key, slot, budget);
         batch_.nodes.push_back(slot);
         ++batch_.built;
     }
@@ -2229,9 +2423,19 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
         u32 held = 0;
         u64 held_bytes = 0;
         u32 held_leaves = 0;
+        // R8e's second gate, taken in the same walk rather than in one of its own: "resident bytes
+        // stay bounded by resolution". It is nought in both arms by construction -- nothing finer
+        // than a brick is ever written to a record -- and a claim made by construction is worth what
+        // an instrument that would notice it stopping being true is worth. Printed on both arms for
+        // the same reason the R2b figures are: a control arm that says nothing leaves the other arm's
+        // numbers to be inferred from a different instrument (D621).
+        u64 sub_voxel = 0;
         for (u32 slot = 0; slot < next_free_; ++slot) {
             const GpuNode& node = nodes_[slot];
             const u32 level = node_level(node);
+            if (level != 0 && node_level_signed(node) < static_cast<i32>(kLeafLevel)) {
+                sub_voxel += sizeof(GpuNode);
+            }
             if (level == 0 || level >= kEntryLevel || level >= kMarcherMaxDetail) continue;
             if (level >= subpixel_finest_for(NodeKey{node.x, node.y, node.z, level})) continue;
             ++held;
@@ -2250,12 +2454,14 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
         WS_LOG_INFO("pool",
                     "R2b {} at frame {}: {} nodes, {} leaves held; sub-pixel STILL HELD {} ({} of "
                     "them leaves, {} bytes); lifetime {} refused, {} given up for being "
-                    "unaddressable; pixel angle {:.6f} rad ({:.0f} lines){}",
+                    "unaddressable; pixel angle {:.6f} rad ({:.0f} lines){}; R8e infinite detail {} "
+                    "and sub-voxel resident bytes {}",
                     subpixel_rule_ ? "ON" : "OFF", frame, live.nodes, live.leaves, held,
                     held_leaves, held_bytes, subpixel_refused_, subpixel_evicted_, pixel_angle_,
                     (pixel_angle_ > 0.0) ? 2.0 / pixel_angle_ : 0.0,
                     (pixel_angle_ == kSubPixelAngle) ? ", the FALLBACK -- nothing filled the view in"
-                                                     : "");
+                                                     : "",
+                    infinite_detail_ ? "ON" : "OFF", sub_voxel);
     }
 
     // ---- R8b's own line, and it is the gate rather than an instrument ---------------------------

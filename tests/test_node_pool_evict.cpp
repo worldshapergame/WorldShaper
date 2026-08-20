@@ -63,7 +63,11 @@ struct Fixture {
     // the origin instead of a few hundred metres and the test world stays small. The rule is a
     // ratio, so nothing about its shape depends on the constant — and the shipping constant is
     // pinned separately, against the ladder, in "the rule is the ladder's rule".
-    explicit Fixture(bool rule_on, f64 pixel_angle = 0.25) {
+    // `infinite` is R8e's arm, and it defaults to the shipped one so that every case written before
+    // R8a keeps exactly the pool it had. R8e is meant to change what a DESCENT can target and
+    // nothing about what the pool keeps, so a residency case that reads differently between the two
+    // is the interesting failure rather than a case needing updating.
+    explicit Fixture(bool rule_on, f64 pixel_angle = 0.25, bool infinite = false) {
         VisualRecord visual{};
         visual.red = 128;
         visual.green = 128;
@@ -77,6 +81,7 @@ struct Fixture {
         budget.proximity_voxels = 0;   // the tests ask for what they want explicitly
         budget.subpixel_rule = rule_on;
         budget.pixel_angle = pixel_angle;
+        budget.infinite_detail = infinite;
         pool.create(budget, types);
     }
 
@@ -472,4 +477,78 @@ TEST_CASE("the view's pixel angle reaches the rule, and the constant no longer d
     // arm the constant was chosen to be safe for, which is the point: at or below a thousand lines
     // the constant keeps MORE than the rays need, never less.
     CHECK(eight_hundred.pool.subpixel_finest_for(node_key_of(kThreeHundred, 0, 0, kLeafLevel)) == 4);
+}
+
+
+// ==================================================================================================
+// R8e against R2b: the mode changes what a descent can TARGET and nothing about what the pool keeps
+// ==================================================================================================
+//
+// The two rules are about different things and it would be very easy for them to stop being. R2b
+// evicts a node no ray can address; R8e says a ray near a wall can address something much finer than
+// a brick. Read carelessly, the second says the first should stop firing near the camera — and it
+// does not, because R2b's floor is the finest thing the pool STORES and that is a brick in both
+// arms. `marcher_finest_for` answers below it, `subpixel_finest_for` never does, and this is what
+// stands between them.
+//
+// It is also the shape trap 20 warns about: a mode that quietly made the erosion sweep keep more
+// would look like R8e costing nothing and would be R8e being paid for out of R2b's measured table.
+
+TEST_CASE("R8e does not move what R2b evicts") {
+    // The same world, the same requests, the same frames, on both arms of the mode -- with R2b's own
+    // rule ON, so there is something for the mode to have disturbed.
+    Fixture shipped(true, 0.25, false);
+    Fixture infinite(true, 0.25, true);
+    REQUIRE(!shipped.pool.infinite_detail());
+    REQUIRE(infinite.pool.infinite_detail());
+
+    for (Fixture* f : {&shipped, &infinite}) {
+        f->fill_box(kNearAt, 0, 0, kNearAt + 7, 7, 7);
+        f->fill_box(kFarAt, 0, 0, kFarAt + 7, 7, 7);
+        for (u64 frame = 1; frame <= 4; ++frame) {
+            f->want(kNearAt, 0, 0);
+            f->want(kFarAt, 0, 0);
+            f->serve(frame);
+        }
+        for (u64 frame = 5; frame <= 64; ++frame) f->serve(frame);
+    }
+
+    // The near brick is kept and the far one is given up, on both arms and for the same reason.
+    CHECK(shipped.pool.find(node_key_of(kNearAt, 0, 0, kLeafLevel)) != kNoNode);
+    CHECK(infinite.pool.find(node_key_of(kNearAt, 0, 0, kLeafLevel)) != kNoNode);
+    CHECK(shipped.pool.find(node_key_of(kFarAt, 0, 0, kLeafLevel)) == kNoNode);
+    CHECK(infinite.pool.find(node_key_of(kFarAt, 0, 0, kLeafLevel)) == kNoNode);
+
+    const NodePoolStats a = shipped.pool.stats();
+    const NodePoolStats b = infinite.pool.stats();
+    CHECK(a.nodes == b.nodes);
+    CHECK(a.leaves == b.leaves);
+    CHECK(a.total_bytes == b.total_bytes);
+    CHECK(a.subpixel_refused == b.subpixel_refused);
+    CHECK(a.subpixel_evicted == b.subpixel_evicted);
+    CHECK(a.subpixel_resident == b.subpixel_resident);
+    for (u32 level = 0; level < 32; ++level) REQUIRE(a.per_level[level] == b.per_level[level]);
+
+    // ...and nothing below a brick is held on either, which is R8e's second gate asked of the
+    // arm that is actually running the mode.
+    CHECK(shipped.pool.sub_voxel_bytes() == 0);
+    CHECK(infinite.pool.sub_voxel_bytes() == 0);
+
+    // The one thing that DOES differ, so this pair is a gate rather than a pair of identical runs.
+    //
+    // This fixture's pixel angle is a deliberately coarse 0.25 rad, so a brick eight voxels out has
+    // a footprint of two voxels: `floor(log2)` is 1, the shipped arm clamps that to the leaf, and
+    // the mode does not. That is the clamp coming off, measured at a distance rather than at the
+    // degenerate nought.
+    const NodeKey eight_out = node_key_of(8, 0, 0, kLeafLevel);
+    CHECK(shipped.pool.marcher_finest_for(eight_out) == static_cast<i32>(kLeafLevel));
+    CHECK(infinite.pool.marcher_finest_for(eight_out) == 1);
+
+    // ...and R2b's own reading of the same node is the same on both arms, which is the sentence this
+    // whole case exists to hold: the mode moves the descent's target and not the residency floor.
+    const NodeKey near_key = node_key_of(kNearAt, 0, 0, kLeafLevel);
+    CHECK(shipped.pool.subpixel_finest_for(near_key) ==
+          infinite.pool.subpixel_finest_for(near_key));
+    CHECK(shipped.pool.subpixel_finest_for(eight_out) ==
+          infinite.pool.subpixel_finest_for(eight_out));
 }
