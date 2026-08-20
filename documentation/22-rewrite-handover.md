@@ -621,6 +621,46 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### THE STATE OF THE LOAD AND THE FRAME, 2026-08-20, after D721–D728
+
+Everything below landed in one session and the defaults moved with it. **This is what a launch does
+now**, and every one of these is a flag away from what it did before.
+
+| | | the way back |
+|---|---|---|
+| the whole clip goes into the world at 0.5 m voxels before the ladder starts | **5.4 s** on the estate, 10 MB | `--no-coarse-paste`, `--clip-coarse N` |
+| then the loading screen stays up while the ladder takes every node to the clip's own detail | `play now` ends it whenever | `--no-full-load`, `--no-full-load-authored` |
+| the descent asks the field a level at a time | 618 walks a node → 3.23 | `--sample-block-cells 0` |
+| a rotate's trigonometry is worked out once per clip | 1.7% | `--no-field-turns` |
+| the union's child boxes sit beside the parent | 0.3% | `--no-field-cull-boxes` |
+| the ladder no longer tells every face to re-measure its shadow | **1.47x the frames** | `--refresh-shadows-on-paste` |
+| the pick walks what is left to do | 17x fewer entries, 1.5% of a frame | `--sweep-all-regions` |
+| a bank writes 8 chunks of 293 rather than all of them | 10.5 MB → 3.6 MB, 0 when nothing moved | — |
+
+**The gate every one of them was held to, and the one to run before believing anything here:**
+```
+buildin\WorldShaper.exe --no-title --world clips/sampler.clip --full-load --no-coarse-paste --no-clip-cache --cycle 20 --max-seconds 200
+```
+must say `1430104 solid voxels, content d0d5f84c685be847`. `test.bat` is green end to end — 748 of
+748, the headless audit, the node pool's GPU mirror, and R11a's agreement check on the facility.
+
+**Two instruments came out of it and both ship.** `heartbeat at frame N` every ten seconds — frame
+time, median, 99th, the GPU split by pass, and every quantity that grows as a world builds;
+`forge::field_visits()`, whose cost was measured at 0.6% before it was kept. And `--box-probe`,
+`--slack-ceiling`, `--sample-block-cells`, `--sweep-all-regions` are the arms.
+
+**What is still open, in the order I would take it:**
+
+1. **The card, and it is the only large multiple left** — see D727 below and the shader
+   specialisation it names.
+2. **A box settled SOLID in bulk disagrees with its own cells** (D725) — 220 voxels of 1,430,104,
+   and both answers pass the brute-force reference so the suite cannot see it. Which is right is
+   genuinely open and it decides whether the descent may batch cells rather than levels.
+3. **A resumed world's content hash changes every launch** (D721) — same voxels, same chunks, same
+   leaves. Trap 8 gates every measurement here on that hash.
+4. **The rest of the pick** (D728) — the sweep is dealt with; the shortlist descent, `split_refine_node`
+   and `enlist` are what is left, and they are proportional to the batch rather than the list.
+
 #### WHERE THE CARD'S EIGHTY WENT, answered — and what is left
 
 **D727.** D722 pointed at the card as the only place with headroom bigger than the ask. It has been
