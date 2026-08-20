@@ -138,6 +138,20 @@ work; it is what happens around it.
 Still true, and it is what makes parallel work safe here: give each agent an isolated worktree and
 files nobody else is in. Two agents in one shader is a lost afternoon.
 
+**And a worktree is not an isolated MACHINE, which is the half nobody thinks of.** Every agent is
+told to kill a stale `WorldShaper.exe` before it builds — correctly, it is the rule above — and
+`Get-Process WorldShaper | Stop-Process -Force` on a shared machine kills **every other agent's run
+as well as its own**. Two of four agents in one wave reported it: one lost roughly a third of its
+runs outright, the other had its timings taken beside two strays it did not own. The measurements
+that survive are the ones taken when `Get-Process WorldShaper` read zero immediately before them,
+and a run killed at second forty of sixty looks exactly like a crash — truncated output, exit 255,
+no dump.
+
+So: **parallel agents may build in parallel and must not MEASURE in parallel.** Either give one
+agent at a time the machine for its numbers, or accept that every timing from a wave is noise and
+re-take the ones that matter afterwards. Correctness gates — a test suite, a content hash — are
+unaffected and can run whenever.
+
 ## Say it in terms of the build
 
 The person this is for does not read code and does not run the measurements. What they have is the
