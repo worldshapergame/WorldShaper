@@ -3103,6 +3103,68 @@ private:
         SampleCause forced_by = SampleCause::kCamera;
     };
     std::vector<RefineNode> refine_regions_;
+    // HOW MANY OF THEM ARE `done`, kept rather than counted.
+    //
+    // Four places wanted this number and every one of them walked the whole list for it: the batch
+    // delivery's own log line — **on every delivery**, which is several a second — the whole-world
+    // pass's exit line, and the two saves. `refine_regions_` reaches six hundred and twenty
+    // thousand entries on the estate within a few minutes and millions by the end (see
+    // `refine_live_` above, which is the same problem for the sweep and was solved the same way),
+    // so the count grew with the world and was paid for by the frame the player was inside.
+    //
+    // A counter is only right if EVERY write to `done` goes through one place, so every write
+    // does: `set_refine_done`. `checked_refine_done()` is the check that says so, it runs in the
+    // SHIPPED build, and it repairs rather than merely complaining -- because a bookkeeping counter
+    // that has silently drifted prints a plausible number for ever and is exactly the class of
+    // fault this repository keeps finding.
+    usize refine_done_count_ = 0;
+    // The one door. `done` is written nowhere else -- if you are about to write it directly, this
+    // is the reason not to.
+    void set_refine_done(usize at, bool value) {
+        RefineNode& box = refine_regions_[at];
+        if (box.done == value) return;
+        box.done = value;
+        if (value) {
+            ++refine_done_count_;
+        } else {
+            --refine_done_count_;
+        }
+    }
+    // Recount from scratch, for the two moments the list is replaced wholesale rather than
+    // written through: a resumed run reading the cache back, and the first build.
+    void recount_refine_done() {
+        usize done = 0;
+        for (const RefineNode& box : refine_regions_) {
+            if (box.done) ++done;
+        }
+        refine_done_count_ = done;
+    }
+    // The audit, and it runs in the SHIPPED build.
+    //
+    // `WS_ASSERT` compiles out in release, so an assertion here would verify the counter in the
+    // build nobody plays and trust it in the one everybody does. Instead this walks the list, says
+    // so loudly if the two disagree, and RETURNS THE WALKED NUMBER -- so a drifted counter is a
+    // line in the log and a correct report, rather than a plausible wrong number for ever.
+    //
+    // It is only called at the three stand-downs where the walk was already happening: the
+    // whole-world pass's exit line and the two saves. **The hot site -- the batch delivery, several
+    // a second -- reads the counter raw and is the entire point of it.**
+    usize checked_refine_done() {
+        usize done = 0;
+        for (const RefineNode& box : refine_regions_) {
+            if (box.done) ++done;
+        }
+        if (done != refine_done_count_) {
+            WS_LOG_WARN("refine",
+                        "the done counter has drifted: it says {} and the list holds {} of {}. "
+                        "Every write to `done` is supposed to go through `set_refine_done`; one "
+                        "does not. Repaired here, but the batch line has been printing the wrong "
+                        "number since it drifted",
+                        refine_done_count_, done, refine_regions_.size());
+            refine_done_count_ = done;
+        }
+        return done;
+    }
     // WHICH OF THEM MIGHT STILL HAVE WORK IN THEM, as indices into the list above.
     //
     // The pick sweeps for the best node to sample next, and it swept ALL of them: `refine_regions_`
@@ -4982,7 +5044,7 @@ bool Application::start_refinement() {
         refine_batch_.push_back(std::move(job));
         // Held out of the next pick, and put back by pump_refinement when the result lands. A node
         // chosen twice in one batch would be sampled twice and pasted twice.
-        refine_regions_[at].done = true;
+        set_refine_done(at, true);
     };
 
     for (usize entry = 0; entry < short_count && refine_batch_.size() < batch_size; ++entry) {
@@ -5098,7 +5160,7 @@ bool Application::start_refinement() {
         // the next pick, so a dropped batch is a hole in the world nothing ever fills again. D624
         // is that fault from the other side.
         for (const RefineJob& job : refine_batch_) {
-            refine_regions_[job.at].done = false;
+            set_refine_done(job.at, false);
             // Back into the live list with it: a node put back by a dropped batch is not-done
             // again, and the sweep only ever looks at what that list holds. See `refine_live_`.
             refine_live_.push_back(static_cast<u32>(job.at));
@@ -5669,10 +5731,9 @@ bool Application::build_the_whole_world() {
     // in the world now, and standing them in front of a three-hundred-megabyte write is answering
     // a different request. What they built is banked by the periodic save above to within two
     // minutes, and the rest is written on the way out like every other session's.
-    usize done = 0;
-    for (const RefineNode& box : refine_regions_) {
-        if (box.done) ++done;
-    }
+    // A stand-down, so the counter is verified rather than trusted here -- see
+    // `checked_refine_done`. The frame path reads it raw.
+    const usize done = checked_refine_done();
     WS_LOG_INFO("load",
                 "left the whole-world build after {:.0f} ms ({}): the world is at the clip's own "
                 "detail for {:.1f} m around the player of the {:.1f} m it reaches -- the rest of "
@@ -5697,7 +5758,7 @@ void Application::deliver_refinement(RefineDelivery delivered) {
     std::vector<RefineJob> finished;
     finished.swap(delivered.jobs);
     for (const RefineJob& job : finished) {
-        refine_regions_[job.at].done = true;
+        set_refine_done(job.at, true);
         refine_regions_[job.at].applied_per_metre = job.settings.voxels_per_metre;
         refine_stipple_counts_.add(job.stipple);
     }
@@ -5789,10 +5850,10 @@ void Application::deliver_refinement(RefineDelivery delivered) {
     if (!done.empty()) apply_ops(world_, done, ledger_);
     const f64 replay_ms = ns_to_ms(now_ns() - replay_began);
 
-    usize left = 0;
-    for (const RefineNode& box : refine_regions_) {
-        if (!box.done) ++left;
-    }
+    // THE HOT ONE. This ran on every delivery -- several a second -- over a list that reaches
+    // six hundred and twenty thousand entries on the estate, to print one number. See
+    // `refine_done_count_`.
+    const usize left = refine_regions_.size() - refine_done_count_;
     i32 coarsest = 1 << 20;
     i32 finest_seen = 0;
     for (const RefineJob& job : finished) {
@@ -5957,10 +6018,7 @@ void Application::save_refined_world() {
     // release is baked without the baking machine's own cache getting in the way.
     if ((refine_cache_path_.empty() && refine_bake_path_.empty()) || refine_regions_.empty()) return;
 
-    usize done = 0;
-    for (const RefineNode& box : refine_regions_) {
-        if (box.done) ++done;
-    }
+    const usize done = checked_refine_done();
     // Nothing has been sharpened since the file was written. Rewriting six hundred megabytes to
     // say the same thing is the sort of cost that only shows up as a stutter nobody can explain.
     if (done <= refine_saved_regions_) return;
@@ -6334,6 +6392,10 @@ void Application::seed_refine_nodes(const forge::Script& script) {
             }
         }
     }
+    // The seeds are in. Nothing here is born `done`, so this is nought -- taken from the list
+    // rather than assumed, because "nothing here is born done" is a property of `refine_node_of`
+    // and not of this loop. See `refine_done_count_`.
+    recount_refine_done();
 }
 
 // One node as a box, clipped to the clip's own bounds. False when nothing of it is inside them.
@@ -6427,11 +6489,18 @@ u32 Application::split_refine_node(usize at) {
     if (kept == 0) {
         // Nothing of the parent is inside the clip after all, which the parent's own clip test
         // should have caught. Marked rather than left, so the picker cannot choose it again.
-        refine_regions_[at].done = true;
+        set_refine_done(at, true);
         return 0;
     }
     // Slot `at` keeps its place in `refine_live_` -- it was live to have been picked, and what is
     // going into it is a child that is not done either. The new slots have to be added.
+    // Slot `at` is overwritten with a child, and a child is never born `done` -- so the counter
+    // has to hear the parent leave `done` behind before the record is gone. Today the caller only
+    // ever splits a node the sweep found not-done, so this is a no-op; it is written anyway because
+    // the counter's whole correctness is "every write goes through one door", and a second caller
+    // that splits a finished node would otherwise put it permanently out by one with nothing
+    // failing. See `refine_done_count_`.
+    set_refine_done(at, false);
     refine_regions_[at] = children[0];
     for (u32 i = 1; i < kept; ++i) {
         refine_live_.push_back(static_cast<u32>(refine_regions_.size()));
@@ -6857,7 +6926,7 @@ bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64
     // caller decides that; see refine_would_improve.
     if (refine_node_is_a_no_op(box) ||
         (box.key.level <= refine_finest_level() && !refine_would_improve(box))) {
-        refine_regions_[at].done = true;
+        set_refine_done(at, true);
         return false;
     }
 
@@ -7210,6 +7279,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
         refine_plan_ = {};
         refine_regions_.clear();
         refine_live_.clear();
+        recount_refine_done();
         refine_cache_path_.clear();
         return;
     }
@@ -7293,6 +7363,9 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
     }
     if (!restored.empty()) {
         refine_regions_ = std::move(restored);
+        // The list was replaced wholesale rather than written through, so the counter is recounted
+        // rather than carried. A resumed run is the one path where `done` arrives already set.
+        recount_refine_done();
     } else {
         // Every saved key fell outside this run's bounds. The seeds stand, and the run rebuilds --
         // said out loud because a silent full rebuild off a file that read fine is exactly the kind
@@ -7302,10 +7375,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
                     cache.regions.size());
     }
 
-    usize done = 0;
-    for (const RefineNode& box : refine_regions_) {
-        if (box.done) ++done;
-    }
+    const usize done = checked_refine_done();
     refine_saved_regions_ = done;
     if (done == refine_regions_.size()) {
         // Finished, so there is no ladder to stand up and no reason to keep the field alive.
@@ -7314,6 +7384,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
         refine_plan_ = {};
         refine_regions_.clear();
         refine_live_.clear();
+        recount_refine_done();
         refine_cache_path_.clear();
         refine_saved_regions_ = 0;
         WS_LOG_INFO("clip", "the cached world is fully sharpened");

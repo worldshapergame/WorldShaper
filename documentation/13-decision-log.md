@@ -14227,3 +14227,91 @@ and the line counts them apart now.
 | D732 | **The key loop cost a field evaluation per finest node** | fault | ~4,900 of them at ten microseconds, before any region was looked at — a cost D720's diagnosis did not name |
 | D732 | **Where the two differ is toward MORE sampling** | decision | A coarse leaf may answer "may hold matter" where its finest nodes do not; less is what leaves a blocky cut (D697) |
 | D732 | **"0 of 0" meant two opposite things** | instrument | No leaf overlaps, against every leaf already sharp |
+
+---
+
+## D733 — The gate command in everybody's head was missing two flags, and the counter it was checking
+
+**2026-08-20.** Seven agents were dispatched with a brief that named the repository's own gate:
+*`clips/sampler.clip` cold must build 1,430,104 solid voxels, content `d0d5f84c685be847`*, and a
+command to produce it. **Neither half was right, and the command was wrong in a way that fails
+silently.**
+
+### `--clip` is not the clip
+
+`--clip` takes **twelve numbers** — it is a scripted clip EDIT, the thing a chisel does. The world
+clip is `--clip-file`. A run given `--clip clips/sampler.clip` does not complain, does not fall over
+and does not load `sampler.clip`: it parses nothing out of the argument and loads the default world,
+which is the estate. The evidence is a `scene:` line reading **291 chunks and 573,965,942 solid
+voxels** where four chunks and 1.4 million were expected.
+
+That is the whole shape of the fault. **An unrecognised world silently becomes a different world**,
+and every number taken beside it is about a building nobody asked for. Two hundred and twenty voxels
+of disagreement — the thing one of those agents was sent to find — is 0.015% of `sampler.clip` and
+0.00004% of the estate. It would not have been found, and the agent would have reported honestly
+that it could not reproduce it.
+
+### And the two flags that make it the gate
+
+Even with `--clip-file`, the run settles on **1,393,620 voxels, `e5bcf9f1afb6f57e`**. The recorded
+gate has always been written `clips/sampler.clip --refine-all --no-despeckle` and **both flags are
+load-bearing**: `--refine-all` builds every node instead of the ones a camera wants, and
+`--no-despeckle` leaves the stipple clean out. Without them the ladder is camera-driven and settles
+on a smaller, legitimate, completely different world.
+
+**The gate, run today, matching the value recorded since D615 to the voxel:**
+
+```
+build\bin\WorldShaper.exe --clip-file clips/sampler.clip --refine-all --no-despeckle --no-clip-cache --no-title --settle --screenshot <out.png> --screenshot-frame 240 --max-seconds 300
+```
+
+```
+scene: 4 chunks, 1430104 solid voxels, 9826 of 9826 nodes sharpened, content a1f8bc6c656343b7, shape e105a8a6940f0da2
+```
+
+### The voxel count was right and the hash was not, and D729 is why
+
+`d0d5f84c685be847` is not wrong — it is **the same building under a differently-ordered type
+table**, which is exactly what D729 established a content hash does. The shape hash
+`e105a8a6940f0da2` is identical to the one D729 tabulated across a cold build and three resumes, and
+it is what proves the two are one world. The canonical content hash for this command is
+`a1f8bc6c656343b7`.
+
+**So the shape hash paid for itself the first time somebody quoted the wrong content hash.** That
+was written down as making two resumed runs comparable; what it actually did here was turn *"the
+gate does not reproduce"* from an afternoon into a sentence.
+
+### The change this was checking: `done` is counted once, not walked for
+
+`refine_regions_` reaches six hundred and twenty thousand entries on the estate within a few minutes
+and millions by the end. **Four places walked all of it to ask how many were `done`** — the two
+saves, the whole-world pass's exit line, and, the one that matters, **the batch delivery's own log
+line, on every delivery, several a second, inside the frame the player is in.** It is the same fault
+`refine_live_` was built for one function earlier, in the same file, and it survived because a walk
+that only feeds a log line does not look like work.
+
+`refine_done_count_` is kept instead, and every write to `done` goes through `set_refine_done` —
+which is the only thing that makes a counter safe. Five write sites, including one whole-record
+overwrite in `split_refine_node` (`refine_regions_[at] = children[0]`) that would have bypassed it.
+That one is a no-op today, because the only caller splits a node the sweep found not-done; it is
+routed anyway, because *"a second caller splits a finished node and the counter is permanently out
+by one with nothing failing"* is the whole class of fault this kind of bookkeeping invites.
+
+**And the audit runs in the SHIPPED build.** `WS_ASSERT` compiles out in release, so asserting here
+would verify the counter in the build nobody plays and trust it in the one everybody does.
+`checked_refine_done()` walks the list, warns loudly if the two disagree, **repairs the counter**,
+and returns the walked number — and it is called only at the three stand-downs where the walk was
+already happening. The hot site reads the counter raw, which is the entire point.
+
+Gate: `1430104` and `a1f8bc6c656343b7` above, 748 of 748 tests, and the same figures from a stashed
+control arm rebuilt from scratch.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D733 | **`--clip` is a scripted EDIT; the world is `--clip-file`** | trap | An unrecognised world silently becomes the estate — 291 chunks where 4 were expected, no error |
+| D733 | **The gate needs `--refine-all --no-despeckle`** | trap | Without them the ladder is camera-driven and settles on 1,393,620 voxels, which is a different legitimate world |
+| D733 | **`a1f8bc6c656343b7`, not `d0d5f84c685be847`** | fault | The second is the same building under a re-interned type table; the shape hash proves it |
+| D733 | **The shape hash paid for itself immediately** | measurement | `e105a8a6940f0da2` matched D729's table, turning "the gate does not reproduce" into a sentence |
+| D733 | **`done` is counted, not walked for** | build | Four O(regions) walks, one of them on every batch delivery inside the player's frame |
+| D733 | **Every write goes through one door** | decision | Five sites including a whole-record overwrite that is a no-op today and would not have stayed one |
+| D733 | **The audit runs in release and repairs** | instrument | `WS_ASSERT` compiles out; a drifted counter prints a plausible number for ever |

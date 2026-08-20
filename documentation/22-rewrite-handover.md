@@ -251,7 +251,12 @@ either measurable. Against the three things the user actually asked for:
 The unplanned work has been most of the elapsed time and is not visible in that table: nine faults
 found and fixed, of which three were introduced by this rewrite and six predate it.
 
-### R1 — the node pool (a–d and f–i done, e outstanding)
+### R1 — the node pool (done, all of it)
+
+**Corrected 2026-08-20: R1e is DONE and this heading said otherwise for weeks.** The
+`21-renderer-rewrite.md` R11 row records it landing — *"true when R1e landed two days later"* —
+and the same file says the renderer has no chunks in it. A stale heading is how a finished
+sub-step gets scheduled twice, which is what nearly happened here.
 
 One sparse octree at every scale replaces the wrapped chunk grid, brick masks, popcount prefixes,
 slot runs, five coarse occupancy grids, the summary octree and eight thumbnail tiers. A leaf is a

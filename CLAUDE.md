@@ -70,6 +70,23 @@ is not a measurement.
 `documentation/22-rewrite-handover.md` §4 is thirty traps, every one of which produced a wrong
 measurement or a silent failure rather than a compile error. They are worth the twenty minutes.
 
+**The gate command, written out, because it has been quoted wrong from memory and it fails
+SILENTLY.** `--clip` is a scripted clip EDIT that parses twelve numbers; the world is `--clip-file`,
+and a run given the wrong one loads the estate instead and says nothing. `--refine-all` and
+`--no-despeckle` are both load-bearing — without them the ladder is camera-driven and settles on a
+different, legitimate world.
+
+```
+build\bin\WorldShaper.exe --clip-file clips/sampler.clip --refine-all --no-despeckle --no-clip-cache --no-title --settle --screenshot <out.png> --screenshot-frame 240 --max-seconds 300
+```
+
+```
+scene: 4 chunks, 1430104 solid voxels, 9826 of 9826 nodes sharpened, content a1f8bc6c656343b7, shape e105a8a6940f0da2
+```
+
+`d0d5f84c685be847` is the SAME world with its type table interned in another order (D729) — compare
+**shape** whenever a resume is involved, and content only cold against cold. D733.
+
 The two that catch people most often:
 
 - **A counter taken from inside the change is not a control.** When two theories both fit the
