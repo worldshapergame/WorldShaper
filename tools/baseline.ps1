@@ -21,6 +21,23 @@
 #
 # The full grid is seven views times three resolutions and takes a few minutes.
 # Narrow it while iterating; run all of it before claiming a stage is done.
+#
+# # ROWS TAKEN BEFORE 2026-08-20 ARE NOT COMPARABLE WITH ROWS TAKEN AFTER IT
+#
+# D722 turned the up-front coarse build back on, so every run of this harness now puts the WHOLE
+# clip into the world at half-metre voxels before the ladder starts -- about eight seconds on the
+# estate -- where before it started from nothing and filled outward from the camera. That is a
+# different world in front of the renderer, not a different renderer.
+#
+# This harness is not pinned to either arm, deliberately: it exists to measure what the game
+# ships, and a harness pinned to a state the game abandoned measures history. What protects a
+# reader is the `scene` column -- it carries the content hash, and the hash moved the day the
+# default did, so a comparison across the boundary announces itself rather than quietly averaging
+# two different buildings. `-Extra "--no-coarse-paste"` is the old arm if a row has to be matched
+# against an old one.
+#
+# D673 made exactly this change in the other direction and the same paragraph would have been
+# worth writing then.
 
 param(
     # Named cameras, comma separated, or "all".
