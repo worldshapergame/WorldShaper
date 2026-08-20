@@ -2,12 +2,18 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <system_error>
 #include <vector>
 
+#include "core/jobs.hpp"
+#include "core/time.hpp"
+#include "forge/clip_script.hpp"
+#include "forge/sample.hpp"
+#include "game/clip.hpp"
 #include "world/ledger.hpp"
 #include "world/op.hpp"
 #include "world/property.hpp"
@@ -745,4 +751,150 @@ TEST_CASE("the journal is rewritten before it can creep") {
     REQUIRE(read_world_cache(file.path, key, in, nullptr));
     CHECK(read.world.content_hash() == wrote.world.content_hash());
     CHECK(read.world.stats().solid_voxels == wrote.world.stats().solid_voxels);
+}
+
+// ============================================================================================
+// The measurement, on a real world. Skipped by default -- it samples a real clip.
+//
+//   ws_tests.exe --no-skip --test-case="banking the facility, three saves"
+//
+// WS_FACILITY_PER_METRE sets the grain (8 by default, 32 for the world the game builds) and
+// WS_LADDER_LEAVES how many leaves the ladder is carrying, because the leaf set is a real part of
+// what the file costs and it changes on every save by construction.
+// ============================================================================================
+
+TEST_CASE("banking the facility, three saves" * doctest::skip()) {
+    std::string named = "clips/facility.clip";
+    if (const char* asked = std::getenv("WS_GATE_CLIP")) named = asked;
+    const std::string prefixes[] = {"", "../", "../../", "../../../"};
+    std::string clip_path;
+    for (const std::string& prefix : prefixes) {
+        if (std::filesystem::exists(prefix + named)) {
+            clip_path = prefix + named;
+            break;
+        }
+    }
+    REQUIRE_MESSAGE(!clip_path.empty(), "the clip named is not beside the test binary");
+
+    i32 per_metre = 8;
+    if (const char* asked = std::getenv("WS_FACILITY_PER_METRE")) per_metre = std::atoi(asked);
+    u32 leaves = 40000;
+    if (const char* asked = std::getenv("WS_LADDER_LEAVES")) {
+        leaves = static_cast<u32>(std::atoi(asked));
+    }
+
+    JobSystem jobs;
+    TagRegistry tags;
+    PropertyRegistry properties;
+    VoxelTypeTable types;
+    forge::Script script = forge::load_clip_script(clip_path, types, tags);
+    script.settings.voxels_per_metre = per_metre;
+
+    const u64 sample_began = now_ns();
+    const forge::SampleResult built =
+        forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
+    const f64 sample_ms = ns_to_ms(now_ns() - sample_began);
+    REQUIRE_FALSE(built.clip.empty());
+
+    World world;
+    MatterLedger ledger;
+    paste_clip(world, ledger, built.clip, built.origin_voxel[0], built.origin_voxel[1],
+               built.origin_voxel[2], PasteMode::Replace, MatterReason::Generation, 1, &jobs,
+               types.type_count());
+    const WorldStats stats = world.stats();
+
+    Scratch file("ws_bank_facility.world");
+    const u64 key = world_cache_key("facility", per_metre, 1);
+    WorldCache out;
+    out.tags = &tags;
+    out.properties = &properties;
+    out.types = &types;
+    out.world = &world;
+    out.ledger = &ledger;
+    out.regions = many_regions(leaves, leaves / 2);
+    out.stipple_taken = true;
+
+    std::printf("\nfacility      %s at %d voxels a metre, sampled in %.0f ms\n", clip_path.c_str(),
+                per_metre, sample_ms);
+    std::printf("world         %llu chunks, %llu bricks, %llu solid voxels, %u ladder leaves\n",
+                static_cast<unsigned long long>(stats.chunks),
+                static_cast<unsigned long long>(stats.bricks),
+                static_cast<unsigned long long>(stats.solid_voxels), leaves);
+
+    // One: the first bank of a run. There is nothing on disk, so this is the whole world.
+    WorldCacheWritten first;
+    const u64 began_first = now_ns();
+    REQUIRE(write_world_cache(file.path, key, out, &first));
+    const f64 first_ms = ns_to_ms(now_ns() - began_first);
+    CHECK_FALSE(first.incremental);
+
+    // Two: a bank where nothing has moved since. This is the resumed run that used to rewrite the
+    // whole file to say what it already said.
+    WorldCacheWritten second;
+    const u64 began_second = now_ns();
+    REQUIRE(write_world_cache(file.path, key, out, &second));
+    const f64 second_ms = ns_to_ms(now_ns() - began_second);
+    CHECK(second.unchanged);
+    CHECK(second.bytes_written == 0);
+
+    // Three: two minutes of building later. One node of the ladder came good and one voxel of one
+    // chunk moved with it, which is the smallest real bank there is.
+    const std::vector<ChunkCoord> coords = world.sorted_chunk_coords();
+    REQUIRE_FALSE(coords.empty());
+    const ChunkCoord touched = coords[coords.size() / 2];
+    bool moved = false;
+    for (i64 lz = 0; lz < 256 && !moved; ++lz) {
+        for (i64 ly = 0; ly < 256 && !moved; ++ly) {
+            for (i64 lx = 0; lx < 256 && !moved; ++lx) {
+                const i64 x = touched.x * 256 + lx;
+                const i64 y = touched.y * 256 + ly;
+                const i64 z = touched.z * 256 + lz;
+                if (world.get(x, y, z) != kAir) moved = world.set(x, y, z, kAir);
+            }
+        }
+    }
+    REQUIRE(moved);
+    out.regions[leaves / 2].done = true;
+    out.regions[leaves / 2].applied_per_metre = per_metre;
+
+    WorldCacheWritten third;
+    const u64 began_third = now_ns();
+    REQUIRE(write_world_cache(file.path, key, out, &third));
+    const f64 third_ms = ns_to_ms(now_ns() - began_third);
+    CHECK(third.incremental);
+    CHECK(third.chunks_written == 1);
+
+    std::printf("\n                       bytes written        ms   chunks written / left alone\n");
+    std::printf("1 whole            %16llu  %8.0f   %u / %u\n",
+                static_cast<unsigned long long>(first.bytes_written), first_ms,
+                first.chunks_written, first.chunks_left_alone);
+    std::printf("2 nothing changed  %16llu  %8.0f   %u / %u\n",
+                static_cast<unsigned long long>(second.bytes_written), second_ms,
+                second.chunks_written, second.chunks_left_alone);
+    std::printf("3 one node, one voxel %13llu  %8.0f   %u / %u   (%u of %u leaf blocks)\n",
+                static_cast<unsigned long long>(third.bytes_written), third_ms,
+                third.chunks_written, third.chunks_left_alone, third.region_blocks_written,
+                third.region_blocks_total);
+    std::printf("the file is %llu bytes\n\n",
+                static_cast<unsigned long long>(third.file_bytes));
+
+    // And it is still the world. Read back from a journal of three segments plus its directories.
+    World back;
+    MatterLedger back_ledger;
+    TagRegistry back_tags;
+    PropertyRegistry back_properties;
+    VoxelTypeTable back_types;
+    WorldCache in;
+    in.tags = &back_tags;
+    in.properties = &back_properties;
+    in.types = &back_types;
+    in.world = &back;
+    in.ledger = &back_ledger;
+    const u64 read_began = now_ns();
+    REQUIRE(read_world_cache(file.path, key, in, &jobs));
+    std::printf("read back in %.0f ms\n", ns_to_ms(now_ns() - read_began));
+    CHECK(back.content_hash() == world.content_hash());
+    CHECK(back.stats().solid_voxels == world.stats().solid_voxels);
+    CHECK(back.chunk_count() == world.chunk_count());
+    CHECK(same_regions(in.regions, out.regions));
 }
