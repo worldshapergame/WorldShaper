@@ -216,6 +216,14 @@ struct SampleResult {
     u64 voxels_asked = 0;      // boxes that came down to a single voxel
     u64 voxels_settled = 0;    // voxels decided in bulk, never asked about
 
+    // How many times the field was WALKED, against `shape_evaluations` points answered.
+    //
+    // Nought in the control arm, where every evaluation is its own walk and the two numbers are the
+    // same by definition. With the block sweep on they come apart, and the gap is the whole of what
+    // the sweep buys: on the facility's ladder, 638 evaluations a node arriving in six walks. A
+    // clock cannot see that yet — `Field::eval_block` is still a loop of `eval` — so it is counted.
+    u64 block_calls = 0;
+
     // Core-nanoseconds, summed across every worker, so these add up to well over the wall clock
     // on a machine with eight of them. What they are for is the RATIO: which half of the sampler
     // the build was actually spent in, which an evaluation count does not say.
@@ -315,6 +323,29 @@ struct SamplePlan {
 };
 
 SamplePlan plan_sample(const Field& field, u32 root, const std::vector<PaintRule>& paint);
+
+// How small a box has to get before the descent stops recursing and runs the rest of itself a
+// LEVEL at a time, asking `Field::eval_block` about every box of a level in one traversal.
+//
+// D722 measured what the recursion costs at the size of a render-tree node: about **640 evaluations
+// of the shape to fill 512 cells**, and `65,536 voxels asked` of `65,536 cells` over a batch of a
+// hundred and twenty-eight nodes — the descent comes all the way down to a single voxel for nearly
+// every cell of every ladder node. All 640 of those walks visit the same field nodes and take the
+// same turns, because all 640 are about points inside the same quarter of a metre. Batched by level
+// they become about SIX walks for the same 640 evaluations.
+//
+// The number is in CELLS rather than in voxels a side because a box of the descent is not always a
+// cube — an edge box is whatever is left. 512 is one whole node of the render tree.
+//
+// It is a ceiling on memory as much as a choice: a level of the sweep holds every box abreast with
+// its inherited paint state, and the facility carries 628 rules, so a 512-cell box bottoms out at
+// 512 × 628 bytes and the whole-clip sampler's own 64³ top box would be five hundred times that.
+//
+// **Zero is the control arm**: the descent recurses to single voxels exactly as it did before, and
+// nothing calls `eval_block` at all. The two arms build the same world, bit for bit, and that is
+// the gate — `clips/sampler.clip` at `d0d5f84c685be847`, 1,430,104 solid voxels, both ways.
+void set_sample_block_cells(u32 cells);
+u32 sample_block_cells();
 
 // Could this box hold any matter at all, at this resolution?
 //
