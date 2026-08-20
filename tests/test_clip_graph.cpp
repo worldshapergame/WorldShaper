@@ -7,11 +7,13 @@
 //   **nothing is reformatted** — an edit changes the bytes of one number and no others;
 //   **it never fails** — half of every word being typed is a syntax error (D453).
 
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
 
+#include "core/time.hpp"
 #include "doctest/doctest.h"
 #include "game/clip_graph.hpp"
 
@@ -411,4 +413,45 @@ TEST_CASE("every clip the game ships reads as a graph with nothing left over") {
     CHECK(nodes > 0);
     INFO("clip files read: " << files << ", nodes: " << nodes);
     CHECK_MESSAGE(unread.empty(), "lines the graph could not read:" << unread);
+}
+
+TEST_CASE("reading the largest clip in the repository costs less than a frame") {
+    // The editor re-reads the document on every keystroke, so this is a budget rather than a
+    // curiosity: a read that costs a frame is a text view that stutters as it is typed into, and
+    // `09-performance-budgets.md`'s rule is that exceeding a budget is a bug rather than a
+    // trade-off. The bound is a whole frame at 60, which is far above what this should ever be —
+    // what it is guarding against is an accidental quadratic, not a few microseconds.
+    const std::filesystem::path clips = std::filesystem::path(WS_ASSET_SOURCE_DIR) / ".." / "clips";
+    std::error_code error;
+    if (!std::filesystem::is_directory(clips, error)) return;
+
+    std::vector<std::string> biggest;
+    std::string which;
+    for (const std::filesystem::directory_entry& item :
+         std::filesystem::recursive_directory_iterator(clips, error)) {
+        if (!item.is_regular_file(error) || item.path().extension() != ".clip") continue;
+        std::ifstream in(item.path(), std::ios::binary);
+        std::vector<std::string> lines;
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            lines.push_back(line);
+        }
+        if (lines.size() > biggest.size()) {
+            biggest = std::move(lines);
+            which = item.path().filename().string();
+        }
+    }
+    REQUIRE(!biggest.empty());
+
+    const u64 began = now_ns();
+    u32 nodes = 0;
+    for (u32 round = 0; round < 10; ++round) {
+        nodes = static_cast<u32>(read_clip_graph(biggest).nodes.size());
+    }
+    const f64 each_ms = static_cast<f64>(now_ns() - began) / 1.0e6 / 10.0;
+    std::printf("\n--- the graph of the largest clip -------------------------------------------\n"
+                "  %s: %zu lines, %u nodes, %.3f ms a read\n\n",
+                which.c_str(), biggest.size(), nodes, each_ms);
+    CHECK(each_ms < 16.6);
 }

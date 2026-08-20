@@ -7,6 +7,7 @@
 #include <iterator>
 
 #include "core/log.hpp"
+#include "core/time.hpp"
 #include "core/version.hpp"
 #include "platform/desktop.hpp"
 
@@ -439,6 +440,8 @@ Verdict Shell::frame(const InputState& input, u32 width, u32 height, f64 seconds
     // here rather than a call in each reader, because a reader that forgets it is a slider that
     // half works.
     refresh_graph();
+    // And the verdict, when the text has been still long enough to be worth asking about.
+    if (parse_wanted_ && seconds_ >= parse_at_) reparse();
     // The left-hand window is the parameters family, and a NODE's parameters are a parameters
     // window (`23-shell-and-libraries.md` §5c) — which is the whole reason there are two families.
     // So while a node is selected in the visual view, this side is that node; the rest of the time
@@ -1832,9 +1835,9 @@ std::filesystem::path Shell::follow_include(const std::string& named) const {
 
 bool Shell::choose_node(std::string_view name) {
     refresh_graph();
-    for (const ClipNode& node : graph_.nodes) {
-        if (node.name == name) {
-            chosen_node_ = ClipGraph::key_of(node);
+    for (usize i = 0; i < graph_.nodes.size(); ++i) {
+        if (graph_.nodes[i].name == name) {
+            choose(static_cast<u32>(i));
             view_ = 1;
             open_settings();
             return true;
@@ -1865,11 +1868,25 @@ void Shell::refresh_graph() {
     if (!graph_stale_) return;
     graph_stale_ = false;
     graph_ = read_clip_graph(lines_);
+    // The one place the key is turned back into an index. A node that has gone — its line deleted,
+    // its name typed over — deselects itself here, which is the only sane thing to do with a
+    // selection whose subject no longer exists.
+    chosen_index_ = chosen_node_.empty() ? ClipGraph::kNone : graph_.find(chosen_node_);
+}
+
+void Shell::choose(u32 index) {
+    if (index >= graph_.nodes.size()) {
+        chosen_node_.clear();
+        chosen_index_ = ClipGraph::kNone;
+        return;
+    }
+    chosen_node_ = ClipGraph::key_of(graph_.nodes[index]);
+    chosen_index_ = index;
 }
 
 bool Shell::a_node_is_selected() const {
-    return dock_.is_open(window_worlds_) && tab_ == 2 && view_ == 1 && !chosen_node_.empty() &&
-           graph_.find(chosen_node_) != ClipGraph::kNone;
+    return dock_.is_open(window_worlds_) && tab_ == 2 && view_ == 1 &&
+           chosen_index_ < graph_.nodes.size();
 }
 
 void Shell::draw_editor_tab(const Rect& rect) {
@@ -1951,9 +1968,7 @@ void Shell::draw_editor_tab(const Rect& rect) {
             // views agree about where you are rather than each keeping its own place.
             if (want == 1 && view_ == 0) {
                 const u32 under = node_at_line(caret_line_ + 1);
-                if (under != ClipGraph::kNone) {
-                    chosen_node_ = ClipGraph::key_of(graph_.nodes[under]);
-                }
+                if (under != ClipGraph::kNone) choose(under);
             }
             view_ = want;
         }
@@ -2169,7 +2184,7 @@ void Shell::draw_visual_view(const Rect& page) {
         const Rect box = box_of(i);
         if (box.y1 < page.y0 || box.y0 > page.y1 || box.x1 < page.x0 || box.x0 > page.x1) continue;
 
-        const bool chosen = !chosen_node_.empty() && ClipGraph::key_of(node) == chosen_node_;
+        const bool chosen = (static_cast<u32>(i) == chosen_index_);
         ui_.draw().glass(box, 0.55f);
         ui_.draw().ink(box, chosen ? 0.22f : 0.10f);
         ui_.draw().edge(box, chosen ? 0.9f : (caret_node == i ? 0.6f : 0.28f),
@@ -2212,7 +2227,7 @@ void Shell::draw_visual_view(const Rect& page) {
         if (over_page && box.holds(ui_.pointer_x(), ui_.pointer_y())) {
             if (ui_.pressed_in(box)) {
                 hit_a_node = true;
-                chosen_node_ = ClipGraph::key_of(node);
+                choose(static_cast<u32>(i));
                 // A node's parameters are a parameters window (§5c), so choosing one opens the
                 // left-hand side on it — which is the whole reason the two families exist.
                 open_settings();
@@ -2254,7 +2269,7 @@ void Shell::draw_visual_view(const Rect& page) {
     // A press on the empty canvas is *nothing selected*, and the start of a pan. Both, because
     // they are the same gesture until the hand moves.
     if (over_page && ui_.pressed_in(page) && !hit_a_node && !ui_.busy()) {
-        chosen_node_.clear();
+        choose(ClipGraph::kNone);
         dragging_graph_ = true;
     }
 }
@@ -2266,9 +2281,8 @@ void Shell::draw_visual_view(const Rect& page) {
 // they open on the left while its node is selected, which is why the two families exist.*
 void Shell::draw_node_parameters(const Rect& rect) {
     const Metrics& metrics = ui_.metrics();
-    const u32 at = graph_.find(chosen_node_);
-    if (at == ClipGraph::kNone) return;
-    const ClipNode node = graph_.nodes[at];   // by value: the graph is re-read under this
+    if (chosen_index_ >= graph_.nodes.size()) return;
+    const ClipNode node = graph_.nodes[chosen_index_];   // by value: the graph is re-read under it
 
     ui_.panel(rect);
     draw_header(rect, window_settings_, icon_of(node),
@@ -2286,7 +2300,7 @@ void Shell::draw_node_parameters(const Rect& rect) {
         const Rect back{row.x0, row.y0, row.x0 + metrics.px(96.0f), row.y1};
         if (ui_.button(id_of("node.back"), back, Icon::Up, "settings",
                        "Stop looking at this node")) {
-            chosen_node_.clear();
+            choose(ClipGraph::kNone);
             return;
         }
         // What it is, in the language's own word, for the case where the name says nothing about
@@ -2381,7 +2395,7 @@ void Shell::draw_node_parameters(const Rect& rect) {
             if (write_clip_number(lines_, number, spell_clip_number(value, number.text))) {
                 dirty_ = true;
                 graph_stale_ = true;
-                reparse();
+                reparse_soon();
             }
         }
     }
@@ -2401,9 +2415,9 @@ void Shell::draw_node_parameters(const Rect& rect) {
             const Rect go{row.x1 - metrics.row(), row.y0, row.x1, row.y1};
             if (ui_.icon_button(id_of("node.follow", w), go, Icon::Up,
                                 "Look at what this names")) {
-                for (const ClipNode& other : graph_.nodes) {
-                    if (other.name == word.text) {
-                        chosen_node_ = ClipGraph::key_of(other);
+                for (usize other = 0; other < graph_.nodes.size(); ++other) {
+                    if (graph_.nodes[other].name == word.text) {
+                        choose(static_cast<u32>(other));
                         break;
                     }
                 }
@@ -2441,6 +2455,7 @@ void Shell::open_document(const std::filesystem::path& path) {
     // it, and the travel its sliders were given are all about a file that is no longer open.
     graph_stale_ = true;
     chosen_node_.clear();
+    chosen_index_ = ClipGraph::kNone;
     range_node_.clear();
     node_range_.clear();
     graph_pan_x_ = 0.0f;
@@ -2453,7 +2468,31 @@ void Shell::open_document(const std::filesystem::path& path) {
 // `editing_` goes over with the text because a document's includes resolve relative to where it
 // lives, and a world is very often one `include` line and nothing else.
 void Shell::reparse() {
-    if (parse_) report_ = parse_(document(), editing_);
+    parse_wanted_ = false;
+    if (!parse_) return;
+    const u64 began = now_ns();
+    report_ = parse_(document(), editing_);
+    parse_cost_ = static_cast<f64>(now_ns() - began) * 1.0e-9;
+}
+
+// **D453 said the script is parsed on every keystroke, and this is what that had to become.**
+//
+// The rule it exists for is unchanged and is the important half: a script that does not parse is
+// not an error, the view says so in one line, and nothing pops up — because a parser that
+// interrupts you halfway through typing a word is a parser you fight. What was literal in it was
+// *on every keystroke*, and that was affordable while the only thing the editor could open was a
+// clip. A **world** costs the whole building: 22 ms to splice its twenty-two pieces and 54 to read
+// them, measured, which is five frames a letter on exactly the file kind D744 made editable.
+//
+// So the verdict is asked for when the text has been STILL for a moment, and the moment is a
+// function of what the last one cost — three times it, capped at half a second. A document that
+// parses in a millisecond re-parses three milliseconds later, which is every keystroke in
+// everything but name; a world re-parses a fifth of a second after you stop, which is a verdict
+// that arrives while you are still looking at the line you typed. The cap is what stops a document
+// that has become expensive from quietly stopping being checked at all.
+void Shell::reparse_soon() {
+    parse_wanted_ = true;
+    parse_at_ = seconds_ + std::clamp(parse_cost_ * 3.0, 0.0, 0.5);
 }
 
 void Shell::save_document() {
@@ -2547,10 +2586,11 @@ void Shell::edit_keys(const InputState& input) {
         // Re-parsed on every keystroke, and a script that does not parse is NOT an error (D453):
         // the status line says where it stopped and nothing pops up, because a parser that
         // interrupts you halfway through typing a word is a parser you fight.
-        reparse();
-        // And re-read into a graph, so the other view is this document rather than the document as
-        // it was when it was opened (D452). It is a few hundred lines, on a keystroke; the parse
-        // beside it costs more.
+        reparse_soon();
+        // The graph, though, is re-read at once, so the other view is this document rather than the
+        // document as it was when it was opened (D452). It costs 1.3 ms on the largest fragment in
+        // the repository and it reads the document alone — where the parse reads everything the
+        // document includes, which is why one of the two is deferred and the other is not.
         graph_stale_ = true;
     }
 }

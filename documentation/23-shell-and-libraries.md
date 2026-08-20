@@ -347,9 +347,16 @@ nodes; the field nodes do not lift back.
 Four things that has to be true for it to work, and each is a decision rather than an implementation
 detail:
 
-- **The script is parsed on every keystroke, and a script that does not parse is not an error.** The
+- **The script is parsed as you type, and a script that does not parse is not an error.** The
   visual view holds the last graph that parsed and greys itself; it does not empty, and nothing pops
   up. A parser that interrupts you halfway through typing a word is a parser you fight.
+  **On every keystroke was literal and had to stop being** (D753): a clip parses in a millisecond
+  and a *world* parses the whole building — 22 ms to splice its twenty-two pieces and 54 to read
+  them — which is five frames a letter. So the verdict is asked for when the text has been still for
+  a moment, and the moment is three times what the last one cost, capped at half a second. A clip is
+  therefore checked on every keystroke in everything but name; a world is checked a fifth of a
+  second after you stop. The **graph** is not deferred: it reads the document alone, it is 1.3 ms on
+  the largest fragment in the repository, and it is what the other view is drawn from.
 - **A round trip does not reformat what you wrote.** Comments, blank lines, the order you declared
   things in and your own spacing are part of the document, not decoration around it. A visual edit
   rewrites the lines it touched and leaves the rest byte-identical — otherwise nobody will trust the
@@ -517,6 +524,14 @@ double-clicking a world builds it and the world is torn down on the way back out
 | Cold start to the title | **543 ms** | 3 s (`09-performance-budgets.md` §8) |
 | Enter the facility from the library | **0.84 s**, at the detail the clip asked for | 5 s |
 | The interface, at 2560×1440, with two full-height windows docked | **0.26 ms** mean, 1.09 ms worst | 0.6 ms |
+| The editor's **script** view, at 1600×1000, in a world | **0.185 ms** mean, 0.189 worst | 0.6 ms |
+| The editor's **visual** view, and a node's parameters beside it | **0.193 ms** mean, 0.201 worst | 0.6 ms |
+| The same over a 1,602-line, 702-node fragment | **0.195 ms** mean, 0.201 worst | 0.6 ms |
+
+The visual view being *cheaper* than the script view is the figure worth explaining: a node is six
+marks and a line of source is one per run of characters, so a page of text is more marks than a
+screen of boxes. And a 1,602-line fragment costs what the fifty-line sampler does, because only the
+nodes on screen are drawn.
 
 The first is what D441 is for: nothing above the device, the swapchain and one compute pipeline
 exists when the title is up, so the three-second budget is spent on opening a window and not on

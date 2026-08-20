@@ -15240,6 +15240,34 @@ scene: 4 chunks, 1429596 solid voxels, 10018 of 10018 nodes sharpened, content e
 box against cell: 68324 boxes settled solid and 47943 empty over 2567288 cells; 0 filled that are air and 0 cleared that are matter
 ```
 
+## D753–D754 — what the two new panels cost, and the promise that had to stop being literal
+
+*Measured after the change above, because `09-performance-budgets.md`'s rule is that a budget is a
+number a subsystem is not allowed to exceed and the editor is now two panels rather than one.*
+
+**The interface, at 1600×1000, in a world, against the `shell` pass's own 0.6 ms budget.** Arms
+alternated within minutes of each other and each taken twice, which is the only way two figures on
+this machine are comparable (§4 trap 29):
+
+| what is on screen | mean | worst |
+|---|---|---|
+| nothing open | 0.061 | 0.195 |
+| the editor, script view | 0.185 / 0.186 | 0.189 |
+| the editor, visual view | 0.173 / 0.174 | 0.181 |
+| the visual view AND a node's parameters on the left | 0.193 / 0.193 | 0.201 |
+| the same, over `clips/facility/ballroom.clip` — 1,602 lines, 702 nodes | 0.195 / 0.196 | 0.201 |
+
+**The visual view is CHEAPER than the script view**, which is the one figure worth explaining: a
+node is six marks and a line of source is one mark per run of characters, so a page of text is more
+marks than a screen of boxes. And the 1,602-line fragment costs the same as the fifty-line sampler,
+because only the nodes on screen are drawn. Every row is a third of the budget and half of the
+0.3 ms `09` §3 gives the interface on this machine.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D753 | **The document is re-read into a graph on every keystroke; the PARSE is not** | correction | D453 says *the script is parsed on every keystroke*, and the rule it exists for is unchanged and is the important half: a script that does not parse is not an error, the view says so in one line, and nothing pops up. What was literal in it was *every keystroke*, and that was affordable while the only thing the editor could open was a clip. **A world costs the whole building** — 22.6 ms to splice its twenty-two pieces and 54.0 to read them, measured — which is five frames a letter on exactly the file kind D744 made editable. So the verdict is asked for when the text has been STILL for a moment, and the moment is three times what the last one cost, capped at half a second: a document that parses in a millisecond re-parses three milliseconds later, which is every keystroke in everything but name, and a world re-parses a fifth of a second after you stop typing. The cap is what stops a document that has become expensive from quietly stopping being checked. The GRAPH is not deferred — it is 1.3 ms on the largest fragment in the repository and it reads the document alone, where the parse reads everything the document includes |
+| D754 | **A node's key is turned into an index once per re-read, not once per look** | trap | Three separate places wanted *which node is selected* every frame — the panel on the left, the box drawn lit on the right, and the test that decides which of the two the left-hand window is — and each of them was a walk over every node building a key string for it. On a seven-hundred-node fragment that is two thousand strings a frame to answer one question, on the host, every frame the window is open. The key is what survives a re-read and the index is what is fast, so both are kept and one function sets them together |
+
 ### What is not built, each for a stated reason
 
 - **Wiring by hand.** A node's numbers move; its wires do not. Re-wiring means rewriting a name in

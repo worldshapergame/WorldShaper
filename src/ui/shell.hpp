@@ -280,6 +280,9 @@ private:
     // Re-read the document into a graph. Only when the text has actually changed, because this is
     // otherwise a parse a frame for a window nobody is typing into.
     void refresh_graph();
+    // Choose a node by index, keeping the key and the index in step. `ClipGraph::kNone` is
+    // "nothing", and everything that selects goes through here so the two cannot disagree.
+    void choose(u32 index);
     // Which node covers a line of the document, innermost first. It is the whole of the link
     // between the two views: the statement the caret is in is the box that is lit over there, and
     // the box you double-click is the line the caret goes to.
@@ -366,6 +369,14 @@ private:
     bool dirty_ = false;
     ParseReport report_{};
     std::function<ParseReport(const std::string&, const std::filesystem::path&)> parse_;
+    // When the verdict is next worth asking for, and what the last one cost. A parse of an ordinary
+    // clip is a millisecond and a parse of a WORLD is the whole building — 22 ms to splice its
+    // twenty-two pieces and 54 to read them — so "on every keystroke" is a promise that costs five
+    // frames a letter on the one file kind this change made editable.
+    bool parse_wanted_ = false;
+    f64 parse_at_ = 0.0;
+    f64 parse_cost_ = 0.0;   // seconds
+
     // Something else was selected while this document had unsaved changes. Nothing is thrown away
     // and nothing pops up: the editor says which file is waiting, and opens it the moment this one
     // is saved.
@@ -375,9 +386,16 @@ private:
     // changes and not otherwise.
     ClipGraph graph_;
     bool graph_stale_ = true;
-    // Which node is selected, by the key that survives a re-read — its name, or where its head is
-    // written. An index would be a different node by the time a drag's second frame arrived.
+    // Which node is selected, by the key that survives a re-read — where its head is written, and
+    // the name beside it. An index alone would be a different node by the time a drag's second
+    // frame arrived, because the graph is re-read on the frame the drag writes.
     std::string chosen_node_;
+    // And what that key resolved to in the graph as it stands, worked out once when the graph is
+    // re-read. Three separate places wanted it every frame — the panel on the left, the box drawn
+    // lit on the right, and the test that decides which of the two the left-hand window is — and
+    // each of them was a walk over every node building a key string for it, which on a fragment of
+    // seven hundred nodes is two thousand strings a frame to answer one question.
+    u32 chosen_index_ = ClipGraph::kNone;
     // Where each of the selected node's sliders may travel, worked out once when it is selected. A
     // range recomputed from the value every frame is a handle that never leaves the middle.
     std::vector<std::pair<f64, f64>> node_range_;
@@ -393,6 +411,9 @@ private:
     void open_document(const std::filesystem::path& path);
     void save_document();
     void edit_keys(const InputState& input);
+    // Ask for the verdict again. Not at once: see `reparse` in the cpp for why a parse on every
+    // keystroke is a promise this had to stop keeping literally in order to keep at all.
+    void reparse_soon();
     void reparse();
 
     f64 seconds_ = 0.0;

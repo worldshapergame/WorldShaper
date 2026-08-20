@@ -453,33 +453,26 @@ private:
     //
     // The document cannot say what `part_podium` is — it is declared in a file this one includes —
     // but it can see that a union is made of it, and a union is made of shapes. So an unresolved
-    // name is given the carries of the first node that takes it as a CHILD, which is where the
-    // reading is decided: a child of a union is a shape and a child of `add` is a value. A
-    // reference through a KEY is deliberately not counted, because `paint moss where=grain` is a
-    // material rule reading a pattern and the two disagree.
+    // name takes the carries of the first node that has it as a CHILD, which is where the reading
+    // is decided: a child of a union is a shape and a child of `add` is a value.
+    //
+    // A child is the only way it can be reached, and that is worth stating rather than testing
+    // for: an unresolved node is only ever MADE from a bare name in a child position, because a
+    // `key=name` wires to a binding that already exists or to nothing at all. So this is one walk
+    // over the edges and not a scan of every node per unresolved one.
     //
     // One case it gets wrong and it is worth naming: `displace { thing grain }` is a shape whose
     // SECOND child is a value, so an unresolved grain there comes out drawn as a shape. It is a
     // wire's colour on a name the document never declared, which is the smallest thing in this
     // file that can be wrong.
     void settle_unresolved() {
-        for (usize i = 0; i < out_.nodes.size(); ++i) {
-            if (!out_.nodes[i].unresolved) continue;
-            for (const ClipNode& user : out_.nodes) {
-                bool by_key = false;
-                for (const ClipWord& word : user.words) {
-                    if (!word.key.empty() && word.names_a_part && word.text == out_.nodes[i].name) {
-                        by_key = true;
-                    }
-                }
-                if (by_key) continue;
-                bool a_child = false;
-                for (u32 input : user.inputs) {
-                    if (input == i) a_child = true;
-                }
-                if (!a_child) continue;
-                out_.nodes[i].carries = user.carries;
-                break;
+        std::vector<bool> settled(out_.nodes.size(), false);
+        for (const ClipNode& user : out_.nodes) {
+            for (u32 input : user.inputs) {
+                if (input >= out_.nodes.size()) continue;
+                if (!out_.nodes[input].unresolved || settled[input]) continue;
+                out_.nodes[input].carries = user.carries;
+                settled[input] = true;
             }
         }
     }
