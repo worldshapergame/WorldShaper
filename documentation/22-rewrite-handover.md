@@ -621,6 +621,30 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### WHERE THE CARD'S EIGHTY WENT, answered — and what is left
+
+**D727.** D722 pointed at the card as the only place with headroom bigger than the ask. It has been
+measured, and **three of the four suspects are dead**: the card computes **93–95% of the wall clock**
+(not idle, not round-trip bound), the dispatch cap **buys nothing** (an 8× grid moves µs-a-cell by
+nothing, and 256 boxes comes within 50 ms of the watchdog), and warp imbalance is **1.4×** with lanes
+useful 66–71%.
+
+**What is left is the walk. The card is at PARITY PER NODE VISIT with ten scalar CPU cores** — 813
+million visits a second against 645 — **while holding 4,608 lanes**. About 14,000 lane-cycles a node
+visit against a CPU core's seventy. More resident warps changed nothing, so the schedulers are
+issuing rather than stalling: **every lane pays for every other lane's opcode**, in a switch over
+sixty-seven ops.
+
+**So the lever is specialising the shader per clip** — `facility.clip` uses a fraction of those ops.
+A block walk is NOT it: on a card it would make 512 lanes lockstep where 32 already are, and D724 has
+priced the cull replay.
+
+**And the frame rate fault is fixed (D726).** *"ever lower framerate the more things load"* was the
+ladder re-opening a two-second every-face-re-measures-its-shadow window three times a second for the
+whole of a load. Gated on an edit: **1.47× the frames for the same world**. The heartbeat that found
+it ships — `heartbeat at frame N`, every ten seconds, frame time and its median and 99th beside the
+GPU split by pass and every quantity that grows as a world builds.
+
 #### THE ARITHMETIC ON 100x, so that the next session does not start by hoping
 
 Asked for directly and it is worth being exact about rather than optimistic. The estate at the

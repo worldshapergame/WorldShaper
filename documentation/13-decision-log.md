@@ -13737,3 +13737,113 @@ if it turns out to be visible.
 | D726 | **The gap is concentrated where the world arrives fastest** | honesty | Both arms end at about the same frame time; the loss was 15.57 ms against 2.59 in the middle of a load |
 | D726 | **The argument for it was already written, for the flag twenty lines below** | trap | `edit_window_opened_` was gated for this exact reason and the line above it was left |
 | D726 | **Match two arms of a LOAD on the world, not on the frame number** | method | At matched frames the same change reads as 6x, because the faster arm has less world in front of it |
+
+---
+
+## D727 — Where the card's factor of eighty went: it is at parity per node visit with ten scalar cores
+
+**2026-08-20.** D722 ended by naming the card as the only place left with headroom bigger than the
+ask — *"an RTX 5060 Ti is roughly eighty times ten CPU cores in raw floating point, and the card
+sampler measures 0.80x of them, about one per cent of the hardware"* — and said that whatever was
+wrong there was worth more than every CPU lever put together. This is the answer. **Three of the four
+suspects are dead and the fourth is the walk itself.**
+
+### The instrument first, because none of it was measurable
+
+`FieldSampler` prints three lines at teardown, so a run cut short by `--max-seconds` still reports —
+which is every measured run.
+
+**1. The card is not idle. It computes 93–95% of the wall clock.** Three spans timed round every
+batch — GPU timestamps, submit-to-collect, and first-submit-to-last-collect — come out at 91–97%
+across every run. **Neither the round trip nor the once-a-frame fence poll is the problem**, which is
+where two previous sessions would have looked first.
+
+**2. The dispatch cap buys nothing.** Sweeping it on one command:
+
+| boxes | ms of GPU a dispatch | µs a cell | worst dispatch |
+|---|---|---|---|
+| 32 | 46.8 | 2.857 | 579 ms |
+| 64 | 92.4 | 2.819 | 711 ms |
+| 128 | 189.0 | 2.884 | 1,040 ms |
+| 256 | 423.6 | 3.233 | **1,950 ms** |
+
+An eight-times-bigger grid — 512 warps to 4,096, on a card with 1,728 warp slots — **moves the cost
+of a cell by nothing.** The cap went up, was measured, and went back to 32: 256 comes within 50 ms of
+Windows' two-second watchdog, and a lost device is the game gone mid-session. D678's "batch size does
+not affect throughput" is confirmed far more strongly than the run that produced it could claim, and
+the header's claim that 32 is "about 220 ms of the worst camera" is corrected to **579** — the margin
+is 3×, not 16×.
+
+**3. Warp load imbalance is 1.4×, not the factor D681 was carrying.** The readback is indexed by flat
+invocation, so an aligned run of 32 entries *is* a warp: the max of the run is what the warp cost and
+the sum is what it did. **Lanes are useful 66–71% of the time.**
+
+**4. So it is the walk, and the arithmetic pins it.** 2.1 evaluations a cell × ~950 nodes an
+evaluation ≈ 2,000 node visits a cell at 2.7 µs → **813 million node visits a second across the whole
+card**. Ten CPU cores at D722's 15.5 ns a visit are **645 million**. The card is at **parity per node
+visit with ten scalar cores while holding 4,608 lanes** — about **14,000 lane-cycles a node visit
+against a CPU core's seventy**.
+
+And because 3.4× more resident warps changed nothing, **the schedulers are issuing rather than
+stalling**. The warp walks the union of every op path any of its thirty-two lanes is on, and the loop
+body is a switch over about forty walk ops with `field_leaf`'s twenty-nine more inlined into it. That
+is where the eighty went: not to memory, not to latency, not to occupancy, but to **every lane paying
+for every other lane's opcode**.
+
+### What was changed, and it is 1.05×
+
+- **The X-axis short cut is out of the card's box tests.** `ws_box_away_sq`, `rule_box_away_sq`,
+  `piece_away_sq` and `pack_cull_word` all asked `infinite()`, which asks about x alone — D722's
+  fault, in a fourth place. It never made a wrong voxel, only a long walk, which is why D691's pass
+  over this file missed it.
+- **Six pure point transforms became the frame instead of pushing under it** — `translate`, `rotate`,
+  `mirror`, `polar repeat`, `twist`, `bend` have nothing to do on the way out, so a push and a pop
+  for `ret = ret` was two turns and a stack level each.
+
+Control arm built with the change absent and the same instrument in both, quiet machine:
+
+| | µs of GPU a cell | worst dispatch |
+|---|---|---|
+| control | 2.861, 2.843 | 582, 594 ms |
+| change | **2.695, 2.723** | **479, 481 ms** |
+
+**1.05×**, and the worst dispatch is 18% lower, which is watchdog margin rather than speed.
+
+**Agreement: 32 nodes, 16,384 cells, 0 differ in matter, 0 in material, 0 in the clip mask**, and
+`0 refused of 21,135,360 cells`. It no longer exits 255 — about 25 runs, all exit 0.
+
+### The named next lever, and the one that is NOT it
+
+**Specialising the shader per clip.** `facility.clip` uses a fraction of the sixty-seven ops, and the
+whole cost above is every lane paying for every op any lane needs. A shader generated for the clip in
+front of it is the only thing left with a large multiple in it.
+
+**The block walk is not it.** On a card it would make 512 lanes lockstep where 32 already are, and
+D724 has already priced what the cull replay costs.
+
+### Three things found on the way
+
+- **My own instrument named a false suspect, and the correction is the entry.** It first read *"the
+  card walks 1.75× the CPU"*. It does not: `Field::eval` counts once per **call** and the shader
+  counts once per **turn**, and a four-child union is five turns. 1,518 against 866 is **1.75 turns a
+  node** — the shape of writing a recursion as a loop, not extra work. Left as it was it would have
+  sent the next session after a cull that is already there. **D681's lesson, third time.**
+- **A crash, caused and fixed within the session:** under `--gpu-visits` the packed counter word in
+  `out_types` was cast to `VoxelTypeId` and indexed a palette off the end — an access violation two
+  thirds into a run, in a mode nobody looks at the voxels of.
+- **The host half of the box fix is worth nothing on this clip.** `14,751 of 15,911 nodes carry a
+  box` either way, so no node of `facility.clip` changed classification. The shader half still paid,
+  because branchless beats a load-and-branch here, and the fault is real for any clip with an
+  axis-aligned half space.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D727 | **The card computes 93–95% of the wall clock** | measurement | Not idle, not round-trip bound; three timed spans, every run |
+| D727 | **The dispatch cap buys nothing and 256 boxes nearly loses the device** | measurement | 8× the grid moves µs-a-cell by nothing; 1,950 ms against a 2 s watchdog |
+| D727 | **Warp imbalance is 1.4×; lanes are useful 66–71%** | measurement | An aligned run of 32 readback entries is a warp |
+| D727 | **The card is at PARITY PER NODE VISIT with ten scalar cores** | decision | 813 M visits a second against 645 M — 14,000 lane-cycles a visit against seventy |
+| D727 | **So the eighty went to divergence in a sixty-seven-op switch** | decision | More resident warps changed nothing, so the schedulers are issuing rather than stalling |
+| D727 | **The X-axis short cut, in a fourth place** | fault | Never a wrong voxel, only a long walk, which is why a previous pass missed it |
+| D727 | **1.05× and 18% of watchdog margin** | build | 2.85 → 2.71 µs a cell, control arm built with the change absent |
+| D727 | **Specialising the shader per clip is the lever; a block walk is not** | honesty | 512 lockstep lanes where 32 already are, and D724 priced the cull replay |
+| D727 | **An instrument that counts turns is not counting work** | trap | "1.75× the CPU" was 1.75 turns a node; D681's lesson for the third time |
