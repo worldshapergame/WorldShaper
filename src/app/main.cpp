@@ -5458,7 +5458,21 @@ bool Application::build_the_whole_world() {
         // file of hundreds of megabytes, and a player who has just asked to be let in must not be
         // held by either -- so a press abandons both. What is lost is at most the two minutes
         // since the last save, which is what the interval is chosen to be worth.
-        while (refine_busy() && !loading_quit_ && !progress_.asked_to_enter()) {
+        // ...AND IT ENDS ON THE CLOCK LIKE EVERYTHING ELSE HERE.
+        //
+        // Without the deadline this loop waits for `refine_busy()` to go false and nothing else,
+        // so a batch that never comes back holds the whole load open **for ever** — no bar, no
+        // frame, no way out but the window. Found by an agent whose run sat at 450 seconds and ten
+        // per cent of one core beside another agent's process; it is a hang the deadline every
+        // other wait here already has would have ended in sixty.
+        //
+        // The same `--max-seconds` and the same origin (`load_began_ns_`) as the pass around it, so
+        // one flag means one thing. A drain cut short takes no save — see below.
+        const auto out_of_time = [&] {
+            return options_.max_seconds > 0.0 &&
+                   ns_to_ms(now_ns() - load_began_ns_) > options_.max_seconds * 1000.0;
+        };
+        while (refine_busy() && !loading_quit_ && !progress_.asked_to_enter() && !out_of_time()) {
             pump_refinement();
             draw_loading();
             if (!loading_screen_.valid()) {

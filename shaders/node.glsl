@@ -3130,13 +3130,25 @@ vec3 node_derive_offset(uint sub, float h) {
 }
 
 // How far a point is from a paint rule's box, squared, and from one piece of its zone. Nought
-// inside, and nought for the infinite box a rule whose place could not be bounded carries. The same
-// two functions sample_field.comp has, because a zone that is the great steps and the cornice wash
-// has a bounding box of the whole building and rejects nothing without the pieces.
+// inside. The same two functions sample_field.comp has, because a zone that is the great steps and
+// the cornice wash has a bounding box of the whole building and rejects nothing without the pieces.
+//
+// NO X-AXIS SHORT CUT, and its absence is the point rather than an oversight.
+//
+// Both of these used to open with `if (lo.x <= -1e29 || hi.x >= 1e29) return 0.0;` — asking about
+// the X AXIS ALONE, because that is what `Field::Aabb::infinite()` asks and this is a copy of it.
+// A box may be unbounded on one axis and bounded on another: a ground plane is `y <= 0` and nothing
+// else (D722), and a rule placed on one is bounded in the one direction that matters. Short-cutting
+// on x threw those away and answered "distance nought" for a point forty metres above the ground,
+// so the rule could never be rejected and every solid voxel up there paid for it.
+//
+// The arithmetic below needs no special case: `max(-1e30 - p, p - 1e30, 0)` is nought on an
+// unbounded axis by construction, which is exactly the right answer. D722 took it out of the CPU's
+// `away_from` and `squared_distance_to`, D727 out of the sampler's shader, and these two are the
+// marcher's own copies of the same rule — the third door on one fault.
 float node_rule_box_away_sq(uint rule, vec3 p) {
-    const float lx = paint_rules.items[rule].lo[0];
-    if (lx <= -1.0e29 || paint_rules.items[rule].hi[0] >= 1.0e29) return 0.0;
-    const vec3 lo = vec3(lx, paint_rules.items[rule].lo[1], paint_rules.items[rule].lo[2]);
+    const vec3 lo = vec3(paint_rules.items[rule].lo[0], paint_rules.items[rule].lo[1],
+                         paint_rules.items[rule].lo[2]);
     const vec3 hi = vec3(paint_rules.items[rule].hi[0], paint_rules.items[rule].hi[1],
                          paint_rules.items[rule].hi[2]);
     const vec3 d = max(max(lo - p, p - hi), vec3(0.0));
@@ -3144,9 +3156,8 @@ float node_rule_box_away_sq(uint rule, vec3 p) {
 }
 
 float node_piece_away_sq(uint piece, vec3 p) {
-    const float lx = rule_pieces.items[piece].lo[0];
-    if (lx <= -1.0e29 || rule_pieces.items[piece].hi[0] >= 1.0e29) return 0.0;
-    const vec3 lo = vec3(lx, rule_pieces.items[piece].lo[1], rule_pieces.items[piece].lo[2]);
+    const vec3 lo = vec3(rule_pieces.items[piece].lo[0], rule_pieces.items[piece].lo[1],
+                         rule_pieces.items[piece].lo[2]);
     const vec3 hi = vec3(rule_pieces.items[piece].hi[0], rule_pieces.items[piece].hi[1],
                          rule_pieces.items[piece].hi[2]);
     const vec3 d = max(max(lo - p, p - hi), vec3(0.0));
