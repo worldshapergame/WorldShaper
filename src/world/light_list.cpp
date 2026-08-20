@@ -150,13 +150,24 @@ f64 emitted_power(const LightSource& light) {
     return luminance * radius * radius;
 }
 
-// A total order over two fittings that never consults the camera: brightest first, and the bytes
-// when two are equally bright. It has to be total — `std::sort` is not stable, so a comparator that
+// A total order over two fittings that never consults the camera: brightest first, and then a hash
+// of where each one stands. It has to be total — `std::sort` is not stable, so a comparator that
 // leaves two records equal lets the input order decide, and the input order here came from a map.
+//
+// The tie-break is a HASH of the position rather than the position itself, and that is about what
+// the picture looks like rather than about determinism. A grid of identical fittings — which is
+// what a hall of one lamp repeated is — ties on every comparison, so ordering by coordinate would
+// drop the last rows of each neighbourhood in a block and leave a hard edge of unlit lamps. A hash
+// spreads the same number of drops evenly through the grid, where they read as fittings the bounce
+// has to find rather than as a wall somebody switched off. Deterministic either way: the same world
+// gives the same list.
 bool brighter(const LightSource& a, const LightSource& b) {
     const f64 pa = emitted_power(a);
     const f64 pb = emitted_power(b);
     if (pa != pb) return pa > pb;
+    const u64 ha = hash_cell(a.x, a.y, a.z, 0, 0x4C414D50ull);
+    const u64 hb = hash_cell(b.x, b.y, b.z, 0, 0x4C414D50ull);
+    if (ha != hb) return ha < hb;
     return std::memcmp(&a, &b, sizeof(LightSource)) < 0;
 }
 
