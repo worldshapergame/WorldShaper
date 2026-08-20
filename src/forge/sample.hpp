@@ -347,6 +347,54 @@ SamplePlan plan_sample(const Field& field, u32 root, const std::vector<PaintRule
 void set_sample_block_cells(u32 cells);
 u32 sample_block_cells();
 
+// --------------------------------------------------------------------------------------
+// The box-against-cell agreement audit — D725's open question, made answerable.
+// --------------------------------------------------------------------------------------
+//
+// The descent's whole correctness argument is that the box test and the cell test cannot disagree:
+// a box settled SOLID in bulk fills cells the per-cell rule would also have filled, and a box
+// settled EMPTY clears cells the per-cell rule would also have cleared. D725 found that they do
+// disagree — 220 voxels of 1,430,104 on `clips/sampler.clip` — and could not say which was right,
+// because `tests/test_sample.cpp`'s brute-force reference is downstream of the SAME descent it is
+// checking (it calls `sample`, then compares that clip with a per-voxel walk of `Field::eval`) and
+// the descent's own settled boxes are what it reads. Trap 26: every audit agreeing is not evidence
+// when they all read the same source.
+//
+// This asks the question with nothing shared. When it is on, every box the descent settles in bulk
+// walks its own cells afterwards and evaluates `Field::eval(root, cell centre)` at each — the
+// finest level, no descent above it, the exact rule a single voxel is decided by including the
+// thin-feature rescue — and records every cell whose own answer differs from what the box claimed.
+// The evaluations are counted apart and go into no figure the sampler reports, so a gate taken
+// with the audit on is the same gate.
+//
+// Off by default and one predictable branch per settled box when off.
+struct BoxCellFault {
+    i64 voxel[3]{};        // the disagreeing cell, in the sample's own voxel coordinates
+    i64 box_low[3]{};      // the settled box's low corner, same coordinates
+    i32 side[3]{};         // how many cells the settled box spans on each axis
+    f64 centre_value = 0;  // what the box read at its own centre (the undisplaced shape)
+    f64 cell_value = 0;    // what the cell reads at its own centre (the real shape)
+    f64 radius = 0;        // the box's half-diagonal over its sample points
+    f64 reach = 0;         // radius + the slack the box was charged
+    f64 voxel_metres = 0;
+    bool box_solid = false;  // the box said SOLID and the cell says air, or the reverse
+    bool cell_rescued = false;
+};
+
+void set_box_cell_audit(bool on);
+bool box_cell_audit();
+
+// Everything found since the last call, and the counters beside it. Clears the list.
+struct BoxCellAudit {
+    std::vector<BoxCellFault> faults;
+    u64 boxes_solid = 0;    // boxes settled SOLID in bulk and checked
+    u64 boxes_empty = 0;    // boxes settled EMPTY in bulk and checked
+    u64 cells_checked = 0;
+    u64 solid_over_claimed = 0;   // cells the box filled that the per-cell rule would not have
+    u64 empty_over_claimed = 0;   // cells the box cleared that the per-cell rule would have kept
+};
+BoxCellAudit take_box_cell_audit();
+
 // Could this box hold any matter at all, at this resolution?
 //
 // A conservative answer: `true` means "sample it and find out", and only `false` is a promise. It

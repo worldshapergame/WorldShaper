@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
+#include <mutex>
 #include <unordered_map>
 
 #include "core/jobs.hpp"
@@ -43,6 +44,35 @@ u32 g_block_cells = block_cells_at_start();
 }  // namespace
 void set_sample_block_cells(u32 cells) { g_block_cells = cells; }
 u32 sample_block_cells() { return g_block_cells; }
+
+// --------------------------------------------------------------------------------------
+// The box-against-cell agreement audit. See the note in sample.hpp for what it is for.
+// --------------------------------------------------------------------------------------
+//
+// One relaxed flag and one mutex-guarded list. The flag is read once per box the descent settles
+// in bulk, which is a predictable branch on a line the box has already touched; the lock is only
+// ever taken by a box that has something to say, and a clip with nothing to say never takes it.
+namespace {
+
+std::atomic<bool> g_box_cell_audit{false};
+std::mutex g_box_cell_lock;
+BoxCellAudit g_box_cell;
+
+// A ceiling on the list, so a clip that disagrees everywhere reports the first few thousand rather
+// than eating the machine. The counters beside it are not capped and are the numbers to read.
+constexpr usize kMaxBoxCellFaults = 8192;
+
+}  // namespace
+
+void set_box_cell_audit(bool on) { g_box_cell_audit.store(on, std::memory_order_relaxed); }
+bool box_cell_audit() { return g_box_cell_audit.load(std::memory_order_relaxed); }
+
+BoxCellAudit take_box_cell_audit() {
+    std::lock_guard<std::mutex> held(g_box_cell_lock);
+    BoxCellAudit out = std::move(g_box_cell);
+    g_box_cell = BoxCellAudit{};
+    return out;
+}
 
 namespace {
 
@@ -630,6 +660,74 @@ void fill_box(const Descent& d, const i32 low[3], const i32 high[3], VoxelTypeId
     }
 }
 
+// Every cell of a box the descent has just settled in bulk, asked the way a SINGLE VOXEL is asked.
+//
+// Nothing here shares a line of reasoning with the box test. `Field::eval` on the real root at the
+// cell's own centre, plus the thin-feature rescue, is exactly and only what `descend` applies to a
+// box of one voxel — no prune root, no slack, no radius, no descent above it. That is the point:
+// the reference in `tests/test_sample.cpp` calls `sample` and then compares the clip it got back
+// with a per-voxel walk, so the cells a box settled in bulk are read out of the descent's own
+// answer and the comparison is downstream of the thing it is checking (trap 26).
+//
+// Runs only when `set_box_cell_audit(true)` has been called, and its evaluations go into no figure
+// the sampler reports, so a gate taken with the audit on is the same gate.
+void audit_box(const Descent& d, const i32 low[3], const i32 high[3], f64 centre_value, f64 radius,
+               f64 reach, bool claims_solid) {
+    std::vector<BoxCellFault> found;
+    u64 cells = 0;
+    u64 wrong = 0;
+    for (i32 z = low[2]; z < high[2]; ++z) {
+        const f64 pz = (static_cast<f64>(d.lo[2] + z) + d.centre_shift) * d.voxel;
+        for (i32 y = low[1]; y < high[1]; ++y) {
+            const f64 py = (static_cast<f64>(d.lo[1] + y) + d.centre_shift) * d.voxel;
+            for (i32 x = low[0]; x < high[0]; ++x) {
+                const f64 px = (static_cast<f64>(d.lo[0] + x) + d.centre_shift) * d.voxel;
+                const Vec3 p{px, py, pz};
+                ++cells;
+                const f64 value = d.field->eval(d.root, p);
+                bool rescued = false;
+                if (value > 0.0 && value < d.voxel * kHalfCellDiagonal) {
+                    rescued = thin_feature_here(*d.field, d.root, p, value, d.voxel, nullptr);
+                }
+                const bool cell_solid = (value <= 0.0) || rescued;
+                if (cell_solid == claims_solid) continue;
+                ++wrong;
+                if (found.size() >= kMaxBoxCellFaults) continue;
+                BoxCellFault fault;
+                fault.voxel[0] = d.lo[0] + x;
+                fault.voxel[1] = d.lo[1] + y;
+                fault.voxel[2] = d.lo[2] + z;
+                for (u32 axis = 0; axis < 3; ++axis) {
+                    fault.box_low[axis] = d.lo[axis] + low[axis];
+                    fault.side[axis] = high[axis] - low[axis];
+                }
+                fault.centre_value = centre_value;
+                fault.cell_value = value;
+                fault.radius = radius;
+                fault.reach = reach;
+                fault.voxel_metres = d.voxel;
+                fault.box_solid = claims_solid;
+                fault.cell_rescued = rescued;
+                found.push_back(fault);
+            }
+        }
+    }
+
+    std::lock_guard<std::mutex> held(g_box_cell_lock);
+    if (claims_solid) {
+        ++g_box_cell.boxes_solid;
+        g_box_cell.solid_over_claimed += wrong;
+    } else {
+        ++g_box_cell.boxes_empty;
+        g_box_cell.empty_over_claimed += wrong;
+    }
+    g_box_cell.cells_checked += cells;
+    for (const BoxCellFault& f : found) {
+        if (g_box_cell.faults.size() >= kMaxBoxCellFaults) break;
+        g_box_cell.faults.push_back(f);
+    }
+}
+
 // Counted apart, because the two kinds of question are reduced by different means and knowing
 // which of them dominates is the difference between optimising the sampler and guessing at it.
 struct Tally {
@@ -1104,6 +1202,10 @@ void sweep(const Descent& d, const i32 seed_low[3], const i32 seed_high[3], bool
             if (!box.rescued && (box.dc > box.reach + rescue || (box.single && box.dc > 0.0))) {
                 // Empty. The cells still have to be marked as part of the clip; see `descend`.
                 if (box.whole_covered) {
+                    if (!box.single && g_box_cell_audit.load(std::memory_order_relaxed)) {
+                        audit_box(d, box.low, box.high, box.dc, box.radius, box.reach,
+                                  /*claims_solid=*/false);
+                    }
                     fill_box(d, box.low, box.high, kAir, false);
                     local.settled += box.cells();
                     continue;
@@ -1172,6 +1274,10 @@ void sweep(const Descent& d, const i32 seed_low[3], const i32 seed_high[3], bool
             }
 
             if (all_solid && box.whole_covered) {
+                if (!box.single && g_box_cell_audit.load(std::memory_order_relaxed)) {
+                    audit_box(d, box.low, box.high, box.dc, box.radius, box.reach,
+                              /*claims_solid=*/true);
+                }
                 if (every_rule_known) {
                     VoxelTypeId type = kAir;
                     for (usize r = 0; r < rules; ++r) {
@@ -1298,6 +1404,9 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
         // left ragged holes in the mask — invisible in the voxels, and visible the moment a slice
         // was printed.
         if (whole_covered) {
+            if (!single && g_box_cell_audit.load(std::memory_order_relaxed)) {
+                audit_box(d, low, high, dc, radius, reach, /*claims_solid=*/false);
+            }
             fill_box(d, low, high, kAir, false);
             local.settled += static_cast<u64>(high[0] - low[0]) * static_cast<u64>(high[1] - low[1]) *
                              static_cast<u64>(high[2] - low[2]);
@@ -1379,6 +1488,9 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
     }
 
     if (all_solid && whole_covered) {
+        if (!single && g_box_cell_audit.load(std::memory_order_relaxed)) {
+            audit_box(d, low, high, dc, radius, reach, /*claims_solid=*/true);
+        }
         if (every_rule_known) {
             // One material all through, and nothing left to ask. This is the inside of a wall.
             VoxelTypeId type = kAir;

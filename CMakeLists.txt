@@ -218,6 +218,7 @@ set(WS_TEST_SOURCES_HEADLESS
     tests/test_clip_script.cpp
     tests/test_weathering.cpp
     tests/test_sample.cpp
+    tests/test_box_agreement.cpp
     tests/test_markup.cpp
     tests/test_fixed.cpp
     tests/test_hash.cpp

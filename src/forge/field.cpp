@@ -3335,8 +3335,58 @@ f64 Field::metric_slack(u32 at) const {
         case Op::Prism:
         case Op::Platonic:
         case Op::Wedge:
-        case Op::Stairs:
             return 0.0;
+
+        // --- D732: A FLIGHT OF STEPS IS NOT A DISTANCE, and saying it was is the fault ---------
+        //
+        // `Op::Stairs` sat in the list above for as long as it has existed. It is the only op in
+        // `clips/sampler.clip` that is not a distance, and it is the whole of the disagreement
+        // D725 recorded and could not place: **every one of the 1,204 cells a bulk-settled box got
+        // wrong on that clip lies inside the stairs' own bounding box and nowhere else in it.**
+        //
+        // `sd_stairs` is `max(sd_box(p, half), v - top(u))`, where `u` is how far along the flight
+        // the point is and
+        //
+        //     top(u) = (floor(u / run) + 1) * rise
+        //
+        // is the height of the tread the point stands on. That is a STEP FUNCTION: as `u` crosses
+        // a multiple of `run`, `top` jumps by a whole `rise` and the field jumps DOWN by `rise`
+        // over no distance at all. Nothing with a Lipschitz bound can jump, so no additive slack
+        // is a bound on it, and a slack of nought says the opposite -- that a reading here bounds
+        // the answer everywhere within the reading's own distance.
+        //
+        // The measured shape of it, on `clips/sampler.clip`'s `flight` (run 0.30, rise 0.18), at a
+        // 4x4x4 box whose sample points span 0.081190 m from its centre:
+        //
+        //   the box read -0.082500 at its centre -- on tread 3, whose top is y = 1.02 -- and
+        //   settled SOLID; the cell 0.047 m away at (-5.8594, 0.8906, -1.7344) is on tread 2,
+        //   whose top is y = 0.84, and reads +0.050625. The field rose 0.133 m over 0.047 m.
+        //
+        // Both readings are correct point samples of the shape that is actually built. The stair
+        // really does end at y = 0.84 there and really does carry on to y = 1.02 one tread along,
+        // and the riser between them is the jump. So **the cells are right and the bulk settle is
+        // wrong**, and the direction is the dangerous one: a box straddling a riser fills air with
+        // stone, or clears stone into air, depending on which side of it the centre fell.
+        //
+        // The honest bound is `rise + (sqrt(1 + (rise/run)^2) - 1) * radius` -- an offset AND a
+        // slope -- and this function returns one constant with no radius in it, so there is no
+        // finite number it can give that is sound for every box the descent asks about. A constant
+        // `rise` is sound only out to radius = rise / (sqrt(1 + (rise/run)^2) - 1), which for
+        // 0.18 / 0.30 is 1.08 m and is SHORT of the descent's own 64-voxel top box at 1.705 m. So
+        // it refuses, exactly as `PolarRepeat` below refuses and for the same reason: the
+        // expression says nothing reliable about its neighbourhood.
+        //
+        // What that costs is bounded and local. `slack_here` charges a part's slack only to boxes
+        // within their own radius of that part's box, so a refusal here switches settling off
+        // inside a flight of steps and nowhere else -- every voxel of the flight is asked one at a
+        // time, which is what the per-cell rule was going to answer anyway.
+        //
+        // **The tighter fix is owed and is written down in the report**: carry a per-part SLOPE
+        // beside `SamplePlan::part_slack` and let `slack_here` charge `slack + slope * radius`,
+        // which is what this op actually needs and what every future non-metric solid will need
+        // too. It is a wider change than one case label and it is not what a hunt should land.
+        case Op::Stairs:
+            return kInfiniteSlack;
 
         // A spiral is walked as a chain of capsules and the answer is the least of their exact
         // distances, so it is a real distance to a real shape: no allowance at all.
