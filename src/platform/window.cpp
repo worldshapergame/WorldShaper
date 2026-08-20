@@ -9,6 +9,19 @@
 #include "core/log.hpp"
 
 namespace ws {
+
+std::string clipboard_text() {
+    // SDL hands back a string it owns and expects it freed. Copied out at once, because everything
+    // above this line deals in `std::string` and nothing above it should have to remember that.
+    char* held = SDL_GetClipboardText();
+    if (held == nullptr) return {};
+    std::string out(held);
+    SDL_free(held);
+    return out;
+}
+
+void set_clipboard_text(const std::string& text) { SDL_SetClipboardText(text.c_str()); }
+
 namespace {
 
 Key key_from_scancode(SDL_Scancode code) {

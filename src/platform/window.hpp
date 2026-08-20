@@ -75,6 +75,17 @@ struct InputState {
     bool fired(Key k) const { return pressed[static_cast<usize>(k)] || repeated[static_cast<usize>(k)]; }
 };
 
+// The system's clipboard, which is the third thing the interface has to ask the desktop for.
+//
+// It is HERE rather than in `platform/desktop.hpp` because SDL already owns it and this is the file
+// that knows SDL exists — a second implementation of a clipboard, or a clipboard of our own, would
+// be a copy a player could not paste into anything else, which is not a clipboard.
+//
+// Free functions rather than members: there is one clipboard per machine, not one per window, and
+// a caller that has to find a `Window` to paste is a caller that cannot paste from a menu.
+std::string clipboard_text();
+void set_clipboard_text(const std::string& text);
+
 class Window {
 public:
     Window() = default;

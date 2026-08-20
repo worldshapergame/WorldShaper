@@ -313,7 +313,15 @@ selected it says so and the button goes to the library tab, with *new* in the me
 gives.
 
 When the open document has unsaved changes and something else is chosen, nothing is thrown away and
-nothing pops up: the tab says which file is waiting, and opens it the moment the tick is pressed.
+nothing pops up: the tab says which file is waiting, and opens it the moment it is saved — and
+**saving is ctrl-S** (D776), from either view, with no button beside it. A control a player's hands
+already know does not need a second one taking up a header.
+
+**The document already open is a FILE, not a path** (D772). Delete `untitled.wsworld` while it is
+open, press *new*, choose it: same path. Answering *is this the one already open* by comparing paths
+said yes, so nothing reloaded, and what was on the screen was the world that had been deleted —
+which saving then wrote back over the live one. The open document remembers when it was last written
+and how many bytes it was, and any disagreement with the disk means a different file.
 
 **A world opens here too** (D744). *open* on the worlds shelf enters the world — that is what a
 double-click means and it is not changed — so a world's row now carries both things you can do to
@@ -385,6 +393,30 @@ detail:
 - **One editor, one node set per library** (answer O19, D66). The world-generation graph, the logic
   graph, the material graph and the clip graph are the same editor with different nodes in the
   palette — the player learns it once.
+
+#### What a text view owes, and now pays (D777, D778, D779)
+
+The script view could be typed into a character at a time and nothing else. Four things fixed that,
+and they are one mechanism: **an anchor and a caret, and what lies between them is chosen.** No third
+piece of state, so there is nothing to keep in step.
+
+- **Putting the two somewhere** is a drag, a double-click on a word, a triple-click on a line, shift
+  with any movement key, or ctrl-A. A word is letters, digits and the underscore, because
+  `snake_case_names` are one word to whoever wrote them.
+- **Ctrl-C, ctrl-X and ctrl-V go through the system's clipboard** (`platform/window.hpp`), not one
+  of our own: a copy a player cannot paste into anything else is not a copy. A paste splits on
+  newlines and drops the carriage returns a Windows editor sends with them, which would otherwise be
+  a byte the clip carries for ever.
+- **Anything that writes replaces what is chosen**, which is what every text field everywhere does —
+  and a selection across the author line refuses, because a cut or a paste over the top is D774's
+  edit by a longer route.
+- **The sideways bar takes a drag rather than a jump** (D778), through the same `Ui::drag_handle` a
+  dock divider uses; and its rectangle is worked out before the caret's hit test, because the bar
+  lies inside the page and steering it would otherwise drag a selection across the file behind it.
+- **A document saved is the document that was opened** (D779). `std::getline` cannot tell `a\nb\n`
+  from `a\nb`, so every save was taking the last byte off a file that ended with a newline — which
+  all of this repository's clips do. The editor asks the file directly and puts it back. One byte,
+  and the whole promise of the round-trip rule above.
 
 **Every node parameter is a slider** by §3, with the same double-click-to-type, and the same lack of
 a cap. A node's parameters are a parameters window: they open on the left while its node is

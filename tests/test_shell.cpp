@@ -7,6 +7,8 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <string>
 
 #include "doctest/doctest.h"
 #include "ui/shell.hpp"
@@ -173,4 +175,137 @@ TEST_CASE("a node the palette cannot place says so instead of writing a line tha
     CHECK(shell.add_node("material").empty());
     CHECK(shell.add_node("paint").empty());
     CHECK_FALSE(quiet_frame(shell, 0.0).quit);
+}
+
+// --- what is chosen ---------------------------------------------------------------------------
+//
+// The script view had no selection at all: no double-click, no drag, no ctrl-A, and nothing for
+// ctrl-C to take. Reported directly. The gate is end to end — put a selection in with keys, replace
+// it by typing, save, and read the file back off the disk — because the pieces in between are
+// private and a test of them would be a test of this file's own arithmetic.
+namespace {
+
+InputState quiet_input() {
+    InputState input{};
+    input.mouse_x = -1000.0f;
+    input.mouse_y = -1000.0f;
+    return input;
+}
+
+InputState with_ctrl(Key key) {
+    InputState input = quiet_input();
+    input.down[static_cast<usize>(Key::Ctrl)] = true;
+    input.down[static_cast<usize>(key)] = true;
+    input.pressed[static_cast<usize>(key)] = true;
+    return input;
+}
+
+std::string file_text(const std::filesystem::path& path) {
+    std::ifstream back(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(back)), std::istreambuf_iterator<char>());
+}
+
+}  // namespace
+
+TEST_CASE("ctrl-A chooses the document, and the next key replaces it") {
+    Scratch scratch("shell-choose-all");
+    const std::filesystem::path clip = write_file(scratch.root / "clips" / "pick.wsclip", kClip);
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    REQUIRE(shell.open_editor_view("script"));
+    quiet_frame(shell, 0.0);
+
+    shell.frame(with_ctrl(Key::A), 1280, 800, 0.1);
+
+    InputState typed = quiet_input();
+    typed.typed = "x";
+    shell.frame(typed, 1280, 800, 0.2);
+
+    shell.frame(with_ctrl(Key::S), 1280, 800, 0.3);
+    // The newline is the file's, not the editor's: a document that ended with one still does.
+    CHECK(file_text(clip) == "x\n");
+}
+
+TEST_CASE("shift and an arrow drag a selection out, and it is what gets replaced") {
+    Scratch scratch("shell-choose-run");
+    const std::filesystem::path clip = write_file(scratch.root / "clips" / "run.wsclip", kClip);
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    REQUIRE(shell.open_editor_view("script"));
+    quiet_frame(shell, 0.0);
+
+    // The caret opens at the top left. Three held-shift steps take the first three characters of
+    // the first line with it, and one typed character stands in for all three.
+    f64 at = 0.1;
+    for (u32 step = 0; step < 3; ++step) {
+        InputState right = quiet_input();
+        right.down[static_cast<usize>(Key::Shift)] = true;
+        right.down[static_cast<usize>(Key::Right)] = true;
+        right.pressed[static_cast<usize>(Key::Right)] = true;
+        shell.frame(right, 1280, 800, at);
+        at += 0.1;
+    }
+    InputState typed = quiet_input();
+    typed.typed = "@";
+    shell.frame(typed, 1280, 800, at);
+    at += 0.1;
+    shell.frame(with_ctrl(Key::S), 1280, 800, at);
+
+    const std::string text = file_text(clip);
+    const std::string was(kClip);
+    CHECK(text.compare(0, 1, "@") == 0);
+    CHECK(text == "@" + was.substr(3));
+}
+
+TEST_CASE("opening a document and saving it back changes not one byte") {
+    Scratch scratch("shell-round-trip");
+    const std::filesystem::path clip = write_file(scratch.root / "clips" / "same.wsclip", kClip);
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    REQUIRE(shell.open_editor_view("script"));
+    quiet_frame(shell, 0.0);
+
+    // Type a character and take it straight back out, so the file is dirty and nothing about it has
+    // actually changed. `getline` cannot tell a trailing newline from none, and the save was
+    // dropping it — every clip in this repository ends with one.
+    InputState typed = quiet_input();
+    typed.typed = "q";
+    shell.frame(typed, 1280, 800, 0.1);
+    InputState back = quiet_input();
+    back.down[static_cast<usize>(Key::Backspace)] = true;
+    back.pressed[static_cast<usize>(Key::Backspace)] = true;
+    shell.frame(back, 1280, 800, 0.2);
+    shell.frame(with_ctrl(Key::S), 1280, 800, 0.3);
+
+    CHECK(file_text(clip) == std::string(kClip));
+}
+
+TEST_CASE("who made a file is not edited from in here") {
+    Scratch scratch("shell-author");
+    const std::string with_author = std::string("# WSauthor: somebody else\n") + kClip;
+    const std::filesystem::path clip =
+        write_file(scratch.root / "clips" / "theirs.wsclip", with_author);
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    REQUIRE(shell.open_editor_view("script"));
+    quiet_frame(shell, 0.0);
+
+    // The caret opens ON the author line, so typing there is refused; and choosing the whole
+    // document and typing over it is the same edit by a longer route, so that is refused too.
+    InputState typed = quiet_input();
+    typed.typed = "me";
+    shell.frame(typed, 1280, 800, 0.1);
+    shell.frame(with_ctrl(Key::A), 1280, 800, 0.2);
+    shell.frame(typed, 1280, 800, 0.3);
+    shell.frame(with_ctrl(Key::S), 1280, 800, 0.4);
+
+    CHECK(file_text(clip) == with_author);
 }

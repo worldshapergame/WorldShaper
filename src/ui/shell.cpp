@@ -2277,7 +2277,7 @@ void Shell::draw_editor_tab(const Rect& rect) {
     }
 
     // The one line the unsaved case needs. Not a dialog: what it says is which file is waiting, and
-    // the button that answers it is the tick above.
+    // ctrl-S is what answers it.
     if (!waiting_.empty() && same_file(waiting_) != editing_) {
         const Rect row = column.next(metrics.px(16.0f));
         ui_.label(row, shown_name(waiting_) + " opens when this is saved", Align::Left, kPlain,
@@ -2403,6 +2403,35 @@ void Shell::draw_script_view(const Rect& page) {
             ui_.draw().ink(Rect{inner.x0, y, inner.x1, y + line_height}, 0.14f);
         }
 
+        // What is chosen, as a wash behind the words. Ink rather than a colour, because the words
+        // over it invert against whatever is behind them and a coloured band would make the ink
+        // rule decide twice.
+        if (has_selection()) {
+            u32 from_line = 0;
+            u32 from_column = 0;
+            u32 to_line = 0;
+            u32 to_column = 0;
+            selection_span(from_line, from_column, to_line, to_column);
+            if (i >= from_line && i <= to_line) {
+                const std::string& text = lines_[i];
+                const usize begin =
+                    (i == from_line) ? std::min<usize>(from_column, text.size()) : 0;
+                const usize end =
+                    (i == to_line) ? std::min<usize>(to_column, text.size()) : text.size();
+                const f32 x0 = inner.x0 + gutter - script_pan_x_ +
+                               DrawList::measure(std::string_view(text).substr(0, begin), size);
+                // A line whose selection ends past its last character shows a little beyond it, so
+                // a selection that spans lines reads as one block rather than as a ragged stack.
+                const f32 x1 =
+                    (end >= text.size() && i < to_line)
+                        ? (inner.x0 + gutter - script_pan_x_ +
+                           DrawList::measure(text, size) + metrics.px(4.0f))
+                        : (inner.x0 + gutter - script_pan_x_ +
+                           DrawList::measure(std::string_view(text).substr(0, end), size));
+                if (x1 > x0) ui_.draw().ink(Rect{x0, y, x1, y + line_height}, 0.26f);
+            }
+        }
+
         // The line, run by run. A word the language knows takes the colour of what it makes, a
         // number takes the value colour, and everything the author chose is the ordinary ink —
         // which is the strongest thing here, because it is the part they wrote.
@@ -2445,30 +2474,69 @@ void Shell::draw_script_view(const Rect& page) {
         ui_.draw().pop_clip();
     }
 
-    // Clicking puts the caret where you clicked, which is the one thing a text view has to do
-    // before it is a text view at all.
-    if (ui_.pressed_in(page)) {
+    // --- the pointer: put the caret, drag one out, take a word, take a line ------------------
+    //
+    // The sideways bar lies inside the page, so its rectangle is worked out first and the caret
+    // ignores presses there — otherwise steering the bar drags a selection across the file behind
+    // it.
+    const f32 bar_tall = metrics.px(5.0f);
+    const Rect bar_track =
+        (across > 0.0f)
+            ? Rect{page.x0 + gutter, page.y1 - bar_tall, page.x1 - metrics.px(9.0f), page.y1}
+            : Rect{0.0f, 0.0f, -1.0f, -1.0f};
+    const bool on_the_bar = bar_track.holds(ui_.pointer_x(), ui_.pointer_y());
+
+    // Where in the document a point is, which all four of them need.
+    const auto at_pointer = [&](u32& line_out, u32& column_out) {
         const f32 local_y = ui_.pointer_y() - inner.y0;
-        caret_line_ = static_cast<u32>(
+        line_out = static_cast<u32>(
             std::clamp(std::floor(local_y / line_height), 0.0f,
                        static_cast<f32>(lines_.empty() ? 0 : lines_.size() - 1)));
-        const std::string& line = lines_.empty() ? rename_buffer_ : lines_[caret_line_];
+        const std::string& at = lines_.empty() ? rename_buffer_ : lines_[line_out];
         const f32 local_x = ui_.pointer_x() - inner.x0 - gutter + script_pan_x_;
         usize column_at = 0;
-        while (column_at < line.size() &&
-               DrawList::measure(std::string_view(line).substr(0, column_at + 1), size) < local_x) {
+        while (column_at < at.size() &&
+               DrawList::measure(std::string_view(at).substr(0, column_at + 1), size) < local_x) {
             ++column_at;
         }
-        caret_column_ = static_cast<u32>(column_at);
+        column_out = static_cast<u32>(column_at);
+    };
+
+    if (ui_.pressed_in(page) && !on_the_bar) {
+        at_pointer(caret_line_, caret_column_);
+        const u32 clicks = ui_.input().click_count;
+        if (clicks >= 3 && caret_line_ < lines_.size()) {
+            // The whole line, which is what a third click means in every editor there is.
+            mark_line_ = caret_line_;
+            mark_column_ = 0;
+            caret_column_ = static_cast<u32>(lines_[caret_line_].size());
+        } else if (clicks == 2 && caret_line_ < lines_.size()) {
+            u32 from = 0;
+            u32 to = 0;
+            word_at(lines_[caret_line_], caret_column_, from, to);
+            mark_line_ = caret_line_;
+            mark_column_ = from;
+            caret_column_ = to;
+        } else {
+            // Shift keeps the anchor, so shift-clicking extends what is already chosen.
+            if (!ui_.input().is_down(Key::Shift)) drop_mark();
+            selecting_ = true;
+        }
         caret_since_ = seconds_;
+        caret_moved_ = true;
         ui_.stop_typing();
     }
+    if (selecting_ && ui_.input().mouse_left &&
+        page.holds(ui_.pointer_x(), ui_.pointer_y())) {
+        at_pointer(caret_line_, caret_column_);
+        caret_since_ = seconds_;
+    }
+    if (!ui_.input().mouse_left) selecting_ = false;
     // The bar for the sideways travel. Drawn only when there IS any, because a control that is
     // always there and does nothing most of the time is furniture — the same argument the reset
     // button in a settings row is made of (D486).
     if (across > 0.0f) {
-        const f32 tall = metrics.px(5.0f);
-        const Rect track{page.x0 + gutter, page.y1 - tall, page.x1 - metrics.px(9.0f), page.y1};
+        const Rect& track = bar_track;
         const f32 wide = std::max(metrics.px(28.0f),
                                   track.width() * room / std::max(room, script_wide_));
         // A DRAG, not a jump. It jumped to wherever it was pressed and let go, which is a bar you
@@ -3440,6 +3508,7 @@ std::string Shell::document() const {
         text += lines_[i];
         if (i + 1 < lines_.size()) text += "\n";
     }
+    if (ended_with_newline_) text += "\n";
     return text;
 }
 
@@ -3486,6 +3555,19 @@ void Shell::open_document(const std::filesystem::path& raw) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         lines_.push_back(line);
     }
+    // Whether the last line had a newline after it, which `getline` swallows either way. Asked of
+    // the file directly, because there is nothing left in `lines_` that remembers.
+    {
+        char last = '\n';
+        std::ifstream tail(path, std::ios::binary | std::ios::ate);
+        const std::streamoff bytes =
+            tail ? static_cast<std::streamoff>(tail.tellg()) : std::streamoff{0};
+        if (bytes > 0) {
+            tail.seekg(bytes - 1);
+            tail.get(last);
+        }
+        ended_with_newline_ = (bytes == 0) || last == '\n';
+    }
     if (lines_.empty()) lines_.push_back({});
     caret_line_ = 0;
     caret_column_ = 0;
@@ -3494,6 +3576,9 @@ void Shell::open_document(const std::filesystem::path& raw) {
     // it, and the travel its sliders were given are all about a file that is no longer open.
     caret_since_ = seconds_;
     caret_moved_ = true;
+    mark_line_ = 0;
+    mark_column_ = 0;
+    selecting_ = false;
     script_pan_x_ = 0.0f;
     // Where you came from is about a JOURNEY, and opening a file off the shelf is not one. Anything
     // that means "go deeper" restores this after the call — see `enter_document`.
@@ -3546,7 +3631,7 @@ void Shell::leave_document() {
     if (came_from_.empty()) return;
     if (dirty_) {
         // Nothing is thrown away without being asked about, here as everywhere else in this tab.
-        say("save this first -- the tick, at the top", 3.0);
+        say("save this first -- ctrl-S", 3.0);
         ui_.sound().say(Cue::Refuse);
         return;
     }
@@ -3659,7 +3744,22 @@ void Shell::edit_keys(const InputState& input) {
             is_author_line(lines_[at - 1]);
         const bool eating_it = at + 1 < lines_.size() && input.fired(Key::Delete) &&
                                caret_column_ >= lines_[at].size() && is_author_line(lines_[at + 1]);
-        if ((on_it && wants_to_change) || joining_it || eating_it) {
+        // And a selection that runs ACROSS it takes it with everything else, which is the same
+        // edit by a longer route. Cut and paste go through here too, so both are covered.
+        bool chosen_over_it = false;
+        if (has_selection() && (wants_to_change || (input.is_down(Key::Ctrl) &&
+                                                    (input.was_pressed(Key::X) ||
+                                                     input.was_pressed(Key::V))))) {
+            u32 from_line = 0;
+            u32 from_column = 0;
+            u32 to_line = 0;
+            u32 to_column = 0;
+            selection_span(from_line, from_column, to_line, to_column);
+            for (u32 line = from_line; line <= to_line && line < lines_.size(); ++line) {
+                if (is_author_line(lines_[line])) chosen_over_it = true;
+            }
+        }
+        if ((on_it && wants_to_change) || joining_it || eating_it || chosen_over_it) {
             say("who made a file travels with it and is not edited from in here", 3.0);
             ui_.sound().say(Cue::Refuse);
             move_caret(input);
@@ -3668,6 +3768,88 @@ void Shell::edit_keys(const InputState& input) {
     }
     // The editor takes the keyboard only when its own view is the one showing, which is the check
     // the caller has already made by drawing it.
+    // --- the four a text view owes: choose everything, copy, cut, paste ---------------------
+    //
+    // Every one of them on the key a player's hands already know. Before this there was nothing to
+    // copy FROM — no selection at all — so the editor was a place you could type into and not a
+    // place you could work in.
+    if (input.is_down(Key::Ctrl)) {
+        if (input.was_pressed(Key::A)) {
+            mark_line_ = 0;
+            mark_column_ = 0;
+            caret_line_ = static_cast<u32>(lines_.size() - 1);
+            caret_column_ = static_cast<u32>(lines_.back().size());
+            caret_moved_ = true;
+            caret_since_ = seconds_;
+            return;
+        }
+        if ((input.was_pressed(Key::C) || input.was_pressed(Key::X)) && has_selection()) {
+            set_clipboard_text(selected_text());
+            if (input.was_pressed(Key::X)) {
+                erase_selection();
+                dirty_ = true;
+                graph_stale_ = true;
+                reparse_soon();
+            }
+            caret_moved_ = true;
+            caret_since_ = seconds_;
+            return;
+        }
+        if (input.was_pressed(Key::V)) {
+            const std::string pasted = clipboard_text();
+            if (!pasted.empty()) {
+                erase_selection();
+                // Split on newlines, and drop a carriage return that came with them: text copied
+                // out of a Windows editor carries CRLF, and a stray \r in a clip is a character the
+                // tokenizer treats as space and the file carries for ever.
+                std::vector<std::string> parts{std::string()};
+                for (char c : pasted) {
+                    if (c == '\n') {
+                        parts.emplace_back();
+                    } else if (c != '\r') {
+                        parts.back() += c;
+                    }
+                }
+                std::string& into = lines_[std::min<usize>(caret_line_, lines_.size() - 1)];
+                const u32 at = static_cast<u32>(std::min<usize>(caret_column_, into.size()));
+                const std::string tail = into.substr(at);
+                into = into.substr(0, at) + parts.front();
+                if (parts.size() == 1) {
+                    caret_column_ = static_cast<u32>(into.size());
+                    into += tail;
+                } else {
+                    for (usize k = 1; k < parts.size(); ++k) {
+                        lines_.insert(lines_.begin() + static_cast<isize>(caret_line_) + k,
+                                      parts[k]);
+                    }
+                    caret_line_ += static_cast<u32>(parts.size() - 1);
+                    caret_column_ = static_cast<u32>(parts.back().size());
+                    lines_[caret_line_] += tail;
+                }
+                drop_mark();
+                dirty_ = true;
+                graph_stale_ = true;
+                reparse_soon();
+                caret_moved_ = true;
+                caret_since_ = seconds_;
+            }
+            return;
+        }
+    }
+
+    // Anything that writes replaces what is chosen, which is what every text field everywhere does.
+    if (has_selection() && (!input.typed.empty() || input.fired(Key::Enter) ||
+                            input.fired(Key::Backspace) || input.fired(Key::Delete))) {
+        erase_selection();
+        dirty_ = true;
+        graph_stale_ = true;
+        reparse_soon();
+        caret_moved_ = true;
+        caret_since_ = seconds_;
+        // A backspace or a delete on a selection has done its whole job by removing it.
+        if (input.typed.empty() && !input.fired(Key::Enter)) return;
+    }
+
     std::string& line = lines_[std::min<usize>(caret_line_, lines_.size() - 1)];
     caret_column_ = static_cast<u32>(std::min<usize>(caret_column_, line.size()));
 
@@ -3726,11 +3908,108 @@ void Shell::edit_keys(const InputState& input) {
     }
 }
 
+// --- what is chosen ---------------------------------------------------------------------------
+//
+// One anchor and one caret, and the selection is whatever lies between them. Everything else — the
+// double-click, the drag, ctrl-A, and what ctrl-C takes — is a way of putting those two somewhere.
+
+void Shell::drop_mark() {
+    mark_line_ = caret_line_;
+    mark_column_ = caret_column_;
+}
+
+bool Shell::has_selection() const {
+    return mark_line_ != caret_line_ || mark_column_ != caret_column_;
+}
+
+void Shell::selection_span(u32& from_line, u32& from_column, u32& to_line, u32& to_column) const {
+    const bool forwards =
+        mark_line_ < caret_line_ || (mark_line_ == caret_line_ && mark_column_ <= caret_column_);
+    from_line = forwards ? mark_line_ : caret_line_;
+    from_column = forwards ? mark_column_ : caret_column_;
+    to_line = forwards ? caret_line_ : mark_line_;
+    to_column = forwards ? caret_column_ : mark_column_;
+}
+
+std::string Shell::selected_text() const {
+    if (!has_selection()) return {};
+    u32 from_line = 0;
+    u32 from_column = 0;
+    u32 to_line = 0;
+    u32 to_column = 0;
+    selection_span(from_line, from_column, to_line, to_column);
+    std::string out;
+    for (u32 line = from_line; line <= to_line && line < lines_.size(); ++line) {
+        const std::string& text = lines_[line];
+        const usize begin = (line == from_line) ? std::min<usize>(from_column, text.size()) : 0;
+        const usize end = (line == to_line) ? std::min<usize>(to_column, text.size()) : text.size();
+        if (end > begin) out += text.substr(begin, end - begin);
+        if (line != to_line) out += "\n";
+    }
+    return out;
+}
+
+void Shell::erase_selection() {
+    if (!has_selection()) return;
+    u32 from_line = 0;
+    u32 from_column = 0;
+    u32 to_line = 0;
+    u32 to_column = 0;
+    selection_span(from_line, from_column, to_line, to_column);
+    if (from_line >= lines_.size()) return;
+    to_line = std::min<u32>(to_line, static_cast<u32>(lines_.size() - 1));
+    const std::string head = lines_[from_line].substr(
+        0, std::min<usize>(from_column, lines_[from_line].size()));
+    const std::string tail =
+        lines_[to_line].substr(std::min<usize>(to_column, lines_[to_line].size()));
+    lines_[from_line] = head + tail;
+    if (to_line > from_line) {
+        lines_.erase(lines_.begin() + static_cast<isize>(from_line) + 1,
+                     lines_.begin() + static_cast<isize>(to_line) + 1);
+    }
+    caret_line_ = from_line;
+    caret_column_ = static_cast<u32>(head.size());
+    drop_mark();
+}
+
+// A word is letters, digits and the underscore, because `snake_case_names` are one word to whoever
+// wrote them — the same rule the markdown reader uses to leave them alone.
+void Shell::word_at(const std::string& line, u32 column, u32& from, u32& to) {
+    const auto part_of_a_word = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+               c == '_' || c == '.' || c == '-';
+    };
+    usize at = std::min<usize>(column, line.size());
+    if (at >= line.size() || !part_of_a_word(line[at])) {
+        // Not on a word: take the run of whatever is under the pointer instead, so a double-click
+        // on a space or a brace still chooses something rather than nothing.
+        if (at >= line.size()) {
+            from = static_cast<u32>(line.size());
+            to = from;
+            return;
+        }
+        usize begin = at;
+        while (begin > 0 && !part_of_a_word(line[begin - 1]) && line[begin - 1] == line[at]) --begin;
+        usize end = at;
+        while (end < line.size() && !part_of_a_word(line[end]) && line[end] == line[at]) ++end;
+        from = static_cast<u32>(begin);
+        to = static_cast<u32>(end);
+        return;
+    }
+    usize begin = at;
+    while (begin > 0 && part_of_a_word(line[begin - 1])) --begin;
+    usize end = at;
+    while (end < line.size() && part_of_a_word(line[end])) ++end;
+    from = static_cast<u32>(begin);
+    to = static_cast<u32>(end);
+}
+
 // Where the caret goes, which a document being READ needs as much as one being written.
 void Shell::move_caret(const InputState& input) {
     if (lines_.empty()) return;
     const std::string& line = lines_[std::min<usize>(caret_line_, lines_.size() - 1)];
     caret_column_ = static_cast<u32>(std::min<usize>(caret_column_, line.size()));
+    const bool extending = input.is_down(Key::Shift);
     bool moved = false;
     if (input.fired(Key::Left) && caret_column_ > 0) {
         --caret_column_;
@@ -3770,6 +4049,9 @@ void Shell::move_caret(const InputState& input) {
     }
 
     if (moved) {
+        // Shift keeps the anchor where it was, so the movement drags a selection behind it;
+        // anything else brings the anchor along, which is the same as having none.
+        if (!extending) drop_mark();
         caret_moved_ = true;
         caret_since_ = seconds_;
     }

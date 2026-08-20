@@ -422,6 +422,21 @@ private:
     std::vector<std::string> lines_;
     u32 caret_line_ = 0;
     u32 caret_column_ = 0;
+    // Whether the file on disk ended with a newline, so that saving it puts one back.
+    //
+    // `std::getline` cannot tell "a\nb\n" from "a\nb" — both give two lines — so opening any of
+    // this repository's clips and saving it took the last byte off. That is a document the editor
+    // changed without being asked to, which is the one thing it must never do (D745).
+    bool ended_with_newline_ = true;
+    // Where a selection started, which is the caret's other end.
+    //
+    // A text view without one is a text view a player can only edit a character at a time — no
+    // double-click on a word, no dragging across a line, no ctrl-A, and nothing for ctrl-C to take.
+    // `mark_line_`/`mark_column_` is the anchor and the caret is the moving end, so a selection is
+    // whatever lies between them and there is no third state to keep in step.
+    u32 mark_line_ = 0;
+    u32 mark_column_ = 0;
+    bool selecting_ = false;   // the hand is down and dragging one out
     // When typing here began, which is what the caret's pulse is measured from — so it is bright at
     // the moment of the click rather than wherever the world clock happens to be.
     f64 caret_since_ = 0.0;
@@ -550,6 +565,16 @@ private:
     // Where the caret goes. Split out because a document being READ moves its caret too, and a
     // built-in is read and not written (D494).
     void move_caret(const InputState& input);
+    // Whether anything is chosen, and where it runs from and to in document order.
+    bool has_selection() const;
+    void selection_span(u32& from_line, u32& from_column, u32& to_line, u32& to_column) const;
+    // What is chosen, as text, and taking it out again. Both work on the span above.
+    std::string selected_text() const;
+    void erase_selection();
+    // Put the anchor where the caret is: what every movement that is not a selection does.
+    void drop_mark();
+    // Where a word begins and ends on a line, for the double-click.
+    static void word_at(const std::string& line, u32 column, u32& from, u32& to);
     // Ask for the verdict again. Not at once: see `reparse` in the cpp for why a parse on every
     // keystroke is a promise this had to stop keeping literally in order to keep at all.
     void reparse_soon();
