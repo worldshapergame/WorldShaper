@@ -81,11 +81,19 @@ build\bin\WorldShaper.exe --clip-file clips/sampler.clip --refine-all --no-despe
 ```
 
 ```
-scene: 4 chunks, 1430104 solid voxels, 9826 of 9826 nodes sharpened, content a1f8bc6c656343b7, shape e105a8a6940f0da2
+scene: 4 chunks, 1429596 solid voxels, 10018 of 10018 nodes sharpened, content efeb39a93c369a2d, shape d41424c8236d15ac
 ```
 
-`d0d5f84c685be847` is the SAME world with its type table interned in another order (D729) — compare
-**shape** whenever a resume is involved, and content only cold against cold. D733.
+**That number MOVED on 2026-08-20 and this is the new one.** It was `1430104` / `a1f8bc6c656343b7` /
+shape `e105a8a6940f0da2` until D735 found `Op::Stairs` claiming to be a distance field when it is a
+step function — 508 voxels of a flight of steps that a bulk-settled box was filling with air or
+clearing of stone. Anything quoting the old figure predates that. `d0d5f84c685be847` is older still:
+the same world as `a1f8bc6c656343b7` with its type table interned in another order (D729) — so
+compare **shape** whenever a resume is involved, and content only cold against cold. D733, D735.
+
+`--box-cell-audit` is the instrument that found it and it must read **0 filled that are air and 0
+cleared that are matter**. That is the descent's whole correctness argument checked directly, and it
+is stronger than the hash: a hash says two runs agree, this says the answer is right.
 
 The two that catch people most often:
 

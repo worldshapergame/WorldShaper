@@ -120,7 +120,7 @@ void report(const BoxCellAudit& audit, const char* what) {
     }
 }
 
-// One clip, asked the question. Two of them, because the fault D732 closed is a property of an OP
+// One clip, asked the question. Two of them, because the fault D735 closed is a property of an OP
 // and not of a clip -- `clips/normal_test.clip` has a flight of its own, at a different place and a
 // different size, and it disagreed on 2,3xx cells of its own before the fix. A test that only ever
 // asks the clip the fault was found on is trap 25 with the resolution held fixed one axis along.

@@ -14414,3 +14414,132 @@ what this entry rests on.
 | D734 | **It does not engage on the ladder — 103-124 bricks a batch** | measurement | The ladder's paste was never the hitch (D511 from the other end); the ceiling is for a LARGE delivery, which means the estate |
 | D734 | **"It also protects the clipboard paste" was false, corrected the same hour** | honesty | Only the ladder's delivery goes through the backlog; the other three `paste_clip` calls do not |
 | D734 | **The estate measurement is owed** | honesty | Seven agents were building on this machine; a timing taken beside them is noise |
+
+---
+
+## D735 - A flight of steps is not a distance, and the box that settled on it was filling air
+
+**2026-08-20.** D725 recorded an open question and could not place it: *"a box that settles SOLID in
+bulk does not agree with its own cells asked one at a time. It keeps a fringe of matter - 220 voxels
+of 1,430,104 at a four-voxel box, 508 at eight - that the per-cell rule does not. Both answers pass
+`tests/test_sample.cpp`'s brute-force reference, so the suite cannot see it. Which of the two is
+right is open."*
+
+**It is closed. The cells were right, the descent was wrong, and it is one op.**
+
+### `Op::Stairs` was in the list of things that are distances, and it is a step function
+
+`metric_slack` is a per-op statement about how far a reading can under-state, and `Op::Stairs` sat in
+the group returning **nought** - the strongest possible claim, that a reading at a box's centre
+bounds the answer everywhere within that reading's own distance.
+
+`sd_stairs` is `max(sd_box(p, half), v - top(u))` with
+
+```
+top(u) = (floor(u / run) + 1) * rise
+```
+
+As `u` crosses a multiple of `run`, `top` jumps by a whole `rise` and the field jumps **down** by
+`rise` over no distance at all. Nothing with a Lipschitz bound can jump, so **no additive slack
+bounds it**, and nought says the opposite.
+
+### The named box, and the arithmetic is four lines
+
+The 4x4x4 box at voxel `(-188, 28, -56)` read **-0.082500** at its centre and settled SOLID. Its
+centre is at `u = 0.9125` along the flight - tread 3, top at `y = 1.02` - and sits at `y = 0.9375`,
+so 8.25 cm inside. The cell at `(-5.8594, 0.8906, -1.7344)`, **0.047 m away**, is at `u = 0.865625`
+- **tread 2**, top at `y = 0.84` - and reads **+0.050625**.
+
+**The field rose 0.133 m over 0.047 m.** Both figures reproduce by hand from `run = 0.30` and
+`rise = 0.18`. Both are correct point samples of the shape that is actually built: the stair really
+does end at 0.84 there and really does carry on to 1.02 one tread along, and the riser between them
+is the jump. `Field::eval <= 0` is the definition of the shape - the box's bulk settle is an
+*inference* from a different point, and the inference is invalid.
+
+### An instrument that does not share the reader it is checking
+
+`--box-cell-audit`: every box the descent settles **in bulk** afterwards walks its own cells through
+`Field::eval` at the finest level, with the thin-feature rescue and nothing else - which is exactly
+what `descend` applies to a box of one voxel, and shares no reasoning with the box test.
+
+**This is why it found what a brute-force reference did not.** CLAUDE.md's own trap - *every audit
+agreeing is not evidence when they all read the same source* - is the shape of it from the other
+side: `tests/test_sample.cpp`'s reference is correct, and is only ever pointed at hand-built fields
+of two or three primitives, so a non-metric op inside a real clip walks straight past it.
+
+On `clips/sampler.clip` before the fix: **1,204 cells disagree** - 856 the box filled that are air,
+348 it cleared that are matter - over 169 distinct boxes, and **every one of them inside
+`(-5.9844, 0.6406, -2.2969)..(-4.2031, 1.3594, -1.1094)`**, which is the bounding box of
+`flight = stairs ... run=0.30 rise=0.18`, the clip's only stairs. Not the torus, not the platonics,
+not the five displaced slabs, not the shell, not the arch. **Reproduced on `clips/normal_test.clip`,
+which nothing was tuned against: 1,878 cells, every one inside that clip's own different flight**,
+over boxes of 2, 4 and 8 voxels a side.
+
+### The fix is one case label, and it refuses rather than guessing
+
+```cpp
+case Op::Stairs:
+    return kInfiniteSlack;
+```
+
+**Why not a finite, tighter number.** The honest bound is
+`rise + (sqrt(1 + (rise/run)^2) - 1) * radius` - an offset **and** a slope. `metric_slack` returns
+one constant with no radius in it, so no finite value is sound for every box the descent asks about:
+a constant `rise` holds only out to `rise / (sqrt(1 + (rise/run)^2) - 1)` = **1.08 m** for 0.18/0.30,
+and the descent's own 64-voxel top box has radius **1.705 m**. It refuses, exactly as `PolarRepeat`
+already refuses in the same switch and for the same reason.
+
+The direction is **more sampling, never less** - D697's rule. `slack_here` charges a part's slack
+only to boxes within their own radius of that part's box, so the refusal switches settling off inside
+a flight of steps **and nowhere else**.
+
+### The gate MOVES, and this is the new one
+
+| arm | scene line |
+|---|---|
+| control, the change absent, rebuilt | `1430104 solid voxels, 9826 of 9826 nodes sharpened, content a1f8bc6c656343b7, shape e105a8a6940f0da2` |
+| **the fix** | **`1429596 solid voxels, 10018 of 10018 nodes sharpened, content efeb39a93c369a2d, shape d41424c8236d15ac`** |
+
+**508 fewer voxels, and 856 - 348 = 508 exactly** - the audit's own net, from a completely different
+direction. It is also the count D725's rejected 512-cell arm built. **Three independent routes to one
+number.**
+
+And the audit on the fixed tree, which is the statement that matters more than the hash:
+
+> `box against cell: 68324 boxes settled solid and 47943 empty over 2567288 cells; 0 filled that are
+> air and 0 cleared that are matter`
+
+A hash says two runs agree. **That says the answer is right.**
+
+### What it costs, in counters rather than wall clock
+
+Deterministic and machine-independent, whole-clip sample: `sampler.clip` shape evaluations
+**1,951,019 -> 2,085,649 (+6.9%)**, voxels asked one at a time 731,464 -> 849,664 (+118,200) against
+the flight's own box of 122,700 - which is the containment claim, measured. `normal_test.clip`
+**3,424,354 -> 3,683,972 (+7.6%)**.
+
+**No wall-clock figure, and it is owed**: seven agents were building on this machine and CLAUDE.md's
+own rule is that a timing taken beside them is noise.
+
+### What is owed
+
+- **The tight fix.** A per-part **slope** beside `SamplePlan::part_slack`, with `slack_here` charging
+  `slack + slope * radius`. That is what this op actually needs and what every future non-metric
+  solid will need. It requires `Field` to expose a slope per node and is a wider change than one case
+  label - an unproved wide fix is worse than a proved narrow one.
+- **The estate.** `fountain.clip`, `orangery.clip` and `crypt.clip` all carry flights and `or_steps`
+  is 9.9 m wide, an order of magnitude more voxels than `sampler.clip`'s. The +6.9% here does not
+  transfer to it and the estate's gate has not been re-taken.
+- **`clips/facility.clip` was not gated**, only `sampler` and `normal_test`.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D735 | **`Op::Stairs` returned nought slack and is a step function** | fault | `top(u)` jumps by a whole `rise` over no distance; no additive slack bounds a discontinuity |
+| D735 | **The cells were right and the bulk settle was wrong** | decision | `Field::eval <= 0` is the definition; the box's settle is an inference from another point |
+| D735 | **The field rose 0.133 m over 0.047 m** | measurement | One named box, reproduced by hand from `run` and `rise` |
+| D735 | **Every disagreeing cell is inside the stairs' own box** | measurement | 1,204 on `sampler.clip`, 1,878 on `normal_test.clip`, nowhere else in either |
+| D735 | **The brute-force reference could not see it** | trap | It is correct, and is only ever pointed at hand-built fields of two or three primitives |
+| D735 | **It refuses rather than taking a finite bound** | decision | The honest bound needs a slope; a constant `rise` is sound to 1.08 m and the top box is 1.705 |
+| D735 | **The gate moves to 1,429,596 / `efeb39a93c369a2d` / shape `d41424c8236d15ac`** | measurement | 508 = 856 - 348, and the count D725's rejected arm built: three routes to one number |
+| D735 | **The audit reads nought on the fixed tree** | instrument | 0 of 2,567,288 cells over 116,267 settled boxes; stronger than a hash, which only says two runs agree |
+| D735 | **+6.9% shape evaluations, no wall clock** | honesty | Seven agents were building beside it; the timing is owed |

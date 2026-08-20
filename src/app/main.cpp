@@ -305,6 +305,16 @@ struct Options {
     // EMPTY one is not an unset one: `atoi("")` is nought, nought is the control arm, and a shell
     // that clears a variable by assigning `""` silently measures the arm it is comparing against.
     u32 sample_block_cells = 512;
+    // See `forge::set_box_cell_audit`. Every box the descent settles in BULK re-asks its own cells
+    // one at a time -- `Field::eval` at the finest level, with the thin-feature rescue and nothing
+    // else -- and says where the two answers differ. That is the descent's whole correctness
+    // argument checked directly, and it is the only instrument that could have found D735: the
+    // brute-force reference in `tests/test_sample.cpp` is right, and is only ever pointed at
+    // hand-built fields of two or three primitives, so a non-metric op in a real clip walks past it.
+    //
+    // One field evaluation a settled cell, so it roughly doubles a cold clip build and is a flag
+    // rather than an always-on audit. Off, it is one relaxed load per settled box.
+    bool box_cell_audit = false;
     // ---- the two control arms D725 measured, as flags rather than as environment variables ----
     //
     // `--no-field-turns` puts a `rotate`'s six cosines and sines back where they were: computed
@@ -1421,6 +1431,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         options.no_field_cull_boxes = true;
     } else if (arg == "--sample-block-cells") {
         options.sample_block_cells = static_cast<u32>(next_number(512));
+    } else if (arg == "--box-cell-audit") {
+        options.box_cell_audit = true;
     } else if (arg == "--slack-ceiling") {
         options.slack_ceiling = true;
     } else if (arg == "--box-probe") {
@@ -1981,6 +1993,8 @@ void print_help() {
         "  --sample-block-cells N  how small a box gets before the descent asks the field about a\n"
         "                        whole LEVEL at once instead of recursing (512, one render node).\n"
         "                        0 is the control arm: recurse to single voxels as before D724\n"
+        "  --box-cell-audit      every box the descent settles in bulk re-asks its own cells and\n"
+        "                        says where the two disagree. D735; one evaluation a settled cell\n"
         "  --edit-presample-per-node  ask the ladder about an edit one finest node at a time, which\n"
         "                        is what R11h shipped and what D720 measured freezing. The control\n"
         "                        arm: 87.45 ms on a four-metre carve against 0.11 for the same answer\n"
@@ -5856,6 +5870,26 @@ void Application::maybe_finish_refinement() {
         const WorldStats now = world_.stats();
         WS_LOG_INFO("clip", "world fully sharpened: {} chunks, {} solid voxels", now.chunks,
                     now.solid_voxels);
+        // And what the bulk settles cost in CORRECTNESS, when asked for. Printed here rather than
+        // per sample because the interesting number is over the whole world: one node's worth of
+        // boxes is a handful and a clip's worth is the gate. See Options::box_cell_audit and D735.
+        if (options_.box_cell_audit) {
+            const forge::BoxCellAudit agree = forge::take_box_cell_audit();
+            WS_LOG_INFO("clip",
+                        "box against cell: {} boxes settled solid and {} empty over {} cells; "
+                        "{} filled that are air and {} cleared that are matter",
+                        agree.boxes_solid, agree.boxes_empty, agree.cells_checked,
+                        agree.solid_over_claimed, agree.empty_over_claimed);
+            for (usize i = 0; i < agree.faults.size() && i < 8; ++i) {
+                const forge::BoxCellFault& f = agree.faults[i];
+                WS_LOG_INFO("clip",
+                            "  a {}x{}x{} box at {},{},{} said {} (centre {:.6f}, reach {:.6f}); "
+                            "the cell {},{},{} reads {:.6f}",
+                            f.side[0], f.side[1], f.side[2], f.box_low[0], f.box_low[1],
+                            f.box_low[2], f.box_solid ? "SOLID" : "EMPTY", f.centre_value, f.reach,
+                            f.voxel[0], f.voxel[1], f.voxel[2], f.cell_value);
+            }
+        }
         // AND THE DESPECKLE, which until D673 could only happen on the other path.
         //
         // This is a fixed point exactly as the stand-down is -- every node is at the detail it is
@@ -16436,6 +16470,7 @@ int main(int argc, char** argv) {
     // The descent's block sweep, before any clip is sampled. Set here for the same reason the
     // hierarchy below it is: there are several samplers and only one decision.
     ws::forge::set_sample_block_cells(options.sample_block_cells);
+    ws::forge::set_box_cell_audit(options.box_cell_audit);
     // Before any clip is parsed, because both are read while a Field is being built rather than
     // while it is being evaluated. See Options::no_field_turns.
     ws::forge::use_turn_cache(!options.no_field_turns);

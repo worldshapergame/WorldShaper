@@ -3337,7 +3337,7 @@ f64 Field::metric_slack(u32 at) const {
         case Op::Wedge:
             return 0.0;
 
-        // --- D732: A FLIGHT OF STEPS IS NOT A DISTANCE, and saying it was is the fault ---------
+        // --- D735: A FLIGHT OF STEPS IS NOT A DISTANCE, and saying it was is the fault ---------
         //
         // `Op::Stairs` sat in the list above for as long as it has existed. It is the only op in
         // `clips/sampler.clip` that is not a distance, and it is the whole of the disagreement
