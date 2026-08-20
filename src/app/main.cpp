@@ -299,6 +299,10 @@ struct Options {
     // Both on. Both build the same world, bit for bit, and the sampler asks the same number of
     // voxels and settles the same number in bulk either way — which is what says the cull decisions
     // did not move, rather than only the final hash.
+    // The control arm for the line D726 is about: every refinement paste re-opening the
+    // hundred-and-twenty-frame window in which every face in the world re-measures its shadow.
+    // On during a load that is a window that never closes. See `announce_world_change`.
+    bool refresh_shadows_on_paste = false;
     bool no_field_turns = false;
     bool no_field_cull_boxes = false;
     // The control arm for the edit pre-sample's own emptiness test: sample every node the
@@ -1362,6 +1366,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
     } else if (arg == "--no-full-load") {
         options.full_load = false;
         options.full_load_asked = false;
+    } else if (arg == "--refresh-shadows-on-paste") {
+        options.refresh_shadows_on_paste = true;
     } else if (arg == "--no-field-turns") {
         options.no_field_turns = true;
     } else if (arg == "--no-field-cull-boxes") {
@@ -1924,6 +1930,9 @@ void print_help() {
         "  --sample-block-cells N  how small a box gets before the descent asks the field about a\n"
         "                        whole LEVEL at once instead of recursing (512, one render node).\n"
         "                        0 is the control arm: recurse to single voxels as before D724\n"
+        "  --refresh-shadows-on-paste  let the ladder delivering a node re-open the two-second\n"
+        "                        window in which every face re-measures its shadow, as an edit does.\n"
+        "                        The control arm for D726, and what shipped before it\n"
         "  --no-field-turns      compute a rotate's six cosines and sines at every visit again,\n"
         "                        instead of once per clip. The control arm, worth 1.7%\n"
         "  --no-field-cull-boxes  read a union's child boxes out of the whole-field array again\n"
@@ -8278,7 +8287,31 @@ void Application::announce_world_change(const i64 lo[3], const i64 hi[3], WorldC
     // So an edit says "look again" to everything, briefly. Not a wipe of the cache ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that was
     // tried and it is the smearing, every voxel placed relighting the whole scene at once.
     // This keeps every measured value and simply re-measures faster for a moment.
-    shadow_refresh_frames_ = kShadowRefreshFrames;
+    // ...AND NOT FOR THE LADDER DELIVERING A NODE, which is the same distinction the line below
+    // draws for `edit_window_opened_` and the same argument, left undrawn here.
+    //
+    // Reported from playing: *"the game is running at ever lower framerate the more things load"*.
+    // This line is most of it. Three of this function's four callers are refinement pastes, a batch
+    // lands every hundred to three hundred milliseconds for the whole of a load, and the window is
+    // a hundred and twenty frames — so during a load the window is **permanently open**, and
+    // `trace.quality[2]` tells every face in the world to re-measure its shadow on every frame for
+    // as long as the world is still arriving. Measured: the faces pass goes 1.98 ms at frame 600 to
+    // 15.57 at frame 7,200 while the visibility pass stays flat at about 2, and the live face count
+    // goes 35,119 to 205,287. The cost grows with the world because the window never closes.
+    //
+    // The reason a paste does not need it is the FACE KEY, and it is spelled out over
+    // `edit_window_opened_` twenty lines below: a face is (node, level, direction), so a coarse
+    // node replaced by finer geometry gets NEW keys and starts from nothing anyway, and a face
+    // whose key survives a paste is the same surface with sharper neighbours and its measured light
+    // is still the right answer. An EDIT is genuinely different — a chisel changes what is behind a
+    // face whose key is unchanged.
+    //
+    // What it costs is a shadow cast by newly arrived geometry onto an unchanged face arriving on
+    // the two per cent trickle rather than at once. `--refresh-shadows-on-paste` is the control arm
+    // and restores the line to what it was.
+    if (why == WorldChange::kEdit || options_.refresh_shadows_on_paste) {
+        shadow_refresh_frames_ = kShadowRefreshFrames;
+    }
     // ...and the faces in the box drop their history once -- FOR AN EDIT, and never for the ladder
     // delivering a node.
     //
@@ -8717,6 +8750,50 @@ void Application::stream(f64 seconds) {
                         "cold window {} frames (floor {})",
                         frame_counter_, live.faces, face_budget_max_, live.evictions,
                         live.refusals, live.cold_window, face_store_.min_cold());
+            // WHAT A FRAME COSTS, BESIDE HOW MUCH WORLD THERE IS, every ten seconds.
+            //
+            // Reported from playing: *"the game is running at ever lower framerate the more things
+            // load"*. Nothing in this log could answer that. There is a heartbeat for the face
+            // store and one for the node pool, and the frame time appears only in the HUD, which
+            // is not in a log a player sends — so a frame time that drifts over minutes was
+            // invisible unless somebody watched a number on screen and remembered it.
+            //
+            // Everything on this line is a quantity that GROWS as a world builds, printed beside
+            // the frame time so a reader can see which of them the frame time is following. That
+            // is the whole design: a heartbeat with one number in it says something got slower,
+            // and a heartbeat with the candidates beside it says what it is tracking.
+            //
+            // `live_stats()` and not `stats()` -- the walking version costs 1.76 ms and this runs
+            // beside a frame-time measurement, which is the one place a probe must not be the
+            // thing it is measuring.
+            const NodePoolStats pool = node_pool_.live_stats();
+            // ...AND WHICH PASS THE TIME IS IN, because "it got slower" and "the marcher got
+            // slower" are different reports and only the second one can be acted on. The passes
+            // are already timed on the card for the HUD; this is the same numbers in the log,
+            // where a player's own session can be read afterwards.
+            std::string passes;
+            for (const PassTiming& pass : profiler_.results()) {
+                if (pass.depth != 0 || pass.gpu_ms < 0.05) continue;
+                if (!passes.empty()) passes += ' ';
+                // Formatted rather than assembled out of a division and a remainder, which is how
+                // the first version of this line reported 0.08 ms as "0.8" and 4.03 as "4.3" --
+                // a tenfold error in the one number the line exists to show, in exactly the cases
+                // where a pass is cheap and the reader most needs to know it.
+                char ms[16];
+                std::snprintf(ms, sizeof(ms), "%.2f", pass.gpu_ms);
+                passes += pass.name + ' ' + ms;
+            }
+            WS_LOG_INFO("frame",
+                        "heartbeat at frame {}: {:.2f} ms this frame, {:.2f} median, {:.2f} at the "
+                        "99th; GPU {:.2f} ms ({}); world {} chunks; pool {} nodes {} leaves; "
+                        "faces {} of {} slots ({} evicted, {} turned away); ladder {} regions, "
+                        "pick {:.0f} ms of main thread so far ({:.0f} of it sweeping {} entries)",
+                        frame_counter_, stats_.last_ms(), stats_.percentile_ms(0.50),
+                        stats_.percentile_ms(0.99), profiler_.total_gpu_ms(), passes,
+                        world_.chunk_count(), pool.nodes, pool.leaves, live.faces,
+                        face_budget_max_, live.evictions, live.refusals,
+                        refine_regions_.size(), refine_total_pick_ms_, refine_total_sweep_ms_,
+                        refine_total_swept_);
         }
     }
 

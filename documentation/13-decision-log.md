@@ -13639,3 +13639,101 @@ questions, and the claim was withdrawn.
 | D725 | **D701's fourth field was never the cache header's** | honesty | It is the bake script's own stamp; the claim was withdrawn |
 | D725 | **`--box-probe`'s ns-a-visit cannot gate under 10%** | instrument | 23.07 against 15.88 ns on bit-identical work; use a fixed-work arm |
 | D725 | **Agents may build in parallel and must not MEASURE in parallel** | trap | They kill each other's processes, and a killed run looks like a crash |
+
+---
+
+## D726 — "ever lower framerate the more things load" is a two-second window the ladder never lets close
+
+**2026-08-20, reported from playing:** *"the game is running at ever lower framerate the more things
+load"*. It is one line, it is the same fault the line twenty below it was already fixed for, and
+nothing in the log could have found it because nothing in the log said what a frame cost.
+
+### The instrument had to come first
+
+There is a heartbeat for the face store and one for the node pool, and the frame time appears **only
+in the HUD** — which is not in a log a player sends. So a frame time that drifts over minutes was
+invisible unless somebody watched a number on screen and remembered it.
+
+`heartbeat at frame N` now says, every ten seconds: the frame time, its median and its 99th
+percentile, **the GPU total split by pass**, the world's chunk count, the pool's nodes and leaves,
+the face store's live and evicted slots, and the ladder's region count with what its picking has cost
+the main thread. Everything on it is a quantity that GROWS as a world builds, printed beside the
+frame time, so a reader can see which of them the frame time is following. **A heartbeat with one
+number in it says something got slower; a heartbeat with the candidates beside it says what it is
+tracking.**
+
+It found the answer in one run:
+
+| frame | median ms | visibility | **faces** | live faces | pool nodes |
+|---|---|---|---|---|---|
+| 600 | 4.45 | 2.27 | **1.98** | 35,119 | 4,508 |
+| 2,400 | 10.09 | 2.20 | **4.66** | 246,208 | 14,708 |
+| 7,200 | 9.08 | 1.66 | **15.57** | 205,287 | 44,716 |
+
+**The visibility pass is flat at about two milliseconds and the faces pass goes to fifteen.** It is
+the lighting, and it is following the number of faces in the world.
+
+### The line
+
+`announce_world_change` sets `shadow_refresh_frames_ = kShadowRefreshFrames` — a hundred and twenty
+frames, about two seconds, during which `trace.quality[2]` tells **every face in the world** to
+re-measure its shadow. It was written for an edit: a player carves a hole, and every surface should
+look again quickly rather than wait for the two per cent trickle.
+
+**Three of that function's four callers are refinement pastes**, and a batch lands every hundred to
+three hundred milliseconds for the whole of a load. A two-second window re-opened three times a
+second is a window that **never closes**. So for the entire time a world is arriving, every face in
+it re-measures its shadow on every frame — and the cost of that grows with the world, which is
+exactly the shape of the report.
+
+**The argument for not doing it was already written down, twenty lines below, for a different flag.**
+`edit_window_opened_` was gated on `why == kEdit` with this reasoning: a face is `(node, level,
+direction)`, so when a coarse node is replaced by finer geometry the faces on it get NEW keys and
+start from nothing anyway; a face whose key survives a paste is the same surface with sharper
+neighbours, and its measured light is still the correct answer. **Every word of that applies to the
+line above it, and the line above it was left alone.**
+
+### Both arms, one binary, matched on the world rather than on the frame number
+
+`--refresh-shadows-on-paste` restores the old line. Same command, same clip, `--enter-now` so the
+ladder builds around a player standing in it, 170 seconds each:
+
+| | frames drawn | median ms at the end | faces pass | live faces | pool nodes |
+|---|---|---|---|---|---|
+| the line as it was | 47,400 | 7.32 | 2.88 ms | 141,791 | 41,764 |
+| gated on an edit | **69,600** | 6.98 | 2.62 ms | 141,437 | 38,316 |
+
+Both arms reach the **same world** in the same wall clock — 141.4 against 141.8 thousand live faces,
+38.3 against 41.8 thousand pool nodes — and the gated arm draws **1.47 times as many frames** doing
+it.
+
+**And the two end at almost the same frame time, which is the shape of the fault rather than an
+argument against it.** The gap is not spread evenly: it is concentrated in the minutes when the world
+is arriving fastest, because that is when batches land often enough to keep re-opening the window. In
+the middle of a load the faces pass was **15.57 ms** with the line as it was and **2.59** with it
+gated. Once the ladder slows down the window stops being re-opened three times a second and the two
+arms converge — which is precisely why the report is *"ever lower framerate the more things load"*
+and not *"the game is slow"*.
+
+**Matching on the world and not on the frame number is what makes that a measurement.** Compared at
+the same frame number the gap reads as six times, and that is not a result: the faster arm reaches
+frame 7,200 sooner, with less world in front of it, and a smaller world is cheaper to light. Two arms
+of a load are only comparable where the loads are at the same place.
+
+### What it costs, said plainly
+
+A shadow cast by newly arrived geometry onto a face whose key did NOT change now arrives on the two
+per cent trickle rather than within two seconds. Near the camera a face is covered by hundreds of
+pixels and two per cent of that is a steady stream; at distance it is slower. That is the trade, it
+is the same one `edit_window_opened_` already makes, and `--refresh-shadows-on-paste` is the way back
+if it turns out to be visible.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D726 | **The frame time was in no log, only the HUD** | instrument | A drift over minutes was invisible unless somebody watched a number and remembered it |
+| D726 | **A two-second refresh window re-opened three times a second never closes** | fault | Three of `announce_world_change`'s four callers are the ladder |
+| D726 | **The faces pass goes 1.98 → 15.57 ms while visibility stays at 2** | measurement | The lighting follows the face count; the marcher does not |
+| D726 | **Gated on an edit: 1.47x the frames for the same world** | decision | 69,600 against 47,400 in 170 s, matched at 141.4 against 141.8 thousand live faces |
+| D726 | **The gap is concentrated where the world arrives fastest** | honesty | Both arms end at about the same frame time; the loss was 15.57 ms against 2.59 in the middle of a load |
+| D726 | **The argument for it was already written, for the flag twenty lines below** | trap | `edit_window_opened_` was gated for this exact reason and the line above it was left |
+| D726 | **Match two arms of a LOAD on the world, not on the frame number** | method | At matched frames the same change reads as 6x, because the faster arm has less world in front of it |
