@@ -13349,3 +13349,61 @@ between entering a world and entering an empty one.
 | D722 | **The whole estate is in the world in 8.5 s and 10 MB** | decision | The coarse paste is back on at metre 2; it is the only thing that answers the complaint |
 | D722 | **A stale WorldShaper poisons every measurement beside it, gradually** | trap | Five readings degraded 18.8 → 36.2 s with a 2,353-CPU-second stray running; killed, the same command is 8.5 s |
 | D722 | **The one lever left is a BLOCK evaluator** | honesty | 640 traversals a node become one; worth roughly 20x on these numbers, and a rewrite rather than a flag |
+
+---
+
+## D723 — Complete means full resolution, and four agents at the one lever that is left
+
+**2026-08-20, and the user settled the ambiguity in one sentence:** *"ok do it, you can use a ton of
+agents, btw i meant by complete everything at full resolution"*.
+
+### What "complete" means, now that it has been said
+
+D721 built a pass that finishes the world before the player is put in it, and D722 gave it a dial
+with two settings because "the entire world" has two readings. This is the user choosing between
+them: **every node at the clip's own three centimetres, everywhere, including the campanile a
+hundred metres away.** `full_load_authored` is on by default and `--no-full-load-authored` is the
+other arm.
+
+**And the wording of everything the pass reports had to follow the meaning.** With D722's up-front
+coarse build back on, the whole estate is in the world at metre 2 within eight seconds — so the pass
+raises the world's DETAIL and not its extent, and *"the world is finished for 5.2 m"* read as though
+the rest of it were missing. It says *"the world is at the clip's own detail for 6.4 m of the 106 m
+it reaches — the rest of it is THERE and coarser, not missing"* now.
+
+Measured, cold estate, clean machine: the whole clip in the world at **7.8 s**, then **71,296 of
+84,224 nodes** taken to metre 32 in the next 142 s, reaching **6.4 m** of a 106 m clip. That is the
+number the block evaluator is aimed at.
+
+**And the gate says coarse-then-sharpen reaches exactly the world one authored pass does.**
+`clips/sampler.clip` cold, with the coarse stage ON and full resolution ON, converges to
+`d0d5f84c685be847` at 1,430,104 solid voxels — the same content, to the voxel, as building it fine
+in one go. That is worth more than it looks: it means the coarse stage is a schedule and not a
+compromise.
+
+### The coarse stage costs a small clip six per cent, not three times
+
+This log was very nearly told the coarse stage costs `clips/sampler.clip` **1,289 ms against 409** —
+a 3.1x regression, which would have been an argument for a size threshold on it. That reading was
+taken while the machine was still finishing a hundred-and-fifty-second estate build. **It is D722's
+own stray-process trap, made one paragraph after writing it down.**
+
+Clean, both arms, four clips, time to `everything ready`:
+
+| clip | with the coarse stage | without | |
+|---|---|---|---|
+| `sampler` | 773 ms | 726 ms | +6% |
+| `mirror_hall` | 704 ms | 664 ms | +6% |
+| `max_test` | 650 ms | 526 ms | +24% |
+| `_trees` | does not build either way | | it is an include-only fragment and says so: *"the file never says which shape is the solid"* |
+
+Six to twenty-four per cent of a sub-second load, against the estate's whole world arriving at 7.8 s
+instead of never. **So there is no size threshold on the coarse stage, because there is no crossover
+to put one at.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D723 | **Complete means every node at the clip's own detail** | decision | Asked for directly; `full_load_authored` on, `--no-full-load-authored` the other arm |
+| D723 | **The pass raises DETAIL, not extent, and says so** | decision | The world is all there at metre 2 in eight seconds; "finished for 5.2 m" read as though the rest were missing |
+| D723 | **Coarse-then-sharpen reaches the same world as one authored pass** | measurement | `d0d5f84c685be847` at 1,430,104 voxels either way, so the coarse stage is a schedule and not a compromise |
+| D723 | **The coarse stage costs a small clip 6%, and the 3.1x was contaminated** | trap | D722's own stray-process trap, made one paragraph after writing it down |
