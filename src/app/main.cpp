@@ -1297,6 +1297,12 @@ struct Options {
     // view can now CHANGE a document, and a change nothing automated can make is a change nothing
     // automated can check.
     std::string editor_add;
+    // `--editor-part clips/sampler.clip`, and `--editor-new-part clip:porch`: put another whole
+    // document inside this one, off a shelf or made fresh. A world IS a document made of documents
+    // — every one the game ships is — and until the graph grew a way to say so there was no way to
+    // build one without a hand on the mouse.
+    std::string editor_part;
+    std::string editor_new_part;
     // `--editor-enter NAME`: go into the `include` of that name, exactly as pressing its door mark
     // does — so the way in, the document under it and the way back out are all photographable.
     std::string editor_enter;
@@ -1418,6 +1424,10 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         if (i + 1 < argc) options.editor_node = argv[++i];
     } else if (arg == "--editor-add") {
         if (i + 1 < argc) options.editor_add = argv[++i];
+    } else if (arg == "--editor-part") {
+        if (i + 1 < argc) options.editor_part = argv[++i];
+    } else if (arg == "--editor-new-part") {
+        if (i + 1 < argc) options.editor_new_part = argv[++i];
     } else if (arg == "--editor-enter") {
         if (i + 1 < argc) options.editor_enter = argv[++i];
     } else if (arg == "--logo-seed") {
@@ -2221,6 +2231,8 @@ void print_help() {
         "  --target-fps N        frame rate to hold (default: the monitor's refresh rate)\n"
         "  --quality N           pin the quality level 0-7 instead of deciding it\n"
         "  --no-auto-quality     leave quality where it is and never adjust it\n"
+        "  --editor-part FILE    put that document inside the open one, copied beside it\n"
+        "  --editor-new-part K:N make a new clip or material called N and put it in\n"
         "  --benchmark           measure this machine again and save the result\n"
         "  --fly vx,vy,vz,vyaw   move the camera every frame (m/s, deg/s), so a screenshot\n"
         "                        is of the moving picture rather than a settled one\n"
@@ -14055,6 +14067,20 @@ int run_windowed(const Options& options) {
         if (!options.editor_add.empty()) {
             const std::string why = shell.add_node(options.editor_add);
             if (!why.empty()) WS_LOG_WARN("shell", "--editor-add: {}", why);
+        }
+        if (!options.editor_part.empty()) {
+            const std::string why = shell.add_part(std::filesystem::path(options.editor_part));
+            if (!why.empty()) WS_LOG_WARN("shell", "--editor-part: {}", why);
+        }
+        if (!options.editor_new_part.empty()) {
+            // `kind:name`, one argument, because two would be two flags to keep in step.
+            const usize colon = options.editor_new_part.find(':');
+            const std::string kind = options.editor_new_part.substr(0, colon);
+            const std::string name = (colon == std::string::npos)
+                                         ? std::string()
+                                         : options.editor_new_part.substr(colon + 1);
+            const std::string why = shell.new_part(kind, name);
+            if (!why.empty()) WS_LOG_WARN("shell", "--editor-new-part: {}", why);
         }
         if (!options.editor_node.empty() && !shell.choose_node(options.editor_node)) {
             WS_LOG_WARN("shell", "'{}' does not name anything in '{}'", options.editor_node,

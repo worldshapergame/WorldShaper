@@ -259,3 +259,11 @@ wire takes one out, and the palette writes a whole statement. Every one of them 
 author's own bytes with everything else in the file left alone, which is the round-trip rule
 `23-shell-and-libraries.md` §5c states and the reason the reader records a line and a column for
 every number, every name and every brace.
+
+## A note on what a clip file may begin with
+
+A **UTF-8 byte-order mark** at the head of the file is skipped. Every Windows text editor writes one
+by default, and without this the first statement of the file is an unknown statement with three
+invisible bytes in front of it — reported once as `line 1: unknown statement 'metre'`, which is a
+message that sends you to look at the word `metre`. The editor remembers it and writes it back, so a
+file that had one still has one (D785).

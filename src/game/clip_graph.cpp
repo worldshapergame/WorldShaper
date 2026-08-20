@@ -1101,6 +1101,30 @@ std::string disconnect_clip_node(std::vector<std::string>& lines, const ClipGrap
     return {};
 }
 
+std::string add_clip_include(std::vector<std::string>& lines, const ClipGraph& graph,
+                             const std::string& file, f32 x, f32 y) {
+    if (file.empty()) return "an include has to name a file";
+    if (file.find('"') != std::string::npos) return "a file name cannot hold a quotation mark";
+    for (const ClipNode& node : graph.nodes) {
+        if (node.head == "include" && node.target == file) return file + " is already in here";
+    }
+    // At the top, under whatever the document already reads from elsewhere: an include brings names
+    // with it, and a name has to be bound before anything reads it.
+    usize at = 0;
+    for (const ClipNode& node : graph.nodes) {
+        if (node.head == "metre" || node.head == "meter" || node.head == "bounds" ||
+            node.head == "include" || node.head == "param" || node.head == "material") {
+            at = std::max<usize>(at, node.last_line);
+        }
+    }
+    at = std::min(at, lines.size());
+    char marker[64];
+    std::snprintf(marker, sizeof(marker), "  %s %.1f %.1f", kPlacedMarker, static_cast<f64>(x),
+                  static_cast<f64>(y));
+    lines.insert(lines.begin() + static_cast<isize>(at), "include \"" + file + "\"" + marker);
+    return {};
+}
+
 std::string add_clip_node(std::vector<std::string>& lines, const ClipGraph& graph,
                           const std::string& head, f32 x, f32 y, std::string& made) {
     const std::string body = clip_node_template(head);

@@ -298,6 +298,16 @@ std::string disconnect_clip_node(std::vector<std::string>& lines, const ClipGrap
                                  u32 which);
 
 // A new statement, from the palette. `made` comes back holding the name it was given.
+// `include "some.clip"`, written in at the top with everything else the document reads from
+// elsewhere — and with the same `#@` marker, so a part dropped on the canvas stays where it was
+// dropped.
+//
+// Separate from `add_clip_node` because an include is not a word out of the palette: it names a
+// FILE, and which file is a question only the interface can answer. Reported directly — *there is
+// no node for adding a clip into the editor either an empty one or one from your clip library.*
+std::string add_clip_include(std::vector<std::string>& lines, const ClipGraph& graph,
+                             const std::string& file, f32 x, f32 y);
+
 std::string add_clip_node(std::vector<std::string>& lines, const ClipGraph& graph,
                           const std::string& head, f32 x, f32 y, std::string& made);
 

@@ -369,3 +369,107 @@ TEST_CASE("every document in the repository lays out with nothing on top of anyt
     }
     CHECK(looked_at > 0);
 }
+
+// --- a document made of documents ---------------------------------------------------------------
+
+TEST_CASE("a clip off the shelf is copied beside the document and included by name") {
+    Scratch scratch("shell-part-take");
+    const std::filesystem::path world =
+        write_file(scratch.root / "worlds" / "site.wsworld", "metre 32\n");
+    write_file(scratch.root / "clips" / "porch.wsclip",
+               "let porch = box -1 0 -1  1 1 1\nsolid porch\n");
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(world);
+    REQUIRE(shell.open_editor_view("visual"));
+    quiet_frame(shell, 0.0);
+
+    REQUIRE(shell.add_part(scratch.root / "clips" / "porch.wsclip").empty());
+    // Copied BESIDE the document, not pointed at where it lives: an include resolves beside the
+    // file doing the including and then in the game's own clips, and nowhere else — so a world
+    // pointing at the player's own shelf would open on their machine and on nobody else's.
+    CHECK(std::filesystem::exists(scratch.root / "worlds" / "porch.wsclip"));
+
+    shell.frame(with_ctrl(Key::S), 1280, 800, 0.1);
+    const std::string text = file_text(world);
+    CHECK(text.find("include \"porch.wsclip\"") != std::string::npos);
+
+    // And the graph lays out with it in.
+    quiet_frame(shell, 0.2);
+    CHECK(shell.boxes_overlapping() == 0);
+}
+
+TEST_CASE("a new clip and a new material are made beside the document and put in it") {
+    Scratch scratch("shell-part-new");
+    const std::filesystem::path world =
+        write_file(scratch.root / "worlds" / "site.wsworld", "metre 32\n");
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(world);
+    REQUIRE(shell.open_editor_view("visual"));
+    quiet_frame(shell, 0.0);
+
+    REQUIRE(shell.new_part("clip", "front porch").empty());
+    REQUIRE(shell.new_part("material", "old brass").empty());
+    // A name is a FILE name, not a sentence: the space becomes an underscore and nothing else
+    // survives that a quoted include could not carry.
+    CHECK(std::filesystem::exists(scratch.root / "worlds" / "front_porch.clip"));
+    CHECK(std::filesystem::exists(scratch.root / "worlds" / "old_brass.wsmat"));
+
+    // Neither is empty. An empty clip builds to nothing, which is indistinguishable from a document
+    // that failed to load.
+    const std::string clip = file_text(scratch.root / "worlds" / "front_porch.clip");
+    CHECK(clip.find("solid") != std::string::npos);
+    const std::string material = file_text(scratch.root / "worlds" / "old_brass.wsmat");
+    CHECK(material.find("material old_brass") != std::string::npos);
+    CHECK(material.find("ior=") != std::string::npos);
+    CHECK(material.find("metal=") != std::string::npos);
+    CHECK(material.find("emit=") != std::string::npos);
+    // Both carry who made them (D447).
+    CHECK(clip.find("WSauthor:") != std::string::npos);
+    CHECK(material.find("WSauthor:") != std::string::npos);
+
+    shell.frame(with_ctrl(Key::S), 1280, 800, 0.1);
+    const std::string text = file_text(world);
+    CHECK(text.find("include \"front_porch.clip\"") != std::string::npos);
+    CHECK(text.find("include \"old_brass.wsmat\"") != std::string::npos);
+
+    // A second one of the same name is refused rather than written over.
+    CHECK_FALSE(shell.new_part("clip", "front porch").empty());
+    // And a name with nothing usable in it is refused before a file is made.
+    CHECK_FALSE(shell.new_part("clip", "!!!").empty());
+    CHECK_FALSE(shell.new_part("nonsense", "thing").empty());
+}
+
+TEST_CASE("a clip written by a Windows editor opens, and keeps its byte order mark") {
+    // Three invisible bytes at the head of the file, which every Windows text editor writes by
+    // default. The parser answered `line 1: unknown statement 'metre'` — a message that sends a
+    // player to look at the word `metre`, which is not what is wrong with it. Found by writing a
+    // clip from PowerShell, which is exactly what somebody scripting one would do.
+    Scratch scratch("shell-byte-order-mark");
+    const std::string marked = std::string("\xEF\xBB\xBF") + kClip;
+    const std::filesystem::path clip = write_file(scratch.root / "clips" / "marked.wsclip", marked);
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    REQUIRE(shell.open_editor_view("visual"));
+    quiet_frame(shell, 0.0);
+    // The first statement is a statement again, so the graph has the boxes rather than one opaque
+    // lump of text.
+    CHECK(shell.choose_node("plinth"));
+
+    // And it is still there after a round trip: it is in the file, so it is not the editor's to
+    // throw away — the same promise the trailing newline is made of.
+    InputState typed = quiet_input();
+    typed.typed = "q";
+    shell.frame(typed, 1280, 800, 0.1);
+    InputState back = quiet_input();
+    back.down[static_cast<usize>(Key::Backspace)] = true;
+    back.pressed[static_cast<usize>(Key::Backspace)] = true;
+    shell.frame(back, 1280, 800, 0.2);
+    shell.frame(with_ctrl(Key::S), 1280, 800, 0.3);
+    CHECK(file_text(clip) == marked);
+}

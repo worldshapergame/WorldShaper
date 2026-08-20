@@ -394,6 +394,27 @@ detail:
   graph, the material graph and the clip graph are the same editor with different nodes in the
   palette — the player learns it once.
 
+#### A document is made of documents (D783, D784)
+
+The graph's right-click menu opens on **a clip** and **a material**, above the words of the
+language, because they are the two biggest things a document can be made of. Each offers *a new one*
+and then everything on that shelf — beside the document, on the player's own shelf, and (for clips)
+what the game ships.
+
+**A part off a shelf is copied beside the document** and included by name. An include resolves
+beside the file doing the including and then in the game's own clips and *nowhere else*, so a world
+that pointed at the player's own shelf would open on their machine and on nobody else's. Copying is
+what makes a document something you can send — and it is what the shipped facility already is: a
+world file and a folder of parts beside it.
+
+**A new part is named before it exists**, in the place the menu was standing. The name is a file
+name and not a sentence; a space becomes an underscore and anything a quoted `include` could not
+carry is dropped. Neither kind is made empty, and both carry the author tag.
+
+A **material** is a document too: a `.wsmat` holding a `material` statement with every property it
+takes written out, so the file itself is the list. It is spliced in like any other part, which is
+why one editor and one language cover both.
+
 #### One box, one cell — and therefore no overlaps (D780, D781, D782)
 
 **Every box on the graph sits on a whole cell, and a cell holds one.** A drag snaps as it moves

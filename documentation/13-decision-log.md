@@ -15528,3 +15528,31 @@ above rather than tested, because it is true of every layout by construction and
 sample.
 
 **837 test cases, 21,248,569 assertions.**
+
+## D783–D785 — a document made of documents, and three invisible bytes
+
+*From the same message: **"there is no node for adding a clip into the editor either an empty one or
+one from your clip library (it should work the same for materials, either a new empty one or one
+from your material library)"**. It was the one thing the graph could not do that the language can —
+and `include` is not a nicety, it is what every world the game ships is made of.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D783 | **A part is COPIED beside the document, not pointed at where it lives** | user | *a clip* and *a material* are the first two entries in the graph's right-click menu now, above the words of the language, because they are the two biggest things a document can be made of. Each offers *a new one* and then everything on that shelf — what is already beside the document, what is on the player's own shelf, and, for clips, what the game ships. And what happens when one is chosen is the decision: **the file is copied beside the document** and included by name. Not a shortcut. An include resolves beside the file doing the including and then in the game's own clips, and **nowhere else** — so a world that pointed at the player's own shelf would open on their machine and on nobody else's. Copying is what makes a document something you can send, and it is what the shipped facility already does: a world file and a folder of parts beside it. A file already there under that name is included as it stands rather than overwritten, because a copy that silently replaces one is a copy that loses work |
+| D784 | **A new part is named before it exists** | user | D773 one window along: *new things should always prompt you to title them immediately*. There is no row on a canvas to rename in place, so it asks where the menu was standing — and it asks **before** the file is made, because a file made first is a file called `untitled` the moment the player changes their mind. The name is a FILE name and not a sentence: a space becomes an underscore and anything a quoted `include` could not carry is dropped, because a name with a quotation mark in it would end the string the whole language then has to survive. And neither kind is made empty — an empty clip builds to nothing, which is indistinguishable from a document that failed to load, and a `.wsmat` is written with every property a material takes so the file itself is the list. Both carry the author tag (D447) |
+| D785 | **A byte-order mark is three bytes the reader skips and the editor puts back** | correction | Found by writing a test clip from PowerShell — which is exactly what a player scripting one would do. `Set-Content -Encoding utf8` writes a UTF-8 byte-order mark, every Windows text editor does the same by default, and the answer was **`line 1: unknown statement 'metre'`** with three invisible bytes in front of the word. A message that sends a player to look at `metre`, which is not what is wrong with it. The splicer skips it on the first line of every file it reads. The editor **remembers it and writes it back**, because it is in the file and therefore not the editor's to throw away — the same promise the trailing newline is made of (D779) |
+
+### The gate, re-run because the splicer changed
+
+```
+scene: 4 chunks, 1429596 solid voxels, 10018 of 10018 nodes sharpened, content efeb39a93c369a2d, shape d41424c8236d15ac
+box against cell: 0 filled that are air and 0 cleared that are matter
+```
+
+Unmoved. **841 test cases, 21,248,604 assertions.**
+
+### And the instruments
+
+`--editor-part FILE` puts a document inside the open one exactly as the menu does, and
+`--editor-new-part clip:porch` makes one and puts it in. A world is a document made of documents and
+there was no way to build one without a hand on the mouse (D460).

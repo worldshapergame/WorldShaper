@@ -930,3 +930,34 @@ TEST_CASE("an explicit empty pair of braces is not a braceless child") {
     }
     CHECK(has_solid);
 }
+
+TEST_CASE("a whole document can be put inside another one") {
+    // `include` is how a document is made of other documents, and every world the game ships is
+    // one. The graph could not say it: reported as there being no node for adding a clip.
+    std::vector<std::string> lines = lines_of(kWirable);
+    ClipGraph graph = read_clip_graph(lines);
+    CHECK(add_clip_include(lines, graph, "porch.clip", 2.0f, 1.0f).empty());
+
+    graph = read_clip_graph(lines);
+    const ClipNode* part = nullptr;
+    for (const ClipNode& node : graph.nodes) {
+        if (node.head == "include") part = &node;
+    }
+    REQUIRE(part != nullptr);
+    CHECK(part->target == "porch.clip");
+    CHECK(part->placed);
+    CHECK(part->at_x == doctest::Approx(2.0));
+    CHECK(part->at_y == doctest::Approx(1.0));
+    // At the top, because an include brings names with it and a name has to be bound before
+    // anything reads it.
+    for (const ClipNode& node : graph.nodes) {
+        if (node.head == "solid") CHECK(part->line < node.line);
+    }
+
+    // Twice is refused rather than written: two of the same include is the same file spliced in
+    // twice, which is every name in it declared twice.
+    CHECK_FALSE(add_clip_include(lines, graph, "porch.clip", 4.0f, 0.0f).empty());
+    // And a quotation mark in the name would end the string the whole language then has to survive.
+    CHECK_FALSE(add_clip_include(lines, graph, "por\"ch.clip", 4.0f, 0.0f).empty());
+    CHECK_FALSE(add_clip_include(lines, graph, "", 4.0f, 0.0f).empty());
+}

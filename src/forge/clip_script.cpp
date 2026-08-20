@@ -2042,6 +2042,16 @@ static std::string splice_includes(const std::string* body, const std::string& p
         while (std::getline(*in, line)) {
             ++number;
             if (!line.empty() && line.back() == '\r') line.pop_back();
+            // A UTF-8 byte-order mark on the first line, which every Windows text editor writes by
+            // default and no reader here was expecting. It made the first statement of the file
+            // unknown — `line 1: unknown statement 'metre'`, with three invisible bytes in front of
+            // it — which is a message that sends a player looking at the word `metre`. Found by
+            // writing a clip from PowerShell, which is exactly what a player scripting one would do.
+            if (number == 1 && line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF &&
+                static_cast<unsigned char>(line[1]) == 0xBB &&
+                static_cast<unsigned char>(line[2]) == 0xBF) {
+                line.erase(0, 3);
+            }
 
             // `include "some/other.clip"`, resolved relative to the file doing the including, so
             // a fragment can be moved with its neighbours and still find them.

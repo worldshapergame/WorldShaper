@@ -2288,6 +2288,28 @@ void Shell::lay_out_graph() {
     }
 }
 
+std::string Shell::add_part(const std::filesystem::path& from) {
+    if (editing_.empty()) return "nothing is open";
+    std::error_code error;
+    if (!std::filesystem::exists(from, error) || error) {
+        return "there is no " + from.filename().string() + " to put in";
+    }
+    refresh_graph();
+    menu_x_ = 0.0f;
+    menu_y_ = 0.0f;
+    return take_part(from);
+}
+
+std::string Shell::new_part(std::string_view kind, std::string_view name) {
+    if (editing_.empty()) return "nothing is open";
+    const u32 which = (kind == "clip") ? 1u : ((kind == "material") ? 2u : 0u);
+    if (which == 0) return "a part is a clip or a material";
+    refresh_graph();
+    menu_x_ = 0.0f;
+    menu_y_ = 0.0f;
+    return make_part(which, std::string(name));
+}
+
 u32 Shell::boxes_overlapping() const {
     std::unordered_set<u64> taken;
     u32 twice = 0;
@@ -2750,6 +2772,7 @@ void Shell::draw_visual_view(const Rect& page) {
             menu_y_ = 0.0f;
             ui_.open_menu(id_of("editor.graph.menu"), ui_.pointer_x(), ui_.pointer_y());
         }
+        draw_part_naming(canvas);
         draw_graph_menu(canvas);
         return;
     }
@@ -3458,6 +3481,7 @@ void Shell::draw_visual_view(const Rect& page) {
         ui_.open_menu(id_of("editor.graph.menu"), ui_.pointer_x(), ui_.pointer_y());
     }
 
+    draw_part_naming(canvas);
     draw_graph_menu(canvas);
 }
 
@@ -3468,15 +3492,174 @@ void Shell::draw_visual_view(const Rect& page) {
 // The palette is TWO steps — the kinds of thing, then the things — because the language has ninety
 // words in it and a menu of ninety is a menu nobody reads. Choosing a kind re-opens the menu where
 // it already is, so it reads as one menu that went deeper rather than as two that happened.
+// Every clip, or every material, a player could put in this document: what is already beside it,
+// what is on their own shelf, and — for clips — what the game ships. Taken once, when the menu
+// opens, because a listing re-read every frame is a menu whose third item is a different file by
+// the time it is pressed (D488).
+void Shell::gather_parts(u32 kind) {
+    part_choices_.clear();
+    if (editing_.empty()) return;
+    const bool clips = kind == 1;
+    std::vector<std::filesystem::path> where;
+    where.push_back(editing_.parent_path());
+    where.push_back(library_.root() / (clips ? "clips" : "materials"));
+    if (clips) where.push_back(library_.shipped_root() / "clips");
+
+    std::vector<std::string> seen;
+    for (const std::filesystem::path& folder : where) {
+        std::error_code error;
+        if (!std::filesystem::exists(folder, error) || error) continue;
+        std::vector<std::filesystem::path> here;
+        for (const std::filesystem::directory_entry& entry :
+             std::filesystem::directory_iterator(folder, error)) {
+            if (error) break;
+            if (!entry.is_regular_file()) continue;
+            const std::string extension = entry.path().extension().string();
+            const bool wanted = clips ? (extension == ".clip" || extension == ".wsclip")
+                                      : (extension == ".wsmat" || extension == ".mat");
+            if (!wanted) continue;
+            if (same_file(entry.path()) == editing_) continue;   // a file cannot include itself
+            here.push_back(entry.path());
+        }
+        // By name, so the listing is the same on every machine rather than whatever order the
+        // file system happens to hand back.
+        std::sort(here.begin(), here.end(), [](const std::filesystem::path& a,
+                                               const std::filesystem::path& b) {
+            return a.filename().string() < b.filename().string();
+        });
+        for (const std::filesystem::path& one : here) {
+            const std::string name = one.filename().string();
+            if (std::find(seen.begin(), seen.end(), name) != seen.end()) continue;
+            seen.push_back(name);
+            part_choices_.push_back(one);
+            if (part_choices_.size() >= 40) return;   // a menu, not a library
+        }
+    }
+}
+
+// A part off a shelf, copied beside the document and included by name.
+std::string Shell::take_part(const std::filesystem::path& from) {
+    if (editing_.empty()) return "nothing is open";
+    const std::string name = from.filename().string();
+    const std::filesystem::path beside = editing_.parent_path() / name;
+    std::error_code error;
+    if (same_file(from) != same_file(beside)) {
+        if (std::filesystem::exists(beside, error) && !error) {
+            // Already here under that name, and it is not this file. Included as it stands rather
+            // than overwritten: a copy that silently replaces one is a copy that loses work.
+        } else {
+            error.clear();
+            std::filesystem::copy_file(from, beside, error);
+            if (error) return "could not copy " + name + " beside this document";
+        }
+    }
+    const std::string why = add_clip_include(lines_, graph_, name, menu_x_, menu_y_);
+    document_changed(why);
+    return why;
+}
+
+// A new part, made beside the document, carrying the player's own author tag.
+std::string Shell::make_part(u32 kind, const std::string& name) {
+    if (editing_.empty()) return "nothing is open";
+    std::string stem;
+    for (char c : name) {
+        // A file name, not a sentence: letters, digits, dashes and underscores, and a space becomes
+        // an underscore. An include names this file in a quoted string that the whole language then
+        // has to survive, and a name with a quotation mark in it is not one.
+        if (c == ' ') {
+            stem += '_';
+        } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                   c == '_' || c == '-') {
+            stem += c;
+        }
+    }
+    if (stem.empty()) return "give it a name first";
+    const bool clips = kind == 1;
+    const std::string file = stem + (clips ? ".clip" : ".wsmat");
+    const std::filesystem::path at = editing_.parent_path() / file;
+    std::error_code error;
+    if (std::filesystem::exists(at, error) && !error) {
+        return "there is already a " + file + " beside this document";
+    }
+    // A new part is not an empty file. An empty clip builds to nothing, and a document that
+    // includes nothing is indistinguishable from a document that failed to load — the failure this
+    // project has chased three times.
+    const std::string body =
+        clips ? ("# " + stem +
+                 "\nlet " + stem + "_shape = box -1 0 -1   1 1 1  round=0.02\nsolid " + stem +
+                 "_shape\n")
+              : ("# " + stem +
+                 "\n# What this is made of. Every one of these can be left out and takes its\n"
+                 "# usual value; what is written here is what makes it look like something.\n"
+                 "material " + stem +
+                 " rgb=170,166,158 rough=200 metal=0 emit=0 ior=0 opacity=255\n");
+    {
+        std::ofstream out(at, std::ios::binary | std::ios::trunc);
+        if (!out) return "could not make " + file + " beside this document";
+        out.write(body.data(), static_cast<std::streamsize>(body.size()));
+    }
+    for (const Kind& of : shipped_kinds()) {
+        if (of.folder == (clips ? "clips" : "materials")) {
+            write_author(at, of, preferences_.username);
+            break;
+        }
+    }
+    const std::string why = add_clip_include(lines_, graph_, file, menu_x_, menu_y_);
+    document_changed(why);
+    return why;
+}
+
+// And the one row that asks what it is called, before it exists.
+//
+// D773 says a new thing asks for its name at once, on the row it was made on. There is no row here,
+// so it asks in the place the menu was standing — and it asks BEFORE the file is made, because a
+// file made first is a file called `untitled` if the player changes their mind.
+void Shell::draw_part_naming(const Rect& canvas) {
+    if (making_ == 0) return;
+    const Metrics& metrics = ui_.metrics();
+    const f32 wide = std::min(canvas.width() - metrics.px(16.0f), metrics.px(260.0f));
+    const Rect row{canvas.x0 + metrics.px(8.0f), canvas.y0 + metrics.px(8.0f),
+                   canvas.x0 + metrics.px(8.0f) + wide,
+                   canvas.y0 + metrics.px(8.0f) + metrics.row()};
+    ui_.panel(Rect{row.x0 - metrics.px(4.0f), row.y0 - metrics.px(4.0f), row.x1 + metrics.px(4.0f),
+                   row.y1 + metrics.px(4.0f)});
+    if (ui_.field(id_of("editor.graph.naming"), row, making_buffer_,
+                  making_ == 1 ? "what is the clip called?" : "what is the material called?")) {
+        const u32 kind = making_;
+        making_ = 0;
+        const std::string why = make_part(kind, making_buffer_);
+        making_buffer_.clear();
+        if (why.empty()) {
+            ui_.sound().say(Cue::Commit);
+        } else {
+            say(why, 3.5);
+            ui_.sound().say(Cue::Refuse);
+        }
+        return;
+    }
+    if (ui_.input().was_pressed(Key::Escape)) {
+        making_ = 0;
+        making_buffer_.clear();
+        ui_.sound().say(Cue::Close);
+    }
+}
+
 void Shell::draw_graph_menu(const Rect& canvas) {
     const u64 id = id_of("editor.graph.menu");
     if (!ui_.menu_open(id)) return;
     (void)canvas;
 
-    enum class Act : u32 { Script, CutWires, Duplicate, TakeOut, Group, Head };
+    enum class Act : u32 { Script, CutWires, Duplicate, TakeOut, Group, Head, Part, NewPart,
+                          TakePart };
     std::vector<Act> acts;
+    std::vector<i32> args;   // which group, which head, which kind — so prepending an item is safe
     std::vector<Ui::MenuItem> items;
     std::vector<std::string> labels;
+
+    // The two levels a part menu has. Negative, because the palette's own groups are indexed from
+    // nought and these are not one of them.
+    constexpr i32 kPartClips = -2;
+    constexpr i32 kPartMaterials = -3;
 
     const bool about_a_node = menu_about_ < graph_.nodes.size();
     // What the menu is ABOUT, fixed the moment it opens: reading the choice every frame is how a
@@ -3496,29 +3679,60 @@ void Shell::draw_graph_menu(const Rect& canvas) {
         labels.push_back("show in the script");
         items.push_back({Icon::Editor, labels.back(), about.size() == 1});
         acts.push_back(Act::Script);
+        args.push_back(0);
         labels.push_back("duplicate" + many);
         items.push_back({Icon::Duplicate, labels.back(), any_statement});
         acts.push_back(Act::Duplicate);
+        args.push_back(0);
         labels.push_back("cut every wire");
         items.push_back({Icon::Close, labels.back(), any_wires});
         acts.push_back(Act::CutWires);
+        args.push_back(0);
         labels.push_back("take out" + many);
         items.push_back({Icon::Delete, labels.back(), any_statement});
         acts.push_back(Act::TakeOut);
+        args.push_back(0);
+    } else if (palette_group_ == kPartClips || palette_group_ == kPartMaterials) {
+        const bool clips = palette_group_ == kPartClips;
+        labels.push_back(clips ? "a new clip" : "a new material");
+        items.push_back({Icon::New, labels.back(), true});
+        acts.push_back(Act::NewPart);
+        args.push_back(clips ? 1 : 2);
+        for (const std::filesystem::path& one : part_choices_) {
+            labels.push_back(shown_name(one));
+            items.push_back({clips ? Icon::Clip : Icon::Material, labels.back(), true});
+            acts.push_back(Act::TakePart);
+            args.push_back(static_cast<i32>(&one - part_choices_.data()));
+        }
     } else if (palette_group_ < 0) {
+        // A whole clip and a whole material come FIRST, above the words of the language: they are
+        // the two biggest things a document can be made of, and the palette's own groups are the
+        // small ones.
+        labels.push_back("a clip");
+        items.push_back({Icon::Clip, labels.back(), true});
+        acts.push_back(Act::Part);
+        args.push_back(1);
+        labels.push_back("a material");
+        items.push_back({Icon::Material, labels.back(), true});
+        acts.push_back(Act::Part);
+        args.push_back(2);
+        i32 which = 0;
         for (const ClipPaletteGroup& group : clip_palette()) {
             labels.push_back(group.name);
             items.push_back({Icon::New, labels.back(), true});
             acts.push_back(Act::Group);
+            args.push_back(which++);
         }
     } else {
         const std::vector<ClipPaletteGroup>& groups = clip_palette();
         const usize which = static_cast<usize>(palette_group_);
         if (which < groups.size()) {
+            i32 head_at = 0;
             for (const std::string& head : groups[which].heads) {
                 labels.push_back(head);
                 items.push_back({Icon::New, labels.back(), true});
                 acts.push_back(Act::Head);
+                args.push_back(head_at++);
             }
         }
     }
@@ -3595,17 +3809,43 @@ void Shell::draw_graph_menu(const Rect& canvas) {
             return;
         case Act::Group:
             // A kind was chosen: the same menu, one level in, where it already is.
-            palette_group_ = picked;
+            palette_group_ = args[at];
             ui_.open_menu(id, ui_.pointer_x(), ui_.pointer_y());
             return;
+        case Act::Part:
+            // A clip or a material: the shelf's listing, taken once, in the same menu one level in.
+            gather_parts(static_cast<u32>(args[at]));
+            palette_group_ = (args[at] == 1) ? kPartClips : kPartMaterials;
+            ui_.open_menu(id, ui_.pointer_x(), ui_.pointer_y());
+            return;
+        case Act::NewPart:
+            palette_group_ = -1;
+            making_ = static_cast<u32>(args[at]);
+            making_buffer_.clear();
+            ui_.sound().say(Cue::Open);
+            return;
+        case Act::TakePart: {
+            palette_group_ = -1;
+            const usize which = static_cast<usize>(args[at]);
+            if (which >= part_choices_.size()) return;
+            const std::string why = take_part(part_choices_[which]);
+            if (why.empty()) {
+                ui_.sound().say(Cue::Commit);
+            } else {
+                say(why, 3.0);
+                ui_.sound().say(Cue::Refuse);
+            }
+            return;
+        }
         case Act::Head: {
             const std::vector<ClipPaletteGroup>& groups = clip_palette();
             const usize which = static_cast<usize>(palette_group_);
+            const usize head = static_cast<usize>(args[at]);
             palette_group_ = -1;
-            if (which >= groups.size() || at >= groups[which].heads.size()) return;
+            if (which >= groups.size() || head >= groups[which].heads.size()) return;
             // Through the same one path a scripted run takes, so the thing a photograph proves is
             // the thing a press does.
-            if (add_node(groups[which].heads[at]).empty()) open_settings();
+            if (add_node(groups[which].heads[head]).empty()) open_settings();
             return;
         }
     }
@@ -3832,6 +4072,7 @@ void Shell::draw_node_parameters(const Rect& rect) {
 
 std::string Shell::document() const {
     std::string text;
+    if (began_with_mark_) text += "\xEF\xBB\xBF";
     for (usize i = 0; i < lines_.size(); ++i) {
         text += lines_[i];
         if (i + 1 < lines_.size()) text += "\n";
@@ -3879,8 +4120,15 @@ void Shell::open_document(const std::filesystem::path& raw) {
     lines_.clear();
     std::ifstream file(path, std::ios::binary);
     std::string line;
+    began_with_mark_ = false;
     while (std::getline(file, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (lines_.empty() && line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF &&
+            static_cast<unsigned char>(line[1]) == 0xBB &&
+            static_cast<unsigned char>(line[2]) == 0xBF) {
+            began_with_mark_ = true;
+            line.erase(0, 3);
+        }
         lines_.push_back(line);
     }
     // Whether the last line had a newline after it, which `getline` swallows either way. Asked of

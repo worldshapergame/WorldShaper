@@ -232,6 +232,15 @@ public:
     // a dragged box exists to produce.
     bool choose_node(std::string_view names);
 
+    // `--editor-part FILE`: put another document inside this one, exactly as the graph's menu
+    // does — copied beside it and included by name. And `--editor-new-part clip|material NAME`,
+    // which is the other half of the same menu. Empty on success, one line otherwise.
+    //
+    // A whole document made of other documents is what every world the game ships IS, and until
+    // these there was no way to build one without a hand on the mouse (D460).
+    std::string add_part(const std::filesystem::path& from);
+    std::string new_part(std::string_view kind, std::string_view name);
+
     // How many boxes on the graph stand where another one already is. **Always nought**, and it is
     // a promise rather than a tidy-up: every box is on a whole cell, and a cell holds one. Asked
     // directly rather than by looking at a picture, because a picture is what a person has to check
@@ -337,6 +346,31 @@ private:
     void give_editor_room();
     // Everything the graph can do, at the pointer: the palette, and what one node can be told.
     void draw_graph_menu(const Rect& canvas);
+    // --- a part: another clip, or a material ---------------------------------------------------
+    //
+    // *There is no node for adding a clip into the editor either an empty one or one from your clip
+    // library (it should work the same for materials).* Reported directly, and it was the one thing
+    // the graph could not do that the language can: `include` is how a document is made of other
+    // documents, and every world the game ships is one.
+    //
+    // A part from the library is **copied beside the document** rather than pointed at where it
+    // lives. That is not a shortcut: an include resolves beside the file doing the including and
+    // then in the game's own clips, and nowhere else — so a world that pointed at the player's own
+    // shelf would open on their machine and on nobody else's. Copying is what makes a document
+    // something you can send.
+    //
+    // 0 nothing, 1 a clip, 2 a material. What it is called is asked for at once (D773).
+    u32 making_ = 0;
+    std::string making_buffer_;
+    // What the part menu is offering, captured when it opens: a listing re-read every frame is a
+    // menu whose third item is a different file by the time it is pressed (D488).
+    std::vector<std::filesystem::path> part_choices_;
+    void gather_parts(u32 kind);
+    // Makes the file, beside the document, and writes the `include` that reads it. Empty on
+    // success, one line saying what happened otherwise.
+    std::string make_part(u32 kind, const std::string& name);
+    std::string take_part(const std::filesystem::path& from);
+    void draw_part_naming(const Rect& canvas);
     // After anything that changed the document from the visual view. `why` empty means it worked;
     // anything else is the one line the refusal says.
     void document_changed(const std::string& why);
@@ -438,6 +472,11 @@ private:
     std::vector<std::string> lines_;
     u32 caret_line_ = 0;
     u32 caret_column_ = 0;
+    // Whether the file on disk began with a UTF-8 byte-order mark, so that saving it puts one
+    // back. Three invisible bytes that every Windows text editor writes by default; the parser
+    // now skips them and the editor must not silently drop them, which is the same promise the
+    // trailing newline is made of.
+    bool began_with_mark_ = false;
     // Whether the file on disk ended with a newline, so that saving it puts one back.
     //
     // `std::getline` cannot tell "a\nb\n" from "a\nb" — both give two lines — so opening any of
