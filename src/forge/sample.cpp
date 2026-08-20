@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <unordered_map>
 
 #include "core/jobs.hpp"
@@ -10,6 +11,38 @@
 
 namespace ws {
 namespace forge {
+
+// The block cut, and its control arm. See the note in sample.hpp.
+//
+// A plain global read once per `sample` call and carried on the descent, for the reason
+// `SamplePlan::rule_bounds` is carried rather than read again where it is used: a setting read
+// twice is two settings, and an arm of an A/B that changes under a running descent is not an arm.
+namespace {
+
+// The environment is a second door on the same setting, and it is here because the first door
+// cannot be opened from a command line: `src/app/main.cpp` has no flag for this yet. Both arms of
+// the A/B have to be one binary or they are two builds being compared (trap 29), so
+// `WS_SAMPLE_BLOCK_CELLS=0` is the control arm and `WS_SAMPLE_BLOCK_CELLS=64` is a different cut,
+// without a rebuild between them. Read once, at start-up, and never again.
+u32 block_cells_at_start() {
+    // An EMPTY setting is not a setting, and this is not pedantry: a shell that clears a variable
+    // by assigning "" to it leaves the variable there, `atoi` reads nought out of it, and nought is
+    // the control arm — so the arm under test quietly measures the arm it is being compared with.
+    // That happened once here and the run that caught it was a 733-of-733 that proved nothing.
+    if (const char* asked = std::getenv("WS_SAMPLE_BLOCK_CELLS")) {
+        if (asked[0] != '\0') {
+            const int n = std::atoi(asked);
+            if (n >= 0) return static_cast<u32>(n);
+        }
+    }
+    return 512;
+}
+
+u32 g_block_cells = block_cells_at_start();
+
+}  // namespace
+void set_sample_block_cells(u32 cells) { g_block_cells = cells; }
+u32 sample_block_cells() { return g_block_cells; }
 
 namespace {
 
@@ -507,6 +540,10 @@ struct Descent {
     f64 voxel = 0.0;
     f64 centre_shift = 0.5;
     f64 slack = 0.0;
+
+    // At or below this many cells, the rest of the descent below the box is run a level at a time
+    // rather than a box at a time. Nought is the control arm. See `sample_block_cells`.
+    u32 block_cells = 0;
 };
 
 // Half a cell's diagonal, in voxels: the furthest a surface can be from a cell's centre and still
@@ -609,6 +646,14 @@ struct Tally {
     // orders of magnitude, so a count says how often and only a clock says how long.
     u64 paint_ns = 0;
     u64 shape_ns = 0;
+
+    // How many times the field was WALKED, as distinct from how many points were answered.
+    //
+    // The two used to be the same number and that is the whole of what the sweep changes: 640
+    // evaluations a node arriving in six traversals rather than in six hundred and forty. A count
+    // of evaluations cannot see that and a clock cannot see it either until the block evaluator
+    // underneath `Field::eval_block` is real, so the thing being bought has to be counted directly.
+    u64 blocks = 0;    // calls to Field::eval_block
 };
 
 
@@ -693,6 +738,482 @@ void paint_solid(const Descent& d, const i32 low[3], const i32 high[3], const u8
         }
     }
     local.paint_ns += now_ns() - entered;
+}
+
+// --------------------------------------------------------------------------------------
+// The block sweep: the same descent, one LEVEL at a time, so the field is walked once a level
+// instead of once a box.
+// --------------------------------------------------------------------------------------
+//
+// D722 measured what the descent costs at the size of a render-tree node: about **640 evaluations
+// of the shape to fill 512 cells**, and `65,536 voxels asked` of `65,536 cells` over a batch of a
+// hundred and twenty-eight nodes — the descent comes all the way down to a single voxel for nearly
+// every cell of every ladder node. Every one of those 640 walks visits the same field nodes, tests
+// the same boxes and takes the same turns, because every one of them is about a point inside the
+// same quarter of a metre. `Field::eval_block` answers many points in one traversal; what follows
+// is how the descent is made to ask that way.
+//
+// # Why the box's cells are not simply all asked at once
+//
+// That was built first and measured, because it is the obvious reading of the number above: stop at
+// the node's own box, evaluate all 512 cells in one call, and do the rescue and the paint from
+// those answers. It works, it takes the facility from **638 shape evaluations a node to 581**, and
+// **it does not build the same world**. `clips/sampler.clip`, which is gated on a content hash:
+//
+// | cut | solid voxels | content |
+// |---|---|---|
+// | the descent, untouched | 1,430,104 | `d0d5f84c685be847` |
+// | ask every cell of a 64-cell box | 1,429,884 | `74ccef4afa2d94b6` |
+// | ask every cell of a 512-cell box | 1,429,596 | `f165ca95fb5886b7` |
+//
+// The reason is a fact about the sampler rather than about the change, and it is worth writing
+// down. A box that settles SOLID in bulk fills every cell of itself, from the undisplaced shape
+// read once at its centre against a radius and a slack. Asking those cells one at a time does not
+// always agree: the bulk answer keeps a fringe of matter that the per-cell rule, which is the rule
+// `tests/test_sample.cpp`'s brute-force reference implements, does not. Which of the two is right is
+// D613's question one size along. What matters here is that they differ, and that the world in
+// every cache and every gate in this repository is the descent's.
+//
+// Note what that also means: cutting at EIGHT cells is bit-identical, because a two-voxel box's
+// eight children are single voxels and nothing is settled in bulk below it. It is also worth
+// nothing — 639.8 evaluations a node against the control's 638.0 — because it removes one level of
+// a four-level tree.
+//
+// # So the LEVELS are batched, and the descent itself is not touched at all
+//
+// Every box at one level is evaluated in one call. The boxes at a level are independent — each
+// reads its own centre, settles or does not, and hands its own children down — so taking them
+// together changes the order the field is asked in and nothing else. Same points, same roots, same
+// comparisons, same answers, and therefore the same world: `clips/sampler.clip` builds
+// `d0d5f84c685be847` at 1,430,104 solid voxels on both arms.
+//
+// A node then costs about **six traversals of the field instead of six hundred and forty**, for
+// exactly the same six hundred and forty evaluations. The count was never what was overpaid; the
+// walking was, and the count is only its shadow.
+
+// A box settled empty whose cells are not all part of the clip. Which of them are is still a
+// per-cell question and the shape is not asked again.
+//
+// Lifted out of `descend` so that the sweep runs this code rather than a copy of it. Two
+// implementations of a rule this fiddly — half a cell diagonal, a rescue on the BOUNDS shape rather
+// than on the solid — is two rules, and the second one is always the one nobody reads.
+void mark_partly_covered(const Descent& d, const i32 low[3], const i32 high[3], Tally& local) {
+    const SampleSettings& settings = *d.settings;
+    Clip& clip = *d.clip;
+    for (i32 z = low[2]; z < high[2]; ++z) {
+        const f64 pz = (static_cast<f64>(d.lo[2] + z) + d.centre_shift) * d.voxel;
+        for (i32 y = low[1]; y < high[1]; ++y) {
+            const f64 py = (static_cast<f64>(d.lo[1] + y) + d.centre_shift) * d.voxel;
+            const usize row = clip.index(0, y, z);
+            for (i32 x = low[0]; x < high[0]; ++x) {
+                const f64 px = (static_cast<f64>(d.lo[0] + x) + d.centre_shift) * d.voxel;
+                ++local.shape;
+                const f64 here = d.field->eval(settings.bounds, {px, py, pz});
+                if (here <= 0.0) {
+                    clip.inside[row + x] = 1;
+                } else if (here < d.voxel * kHalfCellDiagonal &&
+                           thin_feature_here(*d.field, settings.bounds, {px, py, pz}, here,
+                                             d.voxel, &local.shape)) {
+                    // Half a cell diagonal is the furthest a surface can be from a centre and
+                    // still pass through the cell at all, so outside that there is nothing here
+                    // to lose and nothing is asked.
+                    clip.inside[row + x] = 1;
+                }
+            }
+        }
+    }
+}
+
+// One box waiting its turn at a level of the sweep. Everything `descend` works out about a box
+// before it decides anything, kept beside the box so a level can be worked out for all of them and
+// then decided for all of them.
+struct SweepBox {
+    i32 low[3]{0, 0, 0};
+    i32 high[3]{0, 0, 0};
+    Vec3 middle{};
+    f64 radius = 0.0;
+    f64 reach = 0.0;
+    f64 dc = 0.0;
+    u8 whole_covered = 0;
+    u8 single = 0;
+    u8 alive = 1;      // a box the bounds shape has already disposed of
+    u8 rescued = 0;
+
+    u64 cells() const {
+        return static_cast<u64>(high[0] - low[0]) * static_cast<u64>(high[1] - low[1]) *
+               static_cast<u64>(high[2] - low[2]);
+    }
+};
+
+// The lists a sweep runs on, kept per thread so a node's worth of them is allocated once for the
+// life of the process rather than once a box.
+struct SweepScratch {
+    std::vector<SweepBox> cur;
+    std::vector<SweepBox> next;
+    std::vector<u8> cur_state;    // `rules` bytes a box, in the order of `cur`
+    std::vector<u8> next_state;
+    std::vector<u8> state;        // one box's settled state, rebuilt per box
+    std::vector<Vec3> points;     // whatever the current call is asking about
+    std::vector<f64> values;
+    std::vector<u32> pick;        // which boxes a gather covers
+    std::vector<u32> candidate;   // single voxels near enough the surface to be worth rescuing
+    std::vector<u32> live;        // those of them still in play, stage by stage
+    std::vector<Vec3> away;       // the outward direction at each
+    std::vector<Vec3> within;     // the point just inside the surface at each
+};
+
+SweepScratch& sweep_scratch() {
+    static thread_local SweepScratch scratch;
+    return scratch;
+}
+
+// `thin_feature_here` for a whole level's worth of single voxels: three traversals instead of eight
+// evaluations apiece.
+//
+// The same points, in the same order, through the same evaluator — `Field::eval_block` promises the
+// same f64 per point as `eval` — so the answer is the one the per-cell rule gives, bit for bit.
+//
+// Three stages and not one, because that rule has two early exits and they are not decoration: a
+// voxel whose gradient is nothing never asks the two questions below it, and one that is still
+// solid a hair inside never asks the last. Batching straight through them would ask MORE of the
+// field than the rule does, which is the opposite of the point of being here.
+void sweep_rescue(const Descent& d, SweepScratch& s, Tally& local) {
+    const u64 entered = now_ns();
+    const f64 h = d.voxel * 0.25;
+
+    // Which way is out. Central differences over a quarter of a voxel, six points a voxel.
+    s.points.clear();
+    for (const u32 c : s.candidate) {
+        const Vec3 p = s.cur[c].middle;
+        s.points.push_back(Vec3{p.x + h, p.y, p.z});
+        s.points.push_back(Vec3{p.x - h, p.y, p.z});
+        s.points.push_back(Vec3{p.x, p.y + h, p.z});
+        s.points.push_back(Vec3{p.x, p.y - h, p.z});
+        s.points.push_back(Vec3{p.x, p.y, p.z + h});
+        s.points.push_back(Vec3{p.x, p.y, p.z - h});
+    }
+    s.values.resize(s.points.size());
+    d.field->eval_block(d.root, s.points.data(), s.points.size(), s.values.data());
+    ++local.blocks;
+    local.shape += s.points.size();
+
+    s.away.clear();
+    s.live.clear();
+    for (usize k = 0; k < s.candidate.size(); ++k) {
+        Vec3 away{s.values[k * 6 + 0] - s.values[k * 6 + 1],
+                  s.values[k * 6 + 2] - s.values[k * 6 + 3],
+                  s.values[k * 6 + 4] - s.values[k * 6 + 5]};
+        const f64 length = std::sqrt(away.x * away.x + away.y * away.y + away.z * away.z);
+        if (length < 1.0e-12) continue;   // the field is flat here; there is nothing to rescue
+        away.x /= length;
+        away.y /= length;
+        away.z /= length;
+        s.away.push_back(away);
+        s.live.push_back(s.candidate[k]);
+    }
+
+    // Just inside the surface. Nothing solid that way and the field was near zero here for some
+    // other reason, so there is no feature to keep.
+    if (!s.live.empty()) {
+        s.points.clear();
+        for (usize k = 0; k < s.live.size(); ++k) {
+            const Vec3 p = s.cur[s.live[k]].middle;
+            const Vec3 a = s.away[k];
+            const f64 reach = s.cur[s.live[k]].dc + d.voxel * 0.05;
+            s.points.push_back(Vec3{p.x - a.x * reach, p.y - a.y * reach, p.z - a.z * reach});
+        }
+        s.values.resize(s.points.size());
+        d.field->eval_block(d.root, s.points.data(), s.points.size(), s.values.data());
+        ++local.blocks;
+        local.shape += s.points.size();
+
+        s.within.clear();
+        usize kept = 0;
+        for (usize k = 0; k < s.live.size(); ++k) {
+            if (s.values[k] > 0.0) continue;
+            s.within.push_back(s.points[k]);
+            s.away[kept] = s.away[k];
+            s.live[kept] = s.live[k];
+            ++kept;
+        }
+        s.away.resize(kept);
+        s.live.resize(kept);
+    }
+
+    // And a whole voxel further in. Still solid is a wall and a wall needs no rescuing; out the far
+    // side means the whole feature is thinner than the grid can hold, and it is kept.
+    if (!s.live.empty()) {
+        s.points.clear();
+        for (usize k = 0; k < s.live.size(); ++k) {
+            const Vec3 w = s.within[k];
+            const Vec3 a = s.away[k];
+            s.points.push_back(
+                Vec3{w.x - a.x * d.voxel, w.y - a.y * d.voxel, w.z - a.z * d.voxel});
+        }
+        s.values.resize(s.points.size());
+        d.field->eval_block(d.root, s.points.data(), s.points.size(), s.values.data());
+        ++local.blocks;
+        local.shape += s.points.size();
+        for (usize k = 0; k < s.live.size(); ++k) {
+            if (s.values[k] > 0.0) s.cur[s.live[k]].rescued = 1;
+        }
+    }
+
+    local.shape_ns += now_ns() - entered;
+}
+
+// The rest of the descent below one box, level by level.
+//
+// `descend` has already asked everything about the box itself; this picks up where its recursion
+// would have, with the box's eight children, and carries on to single voxels. Every test below is
+// the one `descend` runs, in the order `descend` runs it — read the two side by side, because the
+// only thing that may ever differ between them is when the field is asked, never what it is asked.
+void sweep(const Descent& d, const i32 seed_low[3], const i32 seed_high[3], bool whole_covered,
+           const u8* parent_state, Tally& local) {
+    const SampleSettings& settings = *d.settings;
+    const std::vector<PaintRule>& paint = *d.paint;
+    const usize rules = paint.size();
+    SweepScratch& s = sweep_scratch();
+
+    // Halve on every axis that has more than one voxel left, exactly as the recursion does.
+    s.cur.clear();
+    s.cur_state.clear();
+    {
+        i32 mid[3];
+        for (u32 axis = 0; axis < 3; ++axis) {
+            mid[axis] = seed_low[axis] + (seed_high[axis] - seed_low[axis]) / 2;
+            if (mid[axis] <= seed_low[axis]) mid[axis] = seed_high[axis];
+        }
+        for (u32 child = 0; child < 8; ++child) {
+            SweepBox box;
+            box.whole_covered = whole_covered ? u8{1} : u8{0};
+            bool empty = false;
+            for (u32 axis = 0; axis < 3; ++axis) {
+                const bool upper = ((child >> axis) & 1u) != 0;
+                box.low[axis] = upper ? mid[axis] : seed_low[axis];
+                box.high[axis] = upper ? seed_high[axis] : mid[axis];
+                if (box.low[axis] >= box.high[axis]) empty = true;
+            }
+            if (empty) continue;
+            s.cur.push_back(box);
+            for (usize r = 0; r < rules; ++r) {
+                s.cur_state.push_back((parent_state != nullptr) ? parent_state[r] : u8{2});
+            }
+        }
+    }
+
+    while (!s.cur.empty()) {
+        const usize m = s.cur.size();
+
+        // Where each box's sample points are centred, how far the furthest of them is, and what
+        // this box has to allow for. All of it is arithmetic and none of it asks the field.
+        for (usize i = 0; i < m; ++i) {
+            SweepBox& box = s.cur[i];
+            box.alive = 1;
+            box.rescued = 0;
+            box_centre(d, box.low, box.high, box.middle, box.radius);
+            box.single = ((box.high[0] - box.low[0] == 1) && (box.high[1] - box.low[1] == 1) &&
+                          (box.high[2] - box.low[2] == 1))
+                             ? u8{1}
+                             : u8{0};
+            box.reach = box.radius + (box.single ? d.slack
+                                                 : slack_here(d, box.middle, box.radius));
+        }
+
+        // Is any of this box part of the clip at all? One call for every box at this level that
+        // still has to ask.
+        if (settings.has_bounds) {
+            s.pick.clear();
+            s.points.clear();
+            for (usize i = 0; i < m; ++i) {
+                if (s.cur[i].whole_covered) continue;
+                s.pick.push_back(static_cast<u32>(i));
+                s.points.push_back(s.cur[i].middle);
+            }
+            if (!s.pick.empty()) {
+                s.values.resize(s.pick.size());
+                d.field->eval_block(settings.bounds, s.points.data(), s.points.size(),
+                                    s.values.data());
+                ++local.blocks;
+                local.shape += s.pick.size();
+                for (usize k = 0; k < s.pick.size(); ++k) {
+                    SweepBox& box = s.cur[s.pick[k]];
+                    const f64 db = s.values[k];
+                    const f64 rescue = box.single ? 0.0 : d.voxel * kHalfCellDiagonal;
+                    if (db > box.reach + rescue) {
+                        box.alive = 0;           // none of it is; leave the mask clear
+                        continue;
+                    }
+                    if (db < -box.reach) {
+                        box.whole_covered = 1;
+                    } else if (box.single) {
+                        box.whole_covered = (db <= 0.0) ? u8{1} : u8{0};
+                    }
+                    if (box.single && !box.whole_covered) box.alive = 0;
+                }
+            }
+        }
+
+        // A box is settled from the undisplaced shape; a voxel is decided from the real one. Two
+        // roots, so two calls — and a level can hold both, because an axis already down to one
+        // voxel stops halving while the others carry on.
+        for (u32 pass = 0; pass < 2; ++pass) {
+            const bool want_single = (pass == 1);
+            s.pick.clear();
+            s.points.clear();
+            for (usize i = 0; i < m; ++i) {
+                if (!s.cur[i].alive) continue;
+                if ((s.cur[i].single != 0) != want_single) continue;
+                s.pick.push_back(static_cast<u32>(i));
+                s.points.push_back(s.cur[i].middle);
+            }
+            if (s.pick.empty()) continue;
+            s.values.resize(s.pick.size());
+            const u64 entered = now_ns();
+            d.field->eval_block(want_single ? d.root : d.prune_root, s.points.data(),
+                                s.points.size(), s.values.data());
+            ++local.blocks;
+            local.shape_ns += now_ns() - entered;
+            local.shape += s.pick.size();
+            if (want_single) local.singles += s.pick.size();
+            for (usize k = 0; k < s.pick.size(); ++k) s.cur[s.pick[k]].dc = s.values[k];
+        }
+
+        // The thin-feature rescue, for the shell of single voxels that are outside the shape but
+        // within half a cell diagonal of it, and for no others.
+        s.candidate.clear();
+        {
+            const f64 band = d.voxel * kHalfCellDiagonal;
+            for (usize i = 0; i < m; ++i) {
+                const SweepBox& box = s.cur[i];
+                if (!box.alive || !box.single) continue;
+                if (box.dc > 0.0 && box.dc < band) s.candidate.push_back(static_cast<u32>(i));
+            }
+        }
+        if (!s.candidate.empty()) sweep_rescue(d, s, local);
+
+        // And now every box decides, with nothing left to ask the field except the paint.
+        s.next.clear();
+        s.next_state.clear();
+        for (usize i = 0; i < m; ++i) {
+            SweepBox& box = s.cur[i];
+            if (!box.alive) continue;
+            const u8* inherited = (rules > 0) ? &s.cur_state[i * rules] : nullptr;
+            const f64 rescue = box.single ? 0.0 : d.voxel * kHalfCellDiagonal;
+
+            if (!box.rescued && (box.dc > box.reach + rescue || (box.single && box.dc > 0.0))) {
+                // Empty. The cells still have to be marked as part of the clip; see `descend`.
+                if (box.whole_covered) {
+                    fill_box(d, box.low, box.high, kAir, false);
+                    local.settled += box.cells();
+                    continue;
+                }
+                if (box.single) {
+                    if (!d.inside_by_default) {
+                        d.clip->inside[d.clip->index(box.low[0], box.low[1], box.low[2])] = 1;
+                    }
+                    continue;
+                }
+                mark_partly_covered(d, box.low, box.high, local);
+                continue;
+            }
+
+            const bool all_solid = (box.dc < -box.reach) || box.single;
+
+            // Settle what can be settled for this box. Rules the parent already decided are
+            // inherited rather than re-asked; only the ones still open are tested, and they get
+            // sharper every time the box halves.
+            s.state.assign(rules, 2);
+            u8* state = s.state.data();
+            bool every_rule_known = true;
+            for (usize r = 0; r < rules; ++r) {
+                const u8 was = (inherited != nullptr) ? inherited[r] : u8{2};
+                if (was != 2) {
+                    state[r] = was;
+                    continue;
+                }
+                if (away_from((*d.rule_box)[r], box.middle) > box.radius) {
+                    state[r] = 0;
+                    continue;
+                }
+                if (d.rule_piece_at != nullptr) {
+                    const u32 from = (*d.rule_piece_at)[r];
+                    const u32 to = (*d.rule_piece_at)[r + 1];
+                    if (from != to) {
+                        bool near_a_piece = false;
+                        for (u32 q = from; q < to && !near_a_piece; ++q) {
+                            near_a_piece = away_from((*d.rule_piece)[q], box.middle) <= box.radius;
+                        }
+                        if (!near_a_piece) {
+                            state[r] = 0;
+                            continue;
+                        }
+                    }
+                }
+                if ((*d.rule_slack)[r] >= Field::kInfiniteSlack) {
+                    state[r] = 2;
+                    every_rule_known = false;
+                    continue;
+                }
+                const f64 value = d.field->eval(paint[r].test, box.middle);
+                ++local.paint;
+                if (d.rule_cost != nullptr) d.rule_cost[r].fetch_add(1, std::memory_order_relaxed);
+                const f64 span = box.radius + (*d.rule_slack)[r];
+                if (value - span > paint[r].high || value + span < paint[r].low) {
+                    state[r] = 0;
+                } else if (value - span >= paint[r].low && value + span <= paint[r].high) {
+                    state[r] = 1;
+                } else if (box.single) {
+                    state[r] = (value >= paint[r].low && value <= paint[r].high) ? u8{1} : u8{0};
+                } else {
+                    state[r] = 2;
+                    every_rule_known = false;
+                }
+            }
+
+            if (all_solid && box.whole_covered) {
+                if (every_rule_known) {
+                    VoxelTypeId type = kAir;
+                    for (usize r = 0; r < rules; ++r) {
+                        if (state[r] == 1) type = paint[r].type;
+                    }
+                    if (type == kAir && !paint.empty()) type = paint.front().type;
+                    fill_box(d, box.low, box.high, type, true);
+                    local.settled += box.cells();
+                    continue;
+                }
+                paint_solid(d, box.low, box.high, state, local);
+                continue;
+            }
+
+            // A single voxel that is neither settled solid nor settled empty cannot happen — the
+            // tests above are exhaustive at this size — but the box may still be outside the clip.
+            if (box.single) continue;
+
+            i32 mid[3];
+            for (u32 axis = 0; axis < 3; ++axis) {
+                mid[axis] = box.low[axis] + (box.high[axis] - box.low[axis]) / 2;
+                if (mid[axis] <= box.low[axis]) mid[axis] = box.high[axis];
+            }
+            for (u32 child = 0; child < 8; ++child) {
+                SweepBox kid;
+                kid.whole_covered = box.whole_covered;
+                bool empty = false;
+                for (u32 axis = 0; axis < 3; ++axis) {
+                    const bool upper = ((child >> axis) & 1u) != 0;
+                    kid.low[axis] = upper ? mid[axis] : box.low[axis];
+                    kid.high[axis] = upper ? box.high[axis] : mid[axis];
+                    if (kid.low[axis] >= kid.high[axis]) empty = true;
+                }
+                if (empty) continue;
+                s.next.push_back(kid);
+                s.next_state.insert(s.next_state.end(), state, state + rules);
+            }
+        }
+
+        s.cur.swap(s.next);
+        s.cur_state.swap(s.next_state);
+    }
 }
 
 void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_covered,
@@ -788,28 +1309,7 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
         }
         // Partly covered, so which cells belong is still a per-cell question — but the shape is
         // settled and is not asked again.
-        for (i32 z = low[2]; z < high[2]; ++z) {
-            const f64 pz = (static_cast<f64>(d.lo[2] + z) + d.centre_shift) * d.voxel;
-            for (i32 y = low[1]; y < high[1]; ++y) {
-                const f64 py = (static_cast<f64>(d.lo[1] + y) + d.centre_shift) * d.voxel;
-                const usize row = clip.index(0, y, z);
-                for (i32 x = low[0]; x < high[0]; ++x) {
-                    const f64 px = (static_cast<f64>(d.lo[0] + x) + d.centre_shift) * d.voxel;
-                    ++local.shape;
-                    const f64 here = d.field->eval(settings.bounds, {px, py, pz});
-                    if (here <= 0.0) {
-                        clip.inside[row + x] = 1;
-                    } else if (here < d.voxel * kHalfCellDiagonal &&
-                               thin_feature_here(*d.field, settings.bounds, {px, py, pz}, here,
-                                                 d.voxel, &local.shape)) {
-                        // Half a cell diagonal is the furthest a surface can be from a centre and
-                        // still pass through the cell at all, so outside that there is nothing here
-                        // to lose and nothing is asked.
-                        clip.inside[row + x] = 1;
-                    }
-                }
-            }
-        }
+        mark_partly_covered(d, low, high, local);
         return;
     }
 
@@ -900,6 +1400,26 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
     if (single) {
         // A single voxel that is neither settled solid nor settled empty cannot happen — the
         // tests above are exhaustive at this size — but the box may still be outside the clip.
+        return;
+    }
+
+    // Small enough that the rest of the tree is worth doing a level at a time.
+    //
+    // Every settling test above has been tried and none of them took: this box straddles the
+    // surface, or the clip's edge runs through it. Below a certain size that means it is going to
+    // be cut into eight boxes that each straddle it too, and so on down to single voxels — which is
+    // exactly what D722 measured happening inside every node of the render tree, 640 walks of the
+    // expression over one quarter of a metre. `sweep` does the same descent breadth-first, so those
+    // walks become one a level. See the long note above it.
+    //
+    // The cut is here rather than at the top for one reason: memory. A level of the sweep holds
+    // every box abreast, with its inherited paint state, and the facility carries 628 rules — so
+    // the bottom level of a 512-cell box is 512 boxes at 628 bytes, and the bottom level of the
+    // whole-clip sampler's own 64³ top box would be a quarter of a million.
+    const u64 cells = static_cast<u64>(high[0] - low[0]) * static_cast<u64>(high[1] - low[1]) *
+                      static_cast<u64>(high[2] - low[2]);
+    if (d.block_cells > 0 && cells <= static_cast<u64>(d.block_cells)) {
+        sweep(d, low, high, whole_covered, state, local);
         return;
     }
 
@@ -1289,6 +1809,9 @@ SampleResult sample(const SamplePlan& plan, const SampleSettings& settings, JobS
     descent.voxel = voxel;
     descent.centre_shift = centre_shift;
     descent.slack = plan.slack;
+    // Read once, here, so that every box of this sample is cut the same way however the setting
+    // moves while it runs.
+    descent.block_cells = g_block_cells;
     for (u32 axis = 0; axis < 3; ++axis) {
         descent.lo[axis] = lo[axis];
         descent.size[axis] = size[axis];
@@ -1389,6 +1912,7 @@ SampleResult sample(const SamplePlan& plan, const SampleSettings& settings, JobS
         result.voxels_settled += n.settled;
         result.paint_ns += n.paint_ns;
         result.shape_ns += n.shape_ns;
+        result.block_calls += n.blocks;
     }
     result.evaluations = result.shape_evaluations + result.paint_evaluations;
     if (!rule_cost.empty()) {
