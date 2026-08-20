@@ -15084,3 +15084,99 @@ should be reverted rather than shipped.*
 | D741 | **+12,672 KB unconditionally, so it stays on its branch** | decision | The words are in the record whether the flag is on or not; a tax for a term nothing reads |
 | D741 | **`darkroom.ps1` is RED at HEAD** | fault | A sealed room is not black on `main`; identical with the change stashed |
 | D741 | **The facility cannot A/B a picture** | trap | Two runs of one binary settled 46 million voxels apart |
+
+---
+
+## D742 — Every node loads now, whatever you look at, and dropping the camera rule was free
+
+**2026-08-20.** Asked for directly: *"drop the fact that only the things you look at nodes load, all
+nodes must load as fast as possible, make them load extremely fast and doesnt matter what nodes"*.
+
+Two changes, and **the measurement separates them cleanly, which is the useful part.**
+
+### The switch already existed and was not the default
+
+`--refine-all` has meant *build every node regardless of where the camera is, at the finest level
+there is* since R11b needed a world that did not depend on where somebody stood. It is the default
+now, and `--camera-driven` is the control arm.
+
+What it switches off is **refusal, not order**. Two things refused a node for where the camera was:
+the demotion of anything behind the player (`rank *= 0.05`) and, under `--occlusion-cull`, the ray
+that skipped whatever was hidden. And `refine_to_the_finest()` follows it, so a node is split to the
+finest level rather than to the level its own distance justifies — a wall forty metres off is built
+at the detail it will have when you are standing at it, before you go.
+
+**The pick still ranks by size on screen, and that is deliberate rather than left over.** The order
+the work is done in does not change how much of it there is, and nearest-first means the world around
+the player sharpens first while the rest finishes anyway. *Everything loads* is a statement about what
+is refused; *nearest first* is a statement about when.
+
+That it is doing what it says is visible in the denominator: on `clips/facility.clip` the ladder wants
+**100,520 nodes against 74,972** — 34% more work, which is the world behind the player and the detail
+distance used to excuse.
+
+### And half the machine went, because it was the largest thing in the way
+
+The background sampler was held to `hardware / 2` while somebody is playing, on the argument that
+taking every core sharpens the world by stuttering it. That argument is right and the share was
+still wrong: `hardware - 2` is the rule `JobSystem`'s own default already uses for the main pool, and
+`core/jobs.cpp` writes out why — two held back because the submitting thread is the RENDER thread,
+which does not wait, it competes, alongside the driver's own threads. **Two back rather than five.**
+`--half-the-machine` is the control arm and `--refine-workers N` still overrides both.
+
+### Measured, on a machine with nothing else on it, three arms
+
+`clips/facility.clip`, cold, `--enter-now` so the ladder rather than the whole-world pass is what is
+being measured. Load rate is nodes sharpened in 120 s; frame figures are 1,200 frames and the
+heartbeat at frame 600.
+
+| arm | nodes in 120 s | 1,200 frames | median | 99th |
+|---|---|---|---|---|
+| **shipped** — everything, 8 workers | **83,196 / 86,396** | 24.2 s | 6.06 ms | **20.43 ms** |
+| everything, 5 workers | 66,816 | 23.1 s | 5.89 ms | 14.27 ms |
+| camera-driven, 5 workers — the old default | 65,802 / 66,058 | 23.2 s | 6.22 ms | 12.87 ms |
+
+**Dropping the camera rule is free.** 66,816 against 65,802 and 66,058 is the same rate, and the
+median frame is if anything *better* — 5.89 ms against 6.22. It changes what the ladder wants, not
+how fast it gets through it.
+
+**The speed is entirely the cores: 1.25x–1.29x**, and it is paid for at the frame tail — the 99th
+percentile goes **14.27 → 20.43 ms**, +43%, while the median moves 3% and the wall clock for 1,200
+frames moves 4.8%.
+
+**Why the tail and not the median**: `pump_refinement` starts the next sample *before* pasting the
+last one, deliberately, because it nearly halves the ladder (D511). So both pools are hot at once,
+and on ten cores that is now 8 sampler workers plus an 8-wide paste pool plus the render thread. The
+median frame is one with no paste in it and is unaffected; the frames that spike are the ones
+carrying a paste.
+
+**20.43 ms at the 99th is a frame in 49 rather than a frame in 78, and it is the price of the
+change.** It is written here rather than smoothed away, and one flag reverses it.
+
+### What is NOT the answer, and was checked
+
+**The card.** `--gpu-sample` would move the work off the cores entirely and cost the frame nothing,
+and it stays off: D678 records `VK_ERROR_DEVICE_LOST` and pages of `fault type 4` on one camera of
+`clips/facility.clip`, from a dispatch that reached 883 ms against a driver watchdog of about two
+seconds. **A lost device is not a slow frame; it is the game gone mid-session with whatever was being
+built**, and that is not a trade to make for load speed.
+
+### And a stray of my own, which is the trap this file keeps recording
+
+The first attempt at the frame numbers ran the game with `--max-seconds 120` and **no
+`--screenshot-frame`**, so nothing ever quit it: two runs sat open for twenty minutes at 2,921 and
+3,625 CPU-seconds, on the machine every subsequent figure would have been taken beside. The load-rate
+numbers above predate them and the frame numbers were re-taken after `Get-Process WorldShaper` read
+clean. **`--max-seconds` bounds the LOAD, not the session** — the flag that ends a run is
+`--screenshot-frame`.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D742 | **Every node loads, whatever the camera is looking at** | decision | Asked for directly; `--refine-all` becomes the default and `--camera-driven` is the arm |
+| D742 | **Refusal goes, order stays** | decision | Nearest-first does not change how much work there is; it changes when the player sees it |
+| D742 | **34% more nodes wanted — 100,520 against 74,972** | measurement | The world behind the player, and the detail distance used to excuse |
+| D742 | **Dropping the camera rule is FREE** | measurement | 66,816 against 65,802/66,058 nodes, and a median frame of 5.89 ms against 6.22 |
+| D742 | **The speed is entirely the cores, 1.25–1.29x** | measurement | 66,816 to 83,196/86,396, from `hardware/2` to `hardware-2` |
+| D742 | **And it is paid at the tail: 14.27 → 20.43 ms at the 99th** | honesty | +43%; the median moves 3%. The frames that spike are the ones carrying a paste |
+| D742 | **The card would cost the frame nothing and stays off** | decision | D678: device lost at 883 ms against a two-second watchdog. The game gone mid-session |
+| D742 | **`--max-seconds` bounds the load, not the session** | trap | Two runs of my own sat open for twenty minutes on the machine the next figures would come from |

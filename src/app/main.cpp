@@ -752,7 +752,28 @@ struct Options {
     // to one refined in eighteen boxes, and two arms that each stop somewhere different cannot be
     // compared at all. With this the ladder ranks by distance alone and stops only when there is
     // nothing left anywhere, so both arms end at the same world or the difference is real.
-    bool refine_all = false;
+    // **AND IT IS THE DEFAULT NOW, asked for directly on 2026-08-20**: *"drop the fact that only
+    // the things you look at nodes load, all nodes must load as fast as possible, doesnt matter
+    // what nodes"*.
+    //
+    // What that switches off is REFUSAL, not order. Two things refused a node for where the camera
+    // was: the demotion of anything behind the player (`rank *= 0.05`) and, under
+    // `--occlusion-cull`, the ray that skipped whatever was hidden. Neither now applies to anything.
+    // And `refine_to_the_finest()` follows, so a node is split to the finest level there is rather
+    // than to the level its own distance justifies -- a wall forty metres off is built at the
+    // detail it will have when you are standing at it, before you go.
+    //
+    // The pick still RANKS by size on screen, and that is deliberate rather than left over: the
+    // order the work is done in does not change how much of it there is, and nearest-first means
+    // the world around the player sharpens first while the rest of it finishes anyway. "Everything
+    // loads" is a statement about what is refused; "nearest first" is a statement about when.
+    //
+    // `--camera-driven` is the control arm and is the behaviour every build before this one had.
+    bool refine_all = true;
+    // The control arm for the sampler's share of the machine: back to half of it while somebody is
+    // playing, which is what every build before 2026-08-20 gave it. See where `refine_jobs_` is
+    // built for why the shipped share is `hardware - 2` instead.
+    bool half_the_machine = false;
     // THE PICKER'S OCCLUSION RAY, which is OFF, and this flag is the arm that puts it back.
     //
     // The ladder used to refuse a node it could not SEE: it cast a ray from the camera at the
@@ -1620,6 +1641,12 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         options.derive_visits_m = static_cast<u32>(next_number(16));
     } else if (arg == "--refine-all") {
         options.refine_all = true;
+    } else if (arg == "--half-the-machine") {
+        options.half_the_machine = true;
+    } else if (arg == "--camera-driven") {
+        // The control arm: a node is refused for being behind the player and is built only to the
+        // detail its own distance justifies. What every build before 2026-08-20 did.
+        options.refine_all = false;
     } else if (arg == "--occlusion-cull") {
         // The control arm for the picker's occlusion ray. See Options::occlusion_cull.
         options.occlusion_cull = true;
@@ -2191,8 +2218,14 @@ void print_help() {
         "                        cannot see, and remember the refusal for 32 wakes. Off by\n"
         "                        default -- the ladder picks on screen size and facing alone --\n"
         "                        and this is the control arm for that\n"
-        "  --refine-workers N    workers the background sampler gets (default half the machine).\n"
+        "  --refine-workers N    workers the background sampler gets (default: the machine less two).\n"
         "                        More loads faster and steals from the paste; both are measured\n"
+        "  --camera-driven       a node is refused for being behind the player, and is built only to\n"
+        "                        the detail its own distance justifies. The control arm: what every\n"
+        "                        build before 2026-08-20 did. By default EVERY node loads, at full\n"
+        "                        resolution, whatever the camera is looking at\n"
+        "  --half-the-machine    give the background sampler half the cores again instead of the\n"
+        "                        machine less two. The control arm for the loading speed\n"
         "  --no-batch-parallel   sample the batch one node at a time on one core, which is what\n"
         "                        it did before D622. That stage's control arm\n"
         "  --no-paste-drop       a refinement paste leaves a brick it emptied allocated, and a\n"
@@ -5309,9 +5342,24 @@ bool Application::start_refinement() {
         // for the length of an estate build. The pool goes back to the playing size before the
         // first frame — see `refine_pool_oversized_`, because it cannot be freed while the
         // sampler is inside it.
+        // ...AND the half-the-machine share was itself asked to go, on 2026-08-20: *"make them
+        // load extremely fast and doesnt matter what nodes"*. With every node now wanted rather
+        // than only the ones a camera can see (see Options::refine_all) there is a great deal more
+        // of it, and half a machine is the largest single thing standing between the world and
+        // being finished.
+        //
+        // `hardware - 2` is not a guess: it is the rule `JobSystem`'s own default already uses for
+        // the main pool, and the argument for it is written out in `core/jobs.cpp` -- two held back
+        // because the submitting thread here is the RENDER thread, which does not wait, it
+        // competes, alongside the driver's own threads. Taking every core sharpens the world by
+        // stuttering it, which is the fault the player reported four hours before this line was
+        // written. Two back rather than five.
+        //
+        // `--half-the-machine` is the control arm and `--refine-workers N` still overrides both.
         const u32 hardware = std::thread::hardware_concurrency();
-        const u32 share = full_load_running_ ? std::max(hardware, 1u)
-                                             : ((hardware > 4) ? hardware / 2 : 1u);
+        const u32 playing = options_.half_the_machine ? ((hardware > 4) ? hardware / 2 : 1u)
+                                                      : ((hardware > 3) ? hardware - 2 : 1u);
+        const u32 share = full_load_running_ ? std::max(hardware, 1u) : playing;
         const u32 workers = (options_.refine_workers > 0) ? options_.refine_workers : share;
         WS_LOG_INFO("clip", "the ladder's sampler: {} workers of {} the machine has{}", workers,
                     hardware,
