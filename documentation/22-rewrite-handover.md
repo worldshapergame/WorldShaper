@@ -3071,7 +3071,18 @@ Two fixes, in the order they paid:
    after that loads a complete world in five to seven seconds. **Read D243 and D244 before comparing
    any figure across this change** — the `scene:` line now carries the world's content hash, and
    figures taken before it are not comparable with figures taken after it.
-2. ~~**Slice the paste across frames.**~~ **The stall is closed, and slicing was not what closed
+2. ~~**Slice the paste across frames.**~~ **BUILT, gated and ON -- D734 -- and the reason it changes
+   nothing is the finding.** The two hazards this item stood on for months are closed by
+   construction: the backlog is part of `refine_busy()`, so a world with bricks owed cannot be
+   saved, settled or photographed; and the budget is counted in BRICKS rather than milliseconds, so
+   the pick sequence does not become a function of the wall clock. `--no-paste-slice` is the control
+   arm and all three arms settle on `1,430,104` / `a1f8bc6c656343b7` / shape `e105a8a6940f0da2`,
+   fully sharpened. **But a ladder batch pastes 103-124 bricks against a 512 budget, so it never
+   engages on the common path** -- which is D511's own conclusion arrived at from the other end. What
+   the ceiling protects is a clipboard region and the up-front coarse build. The estate measurement
+   is owed. Everything below is the history and is still the most useful part of this item:
+
+   **The stall is closed, and slicing was not what closed
    it** — D511–D514. The paste was never doing the work. Read that block before touching any of
    this, because the shape of the mistake is more useful than the fix:
 

@@ -14315,3 +14315,96 @@ control arm rebuilt from scratch.
 | D733 | **`done` is counted, not walked for** | build | Four O(regions) walks, one of them on every batch delivery inside the player's frame |
 | D733 | **Every write goes through one door** | decision | Five sites including a whole-record overwrite that is a no-op today and would not have stayed one |
 | D733 | **The audit runs in release and repairs** | instrument | `WS_ASSERT` compiles out; a drifted counter prints a plausible number for ever |
+
+---
+
+## D734 — The paste is sliced, and the reason it changes nothing is the finding
+
+**2026-08-20.** `22-rewrite-handover.md` §5 item 2 has read *slice the paste across frames* since the
+file was written, and has been **struck through** since D511–D514 with a note saying what was left of
+it — 31 to 92 ms, two to six frames — and why it was not next: *"a large change whose hazard is real
+(a half-pasted world is visible to `save_refined_world`, to `--settle`, and therefore to every
+measurement in this file)"*.
+
+It is built now. **Both of its hazards are closed by construction rather than by care, and then it
+turns out to have almost nothing to do.**
+
+### The observability hazard is one line
+
+Every consumer of a settled world asks exactly one question — `refine_busy()`. The fixed point, the
+stand-down save, the whole-world pass's own wait loop and `--settle`'s streak all go through it. So
+the backlog is part of it:
+
+```
+if (paste_backlog_at_ < paste_backlog_.size()) return true;
+```
+
+A world with bricks still owed cannot be saved, cannot be declared settled and cannot be
+photographed, because it is **busy**. The hazard the handover named is not mitigated, it is
+unreachable.
+
+The half of that which needed real work is the **fixed point**, which lived at the bottom of
+`deliver_refinement` because that was the only place its second condition could become true. With the
+paste sliced it can become true on a frame with no delivery in it, so it is `maybe_finish_refinement()`
+now and is called from wherever the backlog empties. Without that move the ladder would finish and
+never notice.
+
+### The budget is in BRICKS, and that is not a detail
+
+A time budget makes how much lands this frame a function of how fast the frame was, which makes the
+PICK SEQUENCE a function of the wall clock — and `pump_refinement`'s own comment records two runs of
+exactly that settling on different worlds, `91c00087d98b7532` against `e3a294190ee25fab`, 32,750
+nodes against 32,754. Every measurement in this repository is gated on a content hash. A brick
+budget is the same slicing on every run of the same clip.
+
+One job is always pasted whatever the budget says, and the check is **after** the first job rather
+than before it — so the budget bounds the overrun to one node instead of bounding progress to
+nothing when a node is bigger than the whole budget.
+
+### Back-pressure, because a landed job holds voxels
+
+A `RefineJob` in the backlog carries its sampled **clip**, not a handle to one. Sampling faster than
+the paste drains has no ceiling on that at all, so `start_refinement` refuses while more than
+`kRefineBatch * 4` jobs are owed. Measured at a deliberately cruel `--paste-slice 16` on
+`clips/sampler.clip`, the backlog peaks at **717 jobs** — the cap of 512 plus the batches already in
+the sampler's hands when it bites, which is what a cap on the PICK can bound and nothing more.
+
+### The gate, three arms, and they are the same world
+
+`clips/sampler.clip --refine-all --no-despeckle --no-clip-cache --settle`:
+
+| | deepest backlog | |
+|---|---|---|
+| default, `--paste-slice 512` | **0 jobs** | 1,430,104 · `a1f8bc6c656343b7` · shape `e105a8a6940f0da2` |
+| forced, `--paste-slice 16` | **717 jobs** | 1,430,104 · `a1f8bc6c656343b7` · shape `e105a8a6940f0da2` |
+| control, `--no-paste-slice` | **0 jobs** | 1,430,104 · `a1f8bc6c656343b7` · shape `e105a8a6940f0da2` |
+
+`world fully sharpened` prints in all three, so the fixed point is reached with the paste in pieces.
+**The determinism worry did not materialise**: a pick reads the world, the world converges anyway,
+and 9,826 of 9,826 nodes sharpen either way.
+
+### And the finding, which is worth more than the feature
+
+**The default budget never engages on the ladder, and that is not a badly chosen number.** A batch is
+128 nodes, a node is about one brick, and a delivery pastes **103 to 124 bricks** — `0 owed` on every
+batch of a full settle. The ladder's paste was never the thing, which is what D511 found from the
+other end and is why it took a job-pool fix rather than a slicing one.
+
+So what this ceiling protects is the **big** pastes — a clipboard region (D511 timed one at 5,359
+bricks), the up-front coarse build — and not the common path. That is the honest size of it.
+
+**What is owed**: the estate, where a node carries more than a brick, and where the mechanism would
+actually bite. It is owed because seven agents were building on this machine and CLAUDE.md's own rule
+is that a timing taken beside them is noise. The correctness gate above is unaffected by that and is
+what this entry rests on.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D734 | **The backlog is part of `refine_busy()`** | decision | Every consumer of a settled world asks that one question, so a half-pasted world is unreachable rather than merely guarded |
+| D734 | **The fixed point had to move out of the delivery** | fault | Its second condition can now become true on a frame with no batch in it; left where it was, the ladder finishes and never notices |
+| D734 | **The budget is bricks, not milliseconds** | decision | A clock in the budget puts the wall clock in the pick sequence, and two runs of that settled on different worlds |
+| D734 | **One job always goes in, checked after rather than before** | trap | A node bigger than the budget would otherwise sit at the head of the backlog for ever |
+| D734 | **Back-pressure at four batches owed** | build | A landed job holds its sampled clip; peak 717 at `--paste-slice 16`, cap plus what was already in flight |
+| D734 | **Same world in all three arms** | measurement | 1,430,104 · `a1f8bc6c656343b7` · shape `e105a8a6940f0da2`, fully sharpened in each |
+| D734 | **It does not engage on the ladder — 103-124 bricks a batch** | measurement | The ladder's paste was never the hitch (D511 from the other end); this ceiling is for the big pastes |
+| D734 | **The estate measurement is owed** | honesty | Seven agents were building on this machine; a timing taken beside them is noise |

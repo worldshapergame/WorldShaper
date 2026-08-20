@@ -113,6 +113,23 @@ struct Options {
     // The control arm for the region paste's own pool: put the paste back on the sampler's job
     // system, which is where it was and which is what made it wait for the sample. See D511.
     bool no_paste_pool = false;
+    // HOW MANY BRICKS ONE FRAME MAY PASTE. Nought is the control arm -- the whole backlog goes in
+    // at once, which is what this program did until now. See `paste_backlog_` for why the budget is
+    // bricks rather than milliseconds, and why a half-pasted world cannot be observed.
+    //
+    // 512 is about eight milliseconds at D511's measured 67 bricks a millisecond, which spreads
+    // the 5,359-brick region that entry timed over eleven frames instead of one.
+    //
+    // **AND IT DOES NOT ENGAGE ON THE LADDER, which is a finding rather than a setting.** A ladder
+    // batch is 128 nodes and a node is about one brick, so a delivery on `clips/sampler.clip`
+    // pastes 103-124 bricks and the budget is never reached: `0 owed` on every batch of a full
+    // settle. That is the same thing D511 found from the other end -- the stall was never the
+    // ladder's paste -- and it means the ceiling here is protection against the big pastes (a
+    // clipboard region, the up-front coarse build) rather than a change to the common path. The
+    // estate is where a node carries more than a brick and where this has to be measured; that is
+    // owed, and it is owed because seven agents were building on this machine and a timing taken
+    // beside them is noise.
+    usize paste_slice_bricks = 512;
     // The control arm for D620. A refinement paste REPLACES, so it erases the coarse voxels a
     // node's finer sample supersedes -- and a brick or a chunk emptied that way used to stay
     // allocated, which is `NodePool::world_has` telling the render tree the world holds matter it
@@ -1415,6 +1432,10 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         options.full_load_authored = false;
     } else if (arg == "--no-clip-cache") {
         options.no_clip_cache = true;
+    } else if (arg == "--paste-slice") {
+        options.paste_slice_bricks = static_cast<usize>(next_number(512));
+    } else if (arg == "--no-paste-slice") {
+        options.paste_slice_bricks = 0;
     } else if (arg == "--no-paste-pool") {
         options.no_paste_pool = true;
     } else if (arg == "--no-paste-drop") {
@@ -3032,6 +3053,45 @@ private:
     // One landed batch into the world: mark, paste, announce, replay, log. Split out of
     // pump_refinement so that several can be delivered in one frame.
     void deliver_refinement(RefineDelivery delivered);
+
+    // THE PASTE, SLICED -- handover 5 item 2, opened when this file was written and struck
+    // through by D511-D514 because the stall it was sized against turned out to be a job-pool
+    // fault and not the paste. What is left of it is 31-92 ms, two to six frames, and the reason
+    // it stayed struck through is a real hazard rather than a small prize: **a half-pasted world
+    // is visible to `save_refined_world`, to `--settle` and therefore to every measurement in the
+    // repository.**
+    //
+    // That hazard is closed by construction rather than by care. The backlog is part of
+    // `refine_busy()`, and every consumer of a settled world already asks that one question: the
+    // fixed point below, the stand-down save, the whole-world pass's own loop and `--settle`'s
+    // streak. A world with anything owed cannot be saved, cannot be declared settled and cannot be
+    // photographed, because it is BUSY.
+    //
+    // And the budget is counted in BRICKS rather than in milliseconds, which is the other half.
+    // A time budget makes how much lands this frame a function of how fast the frame was, which
+    // makes the pick sequence a function of wall clock -- and `pump_refinement`'s own comment
+    // records two runs of exactly that settling on different worlds. A brick budget is the same
+    // slicing on every run of the same clip.
+    struct PasteRun {
+        u64 bricks = 0;
+        u64 bricks_emptied = 0;
+        u64 chunks_emptied = 0;
+        f64 paste_ms = 0.0;
+        f64 replay_ms = 0.0;
+        usize jobs = 0;      // how many of the backlog went in this call
+        bool emptied = true; // ...and whether that was all of it
+    };
+    PasteRun drain_paste_backlog();
+    // The fixed point, reached when the ladder has nothing left AND nothing is owed. Called from
+    // wherever the backlog empties, which is either a delivery or a bare frame.
+    void maybe_finish_refinement();
+    // Landed and sampled, waiting for a frame with room to paste it. `paste_backlog_at_` is where
+    // the next slice starts: popping from the front of a vector is a copy of the rest of it, and
+    // the rest of it is what a slice exists to leave alone.
+    std::vector<RefineJob> paste_backlog_;
+    usize paste_backlog_at_ = 0;
+    usize paste_backlog_peak_ = 0;
+    u64 paste_slices_ = 0;   // how many frames the backlog has been drained over, in total
     u32 refine_scale_ = 1;      // what the world is at now; 1 is the clip's own detail
     i32 refine_authored_ = 0;   // voxels per metre the clip asked for
     i64 refine_at_[3]{0, 0, 0};
@@ -4778,6 +4838,14 @@ void Application::stop_refine_worker() {
 }
 
 bool Application::refine_busy() {
+    // The backlog counts, and it is what makes slicing safe rather than merely cheap. Everything
+    // that asks whether the world is finished asks THIS: the fixed point, the stand-down save, the
+    // whole-world pass's loop and `--settle`'s streak. A world with bricks still owed is busy, so
+    // none of them can see it half-pasted. See `paste_backlog_`.
+    //
+    // Read outside the lock deliberately -- the backlog is main-thread-only and the mutex is the
+    // sampler's. Taking it here would say the two are related when they are not.
+    if (paste_backlog_at_ < paste_backlog_.size()) return true;
     std::lock_guard<std::mutex> lock(refine_mutex_);
     return refine_outstanding_ > 0 || !refine_landed_.empty();
 }
@@ -4847,6 +4915,20 @@ bool Application::start_refinement() {
     // `refine_hold_`. Nothing sets it outside the whole-world load, so this is one branch a frame
     // on every other path.
     if (refine_hold_) return false;
+    // AND BACK-PRESSURE FROM THE BACKLOG, which is a memory bound rather than a timing one.
+    //
+    // A landed job holds its sampled CLIP -- voxel data, not a handle to it -- so a backlog is
+    // megabytes and not a list of indices. Sampling faster than the paste drains puts no ceiling on
+    // that at all.
+    //
+    // Four batches deep, which is the same order `kRefineInFlight` already allows in the sampler's
+    // own queue, so this adds no new high-water mark. Measured on `clips/sampler.clip` at a
+    // deliberately cruel `--paste-slice 16`, the backlog peaks at **717 jobs** -- the cap plus the
+    // batches already in the sampler's hands when it bites, which is what a cap on the PICK can
+    // bound and nothing more. A COUNT and not a duration: what the ladder does must not become a
+    // function of how fast the frames were (see `pump_refinement`, where two runs of exactly that
+    // settled on different worlds).
+    if (paste_backlog_.size() - paste_backlog_at_ > kRefineBatch * 4) return false;
     {
         std::lock_guard<std::mutex> lock(refine_mutex_);
         if (refine_outstanding_ >= kRefineInFlight) return false;
@@ -5237,6 +5319,16 @@ void Application::pump_refinement() {
         }
     }
     if (delivered.jobs.empty()) {
+        // Nothing landed, but something may still be OWED. A sliced paste is drained a little at a
+        // time and most of those frames have no batch in them, so the drain cannot live only on the
+        // delivery path. See `paste_backlog_`.
+        if (paste_backlog_at_ < paste_backlog_.size()) {
+            const PasteRun run = drain_paste_backlog();
+            refine_bricks_emptied_ += run.bricks_emptied;
+            refine_chunks_emptied_ += run.chunks_emptied;
+            if (run.emptied) maybe_finish_refinement();
+            return;
+        }
         // Nothing has landed. If nothing is coming either and the ladder has stood down, this is
         // the fixed point -- and it is the only moment the world on disk can be written without
         // catching it half-pasted. The stand-down is what makes it once rather than every frame.
@@ -5745,37 +5837,67 @@ bool Application::build_the_whole_world() {
     return false;
 }
 
-void Application::deliver_refinement(RefineDelivery delivered) {
-    const u64 began = now_ns();
-    refine_sample_ms_ = delivered.sample_ms;
-    refine_asked_ = delivered.asked;
-    refine_bulk_settled_ = delivered.settled;
-    refine_shape_evals_ = delivered.shape_evaluations;
-    refine_paint_evals_ = delivered.paint_evaluations;
-    refine_shape_ns_ = delivered.shape_ns;
-    refine_paint_ns_ = delivered.paint_ns;
+// The fixed point: the ladder has nothing left it can do AND nothing is owed.
+//
+// It used to live at the bottom of `deliver_refinement`, which was the only place the second
+// condition could become true. With the paste sliced it can become true on a frame with no
+// delivery in it, so it is called from wherever the backlog empties. See `paste_backlog_`.
+void Application::maybe_finish_refinement() {
+    if (refine_script_ == nullptr) return;
+    const usize left = refine_regions_.size() - refine_done_count_;
+    if (left != 0 || refine_busy()) return;
+        // The one walk, now that there is nothing left to empty.
+        if (refine_wants_compact_) world_.compact();
+        const WorldStats now = world_.stats();
+        WS_LOG_INFO("clip", "world fully sharpened: {} chunks, {} solid voxels", now.chunks,
+                    now.solid_voxels);
+        // AND THE DESPECKLE, which until D673 could only happen on the other path.
+        //
+        // This is a fixed point exactly as the stand-down is -- every node is at the detail it is
+        // going to be at, which is the one condition `clean_world_stipple` needs -- and it was the
+        // only one of the two that never cleaned. `refine_save_owed_` is set by a stand-down and by
+        // nothing else, and a ladder that finishes every node arrives HERE instead, tears itself
+        // down four lines below and resets `refine_script_`, after which `start_refinement` returns
+        // at its null check before it can ever set the flag. So a clip the ladder completed came out
+        // with every speck in it.
+        //
+        // It was invisible while the verdict came from the up-front sample, because then the specks
+        // were already gone before the ladder started -- which is exactly why flipping that default
+        // had to bring this line with it. The handover named it as a reading and said plainly that
+        // nobody had run it; the run is D673's, and the clip that reaches it is any clip small
+        // enough for one camera to finish, which is most of `clips/` and none of the facility.
+        //
+        // `refine_world_cleaned_` is shared with the stand-down path, so a world that stood down,
+        // cleaned, then went on to finish is not cleaned twice.
+        if (!refine_world_cleaned_ && options_.despeckle && !options_.stipple_at_coarse) {
+            refine_world_cleaned_ = true;
+            clean_world_stipple();
+        }
+        save_refined_world();
+        if (!refine_cache_path_.empty()) {
+            WS_LOG_INFO("clip", "kept the finished world; the next launch reads it back");
+            refine_cache_path_.clear();
+        }
+        // Before the script goes: the plan borrows the field out of it and the sampler borrows the
+        // plan, so a worker still holding either is a dangling walk. Stopping it is also what makes
+        // `refine_jobs_.reset()` safe -- the worker submits to that pool.
+        stop_refine_worker();
+        refine_script_.reset();
+        refine_plan_ = {};
+        refine_jobs_.reset();
+        paste_jobs_.reset();   // nothing left to paste, so nothing left for these to do
+        return;
+}
 
-    std::vector<RefineJob> finished;
-    finished.swap(delivered.jobs);
-    for (const RefineJob& job : finished) {
-        set_refine_done(job.at, true);
-        refine_regions_[job.at].applied_per_metre = job.settings.voxels_per_metre;
-        refine_stipple_counts_.add(job.stipple);
-    }
-
-    // Set the NEXT batch sampling before pasting this one, rather than after.
-    //
-    // The two were serialised once: the worker sat idle for the whole paste, then the main thread
-    // sat idle for the whole sample, and the world sharpened at the sum instead of the larger.
-    //
-    // And it has to be HERE rather than at the top of the frame. With one batch in flight, the slot
-    // is still held at the top of pump_refinement by the batch about to be delivered, so the pick
-    // there refuses and the next one does not go out until the following frame. Measured: ladder
-    // 12,421 -> 15,170 ms on that ordering alone, with the picking a frame late changing which
-    // nodes are held out and so the world it settles on as well.
-    while (start_refinement()) {
-    }
-
+// A slice of the backlog into the world, bounded in bricks. See `paste_backlog_`.
+//
+// The replay comes with it and has to: an op is a SHAPE, so a slice that pasted fresh geometry
+// under a player's cut leaves that cut un-made until the ops run again. Replaying per slice rather
+// than per batch is what keeps the world consistent at the END of every frame instead of at the
+// end of every batch -- and it is measured at 0 ms (D511), which is what makes that affordable.
+Application::PasteRun Application::drain_paste_backlog() {
+    PasteRun run;
+    if (paste_backlog_at_ >= paste_backlog_.size()) return run;
     // Sized like any foreground pool rather than like the sampler, which is deliberately held to
     // half the machine because it runs while somebody is playing. The paste is not background
     // work: it is the frame the player is waiting inside.
@@ -5793,7 +5915,20 @@ void Application::deliver_refinement(RefineDelivery delivered) {
     u64 bricks = 0;
     u64 bricks_emptied = 0;
     u64 chunks_emptied = 0;
-    for (const RefineJob& job : finished) {
+    // UNLIMITED while the whole-world pass is running, because there is no frame to protect: no
+    // player, no camera, and the bar in front of them is drawn by `draw_loading` on its own clock.
+    // Slicing there would spread the same work over more turns of a loop nobody is inside.
+    const u64 budget = (options_.paste_slice_bricks == 0 || full_load_running_)
+                           ? ~u64{0}
+                           : static_cast<u64>(options_.paste_slice_bricks);
+    while (paste_backlog_at_ < paste_backlog_.size()) {
+        // ONE JOB IS ALWAYS PASTED, whatever the budget says. A node bigger than the whole budget
+        // would otherwise sit at the head of the backlog for ever and the world would stop -- and
+        // the check is AFTER the first job rather than before it, so the budget bounds the overrun
+        // to one node instead of bounding the progress to nothing.
+        if (bricks >= budget && run.jobs > 0) break;
+        const RefineJob& job = paste_backlog_[paste_backlog_at_++];
+        ++run.jobs;
         if (job.result == nullptr || job.result->clip.empty()) continue;
         // R11h: a batch picked BEFORE an edit pre-sampled its volume is still in the sampler's
         // hands when the cut lands, and it is carrying a coarser answer for the same box. Pasting
@@ -5838,17 +5973,78 @@ void Application::deliver_refinement(RefineDelivery delivered) {
         // The ladder delivering a node. NOT an edit: see announce_world_change.
         announce_world_change(lo, hi, WorldChange::kRefinement);
     }
-    const f64 paste_ms = ns_to_ms(now_ns() - paste_began);
-    refine_total_paste_ms_ += paste_ms;
-    refine_total_sample_ms_ += refine_sample_ms_;
+    run.bricks = bricks;
+    run.bricks_emptied = bricks_emptied;
+    run.chunks_emptied = chunks_emptied;
+    run.paste_ms = ns_to_ms(now_ns() - paste_began);
+    refine_total_paste_ms_ += run.paste_ms;
+    run.emptied = paste_backlog_at_ >= paste_backlog_.size();
+    if (run.emptied) {
+        // Nothing owed. The vector is released rather than merely rewound, because a backlog that
+        // held one big batch keeps that capacity for the rest of the run otherwise.
+        paste_backlog_.clear();
+        paste_backlog_.shrink_to_fit();
+        paste_backlog_at_ = 0;
+    }
+    ++paste_slices_;
 
     // Everything the player did, done again. An op is a SHAPE -- FillBox carries two corners in
     // world voxels, not the voxels it happened to change -- so replaying it against finer geometry
     // re-cuts the same volume at the new detail. The cut re-measures itself.
     const u64 replay_began = now_ns();
     const std::vector<Op>& done = op_log_.ops();
-    if (!done.empty()) apply_ops(world_, done, ledger_);
-    const f64 replay_ms = ns_to_ms(now_ns() - replay_began);
+    if (!done.empty() && run.jobs > 0) apply_ops(world_, done, ledger_);
+    run.replay_ms = ns_to_ms(now_ns() - replay_began);
+    return run;
+}
+
+void Application::deliver_refinement(RefineDelivery delivered) {
+    const u64 began = now_ns();
+    refine_sample_ms_ = delivered.sample_ms;
+    refine_asked_ = delivered.asked;
+    refine_bulk_settled_ = delivered.settled;
+    refine_shape_evals_ = delivered.shape_evaluations;
+    refine_paint_evals_ = delivered.paint_evaluations;
+    refine_shape_ns_ = delivered.shape_ns;
+    refine_paint_ns_ = delivered.paint_ns;
+
+    std::vector<RefineJob> finished;
+    finished.swap(delivered.jobs);
+    for (const RefineJob& job : finished) {
+        set_refine_done(job.at, true);
+        refine_regions_[job.at].applied_per_metre = job.settings.voxels_per_metre;
+        refine_stipple_counts_.add(job.stipple);
+    }
+
+    // Set the NEXT batch sampling before pasting this one, rather than after.
+    //
+    // The two were serialised once: the worker sat idle for the whole paste, then the main thread
+    // sat idle for the whole sample, and the world sharpened at the sum instead of the larger.
+    //
+    // And it has to be HERE rather than at the top of the frame. With one batch in flight, the slot
+    // is still held at the top of pump_refinement by the batch about to be delivered, so the pick
+    // there refuses and the next one does not go out until the following frame. Measured: ladder
+    // 12,421 -> 15,170 ms on that ordering alone, with the picking a frame late changing which
+    // nodes are held out and so the world it settles on as well.
+    while (start_refinement()) {
+    }
+
+    // Onto the backlog rather than into the world. With `--no-paste-slice` -- and during the
+    // whole-world pass, where there is no frame to protect -- the drain below empties it in this
+    // call and the behaviour is exactly what it was. See `paste_backlog_`.
+    if (paste_backlog_at_ > 0 && paste_backlog_at_ == paste_backlog_.size()) {
+        paste_backlog_.clear();
+        paste_backlog_at_ = 0;
+    }
+    paste_backlog_.insert(paste_backlog_.end(), std::make_move_iterator(finished.begin()),
+                          std::make_move_iterator(finished.end()));
+    paste_backlog_peak_ = std::max(paste_backlog_peak_, paste_backlog_.size() - paste_backlog_at_);
+    const PasteRun run = drain_paste_backlog();
+    const u64 bricks = run.bricks;
+    const u64 bricks_emptied = run.bricks_emptied;
+    const u64 chunks_emptied = run.chunks_emptied;
+    const f64 paste_ms = run.paste_ms;
+    const f64 replay_ms = run.replay_ms;
 
     // THE HOT ONE. This ran on every delivery -- several a second -- over a list that reaches
     // six hundred and twenty thousand entries on the estate, to print one number. See
@@ -5892,12 +6088,14 @@ void Application::deliver_refinement(RefineDelivery delivered) {
                 "batch: {} nodes at metre {}-{}, {:.1f}-{:.1f} m out, sampled {:.0f} ms ({} voxels "
                 "asked, {} settled; shape {} evals in {:.0f} core-ms, paint {} evals in {:.0f} "
                 "core-ms), pasted {:.0f} ms (paste {:.0f} + replay {:.0f}), {} bricks, {} emptied "
-                "({} chunks), {} nodes left",
+                "({} chunks), {} nodes left, {} of {} jobs in, {} owed",
                 finished.size(), coarsest, finest_seen, finished.empty() ? 0.0 : nearest, furthest,
                 refine_sample_ms_, refine_asked_, refine_bulk_settled_, refine_shape_evals_,
                 ns_to_ms(refine_shape_ns_), refine_paint_evals_, ns_to_ms(refine_paint_ns_),
                 ns_to_ms(now_ns() - began), paste_ms, replay_ms,
-                bricks, bricks_emptied, chunks_emptied, left);
+                bricks, bricks_emptied, chunks_emptied, left, run.jobs,
+                run.jobs + (paste_backlog_.size() - paste_backlog_at_),
+                paste_backlog_.size() - paste_backlog_at_);
     // The running total, because the count that matters is not how many one batch emptied but how
     // many are STANDING. One is a rate and the other is the number of lumps.
     refine_bricks_emptied_ += bricks_emptied;
@@ -5921,49 +6119,7 @@ void Application::deliver_refinement(RefineDelivery delivered) {
     //
     // Waiting costs nothing. The outstanding batch lands within a frame or two, is pasted like any
     // other, and the delivery after it finds left == 0 with the sampler idle. See D624.
-    if (left == 0 && !refine_busy()) {
-        // The one walk, now that there is nothing left to empty.
-        if (refine_wants_compact_) world_.compact();
-        const WorldStats now = world_.stats();
-        WS_LOG_INFO("clip", "world fully sharpened: {} chunks, {} solid voxels", now.chunks,
-                    now.solid_voxels);
-        // AND THE DESPECKLE, which until D673 could only happen on the other path.
-        //
-        // This is a fixed point exactly as the stand-down is -- every node is at the detail it is
-        // going to be at, which is the one condition `clean_world_stipple` needs -- and it was the
-        // only one of the two that never cleaned. `refine_save_owed_` is set by a stand-down and by
-        // nothing else, and a ladder that finishes every node arrives HERE instead, tears itself
-        // down four lines below and resets `refine_script_`, after which `start_refinement` returns
-        // at its null check before it can ever set the flag. So a clip the ladder completed came out
-        // with every speck in it.
-        //
-        // It was invisible while the verdict came from the up-front sample, because then the specks
-        // were already gone before the ladder started -- which is exactly why flipping that default
-        // had to bring this line with it. The handover named it as a reading and said plainly that
-        // nobody had run it; the run is D673's, and the clip that reaches it is any clip small
-        // enough for one camera to finish, which is most of `clips/` and none of the facility.
-        //
-        // `refine_world_cleaned_` is shared with the stand-down path, so a world that stood down,
-        // cleaned, then went on to finish is not cleaned twice.
-        if (!refine_world_cleaned_ && options_.despeckle && !options_.stipple_at_coarse) {
-            refine_world_cleaned_ = true;
-            clean_world_stipple();
-        }
-        save_refined_world();
-        if (!refine_cache_path_.empty()) {
-            WS_LOG_INFO("clip", "kept the finished world; the next launch reads it back");
-            refine_cache_path_.clear();
-        }
-        // Before the script goes: the plan borrows the field out of it and the sampler borrows the
-        // plan, so a worker still holding either is a dangling walk. Stopping it is also what makes
-        // `refine_jobs_.reset()` safe -- the worker submits to that pool.
-        stop_refine_worker();
-        refine_script_.reset();
-        refine_plan_ = {};
-        refine_jobs_.reset();
-        paste_jobs_.reset();   // nothing left to paste, so nothing left for these to do
-        return;
-    }
+    maybe_finish_refinement();
 }
 
 // What the world on disk is worth, and when it is worth writing.
