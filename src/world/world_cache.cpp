@@ -49,8 +49,10 @@ constexpr u32 kVersion = 7u;
 //
 //   [ header, 64 bytes ][ journal ]
 //
-// and nothing else; the file is exactly `64 + journal_bytes` long, which is the first thing the
-// reader checks. The journal is a run of segments laid end to end:
+// and the header is the commit record: the file is committed to exactly `64 + journal_bytes`
+// bytes, and that is what the reader reads. Fewer than that is a truncated file and is refused;
+// MORE is the tail of an append that did not finish, and it is ignored, because the header never
+// claimed it. The journal is a run of segments laid end to end:
 //
 //   [ Full ][ Directory ]                                  a first write
 //   [ Full ][ Directory ][ Increment ][ Directory ] ...     and every save after it
@@ -69,11 +71,28 @@ constexpr u32 kSegmentMagic = 0x53435357u;   // "WSCS"
 constexpr usize kHeaderBytes = 64;
 constexpr usize kSegmentHeaderBytes = 16;
 
-// D701's fourth field, in a format that no longer renames a temporary into place. `running` is
-// written before the first byte of an append and cleared only when the file is whole again, so a
-// write cut off by a closed lid leaves a header every reader here refuses.
-constexpr u8 kStateRunning = 0u;
-constexpr u8 kStateDone = 1u;
+// THERE IS NO "A WRITE IS IN PROGRESS" FLAG, AND THERE MUST NOT BE ONE.
+//
+// The first version of this carried one, on the reasoning that D701 wants an interrupted write
+// told apart from a finished one. Both halves of that were wrong.
+//
+// D701's `running`/`done` is the fourth field of the BAKE STAMP — a separate file that
+// `tools/bake_world.ps1` writes after every pass — and the question it answers is whether the bake
+// LOOP finished, which is a fact about how complete the WORLD is. A bake stopped between passes
+// leaves a complete file holding a partial world, and `-RequireWhole` uses the stamp to refuse to
+// publish it. Nothing about that lives in this header, and nothing in `tools/` reads this header.
+//
+// The other half is worse. A flag saying "somebody is writing" has to go down BEFORE the write and
+// come up after it, so for the length of the append the file says "refuse me" — and what it is
+// refusing is the perfectly good world sitting underneath, which no reader can now reach. That
+// turns a crash during a tenth of a second into losing the whole cache, which is exactly the
+// failure the two-minute bank exists to prevent.
+//
+// So the commit record is the HEADER ITSELF, written last. `journal_bytes` says how long the
+// journal is and the check hash covers it, so the file is committed to precisely
+// `kHeaderBytes + journal_bytes` bytes. A crash part way through an append leaves bytes past that
+// point which the header never claimed, and a reader that stops at the committed end is not being
+// lenient — it is reading exactly what was committed. See the append below and `read_world_cache`.
 
 constexpr u32 kSegmentFull = 0u;
 constexpr u32 kSegmentIncrement = 1u;
@@ -283,7 +302,6 @@ const u8* take_part(Cursor& in, usize& bytes) {
 struct CacheHeader {
     u64 key = 0;
     u8 mode = 0;
-    u8 state = kStateRunning;
     u32 segments = 0;
     u64 journal_bytes = 0;
     u64 directory_at = 0;   // where the live directory segment starts, absolute
@@ -324,7 +342,6 @@ u64 header_check(const CacheHeader& head) {
     value = hash_combine(value, kVersion);
     value = hash_combine(value, head.key);
     value = hash_combine(value, static_cast<u64>(head.mode));
-    value = hash_combine(value, static_cast<u64>(head.state));
     value = hash_combine(value, static_cast<u64>(head.segments));
     value = hash_combine(value, head.journal_bytes);
     value = hash_combine(value, head.directory_at);
@@ -342,7 +359,6 @@ void encode_header(u8 out[kHeaderBytes], const CacheHeader& head) {
     std::memcpy(out + 4, &version, sizeof(version));
     std::memcpy(out + 8, &head.key, sizeof(head.key));
     out[16] = head.mode;
-    out[17] = head.state;
     std::memcpy(out + 20, &head.segments, sizeof(head.segments));
     std::memcpy(out + 24, &head.journal_bytes, sizeof(head.journal_bytes));
     std::memcpy(out + 32, &head.directory_at, sizeof(head.directory_at));
@@ -359,7 +375,6 @@ bool decode_header(const u8* data, usize size, CacheHeader& out) {
     if (magic != kMagic || version != kVersion) return false;
     std::memcpy(&out.key, data + 8, sizeof(out.key));
     out.mode = data[16];
-    out.state = data[17];
     std::memcpy(&out.segments, data + 20, sizeof(out.segments));
     std::memcpy(&out.journal_bytes, data + 24, sizeof(out.journal_bytes));
     std::memcpy(&out.directory_at, data + 32, sizeof(out.directory_at));
@@ -979,7 +994,11 @@ struct SegmentSpan {
 // must end exactly where the journal does. A file whose append was cut short fails all three.
 bool walk_journal(const u8* blob, usize blob_size, const CacheHeader& head,
                   std::vector<SegmentSpan>& out) {
-    if (kHeaderBytes + head.journal_bytes != blob_size) return false;
+    // SHORTER than the header committed to is a truncated file and is refused. LONGER is a tail
+    // from an append that did not finish, and it is not a fault: `journal_bytes` is what the file
+    // is committed to, the check hash covers it, and bytes past it were never claimed. Stopping at
+    // the committed end is not leniency -- it is reading exactly what was committed.
+    if (kHeaderBytes + head.journal_bytes > blob_size) return false;
     usize at = kHeaderBytes;
     const usize end = kHeaderBytes + static_cast<usize>(head.journal_bytes);
     for (u32 i = 0; i < head.segments; ++i) {
@@ -1010,10 +1029,12 @@ bool open_for_append(const std::string& path, u64 key, CacheHeader& head, CacheD
     if (!file.read(reinterpret_cast<char*>(raw), kHeaderBytes)) return false;
     if (!decode_header(raw, kHeaderBytes, head)) return false;
     if (head.key != key) return false;
-    if (head.state != kStateDone) return false;
     if (head.mode != static_cast<u8>(WorldCacheMode::Whole)) return false;
     if (head.segments >= kMaxSegments) return false;
-    if (static_cast<u64>(size) != kHeaderBytes + head.journal_bytes) return false;
+    // At LEAST as long as the header committed to. Longer is what a crash part way through an
+    // earlier append leaves behind, and it is not a fault: those bytes were never committed, this
+    // append writes over them, and the trim at the end takes back whatever is left.
+    if (static_cast<u64>(size) < kHeaderBytes + head.journal_bytes) return false;
     // Past a doubling the journal is rewritten whole rather than grown further. See kMaxSegments.
     if (head.base_bytes == 0 || head.journal_bytes >= 2 * head.base_bytes) return false;
 
@@ -1485,7 +1506,6 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
     CacheHeader head;
     head.key = key;
     head.mode = static_cast<u8>(edit_only ? WorldCacheMode::EditOnly : WorldCacheMode::Whole);
-    head.state = kStateDone;
     head.segments = append ? was.segments + 2 : 2;
     head.journal_bytes = (append ? was.journal_bytes : 0) + static_cast<u64>(tail.size());
     head.directory_at = directory_at;
@@ -1496,34 +1516,41 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
     const u64 total = kHeaderBytes + head.journal_bytes;
 
     if (append) {
-        // ---- the append, and the two moments it can be interrupted at -----------------------
+        // ---- the append, and every moment it can be interrupted at --------------------------
         //
-        // `running` goes down first, so a machine that sleeps between here and the last line
-        // leaves a file every reader refuses rather than one that reads back as a world with a
-        // segment missing from the end of it. D701's distinction, in the one place a format that
-        // no longer renames a temporary into place could lose it.
+        // NOTHING ALREADY COMMITTED IS TOUCHED UNTIL THE LAST SIXTY-FOUR BYTES. The new segments
+        // go at `kHeaderBytes + was.journal_bytes`, which is one past the end of what the header
+        // claims, so every byte written before the last line is a byte no reader will look at.
+        // Then one 64-byte header write moves `journal_bytes` over them and commits the lot.
+        //
+        // That is the whole reason it is arranged this way, and there are three moments a machine
+        // can stop:
+        //
+        //   - before any of the tail lands: the file is byte for byte what it was, and it reads
+        //     back as the world the last save left;
+        //   - part way through the tail: the extra bytes sit past the committed end, and it reads
+        //     back as the world the last save left;
+        //   - after the whole tail and before the header: the same again, because every one of
+        //     those bytes is uncommitted until the header says otherwise.
+        //
+        // Only the 64-byte header write itself is unprotected, and it is one write inside a single
+        // sector of a file that is already long enough. A torn one is caught by the check hash and
+        // the file is refused -- that is the one case that costs the cache, and it is the smallest
+        // window this format can be reduced to without carrying two headers.
         std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
         if (!file) {
             WS_LOG_WARN("cache", "could not open '{}' to append to", path);
             return false;
         }
-        CacheHeader marker = was;
-        marker.state = kStateRunning;
-        encode_header(raw, marker);
-        file.seekp(0);
-        file.write(reinterpret_cast<const char*>(raw), kHeaderBytes);
-        file.flush();
-        if (!file) {
-            WS_LOG_WARN("cache", "could not mark '{}' as being written", path);
-            return false;
-        }
-
         file.seekp(static_cast<std::streamoff>(kHeaderBytes + was.journal_bytes));
         file.write(reinterpret_cast<const char*>(tail.data()),
                    static_cast<std::streamsize>(tail.size()));
         file.flush();
         if (!file) {
-            WS_LOG_WARN("cache", "could not append to '{}'", path);
+            // The old header is still on disk and still committed to the old journal, so what is
+            // on disk is the world the last save left. There is nothing to undo.
+            WS_LOG_WARN("cache", "could not append to '{}'; the world it already held stands",
+                        path);
             return false;
         }
         encode_header(raw, head);
@@ -1533,19 +1560,23 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
         const bool ok = static_cast<bool>(file);
         file.close();
         if (!ok) {
-            WS_LOG_WARN("cache", "could not finish '{}'", path);
+            WS_LOG_WARN("cache", "could not finish '{}'; the world it already held stands", path);
             return false;
         }
-        // Anything past the journal is a tail from an older, longer file, and the reader refuses a
-        // file that is not exactly as long as its header says. Only ever shrinks the file.
+        // AFTER the commit and never before it. What this takes back is the tail left by an append
+        // that did not finish, when it was longer than the one just written; trimming first would
+        // cut into bytes this write is about to commit to.
         std::error_code error;
         const auto size = std::filesystem::file_size(path, error);
         if (!error && size > total) {
             std::error_code trim;
             std::filesystem::resize_file(path, total, trim);
+            // Not a failure, and it must not be reported as one. A tail past the committed end is
+            // exactly what the reader ignores, so a file that could not be trimmed is a correct
+            // file that is bigger than it needs to be, and the next save writes over it.
             if (trim) {
-                WS_LOG_WARN("cache", "could not trim '{}' to {} bytes", path, total);
-                return false;
+                WS_LOG_WARN("cache", "could not trim '{}' to {} bytes; it is still the world",
+                            path, total);
             }
         }
     } else {
@@ -1617,8 +1648,14 @@ bool world_cache_matches(const std::string& path, u64 key) {
     if (!file.read(reinterpret_cast<char*>(raw), kHeaderBytes)) return false;
     CacheHeader head;
     if (!decode_header(raw, kHeaderBytes, head)) return false;
-    if (head.state != kStateDone) return false;
-    return head.key == key;
+    if (head.key != key) return false;
+    // And it must be at least as long as its header committed to, because the caller uses this to
+    // decide whether to delete the file: a truncated journal answers NO here and is rebuilt,
+    // rather than being opened and refused later.
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error || static_cast<u64>(size) < kHeaderBytes + head.journal_bytes) return false;
+    return true;
 }
 
 // The mode byte, and a caller has to have it before it commits to anything.
@@ -1634,7 +1671,6 @@ bool world_cache_mode_of(const std::string& path, WorldCacheMode& out) {
     if (!file.read(reinterpret_cast<char*>(raw), kHeaderBytes)) return false;
     CacheHeader head;
     if (!decode_header(raw, kHeaderBytes, head)) return false;
-    if (head.state != kStateDone) return false;
     out = static_cast<WorldCacheMode>(head.mode);
     return true;
 }
@@ -1653,15 +1689,24 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
     if (!decode_header(blob.data(), blob.size(), head)) return false;
     if (head.key != key) return false;   // built from different source; not an error
 
-    // D701, and it is the one thing about this format that is not an optimisation. A write that
-    // began and did not finish leaves `running` here, and a journal cut off mid-append leaves the
-    // file longer or shorter than the header says. Either is refused rather than read: a cache
-    // that is refused is rebuilt, and a partial journal read as a whole world is a building with
-    // holes in it that says it is finished.
-    if (head.state != kStateDone) {
-        WS_LOG_WARN("cache", "'{}' was being written when it was last touched; not loading it",
-                    path);
-        return false;
+    // THE HEADER IS THE COMMIT RECORD, so what it says the journal is, is what this reads.
+    //
+    // A file longer than `kHeaderBytes + journal_bytes` is what a machine that stopped part way
+    // through an append leaves behind, and those bytes were never committed to: the world this
+    // reads is the one the last finished save left, whole and by its own content hash. Said out
+    // loud rather than passed over, because a cache that is quietly bigger than it claims is worth
+    // one line to a person looking at why a file grew.
+    //
+    // Shorter, or a journal whose segments do not frame to exactly the committed end, is a
+    // different thing and is still refused: that is a file with a piece missing from the middle of
+    // what it claims, and reading it would give a world with holes in it that says it is finished.
+    if (blob.size() > kHeaderBytes + head.journal_bytes) {
+        WS_LOG_INFO("cache",
+                    "'{}' carries {} bytes past the end of what it committed to -- an append that "
+                    "did not finish. Reading the {} bytes it did commit; the next save writes over "
+                    "the rest",
+                    path, blob.size() - (kHeaderBytes + head.journal_bytes),
+                    kHeaderBytes + head.journal_bytes);
     }
     std::vector<SegmentSpan> segments;
     if (!walk_journal(blob.data(), blob.size(), head, segments)) {

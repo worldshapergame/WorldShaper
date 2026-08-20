@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -412,6 +413,23 @@ bool same_regions(const std::vector<CachedRegion>& a, const std::vector<CachedRe
     return true;
 }
 
+// The whole file, and a prefix of a file. Between them they are how a crash is written down: the
+// bytes the writer really produced, cut off at the moment a machine stopped.
+std::vector<u8> read_all(const std::string& path) {
+    std::ifstream stream(path, std::ios::binary | std::ios::ate);
+    if (!stream) return {};
+    const std::streamsize size = stream.tellg();
+    stream.seekg(0);
+    std::vector<u8> out(static_cast<usize>(size));
+    if (size > 0 && !stream.read(reinterpret_cast<char*>(out.data()), size)) return {};
+    return out;
+}
+
+void write_all(const std::string& path, const u8* data, usize size) {
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    stream.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
+}
+
 u64 file_bytes(const std::string& path) {
     std::error_code error;
     const auto bytes = std::filesystem::file_size(path, error);
@@ -522,40 +540,176 @@ TEST_CASE("a world reached by appending is the world written whole") {
     }
 }
 
-// D701's fourth field, in a format that no longer renames a temporary into place.
+// THE ONE THAT DECIDES WHETHER ANY OF THIS IS SAFE TO SHIP.
 //
-// Two ways an append is cut off, and both have to be refused rather than read as a whole world. A
-// file that says `running` is one a writer started and never finished; a file with bytes past the
-// end of its journal is one whose segment landed and whose header never did. Reading either of
-// them gives a world with a piece missing that claims to be complete, which is precisely what the
-// `running`/`done` distinction was added to prevent.
-TEST_CASE("an interrupted append is refused, not read as a whole world") {
+// The whole-world pass banks every two minutes for what may be an hour, and the thing banking
+// exists to survive is a machine that stops. So a machine that stops DURING a save has to leave
+// the world the last save left -- not a refused file, and not a world with a piece missing.
+//
+// The header is the commit record and it is written last, so an append writes its new segments
+// past everything the header claims and only then moves `journal_bytes` over them. That makes
+// three moments, and each of them is a real file here rather than an argument:
+//
+//   1. before any of the tail landed;
+//   2. part way through the tail;
+//   3. after the whole tail, before the header.
+//
+// Every one of them is built out of two real writes -- the file after save A, and the file after
+// the append that turns it into B -- so the bytes are the bytes the writer actually produces. The
+// first assertion is the one the arrangement stands on: **the append does not touch a single byte
+// the old header committed to**, which is what makes moment 1 the untouched file and moments 2
+// and 3 a good file with an ignorable tail on the end.
+TEST_CASE("a machine that stops during an append still has the world it had before") {
     const u64 key = world_cache_key("a clip", 32, 1234);
 
-    SUBCASE("a file still marked as being written") {
-        Scratch file("ws_test_cache_running.world");
+    // World A, saved. These are the bytes and the hash every case below has to come back to.
+    Scratch source("ws_test_cache_crash_source.world");
+    Side wrote;
+    const std::vector<VoxelTypeId> materials = populate(wrote);
+    WorldCache out = wrote.handle();
+    out.materials = materials;
+    out.regions = many_regions(2000, 700);
+    REQUIRE(write_world_cache(source.path, key, out));
+    const u64 hash_a = wrote.world.content_hash();
+    const u64 chunks_a = wrote.world.chunk_count();
+    const u64 voxels_a = wrote.world.stats().solid_voxels;
+    const std::vector<u8> after_a = read_all(source.path);
+    REQUIRE(after_a.size() > 64);
+
+    // ...and then somebody builds for two minutes, and the next bank appends.
+    apply_op(wrote.world,
+             Op::fill_box(9, 1, 4000, 4000, 4000, 4060, 4060, 4060, materials[1],
+                          MatterReason::PlayerPlace),
+             wrote.ledger);
+    out.regions = many_regions(2100, 780);
+    WorldCacheWritten appended;
+    REQUIRE(write_world_cache(source.path, key, out, &appended));
+    REQUIRE(appended.incremental);
+    const std::vector<u8> after_b = read_all(source.path);
+    REQUIRE(after_b.size() > after_a.size());
+
+    // THE PROPERTY THE WHOLE THING RESTS ON: the append touched the sixty-four bytes of header and
+    // NOTHING ELSE that world A committed to. Every byte of the journal A committed to is still
+    // exactly where it was, so the file at each moment below is a file the writer really produces
+    // rather than one this test invented.
+    //
+    // The header is the one thing that does move, and it moves LAST and all at once -- that is
+    // what makes it the commit. If a writer marked the file on the way in, or wrote a segment over
+    // the top of a committed one, it would show here.
+    for (usize at = 64; at < after_a.size(); ++at) {
+        REQUIRE(after_b[at] == after_a[at]);
+    }
+    // And it really did change, or the case above is comparing a file with itself.
+    REQUIRE(std::memcmp(after_b.data(), after_a.data(), 64) != 0);
+
+    const usize tail_from = after_a.size();
+    const usize tail_bytes = after_b.size() - tail_from;
+
+    // The file at any instant during the append: the OLD header, because the new one is the last
+    // thing written and by definition has not gone down yet, in front of however much of the new
+    // tail had landed. `at` bytes in total.
+    const auto file_at_that_instant = [&](usize at) {
+        std::vector<u8> bytes(after_b.begin(), after_b.begin() + static_cast<isize>(at));
+        std::copy(after_a.begin(), after_a.begin() + 64, bytes.begin());
+        return bytes;
+    };
+
+    SUBCASE("stopped before any of the new segments landed") {
+        Scratch file("ws_test_cache_crash_1.world");
+        const std::vector<u8> bytes = file_at_that_instant(tail_from);
+        // Which is the file exactly as save A left it, byte for byte -- nothing was touched.
+        REQUIRE(bytes == after_a);
+        write_all(file.path, bytes.data(), bytes.size());
+        Side read;
+        WorldCache in = read.handle();
+        REQUIRE(read_world_cache(file.path, key, in, nullptr));
+        CHECK(read.world.content_hash() == hash_a);
+        CHECK(read.world.chunk_count() == chunks_a);
+        CHECK(read.world.stats().solid_voxels == voxels_a);
+    }
+
+    SUBCASE("stopped part way through the new segments") {
+        Scratch file("ws_test_cache_crash_2.world");
+        const std::vector<u8> bytes = file_at_that_instant(tail_from + tail_bytes / 2);
+        REQUIRE(bytes.size() > after_a.size());
+        write_all(file.path, bytes.data(), bytes.size());
+        Side read;
+        WorldCache in = read.handle();
+        REQUIRE(read_world_cache(file.path, key, in, nullptr));
+        CHECK(read.world.content_hash() == hash_a);
+        CHECK(read.world.chunk_count() == chunks_a);
+        CHECK(read.world.stats().solid_voxels == voxels_a);
+    }
+
+    SUBCASE("stopped after the new segments and before the header") {
+        Scratch file("ws_test_cache_crash_3.world");
+        // Every byte of the append on disk and the old header still in front of it, which is what
+        // the file is at the instant before the last sixty-four bytes go down.
+        const std::vector<u8> bytes = file_at_that_instant(after_b.size());
+        write_all(file.path, bytes.data(), bytes.size());
+
+        Side read;
+        WorldCache in = read.handle();
+        REQUIRE(read_world_cache(file.path, key, in, nullptr));
+        CHECK(read.world.content_hash() == hash_a);
+        CHECK(read.world.chunk_count() == chunks_a);
+        CHECK(read.world.stats().solid_voxels == voxels_a);
+        CHECK(same_regions(in.regions, many_regions(2000, 700)));
+
+        // And the cache is not merely readable, it is still a cache: the next save appends to it
+        // as normal, over the top of the tail nobody committed to, and trims what is left.
+        WorldCacheWritten again;
+        REQUIRE(write_world_cache(file.path, key, out, &again));
+        CHECK(again.incremental);
+        CHECK(file_bytes(file.path) == again.file_bytes);
+        Side after;
+        WorldCache back = after.handle();
+        REQUIRE(read_world_cache(file.path, key, back, nullptr));
+        CHECK(after.world.content_hash() == wrote.world.content_hash());
+        CHECK(same_regions(back.regions, out.regions));
+    }
+}
+
+// The other half, and it is a different question: a file with a piece missing from the MIDDLE of
+// what it claims. There is nothing to fall back to there -- the header committed to bytes that are
+// not on the disk -- so it is refused, and the caller rebuilds.
+TEST_CASE("a file shorter than it claims, or corrupt in its header, is refused") {
+    const u64 key = world_cache_key("a clip", 32, 1234);
+
+    SUBCASE("a committed journal that is not all there") {
+        Scratch file("ws_test_cache_short.world");
         Side wrote;
         populate(wrote);
         WorldCache out = wrote.handle();
         out.regions = two_regions(true, false);
         REQUIRE(write_world_cache(file.path, key, out));
 
-        // It reads before the header is touched, which is what makes the check below about the
-        // state byte rather than about the file being broken some other way.
-        {
-            Side read;
-            WorldCache in = read.handle();
-            CHECK(read_world_cache(file.path, key, in, nullptr));
-        }
+        const auto full = std::filesystem::file_size(file.path);
+        REQUIRE(full > 128);
+        std::filesystem::resize_file(file.path, full - 64);
 
-        // Byte 17 of the header is `done`. A writer that got as far as marking the file and no
-        // further leaves it at `running`.
+        CHECK_FALSE(world_cache_matches(file.path, key));
+        Side read;
+        WorldCache in = read.handle();
+        CHECK_FALSE(read_world_cache(file.path, key, in, nullptr));
+    }
+
+    SUBCASE("a header that was itself torn") {
+        Scratch file("ws_test_cache_tornhead.world");
+        Side wrote;
+        populate(wrote);
+        WorldCache out = wrote.handle();
+        out.regions = two_regions(true, false);
+        REQUIRE(write_world_cache(file.path, key, out));
+
+        // One byte of the journal length, which the check hash covers. This is the only moment of
+        // an append that costs the cache, and it has to be caught rather than believed.
         {
             std::fstream stream(file.path, std::ios::binary | std::ios::in | std::ios::out);
             REQUIRE(stream.good());
-            stream.seekp(17);
-            const char running = 0;
-            stream.write(&running, 1);
+            stream.seekp(24);
+            const char rubbish = 0x7F;
+            stream.write(&rubbish, 1);
         }
 
         CHECK_FALSE(world_cache_matches(file.path, key));
@@ -564,40 +718,6 @@ TEST_CASE("an interrupted append is refused, not read as a whole world") {
         Side read;
         WorldCache in = read.handle();
         CHECK_FALSE(read_world_cache(file.path, key, in, nullptr));
-    }
-
-    SUBCASE("a segment that landed with no header behind it") {
-        Scratch file("ws_test_cache_torn.world");
-        Side wrote;
-        const std::vector<VoxelTypeId> materials = populate(wrote);
-        WorldCache out = wrote.handle();
-        out.materials = materials;
-        out.regions = two_regions(true, false);
-        REQUIRE(write_world_cache(file.path, key, out));
-
-        // What a half-finished append leaves on disk: bytes past the end of the journal the
-        // header knows about.
-        {
-            std::ofstream stream(file.path, std::ios::binary | std::ios::app);
-            REQUIRE(stream.good());
-            const std::vector<char> half(4096, 0x5A);
-            stream.write(half.data(), static_cast<std::streamsize>(half.size()));
-        }
-
-        Side read;
-        WorldCache in = read.handle();
-        CHECK_FALSE(read_world_cache(file.path, key, in, nullptr));
-
-        // And the next save does not append to it. It cannot: the file it would be appending to
-        // is not a file this build would read, so it writes the world out whole and the cache is
-        // good again -- which is the whole reason a refusal is safe.
-        WorldCacheWritten again;
-        REQUIRE(write_world_cache(file.path, key, out, &again));
-        CHECK_FALSE(again.incremental);
-        Side after;
-        WorldCache back = after.handle();
-        REQUIRE(read_world_cache(file.path, key, back, nullptr));
-        CHECK(after.world.content_hash() == wrote.world.content_hash());
     }
 }
 

@@ -358,15 +358,27 @@ struct WorldCacheWritten {
 // at all and says so — which is the D721 waste where a resumed run rewrote hundreds of megabytes
 // to say exactly what the file already said.
 //
-// # And an interrupted write is still refused
+// # And a machine that stops mid-save still has the world it had before
 //
-// D701's fourth field, kept true through a format that no longer renames a temporary into place.
-// The header carries `running` from the moment an append begins and `done` only when the file is
-// whole again, and it carries the exact length the journal is supposed to be. A write cut off by a
-// closed lid leaves one or both wrong, and every reader here — `read_world_cache`,
-// `world_cache_matches`, `world_cache_mode_of` — refuses such a file rather than reading the part
-// of it that landed. A refused cache is rebuilt; a half-read one is a world with holes in it that
-// claims to be whole.
+// **The header is the commit record and it is written last.** It says how long the journal is and
+// a check hash covers that, so the file is committed to exactly `64 + journal_bytes` bytes. An
+// append writes its new segments at the far end — past everything the header claims — and only
+// then writes the sixty-four bytes that move `journal_bytes` over them. So a machine that stops
+// before the tail lands, part way through it, or after it and before the header, leaves a file
+// whose committed part is untouched: **it reads back as the world the last finished save left,
+// whole, by its own content hash.** The uncommitted tail is ignored, which is not leniency — those
+// bytes were never claimed — and the next save writes over them.
+//
+// A file SHORTER than its header committed to, or one whose segments do not frame to exactly the
+// committed end, is a different thing and is still refused: that is a piece missing from the
+// middle of what the file claims, and reading it would give a world with holes in it that says it
+// is finished.
+//
+// There is no "a write is in progress" flag, and there must not be one — see the block at
+// `kSegmentMagic` in the .cpp. D701's `running`/`done` is the fourth field of the BAKE STAMP that
+// `tools/bake_world.ps1` keeps, and it answers a different question: whether the bake LOOP
+// finished, which is a fact about how complete the WORLD is rather than about how complete the
+// file is. Nothing in `tools/` reads this header.
 //
 // A first write, and any write that rebuilds the journal, still goes to a temporary beside the
 // target and is renamed, so it cannot damage the file it replaces.
