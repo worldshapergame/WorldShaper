@@ -2151,7 +2151,7 @@ void main() {
     // reaches -- and the edge then resolves WITHIN a face, over frames, at no extra cost per
     // frame. That is the whole claim of §6: the penumbra costs the face a few samples instead of
     // costing every pixel looking at it a ray of its own, for ever.
-    const float size = float(1 << level);
+    const float size = face_extent_of(face.packed);   // R8a: a half-voxel face is a real size
     const vec3 corner = vec3(ivec3(face.x, face.y, face.z)) * size;
 
     const uint seed = node_hash_mix(slot * 0x9E3779B9u + node_push.frame);

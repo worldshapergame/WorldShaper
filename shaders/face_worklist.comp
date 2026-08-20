@@ -77,7 +77,7 @@ bool probe_coverage_bins() { return (light_probe.words[0] & kProbeCoverageBins) 
 // the blend can pair either side of, rather than a speckle through the middle of a surface.
 float face_coverage_pixels(Face face) {
     const uint level = face_level_of(face.packed);
-    const float extent = float(1u << level);
+    const float extent = face_extent_of(face.packed);   // R8a: a half-voxel face is a real size
     // The patch this face is in, three levels up: the same shift the host takes for a stand-in.
     // Not called `patch` — that is a reserved word in GLSL and the error it gives names the line
     // after it, which is a wasted build.

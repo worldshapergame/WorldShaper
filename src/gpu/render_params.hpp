@@ -459,6 +459,11 @@ inline constexpr u32 kProbeThroughFallback = 1u << 17;
 // way round because every other one defaults off. Must match `kProbeFarFallbackOff` in
 // shaders/node_far.glsl.
 inline constexpr u32 kProbeFarFallbackOff = 1u << 18;
+
+// R8e: `--infinite-detail`, off by default. Bit 19 and not 15, which is where it was first written:
+// see D736 for why every bit above 14 read as free when it was not. Must match
+// `kProbeInfiniteDetail` in shaders/node.glsl.
+inline constexpr u32 kProbeInfiniteDetail = 1u << 19;
 // R4e: a translucent face with the sun behind it casts the ray `sun_possible` used to throw away,
 // through the matter behind it, and is lit by what survives the crossing. Cleared by
 // `--no-translucency`, which is the state every figure before it was taken in: marble as granite.

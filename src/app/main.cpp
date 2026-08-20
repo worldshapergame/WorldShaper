@@ -720,6 +720,15 @@ struct Options {
     // be diffed against one another.
     bool subpixel_rule = false;         // --subpixel-rule: never STORE finer than a pixel
     bool hashed_variation = false;      // --hashed-variation: R8b's always-available child source
+    // R8e: the mode that unclamps. A level below nought is finer than a voxel, and the only floor
+    // is the addressing's own (`kFinestLevel`, in world/level.hpp). Off is the arm every build
+    // before this one ran, so leaving the flag out IS the control and the two arms are one binary.
+    //
+    // **It changes nothing on screen today and that is the honest state**: the CPU addressing is
+    // signed and `node_descend` still breaks at `kNodeLeaf`, so a descent with a negative target
+    // stops at the brick. Drawing below a voxel means calling `variation_descend` from the
+    // marcher's intra-brick walk and keying the face at the negative level. See R8b.
+    bool infinite_detail = kInfiniteDetailDefault;
 
     // R11a's instrument: what one NODE costs to sample, per level, and whether a node sampled on
     // its own is the same voxels as that node inside a bigger box. Headless, beside `--clip-file`,
@@ -1407,6 +1416,9 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
     } else if (arg == "--hashed-variation") {
         // R8b's child source, for a world with no field behind it. Off is the control arm.
         options.hashed_variation = true;
+    } else if (arg == "--infinite-detail") {
+        // R8e. Off is the control arm and is what ships.
+        options.infinite_detail = true;
     } else if (arg == "--no-despeckle") {
         // The control arm for D610. Two flags of one build: with it, every lone voxel of the
         // wrong material stays exactly where the sampler put it.
@@ -2170,6 +2182,9 @@ void print_help() {
         "                        default, and leaving it out is the control arm\n"
         "  --hashed-variation    R8b: derive a node's children by hashing its key when nothing\n"
         "                        else can. Off by default; prints a determinism hash at load\n"
+        "  --infinite-detail     R8e: let a descent target a level BELOW a voxel, so a surface goes\n"
+        "                        on getting finer as you walk up to it. Off by default, and\n"
+        "                        leaving it out is the control arm\n"
         "  --refine-batch N      nodes the ladder picks and samples per wake (default 128). 16\n"
         "                        is what it was when a batch was sampled one node at a time\n"
         "  --occlusion-cull      put the picker's occlusion ray back: refuse a node the camera\n"
@@ -9048,9 +9063,19 @@ void Application::stream(f64 seconds) {
             // from. Claimed rather than requested -- there is nothing to build, only somewhere
             // for the light pass to put an answer.
             if ((entry.level & kFeedbackFace) != 0) {
-                const u32 level = static_cast<u32>(entry.level & 0xFF);
+                // R8a: SIGN-EXTENDED out of the byte, and this is a correctness fix rather than
+                // wiring. A face at level -1 reports a byte of 0xFF, which `& 0xFF` reads as 255 --
+                // and the range test then rejects it, so **every sub-voxel face would be dropped in
+                // silence** and the surface would get no light of its own. `level_from_byte` is the
+                // host's reader and `face_level_of` in shaders/node.glsl is its twin; they compare
+                // against one another through a host-written key, so they have to agree bit for bit.
+                const i32 face_at = level_from_byte(static_cast<u32>(entry.level));
+                const u32 level = level_word(face_at);
                 const u32 face = static_cast<u32>((entry.level >> 8) & 0xFF);
-                if (level > kMaxNodeLevel || face >= kFaceCount) continue;
+                if (face_at > static_cast<i32>(kMaxNodeLevel) || face_at < kFinestLevel ||
+                    face >= kFaceCount) {
+                    continue;
+                }
                 // A face a LIGHT ray landed on, rather than one a pixel landed on. R9a.
                 //
                 // The claim is the same claim -- there is nothing to build and nothing to stream, so
@@ -9121,11 +9146,13 @@ void Application::stream(f64 seconds) {
                 // about the case: a stand-in whose children are all live is indeed read by nobody,
                 // and the moment the camera leaves, the children go and the stand-in is what the
                 // room has to be rebuilt from. See FaceStore::claim_stand_in.
-                const u32 coarse_level = level + kFaceAncestorStep;
-                if (first_time && coarse_level <= kMaxNodeLevel) {
+                // R8a: in signed arithmetic, because `level` is a two's-complement word now and
+                // `level + kFaceAncestorStep` on a negative one wraps rather than climbs.
+                const i32 coarse_at = face_at + static_cast<i32>(kFaceAncestorStep);
+                if (first_time && coarse_at <= static_cast<i32>(kMaxNodeLevel)) {
                     face_store_.claim_stand_in(
                         FaceKey{entry.x >> kFaceAncestorStep, entry.y >> kFaceAncestorStep,
-                                entry.z >> kFaceAncestorStep, coarse_level, face},
+                                entry.z >> kFaceAncestorStep, level_word(coarse_at), face},
                         frame_counter_);
                 }
                 continue;
@@ -11039,6 +11066,7 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.edge_aa ? kProbeEdgeAA : 0u) |
                               (options_.level_blend ? kProbeLevelBlend : 0u) |
                               (options_.sun_confidence ? kProbeSunConfidence : 0u) |
+                              (options_.infinite_detail ? kProbeInfiniteDetail : 0u) |
                               // R9h, and the sense is INVERTED on purpose -- see kProbeFarFallbackOff.
                               (options_.far_fallback ? 0u : kProbeFarFallbackOff);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
@@ -11811,6 +11839,7 @@ int Application::play(const Options& options) {
         // so a table of numbers taken over two runs cannot be read without its flag.
         node_budget.subpixel_rule = options_.subpixel_rule;
         node_budget.hashed_variation = options_.hashed_variation;
+        node_budget.infinite_detail = options_.infinite_detail;
         WS_LOG_INFO("load", "type tables {:.0f} ms  [t+{:.0f} ms]",
                 ns_to_ms(now_ns() - t_tables), ns_to_ms(now_ns() - load_began_ns_));
         const u64 t_pool = now_ns();

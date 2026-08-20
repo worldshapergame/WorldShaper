@@ -97,6 +97,8 @@ layout(std430, set = 1, binding = 8) buffer DeriveStats { DeriveStatsSlot slots[
 
 const uint kNoNode = 0xFFFFFFFFu;
 const int kLeafLevel = 3;       // a brick: 8 voxels
+// R8a: how far below a voxel a descent may go. Must match `kFinestLevel` in src/world/level.hpp.
+const int kFinestLevel = -32;
 const int kEntryLevel = 14;     // 16,384 voxels Ã¢â‚¬â€ 512 m. Must match src/world/node_pool.hpp.
 
 const uint kNodeLeaf = 1u;
@@ -751,6 +753,12 @@ const uint kProbeLevelBlend = 1u << 12;
 // own ratio unchanged, and the two arms differ by the ramp rather than by a branch in the reader.
 const uint kProbeSunConfidence = 1u << 13;
 
+// R8e: `--infinite-detail`. Bit 19 -- 15 is kProbeCoverageBins, 17 is --no-through-fallback and 18
+// is R9h's; see D736 for why the free list above bit 14 could not be trusted. Must match
+// `kProbeInfiniteDetail` in src/gpu/render_params.hpp.
+const uint kProbeInfiniteDetail = 1u << 19;
+bool probe_infinite_detail() { return (light_probe.words[0] & kProbeInfiniteDetail) != 0u; }
+
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
 // in the feedback buffer.
@@ -1042,7 +1050,19 @@ bool node_face_recently_gathered(uint slot) {
     return (node_push.frame - face_gathered.frames[slot]) <= node_push.seen_window;
 }
 
-uint face_level_of(uint packed) { return packed & 0xFFu; }
+// R8a: SIGN-EXTENDED out of the byte, so a sub-voxel face reads back the level it was claimed at
+// rather than 255. Must match `face_level` in src/world/face_store.hpp, which returns the same
+// two's-complement word -- `node_face_lookup` compares this against a host-written key, so the two
+// have to agree bit for bit. Levels nought and above are unchanged.
+uint face_level_of(uint packed) {
+    uint low = packed & 0xFFu;
+    return (low >= 128u) ? (low | 0xFFFFFF00u) : low;
+}
+int face_level_signed_of(uint packed) { return int(face_level_of(packed)); }
+// A face's size in voxels at any level: 8 at the brick, 1 at level 0, a HALF at level -1. `exp2`
+// rather than a shift, because a shift cannot say "half a voxel" and a shift by a negative amount is
+// undefined. Must match `level_extent_f32` in src/world/level.hpp.
+float face_extent_of(uint packed) { return exp2(float(face_level_signed_of(packed))); }
 uint face_dir_of(uint packed) { return (packed >> 8) & 0xFFu; }
 // Must match kFaceLive in src/world/face_store.hpp: flags bit 7, so the flags byte at bits 16-23.
 const uint kFaceLive = 1u << 7;
@@ -1617,7 +1637,7 @@ FaceWork face_work_of(uint slot, Face face, bool provisional_face) {
     // Is this face inside the box the host says it has just changed, and inside the much smaller
     // box the NEAR field can have been changed by. See kEditAmbientReach.
     if (push.edit_min.w != 0) {
-        const float extent = float(1 << face_level_of(face.packed));
+        const float extent = face_extent_of(face.packed);   // R8a
         const vec3 low = vec3(ivec3(face.x, face.y, face.z)) * extent -
                          vec3(push.camera_chunk.xyz * 256);
         w.near_edit = all(greaterThanEqual(low + vec3(extent), vec3(push.edit_min.xyz))) &&
@@ -1965,7 +1985,9 @@ Found node_descend(ivec3 p, int target, uint slot, int level) {
 }
 
 Found node_locate(ivec3 p, int target) {
-    target = clamp(target, kLeafLevel, kEntryLevel);
+    // R8a/R8e: the floor is the MODE's rather than the leaf's. With the mode off this is the line
+    // it always was, byte for byte.
+    target = clamp(target, probe_infinite_detail() ? kFinestLevel : kLeafLevel, kEntryLevel);
 
     // The deepest cached ancestor that still contains this point and is not already below what was
     // asked for. `>=` rather than `>`: a cache sitting exactly at the target level is the answer,
@@ -3443,10 +3465,15 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
         // node_level_blend, and note that `detail` is named here rather than recomputed at the hit
         // so the two cannot drift apart -- the pair the colour blends between has to be the pair the
         // level was chosen from.
-        float footprint = max(t * pixel_angle * push.lens.z, 1.0);
-        float detail = log2(footprint);
-        int level = clamp(int(floor(detail + dither)), 0, kNodeMaxDetail);
-        int march_level = max(level, kLeafLevel);
+        // R8e: the two clamps at nought are the ones R8a takes off -- the footprint floored at one
+        // voxel and the level floored at zero. Must agree with `marcher_finest_level` in
+        // src/world/node_pool.hpp, which is the CPU's copy of exactly this arithmetic.
+        const bool infinite = probe_infinite_detail();
+        float footprint = t * pixel_angle * push.lens.z;
+        if (!infinite) footprint = max(footprint, 1.0);
+        float detail = log2(max(footprint, 1e-30));
+        int level = clamp(int(floor(detail + dither)), infinite ? kFinestLevel : 0, kNodeMaxDetail);
+        int march_level = infinite ? level : max(level, kLeafLevel);
 
         if (march_level != outer_level) {
             // Re-seed the DDA at the new granularity. A handful of times per ray Ã¢â‚¬â€ once per level
