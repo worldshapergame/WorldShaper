@@ -302,6 +302,9 @@ struct Options {
     // The control arm for the line D726 is about: every refinement paste re-opening the
     // hundred-and-twenty-frame window in which every face in the world re-measures its shadow.
     // On during a load that is a window that never closes. See `announce_world_change`.
+    // The control arm for `refine_live_`: sweep every region the ladder has ever made, finished or
+    // not, which is what the pick did until D728. See the member for what it costs.
+    bool sweep_all_regions = false;
     bool refresh_shadows_on_paste = false;
     bool no_field_turns = false;
     bool no_field_cull_boxes = false;
@@ -1366,6 +1369,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
     } else if (arg == "--no-full-load") {
         options.full_load = false;
         options.full_load_asked = false;
+    } else if (arg == "--sweep-all-regions") {
+        options.sweep_all_regions = true;
     } else if (arg == "--refresh-shadows-on-paste") {
         options.refresh_shadows_on_paste = true;
     } else if (arg == "--no-field-turns") {
@@ -1930,6 +1935,9 @@ void print_help() {
         "  --sample-block-cells N  how small a box gets before the descent asks the field about a\n"
         "                        whole LEVEL at once instead of recursing (512, one render node).\n"
         "                        0 is the control arm: recurse to single voxels as before D724\n"
+        "  --sweep-all-regions   have the ladder's pick sweep every region it has ever made rather\n"
+        "                        than the ones that might still have work in them. The control arm\n"
+        "                        for D728, and what the pick did before it\n"
         "  --refresh-shadows-on-paste  let the ladder delivering a node re-open the two-second\n"
         "                        window in which every face re-measures its shadow, as an edit does.\n"
         "                        The control arm for D726, and what shipped before it\n"
@@ -3069,6 +3077,30 @@ private:
         SampleCause forced_by = SampleCause::kCamera;
     };
     std::vector<RefineNode> refine_regions_;
+    // WHICH OF THEM MIGHT STILL HAVE WORK IN THEM, as indices into the list above.
+    //
+    // The pick sweeps for the best node to sample next, and it swept ALL of them: `refine_regions_`
+    // only ever grows — a node that is finished stays in it for ever, because its box and its
+    // `applied_per_metre` are what the cache is written from and what a resumed run reads back. On
+    // the estate at full resolution the list reaches **six hundred and twenty thousand** entries
+    // within a few minutes and millions by the end, and nearly all of them are done. Measured on
+    // one run: 2,421 ms of main thread spent sweeping 283 million entries over 13,200 frames, and
+    // it grows linearly with the list for as long as a world is being built. That is the shape of
+    // "ever lower framerate the more things load" a second time (D726 was the first).
+    //
+    // A SUPERSET, deliberately, and that is what makes it safe: every not-done node is in here, and
+    // an entry whose node has since been finished is skipped by the same `box.done` test the sweep
+    // always had. So the worst a stale entry costs is one comparison, and the invariant to keep is
+    // only ever "add on the way in" — there are three places a node becomes not-done and they are
+    // `seed_refine_nodes`, `split_refine_node` and the requeue in `stop_refine_worker`.
+    //
+    // Indices and not pointers because `refine_regions_` reallocates as it grows, and index
+    // stability is the property everything else here already leans on: `RefineJob::at` is an index
+    // held across a batch that is out being sampled.
+    std::vector<u32> refine_live_;
+    // Rebuilt from the nodes still not done when more than half of what it holds is stale. Counted
+    // during the sweep, which is walking them anyway, so the test is free.
+    void compact_refine_live();
     usize refine_region_ = 0;   // the one being sampled right now
     // The clip's paint rules, worked out once (D614). A node sample that re-derived a hundred and
     // thirty-nine of them would spend longer arriving than sampling.
@@ -4821,10 +4853,21 @@ bool Application::start_refinement() {
     f64 short_rank[kShortlistMax];
     usize short_count = 0;
     const u64 sweep_began = now_ns();
-    refine_total_swept_ += refine_regions_.size();
-    for (usize i = 0; i < refine_regions_.size(); ++i) {
+    // The control arm walks every region there has ever been; the shipped path walks the ones that
+    // might still have work in them. See `refine_live_` and Options::sweep_all_regions. Both reach
+    // the same nodes -- the list is a superset of the not-done -- so the two arms build one world,
+    // and that is the gate rather than an argument.
+    const usize sweep_count =
+        options_.sweep_all_regions ? refine_regions_.size() : refine_live_.size();
+    refine_total_swept_ += sweep_count;
+    usize still_live = 0;
+    for (usize entry = 0; entry < sweep_count; ++entry) {
+        const usize i = options_.sweep_all_regions ? entry : refine_live_[entry];
         const RefineNode& box = refine_regions_[i];
+        // A stale entry: the node was live when it went into the list and has been finished since.
+        // See `refine_live_` -- the list is a superset and this is what makes that safe.
         if (box.done) continue;
+        ++still_live;
         // A demanded node is never memoed out: the memo records that the CAMERA could not see it,
         // and a demand is the statement that the camera is not who is asking.
         if (box.refuse_until > refine_wake_ && !box.forced) continue;
@@ -4870,6 +4913,12 @@ bool Application::start_refinement() {
         }
         short_at[at] = i;
         short_rank[at] = rank;
+    }
+    // More than half of what was walked is finished, so walking it again would be paying for the
+    // same nothing. Counted during the sweep rather than by a second pass, so the test is free.
+    if (!options_.sweep_all_regions && refine_live_.size() > 64 &&
+        still_live * 2 < refine_live_.size()) {
+        compact_refine_live();
     }
     refine_total_sweep_ms_ += ns_to_ms(now_ns() - sweep_began);
 
@@ -5017,7 +5066,12 @@ bool Application::start_refinement() {
         // rather than dropping them: `enlist` has already marked them `done` and taken them out of
         // the next pick, so a dropped batch is a hole in the world nothing ever fills again. D624
         // is that fault from the other side.
-        for (const RefineJob& job : refine_batch_) refine_regions_[job.at].done = false;
+        for (const RefineJob& job : refine_batch_) {
+            refine_regions_[job.at].done = false;
+            // Back into the live list with it: a node put back by a dropped batch is not-done
+            // again, and the sweep only ever looks at what that list holds. See `refine_live_`.
+            refine_live_.push_back(static_cast<u32>(job.at));
+        }
         refine_batch_.clear();
         return false;
     }
@@ -6209,10 +6263,21 @@ void Application::clean_world_stipple() {
                 cleaned.left, ns_to_ms(judged - began), ns_to_ms(now_ns() - judged));
 }
 
+// See `refine_live_`. Everything still to do, and nothing else.
+void Application::compact_refine_live() {
+    usize kept = 0;
+    for (const u32 index : refine_live_) {
+        if (refine_regions_[index].done) continue;
+        refine_live_[kept++] = index;
+    }
+    refine_live_.resize(kept);
+}
+
 void Application::seed_refine_nodes(const forge::Script& script) {
     refine_bounds_low_ = script.settings.low;
     refine_bounds_high_ = script.settings.high;
     refine_regions_.clear();
+    refine_live_.clear();
 
     const f64 span = static_cast<f64>(i64{1} << kRefineCoarsest) / static_cast<f64>(kVoxelsPerMetre);
     const i64 first[3] = {static_cast<i64>(std::floor(refine_bounds_low_.x / span)),
@@ -6231,6 +6296,7 @@ void Application::seed_refine_nodes(const forge::Script& script) {
                     // with the coarse resolution anyway would tell every node it was already
                     // eight-voxels-a-metre good and the ladder would refine almost nothing.
                     node.applied_per_metre = coarse_build_pasted_ ? refine_coarse_per_metre_ : 0;
+                    refine_live_.push_back(static_cast<u32>(refine_regions_.size()));
                     refine_regions_.push_back(node);
                 }
             }
@@ -6315,8 +6381,13 @@ u32 Application::split_refine_node(usize at) {
         refine_regions_[at].done = true;
         return 0;
     }
+    // Slot `at` keeps its place in `refine_live_` -- it was live to have been picked, and what is
+    // going into it is a child that is not done either. The new slots have to be added.
     refine_regions_[at] = children[0];
-    for (u32 i = 1; i < kept; ++i) refine_regions_.push_back(children[i]);
+    for (u32 i = 1; i < kept; ++i) {
+        refine_live_.push_back(static_cast<u32>(refine_regions_.size()));
+        refine_regions_.push_back(children[i]);
+    }
     return kept;
 }
 
@@ -7003,6 +7074,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
         refine_script_.reset();
         refine_plan_ = {};
         refine_regions_.clear();
+        refine_live_.clear();
         refine_cache_path_.clear();
         return;
     }
@@ -7106,6 +7178,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
         refine_script_.reset();
         refine_plan_ = {};
         refine_regions_.clear();
+        refine_live_.clear();
         refine_cache_path_.clear();
         refine_saved_regions_ = 0;
         WS_LOG_INFO("clip", "the cached world is fully sharpened");
