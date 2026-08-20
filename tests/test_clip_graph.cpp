@@ -695,12 +695,11 @@ TEST_CASE("a node made from the palette is a shape somebody can see") {
         CHECK(!group.name.empty());
         CHECK(!group.heads.empty());
         for (const std::string& head : group.heads) {
-            const std::string body = clip_node_template(head);
-            CHECK_MESSAGE(!body.empty(), "no template for " << head);
-            // A `let` names its head first. `material`, `param` and `paint` are statements rather
-            // than expressions and carry only what goes AFTER their own name, which is why they
-            // are assembled by `add_clip_node` and not written out whole here.
-            if (group.name != "document") CHECK(body.compare(0, head.size(), head) == 0);
+            // Every entry has SOMETHING to write. What it writes is checked by the case below,
+            // which puts each one into a document and reads it back — a stronger question than
+            // "does the text begin with the word", and one that does not have to know which of them
+            // are expressions and which are statements assembled by `add_clip_node`.
+            CHECK_MESSAGE(!clip_node_template(head).empty(), "no template for " << head);
         }
     }
     CHECK(clip_node_template("nothing of that name").empty());

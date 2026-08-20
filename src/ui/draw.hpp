@@ -108,6 +108,7 @@ enum class Icon : u32 {
     Pattern,     // a wave: a field read for its value rather than its sign, which is what every
                  // grain, checker and stripe in a clip is
     Graph,       // two nodes and the wire between them: the visual view of a document
+    Inside,      // a box with a way in: this one has something inside it, and this goes there
     Count,
 };
 

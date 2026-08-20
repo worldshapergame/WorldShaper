@@ -107,6 +107,15 @@ std::string read_author(const std::filesystem::path& path);
 // creation — never afterwards, and never from the interface.
 bool write_author(const std::filesystem::path& path, const Kind& kind, const std::string& author);
 
+// Whether this line is the one that says who made the file.
+//
+// D447: *the game does not let that field be edited from inside itself — not because it cannot be
+// forged from outside, but because a name the interface lets you overwrite is a name that means
+// nothing.* The editor put the whole file on the screen, author line and all, and every key went
+// through — so the one field the interface was never supposed to be able to change was one
+// backspace away from saying somebody else. Reported directly.
+bool is_author_line(std::string_view line);
+
 // The same text with every author line taken out of it.
 //
 // This exists for exactly one caller and it is worth saying why. A built world is cached under a

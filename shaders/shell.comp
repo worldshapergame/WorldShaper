@@ -642,6 +642,31 @@ float icon_graph(vec2 p, float m, float w) {
     return min(d, wire - w * 0.42);
 }
 
+float icon_inside(vec2 p, float m, float w) {
+    // A box with a way in, and an arrow going through it. *This one has something inside it, and
+    // this is how you get there.*
+    //
+    // It was the play triangle, borrowed from *enter this world* on a shelf row — and a triangle on
+    // its own says GO rather than *go in*, which is a different statement and the wrong one on a
+    // box that is a container. Reported as looking like a play button, which it was.
+    //
+    // The box is drawn as three sides with the left one OPEN, because a container you can enter is
+    // one with a way in, and the arrow comes through the gap. It travels on a press, which is what
+    // going in is.
+    float d = 1e9;
+    d = min(d, sd_line(p, vec2(26.0, 12.0), vec2(52.0, 12.0)));
+    d = min(d, sd_line(p, vec2(52.0, 12.0), vec2(52.0, 52.0)));
+    d = min(d, sd_line(p, vec2(52.0, 52.0), vec2(26.0, 52.0)));
+    d = d - w * 0.5;
+    // The arrow, through the open side. It goes further in when it is pressed.
+    float run = m * 7.0;
+    vec2 tip = vec2(36.0 + run, 32.0);
+    float arrow = sd_line(p, vec2(8.0 + run, 32.0), tip);
+    arrow = min(arrow, sd_line(p, tip, tip - vec2(9.0, 9.0)));
+    arrow = min(arrow, sd_line(p, tip, tip - vec2(9.0, -9.0)));
+    return min(d, arrow - w * 0.5);
+}
+
 float icon_field(uint which, vec2 p, float m, float w) {
     switch (which) {
         case 1u:  return icon_world(p, m, w);
@@ -673,6 +698,7 @@ float icon_field(uint which, vec2 p, float m, float w) {
         case 27u: return icon_expanded(p, m, w);
         case 28u: return icon_pattern(p, m, w);
         case 29u: return icon_graph(p, m, w);
+        case 30u: return icon_inside(p, m, w);
         default:  return 1e9;
     }
 }

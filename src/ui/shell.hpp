@@ -311,11 +311,11 @@ private:
     // Where every box sits, worked out once when the document is re-read. See the cpp for why the
     // row is the part worth choosing well.
     void lay_out_graph();
-    // Whether this one's own parts are showing, and the press that changes it.
-    bool is_open(u32 index) const;
-    void set_open(u32 index, bool open);
-    // Open whatever it takes for this one to be on screen — everything that uses it, up to an
-    // answer. What choosing a node by name has to do before the node can be looked at.
+    // Go into a box: from here on the canvas shows that box and what it is made of, and nothing
+    // else. Coming back out is `leave_document`, which is one control for both journeys.
+    void go_inside(u32 index);
+    // Everything that has to be walked into for this one to be on screen. What choosing a node by
+    // name has to do before the node can be looked at.
     void reveal(u32 index);
     // The editor is given room the first time it is opened. See the cpp for why once and why wider.
     void give_editor_room();
@@ -337,6 +337,9 @@ private:
     // is how a player asks to edit it, and an editor that then says "open something first" has
     // asked the question they just answered.
     void follow_selection();
+    // Whether what is on disk is still what was read into `lines_`. False when the file has been
+    // written, replaced, or deleted and made again under the same name.
+    bool document_is_current() const;
     void draw_header(const Rect& rect, u32 window, Icon icon, std::string_view title);
 
     // The selection, which every operation in a library works on. Held by NAME rather than by
@@ -407,6 +410,15 @@ private:
     // because it is opened four ways and a flag set in three of them is a file written to in the
     // fourth.
     bool editing_shipped_ = false;
+    // When the file was last written, as the file system reported it at the moment it was read.
+    //
+    // "Is this the document already open" was answered by the PATH alone, and a path is not a file:
+    // delete `untitled.wsworld` while it is open, make a new one, choose it — same path, so nothing
+    // reloaded, and what was on the screen was the deleted world. Saving then wrote the dead world
+    // back over the new one. A name is not an identity and neither is a path; what makes this
+    // answerable is asking the file whether it is still the one that was read.
+    std::filesystem::file_time_type editing_stamp_{};
+    u64 editing_bytes_ = 0;
     std::vector<std::string> lines_;
     u32 caret_line_ = 0;
     u32 caret_column_ = 0;
@@ -475,12 +487,18 @@ private:
     // same reason: *a panel that shows every control it has at once is a panel a player reads
     // rather than uses.*
     //
-    // Which are open is view state and lives here rather than in the file. A `#@` position is
-    // AUTHORED and travels with the document (D756); a fold is where somebody happens to be
-    // looking, which is the same class of thing as a scroll offset.
-    std::vector<std::string> open_nodes_;
+    // **It is a focus and not a fold** (D772). The fold opened a box in place and everything under
+    // it appeared beside everything else, which on a document of any size is the wall it was
+    // supposed to prevent — reported as *instead of cascading just show you only the nodes inside
+    // of it*. So going into a box shows that box and WHAT IT IS MADE OF, one level, and nothing
+    // else; going into one of those goes a level further; and the way back is the same control that
+    // comes back out of a file.
+    //
+    // Where you are is view state and lives here rather than in the file. A `#@` position is
+    // AUTHORED and travels with the document (D756); where somebody happens to be looking is the
+    // same class of thing as a scroll offset.
+    std::vector<std::string> inside_;
     std::vector<bool> node_shown_;
-    std::vector<bool> node_open_;
     std::vector<std::vector<u32>> used_by_;
 
     // Where every box sits, in cells, in step with `graph_.nodes`. Recomputed only when the
@@ -529,6 +547,9 @@ private:
     void enter_document(const std::filesystem::path& path);
     void save_document();
     void edit_keys(const InputState& input);
+    // Where the caret goes. Split out because a document being READ moves its caret too, and a
+    // built-in is read and not written (D494).
+    void move_caret(const InputState& input);
     // Ask for the verdict again. Not at once: see `reparse` in the cpp for why a parse on every
     // keystroke is a promise this had to stop keeping literally in order to keep at all.
     void reparse_soon();

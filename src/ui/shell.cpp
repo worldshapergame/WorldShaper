@@ -597,7 +597,7 @@ void Shell::draw_icon_sheet() {
         "up",     "new",      "rename",  "duplicate", "delete",    "trash",
         "sort",   "search",   "private", "shared",    "close",     "clip",
         "material", "mod",    "character", "script",  "tick",      "play",
-        "reset",  "collapsed", "expanded",  "pattern", "graph",
+        "reset",  "collapsed", "expanded",  "pattern", "graph",   "inside",
     };
     constexpr u32 kCount = static_cast<u32>(std::size(kNames));
     static_assert(kCount + 1 == static_cast<u32>(Icon::Count), "one name per drawing");
@@ -1213,6 +1213,33 @@ void Shell::draw_library(const Rect& rect, Verdict& verdict) {
         top = row.y1;
     }
 
+    // Which shelf, ABOVE which tab. Asked for directly, and it is the right way round: the shelf
+    // says what KIND of thing this window is about and the tabs say what you are doing with it, so
+    // the shelf is the broader question and the one that reads first. It also means the row of
+    // drawings a player picks a kind from is in the same place whichever tab is showing, rather
+    // than appearing and disappearing under it.
+    {
+        const std::vector<Kind>& kinds = shipped_kinds();
+        std::vector<Icon> icons;
+        std::vector<std::string_view> labels;
+        std::vector<std::string_view> hints;
+        for (const Kind& k : kinds) {
+            icons.push_back(k.icon);
+            labels.push_back({});
+            hints.push_back(k.label);
+        }
+        u32 want = kind_;
+        const Rect shelves{rect.x0 + metrics.px(6.0f), top, rect.x1 - metrics.px(6.0f),
+                           top + metrics.row()};
+        if (ui_.choice(id_of("library.kind"), shelves, {}, icons.data(), labels.data(),
+                       hints.data(), static_cast<u32>(kinds.size()), want)) {
+            kind_ = want;
+            clear_selection();
+            library_.open(kinds[kind_]);
+        }
+        top = shelves.y1 + metrics.px(2.0f);
+    }
+
     const Rect tabs{rect.x0, top, rect.x1, top + metrics.row()};
     const u32 was_tab = tab_;
     ui_.tabs(id_of("library.tabs"), tabs, kTabIcons, kTabLabels, 3, tab_);
@@ -1249,25 +1276,6 @@ void Shell::draw_library_tab(const Rect& rect, Verdict& verdict) {
     column.y = column.box.y0;
     column.row = metrics.row();
     column.gap = metrics.px(4.0f);
-
-    {
-        const std::vector<Kind>& kinds = shipped_kinds();
-        std::vector<Icon> icons;
-        std::vector<std::string_view> labels;
-        std::vector<std::string_view> hints;
-        for (const Kind& k : kinds) {
-            icons.push_back(k.icon);
-            labels.push_back({});
-            hints.push_back(k.label);
-        }
-        u32 want = kind_;
-        if (ui_.choice(id_of("library.kind"), column.next(), {}, icons.data(), labels.data(),
-                       hints.data(), static_cast<u32>(kinds.size()), want)) {
-            kind_ = want;
-            clear_selection();
-            library_.open(kinds[kind_]);
-        }
-    }
 
     // --- where you are, and the one control that is not an operation --------------------------
     //
@@ -1651,7 +1659,15 @@ void Shell::make_new_file() {
         name = "untitled " + std::to_string(nth);
         ++nth;
     }
-    say("made " + name, 2.0);
+    // And it asks what it is called, now, on the row it was just made on.
+    //
+    // A shelf fills up with `untitled`, `untitled 2`, `untitled 3` otherwise — and a name typed a
+    // week later is a name typed after the thing has stopped being obvious. The rename is the one
+    // that already exists (in place, on the row, because a dialog for a name is a dialog); all this
+    // does is start it. Escape leaves the name it was given, which is what escape does everywhere.
+    library_.refresh(true);
+    renaming_ = name + shipped_kinds()[kind_].extension;
+    rename_buffer_ = name;
     ui_.sound().say(Cue::Commit);
 }
 
@@ -1790,7 +1806,7 @@ void Shell::open_editor(const std::filesystem::path& path) {
     dock_.set_open(window_worlds_, true);
     give_editor_room();
     tab_ = 2;
-    if (same_file(path) != editing_) open_document(path);
+    if (same_file(path) != editing_ || !document_is_current()) open_document(path);
     waiting_.clear();
 }
 
@@ -1887,7 +1903,10 @@ std::filesystem::path Shell::follow_include(const std::string& named) const {
 void Shell::follow_selection() {
     const std::vector<Entry> chosen = selection();
     if (chosen.size() != 1 || chosen.front().folder) return;
-    if (same_file(chosen.front().path) == editing_) return;
+    // The same PATH is not the same FILE. Deleting a world while it is open and making another of
+    // that name gives the second one the first one's path — and answering "already open" there put
+    // the dead world back on the screen and, on the next save, back on the disk.
+    if (same_file(chosen.front().path) == editing_ && document_is_current()) return;
     if (dirty_) {
         // Nothing is thrown away and nothing pops up. The editor says which file is waiting and
         // opens it the moment this one is saved — which is one press, on the button that is
@@ -1996,42 +2015,37 @@ bool Shell::a_node_is_selected() const {
 // This sorts each column by where its neighbours sit and repeats, which is the ordinary barycentre
 // heuristic — six passes, alternating direction, because that is where it stops improving on the
 // documents in this repository.
-bool Shell::is_open(u32 index) const {
-    return index < node_open_.size() && node_open_[index];
-}
-
-void Shell::set_open(u32 index, bool open) {
+void Shell::go_inside(u32 index) {
     if (index >= graph_.nodes.size()) return;
-    const std::string key = ClipGraph::key_of(graph_.nodes[index]);
-    const auto at = std::find(open_nodes_.begin(), open_nodes_.end(), key);
-    if (open && at == open_nodes_.end()) open_nodes_.push_back(key);
-    if (!open && at != open_nodes_.end()) open_nodes_.erase(at);
+    inside_.push_back(ClipGraph::key_of(graph_.nodes[index]));
+    graph_pan_x_ = 0.0f;
+    graph_pan_y_ = 0.0f;
+    graph_fitted_ = false;
     lay_out_graph();
 }
 
 void Shell::reveal(u32 index) {
     if (index >= graph_.nodes.size()) return;
-    // Up through everything that uses it, so a node chosen by name is a node on the screen. Bounded
-    // by the node count, because a document being typed into can name itself in a ring.
-    std::vector<u32> front{index};
+    // The shortest way in that puts this one on screen: the chain of things that use it, outermost
+    // first. Bounded by the node count, because a document being typed into can name itself in a
+    // ring — and a chain of parents is what "inside" is made of, so it is the same walk the mark
+    // does one press at a time.
+    std::vector<u32> chain;
     std::vector<bool> seen(graph_.nodes.size(), false);
-    bool changed = false;
-    while (!front.empty()) {
-        const u32 at = front.back();
-        front.pop_back();
-        if (at >= seen.size() || seen[at]) continue;
+    u32 at = index;
+    while (at < graph_.nodes.size() && !seen[at] && chain.size() < graph_.nodes.size()) {
         seen[at] = true;
-        if (at >= used_by_.size()) continue;
-        for (u32 user : used_by_[at]) {
-            const std::string key = ClipGraph::key_of(graph_.nodes[user]);
-            if (std::find(open_nodes_.begin(), open_nodes_.end(), key) == open_nodes_.end()) {
-                open_nodes_.push_back(key);
-                changed = true;
-            }
-            front.push_back(user);
-        }
+        if (at >= used_by_.size() || used_by_[at].empty()) break;
+        const u32 user = used_by_[at].front();
+        chain.push_back(user);
+        at = user;
     }
-    if (changed) lay_out_graph();
+    inside_.clear();
+    for (usize i = chain.size(); i-- > 0;) {
+        inside_.push_back(ClipGraph::key_of(graph_.nodes[chain[i]]));
+    }
+    graph_fitted_ = false;
+    lay_out_graph();
 }
 
 void Shell::lay_out_graph() {
@@ -2039,7 +2053,6 @@ void Shell::lay_out_graph() {
     graph_x_.assign(count, 0.0f);
     graph_y_.assign(count, 0.0f);
     node_shown_.assign(count, false);
-    node_open_.assign(count, false);
     used_by_.assign(count, {});
     graph_wide_ = 0.0f;
     graph_tall_ = 0.0f;
@@ -2052,34 +2065,28 @@ void Shell::lay_out_graph() {
             if (input < count) used_by_[input].push_back(static_cast<u32>(i));
         }
     }
-    for (usize i = 0; i < count; ++i) {
-        const std::string key = ClipGraph::key_of(graph_.nodes[i]);
-        node_open_[i] = std::find(open_nodes_.begin(), open_nodes_.end(), key) != open_nodes_.end();
-    }
-
     // --- what is on screen ---------------------------------------------------------------------
     //
-    // A node is drawn when nothing uses it — those are the document's own answers, the `solid`, the
-    // coats, the settings — or when something that uses it is itself drawn AND open. Everything
-    // else is under a fold, which is what stops a hundred-and-thirty-box document being a hundred
-    // and thirty boxes.
+    // Outside anything: the document's own ANSWERS — every statement nothing else uses. That is the
+    // `solid`, the coats, the settings, and whatever nobody reads. Six boxes on a fifty-box clip.
     //
-    // Iterated to a fixed point rather than walked once, because a node can be used from two places
-    // and only one of them need be open for it to be on screen.
-    for (usize i = 0; i < count; ++i) node_shown_[i] = used_by_[i].empty();
-    for (usize round = 0; round < count && round < 64; ++round) {
-        bool moved = false;
-        for (usize i = 0; i < count; ++i) {
-            if (node_shown_[i]) continue;
-            for (u32 user : used_by_[i]) {
-                if (node_shown_[user] && node_open_[user]) {
-                    node_shown_[i] = true;
-                    moved = true;
-                    break;
-                }
-            }
+    // Inside a box: that box and WHAT IT IS MADE OF, one level down, and nothing else. Going into
+    // one of those goes a level further. That is the difference between this and the fold it
+    // replaced (D772): a fold showed everything under everything opened, which on any real document
+    // is the wall it was meant to prevent.
+    //
+    // A key that no longer names anything — a line deleted, a name typed over — takes the walk back
+    // out to wherever it still holds, which is the only sane thing to do with a place that has
+    // stopped existing.
+    while (!inside_.empty() && graph_.find(inside_.back()) == ClipGraph::kNone) inside_.pop_back();
+    if (inside_.empty()) {
+        for (usize i = 0; i < count; ++i) node_shown_[i] = used_by_[i].empty();
+    } else {
+        const u32 here = graph_.find(inside_.back());
+        node_shown_[here] = true;
+        for (u32 input : graph_.nodes[here].inputs) {
+            if (input < count) node_shown_[input] = true;
         }
-        if (!moved) break;
     }
 
     // How far a SHOWN node is from a shown leaf, which is not what the document's own depth says
@@ -2237,9 +2244,10 @@ void Shell::draw_editor_tab(const Rect& rect) {
         // The way back out, and only when there is one. A control that is always there and does
         // nothing most of the time is furniture (D486) — and this one says, by being there at all,
         // that you are inside something.
-        if (!came_from_.empty()) {
+        if (!came_from_.empty() || !inside_.empty()) {
             const Rect back{left, bar.y0, left + metrics.row(), bar.y1};
-            const std::string whence = "Back to " + shown_name(came_from_.back());
+            const std::string whence =
+                inside_.empty() ? ("Back to " + shown_name(came_from_.back())) : "Back out";
             if (ui_.icon_button(id_of("editor.back"), back, Icon::Up, whence)) {
                 leave_document();
                 return;
@@ -2252,21 +2260,20 @@ void Shell::draw_editor_tab(const Rect& rect) {
         ui_.draw().icon(Rect{left, bar.mid_y() - cell * 0.5f, left + cell,
                              bar.mid_y() + cell * 0.5f},
                         icon_for_file(editing_));
-        const Rect save{bar.x1 - metrics.row(), bar.y0, bar.x1, bar.y1};
-        const Rect name{left + cell + metrics.px(5.0f), bar.y0, save.x0 - metrics.px(4.0f),
-                        bar.y1};
+        // **There is no save button.** It was a tick at the right of this row, and what a button
+        // for saving buys over the key everybody already presses is one more thing on a panel whose
+        // first constraint is *as little of everything as possible*. Asked for directly: **ctrl-S**,
+        // which is what a player's hands already do, and the star beside the name is what says
+        // there is anything to press it for.
+        const Rect name{left + cell + metrics.px(5.0f), bar.y0, bar.x1, bar.y1};
         ui_.draw().push_clip(name);
-        ui_.label(name, shown_name(editing_) + (dirty_ ? " *" : ""), Align::Left, kBold);
+        // A built-in is BOLD, everywhere it is named — the same weight the library's listing gives
+        // it (§4), because it is a property of the name rather than something that has happened to
+        // the row, and a player who wonders why they cannot type into this one has the answer in it.
+        ui_.label(name, shown_name(editing_) + (editing_shipped_ ? "  (built in)" : "") +
+                            (dirty_ ? " *" : ""),
+                  Align::Left, kBold);
         ui_.draw().pop_clip();
-        // The one sentence in this interface is the tooltip, and this is where it earns its place:
-        // a built-in cannot be saved and there is nothing on a row that could say so wordlessly.
-        // The press still refuses and says the same thing out loud (D494, D749).
-        if (ui_.icon_button(id_of("editor.save"), save, Icon::Tick,
-                            editing_shipped_
-                                ? "This one came with the game - duplicate it and edit the copy"
-                                : (dirty_ ? "Write it back to the file" : "Nothing to write"))) {
-            save_document();
-        }
     }
 
     // The one line the unsaved case needs. Not a dialog: what it says is which file is waiting, and
@@ -2312,6 +2319,10 @@ void Shell::draw_editor_tab(const Rect& rect) {
                   report_.where.empty() ? report_.message : (report_.where + ": " + report_.message),
                   Align::Left, kPlain, 0.85f);
     }
+
+    // Ctrl-S, from either view, because it is the key everybody presses and neither view should be
+    // the one that does not take it.
+    if (ui_.input().is_down(Key::Ctrl) && ui_.input().was_pressed(Key::S)) save_document();
 
     const Rect page{column.box.x0, column.y, column.box.x1, column.box.y1};
     if (view_ == 0) {
@@ -2460,14 +2471,30 @@ void Shell::draw_script_view(const Rect& page) {
         const Rect track{page.x0 + gutter, page.y1 - tall, page.x1 - metrics.px(9.0f), page.y1};
         const f32 wide = std::max(metrics.px(28.0f),
                                   track.width() * room / std::max(room, script_wide_));
+        // A DRAG, not a jump. It jumped to wherever it was pressed and let go, which is a bar you
+        // can aim at once rather than a bar you can steer — reported as the bars not being properly
+        // draggable. `Ui::drag_handle` is what a dock's divider already uses: it follows the hand
+        // and reports on every frame it moved.
         const f32 travel = std::max(1.0f, track.width() - wide);
-        if (ui_.pressed_in(track)) {
-            script_pan_x_ =
-                std::clamp((ui_.pointer_x() - track.x0 - wide * 0.5f) / travel, 0.0f, 1.0f) * across;
+        const f32 at = track.x0 + travel * (script_pan_x_ / std::max(across, 1.0f));
+        const Rect handle{at, track.y0, at + wide, track.y1};
+        f64 along = static_cast<f64>(script_pan_x_);
+        // A press in the empty part of the track jumps there first, because a bar you have to drag
+        // from one end is a bar that makes you travel the distance you were trying to skip.
+        if (ui_.pressed_in(track) && !handle.holds(ui_.pointer_x(), ui_.pointer_y())) {
+            along = static_cast<f64>(
+                std::clamp((ui_.pointer_x() - track.x0 - wide * 0.5f) / travel, 0.0f, 1.0f) *
+                across);
+        }
+        if (ui_.drag_handle(id_of("editor.script.across"), handle, true, false, travel / across,
+                            along) ||
+            ui_.pressed_in(track)) {
+            script_pan_x_ = std::clamp(static_cast<f32>(along), 0.0f, across);
         }
         ui_.draw().ink(track, 0.07f);
-        const f32 at = track.x0 + travel * (script_pan_x_ / across);
-        ui_.draw().ink(Rect{at, track.y0, at + wide, track.y1}, 0.30f);
+        const f32 drawn = track.x0 + travel * (script_pan_x_ / std::max(across, 1.0f));
+        ui_.draw().ink(Rect{drawn, track.y0, drawn + wide, track.y1},
+                       ui_.busy() ? 0.55f : 0.30f);
     }
 
     ui_.end_scroll();
@@ -2729,33 +2756,46 @@ void Shell::draw_visual_view(const Rect& page) {
         ui_.draw().push_clip(box);
         const f32 cell = std::min(metrics.icon() * 0.8f, node_h * 0.55f);
 
-        // --- the fold, which is what makes a document a shape rather than a wall ------------
+        // --- the one mark that says *there is something inside this* -------------------------
         //
-        // A box that is made of something can be opened, and a triangle says so — the same two
-        // drawings a settings section folds with, because it is the same gesture and a player who
-        // has opened one has learned this one. Everything under a closed box is not drawn at all,
-        // which is the whole of how a hundred-and-thirty-box document fits in a docked panel.
+        // A box made of other boxes, and a box that is an `include` and therefore made of a whole
+        // FILE, are the same statement to a reader: this one has something in it and you can go
+        // there. So they get one drawing and one press, and what happens next differs only in how
+        // far it goes — a level down, or into another document.
+        //
+        // It was two marks and one of them was the play triangle, which says GO rather than *go
+        // in*: reported as looking like a play button, which it was.
         f32 name_left = box.x0 + metrics.px(3.0f);
-        bool has_parts = false;
+        bool has_parts = !node.target.empty();
         for (u32 input : node.inputs) {
             if (input < graph_.nodes.size()) has_parts = true;
         }
         if (has_parts) {
-            const f32 fold_wide = std::min(cell, node_h * 0.8f);
-            const Rect fold{name_left, box.mid_y() - fold_wide * 0.5f, name_left + fold_wide,
-                            box.mid_y() + fold_wide * 0.5f};
-            const bool over_fold = fold.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
-            ui_.draw().icon(fold, is_open(static_cast<u32>(i)) ? Icon::Expanded : Icon::Collapsed,
-                            over_fold ? 1.0f : 0.65f);
-            if (over_fold && ui_.pressed_in(fold)) {
+            const f32 in_wide = std::min(cell, node_h * 0.8f);
+            const Rect in_mark{name_left, box.mid_y() - in_wide * 0.5f, name_left + in_wide,
+                               box.mid_y() + in_wide * 0.5f};
+            const bool over_mark = in_mark.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
+            ui_.draw().icon(in_mark, Icon::Inside, over_mark ? 1.0f : 0.7f);
+            if (over_mark && ui_.pressed_in(in_mark)) {
                 hit_a_node = true;
                 ui_.draw().pop_clip();
                 ui_.draw().pop_clip();
-                set_open(static_cast<u32>(i), !is_open(static_cast<u32>(i)));
-                ui_.sound().say(is_open(static_cast<u32>(i)) ? Cue::Open : Cue::Close);
+                if (!node.target.empty()) {
+                    const std::filesystem::path went = follow_include(node.target);
+                    if (went.empty()) {
+                        say("there is no '" + node.target + "' beside this or in the game's clips",
+                            3.0);
+                        ui_.sound().say(Cue::Refuse);
+                        return;
+                    }
+                    enter_document(went);
+                } else {
+                    go_inside(static_cast<u32>(i));
+                }
+                ui_.sound().say(Cue::Open);
                 return;
             }
-            name_left = fold.x1 + metrics.px(2.0f);
+            name_left = in_mark.x1 + metrics.px(2.0f);
         }
         // The drawing goes when the box is small, and the name takes the room back. A fifth of a
         // narrow box spent saying *this is a shape* is a fifth not spent saying WHICH shape, and at
@@ -2778,35 +2818,11 @@ void Shell::draw_visual_view(const Rect& page) {
         // play mark is *enter this world* on a shelf row, and the three sliders are *settings*. The
         // enter mark is also a PRESS, so the affordance and the way to use it are the same object
         // rather than a hint about a gesture.
-        // The enter mark is drawn at EVERY size, because which boxes are doors is the one thing a
-        // player needs to know before deciding where to look — and a document opens small enough
-        // to see all of it, which is exactly when the question is asked. The settings mark waits
-        // for the detail size, because a box you can read the numbers of is a box you have zoomed
-        // into anyway.
-        const bool can_enter = !node.target.empty();
+        // And a mark on the right for a box that has numbers to change, at the detail size only: a
+        // way in is rare and worth saying at every size, a number is on nearly every box and a mark
+        // on nearly every box is a texture rather than a fact.
         const bool has_numbers = !node.numbers.empty();
         f32 mark_right = box.x1 - metrics.px(3.0f);
-        if (can_enter) {
-            const Rect at{mark_right - cell * 0.85f, box.y0 + metrics.px(2.0f), mark_right,
-                          box.y0 + metrics.px(2.0f) + cell * 0.85f};
-            const bool over_mark = at.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
-            ui_.draw().icon(at, Icon::Play, over_mark ? 1.0f : 0.7f);
-            if (over_mark && ui_.pressed_in(at)) {
-                hit_a_node = true;
-                const std::filesystem::path went = follow_include(node.target);
-                ui_.draw().pop_clip();
-                ui_.draw().pop_clip();
-                if (went.empty()) {
-                    say("there is no '" + node.target + "' beside this or in the game's clips", 3.0);
-                    ui_.sound().say(Cue::Refuse);
-                    return;
-                }
-                enter_document(went);
-                ui_.sound().say(Cue::Open);
-                return;
-            }
-            mark_right = at.x0 - metrics.px(2.0f);
-        }
         if (detail && has_numbers) {
             ui_.draw().icon(Rect{mark_right - cell * 0.85f, box.y0 + metrics.px(2.0f), mark_right,
                                  box.y0 + metrics.px(2.0f) + cell * 0.85f},
@@ -3441,10 +3457,28 @@ std::filesystem::path Shell::same_file(const std::filesystem::path& path) const 
     return (error || settled.empty()) ? path.lexically_normal() : settled;
 }
 
+bool Shell::document_is_current() const {
+    if (editing_.empty()) return false;
+    std::error_code error;
+    const std::filesystem::file_time_type when = std::filesystem::last_write_time(editing_, error);
+    if (error) return false;   // it has gone: whatever is under that name now is not this
+    const u64 bytes = static_cast<u64>(std::filesystem::file_size(editing_, error));
+    if (error) return false;
+    return when == editing_stamp_ && bytes == editing_bytes_;
+}
+
 void Shell::open_document(const std::filesystem::path& raw) {
     const std::filesystem::path path = same_file(raw);
     editing_ = path;
     editing_shipped_ = library_.is_shipped(path);
+    {
+        std::error_code error;
+        editing_stamp_ = std::filesystem::last_write_time(path, error);
+        if (error) editing_stamp_ = std::filesystem::file_time_type{};
+        error.clear();
+        editing_bytes_ = static_cast<u64>(std::filesystem::file_size(path, error));
+        if (error) editing_bytes_ = 0;
+    }
     lines_.clear();
     std::ifstream file(path, std::ios::binary);
     std::string line;
@@ -3464,7 +3498,7 @@ void Shell::open_document(const std::filesystem::path& raw) {
     // Where you came from is about a JOURNEY, and opening a file off the shelf is not one. Anything
     // that means "go deeper" restores this after the call — see `enter_document`.
     came_from_.clear();
-    open_nodes_.clear();
+    inside_.clear();
     graph_stale_ = true;
     chosen_node_.clear();
     chosen_index_ = ClipGraph::kNone;
@@ -3490,6 +3524,9 @@ void Shell::open_document(const std::filesystem::path& raw) {
 // each of them rather than twenty one-way trips.
 void Shell::enter_document(const std::filesystem::path& path) {
     const std::filesystem::path from = editing_;
+    // Where you were INSIDE the file you are leaving is not somewhere to come back to: the way back
+    // is to that file, at its top, which is where it was opened.
+
     std::vector<std::filesystem::path> trail = came_from_;
     open_document(path);
     if (!from.empty() && from != editing_) trail.push_back(from);
@@ -3497,6 +3534,15 @@ void Shell::enter_document(const std::filesystem::path& path) {
 }
 
 void Shell::leave_document() {
+    // Out of a box first, then out of a file. One control for both journeys, because from a
+    // player's side they are one journey: they went in, and this comes back.
+    if (!inside_.empty()) {
+        inside_.pop_back();
+        graph_fitted_ = false;
+        lay_out_graph();
+        ui_.sound().say(Cue::Close);
+        return;
+    }
     if (came_from_.empty()) return;
     if (dirty_) {
         // Nothing is thrown away without being asked about, here as everywhere else in this tab.
@@ -3563,7 +3609,16 @@ void Shell::save_document() {
     }
     const std::string text = document();
     file.write(text.data(), static_cast<std::streamsize>(text.size()));
+    file.close();
     dirty_ = false;
+    {
+        std::error_code error;
+        editing_stamp_ = std::filesystem::last_write_time(editing_, error);
+        if (error) editing_stamp_ = std::filesystem::file_time_type{};
+        error.clear();
+        editing_bytes_ = static_cast<u64>(std::filesystem::file_size(editing_, error));
+        if (error) editing_bytes_ = 0;
+    }
     ui_.sound().say(Cue::Commit);
     // Whatever was chosen while this one had unsaved changes opens now. Nothing was thrown away
     // and nothing had to be answered: the file that was waiting is the one the player picked.
@@ -3576,6 +3631,41 @@ void Shell::save_document() {
 
 void Shell::edit_keys(const InputState& input) {
     if (editing_.empty() || lines_.empty()) return;
+    // What came with the game is READ ONLY, not merely unsaveable (D494, and asked for directly).
+    //
+    // It refused the save and took every keystroke up to it, so a player could spend ten minutes on
+    // a built-in and be told at the end. A refusal that arrives after the work is worse than one
+    // that arrives instead of it. The caret still moves — reading a file means moving about in it —
+    // and nothing that CHANGES a byte is accepted.
+    const bool wants_to_change = !input.typed.empty() || input.fired(Key::Enter) ||
+                                 input.fired(Key::Backspace) || input.fired(Key::Delete);
+    if (editing_shipped_) {
+        if (wants_to_change) {
+            say("this one came with the game -- duplicate it and edit the copy", 3.0);
+            ui_.sound().say(Cue::Refuse);
+        }
+        move_caret(input);
+        return;
+    }
+    // Who made a file is not the player's to type over (D447). The line is on the screen because
+    // the file is on the screen; it is not editable because a name the interface lets you overwrite
+    // is a name that means nothing. A backspace at the start of the line under it would join into
+    // it, so that is refused too.
+    {
+        const usize at = std::min<usize>(caret_line_, lines_.size() - 1);
+        const bool on_it = is_author_line(lines_[at]);
+        const bool joining_it =
+            at > 0 && caret_column_ == 0 && input.fired(Key::Backspace) &&
+            is_author_line(lines_[at - 1]);
+        const bool eating_it = at + 1 < lines_.size() && input.fired(Key::Delete) &&
+                               caret_column_ >= lines_[at].size() && is_author_line(lines_[at + 1]);
+        if ((on_it && wants_to_change) || joining_it || eating_it) {
+            say("who made a file travels with it and is not edited from in here", 3.0);
+            ui_.sound().say(Cue::Refuse);
+            move_caret(input);
+            return;
+        }
+    }
     // The editor takes the keyboard only when its own view is the one showing, which is the check
     // the caller has already made by drawing it.
     std::string& line = lines_[std::min<usize>(caret_line_, lines_.size() - 1)];
@@ -3620,6 +3710,27 @@ void Shell::edit_keys(const InputState& input) {
         }
     }
 
+    move_caret(input);
+
+    if (touched) {
+        dirty_ = true;
+        // Re-parsed on every keystroke, and a script that does not parse is NOT an error (D453):
+        // the status line says where it stopped and nothing pops up, because a parser that
+        // interrupts you halfway through typing a word is a parser you fight.
+        reparse_soon();
+        // The graph, though, is re-read at once, so the other view is this document rather than the
+        // document as it was when it was opened (D452). It costs 1.3 ms on the largest fragment in
+        // the repository and it reads the document alone — where the parse reads everything the
+        // document includes, which is why one of the two is deferred and the other is not.
+        graph_stale_ = true;
+    }
+}
+
+// Where the caret goes, which a document being READ needs as much as one being written.
+void Shell::move_caret(const InputState& input) {
+    if (lines_.empty()) return;
+    const std::string& line = lines_[std::min<usize>(caret_line_, lines_.size() - 1)];
+    caret_column_ = static_cast<u32>(std::min<usize>(caret_column_, line.size()));
     bool moved = false;
     if (input.fired(Key::Left) && caret_column_ > 0) {
         --caret_column_;
@@ -3658,21 +3769,9 @@ void Shell::edit_keys(const InputState& input) {
         moved = true;
     }
 
-    if (moved || touched) {
+    if (moved) {
         caret_moved_ = true;
         caret_since_ = seconds_;
-    }
-    if (touched) {
-        dirty_ = true;
-        // Re-parsed on every keystroke, and a script that does not parse is NOT an error (D453):
-        // the status line says where it stopped and nothing pops up, because a parser that
-        // interrupts you halfway through typing a word is a parser you fight.
-        reparse_soon();
-        // The graph, though, is re-read at once, so the other view is this document rather than the
-        // document as it was when it was opened (D452). It costs 1.3 ms on the largest fragment in
-        // the repository and it reads the document alone — where the parse reads everything the
-        // document includes, which is why one of the two is deferred and the other is not.
-        graph_stale_ = true;
     }
 }
 

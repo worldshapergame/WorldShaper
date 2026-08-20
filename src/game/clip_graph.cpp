@@ -1492,13 +1492,16 @@ const std::vector<ClipPaletteGroup>& clip_palette() {
         {"change", {"shell", "round", "offset", "displace", "revolve"}},
         {"pattern",
          {"fbm", "noise", "ridged", "rasp", "cells", "cell_edge", "sine", "waves", "checker",
-          "stripes", "bricks", "axis", "distance", "constant"}},
+          "stripes", "bricks", "axis", "distance"}},
         {"number",
-         {"add", "multiply", "min", "max", "blend", "remap", "abs", "negate", "step", "smoothstep",
-          "clamp", "power", "occlusion", "curvature", "facing"}},
-        {"document",
-         {"metre", "bounds", "param", "material", "paint", "weather", "variation", "origin", "solid",
-          "region"}},
+         {"param", "constant", "add", "multiply", "min", "max", "blend", "remap", "abs", "negate",
+          "step", "smoothstep", "clamp", "power", "occlusion", "curvature", "facing"}},
+        // Material and paint are not "the document", they are what the thing is MADE of, and a
+        // player looking for a colour was looking under a word that means the file's own settings.
+        // Reported directly: *many nodes are inside the document category which makes no sense.*
+        {"material", {"material", "paint"}},
+        {"finish", {"weather", "variation"}},
+        {"document", {"metre", "bounds", "origin", "solid", "region"}},
     };
     return kGroups;
 }

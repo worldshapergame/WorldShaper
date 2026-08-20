@@ -137,6 +137,10 @@ bool write_author(const std::filesystem::path& path, const Kind& kind,
     return out.good();
 }
 
+bool is_author_line(std::string_view line) {
+    return line.find(kAuthorMarker) != std::string_view::npos;
+}
+
 std::string without_author(const std::string& text) {
     if (text.find(kAuthorMarker) == std::string::npos) return text;
     std::string out;
