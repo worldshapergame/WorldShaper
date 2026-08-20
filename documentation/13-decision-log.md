@@ -13407,3 +13407,91 @@ to put one at.**
 | D723 | **The pass raises DETAIL, not extent, and says so** | decision | The world is all there at metre 2 in eight seconds; "finished for 5.2 m" read as though the rest were missing |
 | D723 | **Coarse-then-sharpen reaches the same world as one authored pass** | measurement | `d0d5f84c685be847` at 1,430,104 voxels either way, so the coarse stage is a schedule and not a compromise |
 | D723 | **The coarse stage costs a small clip 6%, and the 3.1x was contaminated** | trap | D722's own stray-process trap, made one paragraph after writing it down |
+
+---
+
+## D724 — The block evaluator is 1.78x, and what caps it is the promise rather than the code
+
+**2026-08-20.** D722 ended by naming the one lever nobody had tried — *"one traversal carrying all 512
+cells of a node with the arithmetic vectorised, so 640 traversals become one"* — and priced it at
+"roughly 20x on these numbers". **It is 1.78x.** This entry is why, because the reason is structural
+and the next person will price it the same wrong way.
+
+### What it is
+
+`Field::eval_block(root, points, count, out)` walks the expression **once** carrying every point,
+where `Field::eval` walks it once per point. It landed first as a stub — one `eval` per point — so
+that its promise was true by construction while the traversal underneath it was replaced, and so
+everything downstream could be written and gated against a real API. The replacement is then a change
+with a control arm rather than a second path with nothing to compare against.
+
+### The number, and how it was got honestly
+
+`clips/facility.clip`, 512 points in a 0.25 m box near the origin, best of nine interleaved rounds,
+three repeats: **5,832 µs one at a time against 3,277 µs as a block — 1.78x**, and 1.65–1.84x across
+six places in and around the estate.
+
+**The first readings were 6.08x in a wall and 0.65x in the air**, and both were wrong: a stray
+`WorldShaper.exe` with 448 CPU-seconds was running, and *unchanged* `eval` code was swinging 2.7 ms
+to 46 ms between rounds. That is D722's stray-process trap for the third time in one day. The
+benchmark takes the minimum of nine interleaved rounds now, which is the one statistic contention can
+only push the wrong way.
+
+Each step measured separately: **1.45x** for the traversal alone, **1.78x** after copying seven
+distance functions, and **1.70x** with a block-level containment test — which is why that test is not
+in the code, and the rejected arm is written down in the file so nobody tries it again.
+
+### Why it is not 20x: the cull has to be replayed per point
+
+The estimate assumed the traversal could be amortised 512-fold. Most of it can. **The union's cull
+cannot**, and D644 is the reason.
+
+`eval`'s union skips a child when the running answer already beats the child's box. That is sound
+only if a node asked outside its box answers **at least** the distance to that box — and D644
+measured four primitives that do not: `cone` 0.53, `platonic` 0.5774, `ellipsoid` 0.5877, `prism`
+0.866. So a child `eval` rejects can report **less** than the running answer, and a block-level cull
+that evaluated it — which is what "conservative" means here — would produce a different, smaller
+minimum. Small and rare (D644 counted 58 points in 64,000) and fatal to a content hash.
+
+**So the cull is replayed identically: every point gets its own box distances, its own sort and its
+own break, and a child is walked over exactly the sub-block of points `eval` would have walked it
+for**, gathered into a compacted sub-block so a child three points of five hundred still need is
+walked with three. That replay is about fifty flops of box tests per point per union in **both** arms,
+and it is what caps the ratio.
+
+**The evidence that it really is a replay and not an approximation is `field_visits()`: the two arms
+come out EXACTLY equal**, node for node and point for point — 202,002 on the op zoo and equal at all
+six facility places. That is asserted in the tests rather than printed. Bit-for-bit equality on `==`
+follows from it rather than being hoped for.
+
+### What still goes one point at a time
+
+- **Most leaves.** `sd_prism`, `sd_platonic`, `sd_spiral`, the noises and the patterns live in
+  `field.cpp`'s anonymous namespace and cannot be reached from another translation unit. Re-deriving
+  one is the change that could break the promise silently — two copies of a distance function drift,
+  and the drift is a last bit.
+- **Seven ARE copied, and the line is a measurement rather than a taste.** The facility's field holds
+  1,882 boxes, 573 cylinders, 245 capsules, 208 ellipsoids, 154 spheres, 95 planes and 53 tori —
+  **3,210 of its 3,287 shape leaves** against seventy-seven of everything else. Each copy is checked
+  against `Field::eval` point for point, which turns "a copy might drift" from a silent failure into a
+  failing test. `length` and `dot` are not copied; both evaluators call the one definition.
+- **Three composite ops**: a partial `revolve`, every `scatter`, and any union wide enough to have
+  been given a bounding hierarchy. All three fall through to `Field::eval` per point, which keeps the
+  promise by construction.
+
+### The change that would take it further, and it is one line of scope
+
+**Move the `sd_*` functions out of `field.cpp`'s anonymous namespace and into a header.** Then the
+remaining leaves batch without a copy, and the copies that exist can go. It was not done here only
+because `field.cpp` belonged to another piece of work at the same moment.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D724 | **`Field::eval_block` is in and it is 1.78x** | build | 5,832 µs against 3,277 for 512 points, best of nine interleaved rounds |
+| D724 | **D722 priced it at 20x and was wrong** | honesty | The estimate assumed the whole traversal amortises; the cull does not |
+| D724 | **The cull must be replayed per point, and D644 is why** | decision | Four primitives answer as little as 0.53 of the distance to their own box, so a block cull changes the answer |
+| D724 | **Equal `field_visits()` is what proves the replay** | gate | Node for node and point for point, asserted rather than printed |
+| D724 | **A block-level containment test is 1.70x — slower** | fault | Built, measured, removed, and written down in the file so it is not tried again |
+| D724 | **Seven distance functions copied; the line is 3,210 leaves of 3,287** | decision | Each checked point-for-point against its original |
+| D724 | **A stray process gave 6.08x and 0.65x for the same code** | trap | Third time in one day; the benchmark takes the minimum of nine interleaved rounds now |
+| D724 | **Moving `sd_*` to a header is what takes it further** | — | The remaining leaves would batch without a copy |
