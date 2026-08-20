@@ -626,7 +626,30 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### THE EDITOR, 2026-08-20 — D743–D752. Read this first, then the wave below it
+#### THE EDITOR, 2026-08-20 — D743–D760. Read this first, then the wave below it
+
+**Two passes, and the second one rewrote parts of the first.** D743–D754 made the editor show what
+you chose, its code and its wires. D755–D760 is what came back from looking at it: colour that means
+something, a caret that was drawn on the inverted condition, a scroll bar that is a control, and a
+visual view you can build in rather than only read.
+
+| what the second pass changed | | how to look at it |
+|---|---|---|
+| **one colour scheme for both views** — shape, value, material — with a legend over the graph | two schemes is two things to learn for one document | `--editor-view script` and `visual` |
+| **zoom, pan, drag a box, join two, cut a wire, add from a palette, take out** | the visual view read a document and could move one number | `--editor-add box` |
+| **where a box sits is written into the file** as a `#@ x y` comment, and taken out of the cache key | a layout is state about a file, and §4 forbids the game keeping any (D445, D462) | — |
+| **the caret pulses, and is drawn when this view has the keyboard** | it read `wants_keys()`, which is true when something ELSE has it | — |
+| **the bar takes a drag, and the code is not monospaced** | six cells a glyph fitted twenty characters of a sixty-character line | — |
+| **a document opens readable rather than complete**, and a tall column spills sideways | fitting a fifty-box clip in a docked panel is 38% | — |
+
+**Two things worth knowing before touching it.** `game/clip_graph.hpp` now WRITES as well as reads:
+`connect_clip_nodes`, `disconnect_clip_node`, `add_clip_node`, `delete_clip_node`,
+`place_clip_node`, and every one of them returns an empty string or one line saying why not.
+`tests/test_clip_graph.cpp` checks the bytes that did NOT move as carefully as the ones that did,
+because a visual editor that reformats a document is one nobody uses twice. And `Shell::add_node` is
+the ONE path a node is made by, so `--editor-add` walks the same code a press does.
+
+#### THE EDITOR, first pass — D743–D752
 
 **Asked for directly:** *"make it so that selecting something like a clip or a world or anything and
 then opening the editor actually shows it and its code and its visual code so that you can modify
@@ -660,16 +683,15 @@ it"*. All three halves of that were missing and all three are in.
 
 **What is open here, in the order I would take it:**
 
-1. **Wiring by hand is not built and is Stage 20's.** A node's numbers move; its wires do not. The
-   script view is where a wire is changed until the node editor lands.
+1. **A shape written inline cannot be joined from.** A wire is a name and an inline shape has none;
+   it is refused in one line naming the script view. Hoisting it — cut the span, insert a `let`,
+   leave the name behind — is the fix and is worth doing when somebody hits it.
 2. **A node's positional arguments are named by a heuristic** — one is the head, three are `x y z`,
    six are two corners, anything else is numbered. It is right for every solid in the language and
    it is a guess. A per-head table would be a third table beside the two above, so it is worth doing
    only when something reads wrong.
-3. **The panel is the library window's**, which is docked right and about a quarter of the screen.
-   A graph in it pans, and a player who wants more drags the edge (the dock allows up to 0.55). If
-   that reads as cramped in the build, the answer is a wider default for the editor tab rather than
-   a second window.
+3. **The editor widens the library window to 0.42 once a session** and never argues again. If that
+   still reads as cramped, the dock allows up to 0.55.
 4. **`--open-editor` writes to whatever path it is given.** `editing_shipped_` is worked out from
    where the file IS, so the in-game path refuses a built-in correctly; a command-line path into
    `clips/` is treated as a developer's own and saves.

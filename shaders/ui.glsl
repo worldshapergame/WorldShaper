@@ -62,6 +62,29 @@ vec3 ui_ink(vec3 backdrop, vec3 accent) {
     return clamp(mix(inverted, tinted, blind), 0.0, 1.0);
 }
 
+// The same rule with the swing CAPPED and the rest spent on hue.
+//
+// `14-ui-style.md`, the fourth of the five permitted colours: *command-line parts -- verb, subject,
+// value -- using the same three rotations, for the same reason: several unlike things on one line,
+// and telling them apart is the whole task. It keeps the brightness the inversion asked for, except
+// that the swing is capped and the rest spent on hue -- otherwise, over a white sky, all three parts
+// come out as three blacks and black has no hue.*
+//
+// So the target brightness is the ordinary one, pulled toward the middle by the cap so there is
+// always some colour left to spend, and the tint is then taken to it. The tint itself comes from the
+// host (`ui::tint_of`) rather than being rotated here, so the wire under a word cannot be a
+// different colour from the word.
+const float kInkTintSwing = 0.45;
+
+vec3 ui_ink_tinted(vec3 backdrop, vec3 tint) {
+    float here = ui_luma(backdrop);
+    float swing = clamp((1.0 - here) - here, -kInkTintSwing, kInkTintSwing);
+    float shortfall = max(0.0, kInkFloor - abs(swing));
+    float push = shortfall * clamp(swing / kInkFloor, -1.0, 1.0);
+    float want = clamp(here + swing + push, 0.06, 0.98);
+    return clamp(tint * (want / max(ui_luma(tint), 1e-4)), 0.0, 1.0);
+}
+
 // --- the pixel font ---------------------------------------------------------------------------
 //
 // Three by five for a capital, three by three for an x-height, one row below the baseline for a

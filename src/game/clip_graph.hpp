@@ -91,6 +91,23 @@ struct ClipWord {
     bool names_a_part = false;   // it names something the document bound, so it is a wire
 };
 
+// Where one of a node's inputs is written, so that a wire can be taken out again.
+//
+// A wire in the visual view is a NAME in the document — `union { plinth slab }` is two of them —
+// and cutting one means erasing the name that made it. Which bytes to erase is not derivable from
+// the node it points at, because the same node can be named from six places, so the span is
+// recorded where the reference was read.
+struct ClipLink {
+    u32 from = 0;          // the node it comes from
+    // It is written as a NAME. A sub-expression written inline — `displace { box 0 0 0 1 1 1 g }` —
+    // is an input with nothing to erase, and it is cut by deleting the shape rather than the wire.
+    bool named = false;
+    std::string key;       // "where", "on", "thickness"; empty for a child of a `{ }` block
+    u32 line = 0;          // where the whole reference starts: the KEY when there is one
+    u32 column = 0;
+    u32 length = 0;        // through to the end of the name
+};
+
 struct ClipNode {
     std::string head;     // "box", "union", "paint", "material", "include", ...
     // What the document called it: a `let` name, a material's name, the kind of a `weather`. Empty
@@ -120,9 +137,32 @@ struct ClipNode {
     // Indices into `ClipGraph::nodes`, in the order they were written.
     std::vector<u32> inputs;
 
+    // Where each input is written, in step with `inputs`. See ClipLink.
+    std::vector<ClipLink> links;
+
     u32 line = 0;         // where its head is, 1-based
     u32 last_line = 0;    // and the last line it covers
     u32 column = 0;       // where its head starts on that line
+    // And where it ENDS: one past its last token. What a hoist cuts and a delete removes.
+    u32 end_line = 0;
+    u32 end_column = 0;
+
+    // Its `{ }`, when it has one — which is where a new wire is written. `has_block` is false for
+    // a leaf and for the braceless form `shell walls 0.1`, and those are wired differently.
+    bool has_block = false;
+    u32 block_line = 0;      // the `{`
+    u32 block_column = 0;
+    u32 close_line = 0;      // and the `}`
+    u32 close_column = 0;
+
+    // Where the author DRAGGED it, if they did, in node widths and heights from the top left of
+    // the graph. It lives in the document as a `#@ x y` comment on the node's own line, because
+    // `23-shell-and-libraries.md` §4's rule is that nothing in the game may keep state about a file
+    // that the file does not carry — so a clip you send somebody opens laid out the way you left
+    // it, and there is no sidecar to lose.
+    bool placed = false;
+    f32 at_x = 0.0f;
+    f32 at_y = 0.0f;
 
     // Worked out by the reader, once, so that every drawing of the graph agrees about the shape of
     // it: one further right than the furthest of its inputs.
@@ -152,6 +192,124 @@ struct ClipGraph {
 
 // Read a document. Never fails: see the header above.
 ClipGraph read_clip_graph(const std::vector<std::string>& lines);
+
+// --- one line, read for COLOUR ----------------------------------------------------------------
+//
+// `14-ui-style.md`'s fourth permitted colour: *command-line parts, using the same three rotations,
+// for the same reason: several unlike things on one line, and telling them apart is the whole
+// task.* A clip script is that argument at length, so a line of it is read into runs and each run
+// is drawn in one of the three.
+//
+// **And the three are the SAME three the wires are**, which is a decision rather than a
+// coincidence. The style document grants the two separately and only requires that both be
+// rotations of the player's own ink; nothing forced them to agree about what each rotation *means*.
+// Making them agree is what turns two colour schemes a player has to learn into one: green is a
+// shape in the script and a shape on the wire, and the legend over the graph explains both.
+//
+// Everything that is not one of the three takes no hue at all — the braces and the equals signs
+// because they are grammar rather than a kind of thing, the comments because they are not the
+// document's meaning, and a NAME because it is the one thing on the line the author chose, and the
+// ordinary ink is the strongest thing this interface has.
+enum class ClipPart : u8 {
+    Grammar = 0,    // `{ } = ,`: joining words, which take no hue
+    Comment = 1,    // to the end of the line
+    Name = 2,       // what something is called, and the keyword that binds it
+    Shape = 3,      // a word that makes or moves matter: box, union, translate, solid
+    Value = 4,      // a word that makes an amount, and every number
+    Material = 5,   // material, paint, weather
+};
+
+// Which of `ui::tint_of`'s three a part is drawn in, or `kClipNoTint` for the ordinary ink.
+inline constexpr u32 kClipNoTint = 0xFFFFFFFFu;
+inline constexpr u32 clip_part_tint(ClipPart part) {
+    switch (part) {
+        case ClipPart::Shape: return 0;
+        case ClipPart::Value: return 1;
+        case ClipPart::Material: return 2;
+        default: return kClipNoTint;
+    }
+}
+
+// And what a wire carries, in the same three. One table, so a wire and the word it is named after
+// cannot come out different colours.
+inline constexpr u32 clip_carries_tint(ClipCarries carries) {
+    switch (carries) {
+        case ClipCarries::Shape: return 0;
+        case ClipCarries::Value: return 1;
+        default: return 2;
+    }
+}
+
+struct ClipSpan {
+    u32 column = 0;
+    u32 length = 0;
+    ClipPart part = ClipPart::Grammar;
+};
+
+// The runs of one line, in order, covering every byte of it. Cheap: one pass, no allocation beyond
+// the vector, and no knowledge of any line but this one — which is what lets the script view colour
+// only the lines it is about to draw.
+std::vector<ClipSpan> colour_clip_line(const std::string& line);
+
+// Whether the language knows this word. The vocabulary of `20-clip-forge.md` §2, and the one thing
+// the colouring needs that the syntax cannot tell it: `box` is a verb and `plinth` is a name, and
+// nothing about the two words says which.
+bool clip_head_known(const std::string& word);
+
+// --- changing the document --------------------------------------------------------------------
+//
+// Every one of these returns an empty string when it worked and ONE LINE saying why not when it
+// did not, which is `Library`'s convention and for the same reason: that line is what the interface
+// has room to say, and a refusal that does not explain itself is indistinguishable from a bug.
+//
+// They all edit `lines` in place and touch nothing they were not asked to. The graph is re-read
+// afterwards by the caller — none of them try to keep it in step, because a half-updated graph is
+// a graph that disagrees with the document it came from.
+
+// Where the author put it. Written as a `#@ x y` comment on the node's own line.
+bool place_clip_node(std::vector<std::string>& lines, const ClipNode& node, f32 x, f32 y);
+
+// The same text with every layout marker taken out of it.
+//
+// This exists for exactly one caller and it is worth saying why, because `ui::without_author` was
+// written for the same reason and the reason is D462. **A built world is cached under a key hashed
+// from the source that produced it**, so anything written into a file that is not part of what the
+// file BUILDS throws away a cache that is still perfectly good — and D462 is the record of what
+// that costs: every world on the shelf rebuilt from cold, coarse first, then re-sampled region by
+// region over minutes, which from inside is a world made of blocks slowly resolving and looks
+// exactly like the streaming being broken.
+//
+// Where a box sits is not part of what a file builds. Neither is who made it.
+std::string clip_without_layout(const std::string& text);
+
+// Wire `from` into `to`. The name of `from` is written into `to`'s `{ }`, or into the key that
+// takes one, or over the expression a `solid` names.
+std::string connect_clip_nodes(std::vector<std::string>& lines, const ClipGraph& graph, u32 from,
+                               u32 to);
+
+// Cut one of `to`'s wires: `which` indexes `to`'s `links`.
+std::string disconnect_clip_node(std::vector<std::string>& lines, const ClipGraph& graph, u32 to,
+                                 u32 which);
+
+// A new statement, from the palette. `made` comes back holding the name it was given.
+std::string add_clip_node(std::vector<std::string>& lines, const ClipGraph& graph,
+                          const std::string& head, f32 x, f32 y, std::string& made);
+
+// Take a statement out. Refused while anything is still made of it, because a document with a
+// dangling name in it is one the player has to repair by hand.
+std::string delete_clip_node(std::vector<std::string>& lines, const ClipGraph& graph, u32 node);
+
+// What a new node of this head is written as, before its name. Empty for a head with no template,
+// which is what the palette is built from.
+std::string clip_node_template(const std::string& head);
+
+// The palette the visual view offers, grouped. One list, so the menu and the templates cannot
+// disagree about what can be made.
+struct ClipPaletteGroup {
+    std::string name;
+    std::vector<std::string> heads;
+};
+const std::vector<ClipPaletteGroup>& clip_palette();
 
 // How many decimals the author wrote, capped at six. It is what a slider's STEP is made of: a
 // `sides=6` steps by one and a `round=0.04` steps by a hundredth, and neither had to be told which

@@ -25,6 +25,14 @@ bool Dock::is_open(u32 window) const { return windows_[window].open; }
 void Dock::toggle(u32 window) { windows_[window].open = !windows_[window].open; }
 Edge Dock::edge_of(u32 window) const { return windows_[window].edge; }
 void Dock::dock_to(u32 window, Edge edge) { windows_[window].edge = edge; }
+void Dock::widen(u32 window, f32 fraction) {
+    if (window >= windows_.size()) return;
+    Window& one = windows_[window];
+    const usize edge = static_cast<usize>(one.edge);
+    one.fraction[edge] =
+        std::clamp(std::max(one.fraction[edge], fraction), kBandSmallest, kBandLargest);
+}
+
 const Rect& Dock::rect(u32 window) const { return windows_[window].rect; }
 
 std::vector<u32> Dock::on(Edge edge) const {

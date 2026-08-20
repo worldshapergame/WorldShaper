@@ -298,6 +298,19 @@ public:
     // is called with the empty space of a list; it reports the box while it is being dragged.
     bool band(u64 id, const Rect& rect, Rect& box, bool& finished);
 
+    // --- the caret, and it is the same caret everywhere ------------------------------------------
+    //
+    // A vertical line that PULSES, wherever text is being typed: a name being renamed, a number
+    // being typed into, and the script view. One implementation, because three carets is three
+    // rhythms and the eye reads two of them as one of them being wrong.
+    //
+    // It pulses rather than blinking, and never all the way out. A hard blink is a thing that is
+    // sometimes not there, and a line that is sometimes not there is indistinguishable from a field
+    // that has stopped taking characters — which is exactly the question a caret exists to answer.
+    // `since` is when typing here began, so the pulse starts bright at the moment of the click
+    // rather than wherever the world clock happens to be.
+    void caret(f32 x, f32 y0, f32 y1, f64 since = 0.0);
+
     // --- the one place there are words --------------------------------------------------------
     //
     // Claimed by whichever control the pointer is resting on. Drawn once, at the end, over

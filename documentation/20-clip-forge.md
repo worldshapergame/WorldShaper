@@ -245,3 +245,9 @@ does not reformat what you wrote.* What the two views actually share is the **do
 statements the author wrote, the names they bound and the numbers as they spelled them, each with
 the line and column it sits at. `src/game/clip_graph.*` is that reader, and it is what the editor's
 wires are drawn from. The statements lower to field nodes; the field nodes do not lift back.
+
+It **writes** as well (D757): joining two boxes in the visual view puts a name in a `{ }`, cutting a
+wire takes one out, and the palette writes a whole statement. Every one of them is surgery on the
+author's own bytes with everything else in the file left alone, which is the round-trip rule
+`23-shell-and-libraries.md` §5c states and the reason the reader records a line and a column for
+every number, every name and every brace.

@@ -347,6 +347,15 @@ nodes; the field nodes do not lift back.
 Four things that has to be true for it to work, and each is a decision rather than an implementation
 detail:
 
+- **The caret is one caret, and it pulses** (D758). Everywhere text is typed — a name being
+  renamed, a number being typed into, the script — because three carets is three rhythms and the eye
+  reads two of them as one of them being wrong. It never goes all the way out: a line that is
+  sometimes not there is indistinguishable from a field that has stopped taking characters, which is
+  the one question a caret exists to answer.
+- **The script view is set proportionally and has a bar you can drag** (D759), down the side and
+  along the bottom. A code span steps six cells a glyph and this typeface is three columns wide, so
+  monospaced it fitted twenty characters of a sixty-character line; nothing in a clip needs columns
+  to line up except the line numbers, which are set on their own.
 - **The script is parsed as you type, and a script that does not parse is not an error.** The
   visual view holds the last graph that parsed and greys itself; it does not empty, and nothing pops
   up. A parser that interrupts you halfway through typing a word is a parser you fight.
@@ -383,13 +392,41 @@ selected, which is why the two families exist. A value that is **not** a number 
 `axis=y` is a word and `where=grain` is a name — and where it names something the document bound,
 the row carries a press that goes and looks at it.
 
-Four more things the view does, each because a document is a thing you have to be able to get about
-in:
+#### One colour scheme for both views (D755)
 
-- **A wire is coloured by what it carries**, which is `14-ui-style.md`'s third permitted colour: the
-  player's own ink rotated by a third of the circle for each of the language's three value types, so
-  an interface whose ink is grey has grey wires. A name the document never declared — every part of
-  a world is one — takes the reading of the node that uses it (D752).
+`14-ui-style.md` grants two of its five permitted colours to the same three rotations of the
+player's own ink — node-graph wires, and the parts of a command line. Nothing forced them to mean
+the same thing, and making them mean the same thing is what turns two schemes into one:
+
+| | in the script | on a wire |
+|---|---|---|
+| **shape** | `box`, `union`, `translate`, `solid` — the words that make or move matter | a wire carrying a shape |
+| **value** | `fbm`, `sine`, `checker`, and every number | a wire carrying an amount |
+| **material** | `material`, `paint`, `weather` | a wire carrying a material |
+
+The legend over the graph names all three, so it explains the script as well. **What takes no hue is
+as much of the decision**: the braces and the equals signs, because they are grammar rather than a
+kind of thing; a comment, because it is not the document's meaning; and **a name**, because it is
+the one thing on the line the author chose and the ordinary inverted ink is the strongest mark this
+interface has.
+
+#### Getting about, and changing it
+
+- **Zoom and pan.** The wheel zooms about the pointer; a drag on the empty canvas moves the picture.
+  A document **opens readable rather than complete** (D760): fitting a fifty-box clip into a docked
+  panel is 38%, which is a size at which every name is a smudge, so it opens at no less than 80% —
+  centred when it fits, at the left when it does not, because the left is what everything else is
+  made of.
+- **Drag a box to move it, and where it ends up is written into the document** (D756) as a `#@ x y`
+  comment on its own line — inert to the parser and carried by every copy, so a clip you send
+  somebody opens laid out the way you left it. §4's rule is that nothing in the game may keep state
+  about a file that the file does not carry, and a layout is state about a file. It is taken out of
+  the built world's cache key, for the reason D462 gives about the author tag.
+- **Drag out of a box's right-hand tab and onto another to join them**; press a left-hand tab to cut
+  that wire; right-click for the palette, and for *take out*. Each is a line of the file being
+  rewritten (D757), and **each refusal says what it is** — a ring cannot be built, a `box` is not
+  made of anything, a shape written inline has no name to join with, and a thing three others are
+  made of is not taken out from under them.
 - **Double-click a node and the script view opens on the line it is written at**; the statement the
   caret is in is the box that is lit over here. Two views of one document means being able to get
   from either to the other at the place you were looking at rather than at the top.
@@ -397,13 +434,13 @@ in:
   resolves one — beside the file that says it, then the clips the game ships with (D494). A world is
   a manifest, so a visual view of one that could not be walked through would be twenty boxes and no
   way to reach anything they stand for.
-- **Where a box sits comes out of the document** — its column is how far it is from a leaf, its row
-  is the order it was written in — so the picture is the same every time it is opened, and there is
-  no remembered layout to be state about a file that the file does not carry (D445).
-- **A node with no numbers of its own lists what it is MADE of**, each a press that goes there. A
-  union *is* its children, and a panel that answered *nothing to change here* to the commonest node
-  in a clip would be a panel a player stops opening — so the one node with nothing to say becomes
-  the table of contents for everything under it.
+- **The layout comes out of the document.** A column is how far a node is from a leaf; the rows
+  within it are settled by barycentre passes rather than by the order the lines were written in, and
+  a column more than fourteen tall spills into sub-columns so the picture is roughly square. Nothing
+  is remembered anywhere except what a drag wrote into the file.
+- **A node with no numbers of its own lists what it is MADE of**, each with a press that goes there
+  and a press that cuts the wire. A union *is* its children, and a panel that answered *nothing to
+  change here* to the commonest node in a clip would be a panel a player stops opening.
 
 ## 5d. A parameters window folds, and every value can be put back
 
@@ -528,14 +565,13 @@ double-clicking a world builds it and the world is torn down on the way back out
 | Cold start to the title | **543 ms** | 3 s (`09-performance-budgets.md` §8) |
 | Enter the facility from the library | **0.84 s**, at the detail the clip asked for | 5 s |
 | The interface, at 2560×1440, with two full-height windows docked | **0.26 ms** mean, 1.09 ms worst | 0.6 ms |
-| The editor's **script** view, at 1600×1000, in a world | **0.185 ms** mean, 0.189 worst | 0.6 ms |
-| The editor's **visual** view, and a node's parameters beside it | **0.193 ms** mean, 0.201 worst | 0.6 ms |
-| The same over a 1,602-line, 702-node fragment | **0.195 ms** mean, 0.201 worst | 0.6 ms |
+| The editor's **visual** view over a 1,602-line, 702-node fragment, with a node's parameters beside it | **0.216 ms** mean, 0.220 worst | 0.6 ms |
+| The editor's **script** view, coloured, over the same | **0.285 ms** mean, 0.318 worst | 0.6 ms |
 
-The visual view being *cheaper* than the script view is the figure worth explaining: a node is six
-marks and a line of source is one per run of characters, so a page of text is more marks than a
-screen of boxes. And a 1,602-line fragment costs what the fifty-line sampler does, because only the
-nodes on screen are drawn.
+The script view being the expensive one is the figure worth explaining, and it is the colouring: a
+line was one mark and is now a mark per run of one kind. A 1,602-line fragment costs what a
+fifty-line sampler does either way, because only what is on screen is drawn. The whole editor is
+about a tenth of a millisecond of median frame — 3.16 ms against 3.06 with nothing open.
 
 The first is what D441 is for: nothing above the device, the swapchain and one compute pipeline
 exists when the title is up, so the three-second budget is spent on opening a window and not on

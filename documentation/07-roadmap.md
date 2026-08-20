@@ -528,12 +528,16 @@ Motorised joints with PD control; balance controller; protective behaviours (bra
 **The one node editor** (answer O19, D66, D456) lands here: the palette, drag-to-connect, sub-graphs,
 and a node set per library — world generation, logic, materials, clips — learned once.
 
-**The editor tab's visual VIEW is not waiting for it and landed in Stage 15** (D744–D752). The two
-views of a document, the live link between them, the wires coloured by what they carry and a node's
-numbers as sliders on the left are all built; what is not is authoring a graph *with* them. So what
-this stage adds to the editor tab is the half that makes a wire something you can draw rather than
-something you can read: a palette to take a node from, a gesture to join two of them with, and the
-sub-graph. See `23-shell-and-libraries.md` §5c for what exists and §8 for the line between them.
+**The editor tab's visual VIEW is not waiting for it and landed in Stage 15** (D744–D760). The two
+views of a document, the live link between them, the wires coloured by what they carry, a node's
+numbers as sliders on the left, and — after the second pass — zoom, pan, dragging a box, joining two
+of them, cutting a wire, a palette to add from and a layout that lives in the file: all built, for
+the CLIP node set.
+
+What this stage adds is what none of that generalises to on its own: **the same editor over the
+other node sets** — world generation, logic, materials — which is answer O19's whole point, plus the
+sub-graph, the loop-as-a-node and the condition-with-two-outputs `23-shell-and-libraries.md` §5c
+names. See §5c for what exists and §8 for the line between them.
 
 Node-graph visual programming plus **physical wires and logic components in the style of LittleBigPlanet/Dreams** — but destructible, physics-simulated, and attachable to moving objects (answer I1). Signal propagation on its own event-driven tick synchronised to the sim tick (answer I2, my call: separate tick, event-driven, not polled). Sensors (pressure, light, heat, fluid, proximity), displays, timers, math and logic nodes. **Accounted matter source/sink ops** so drills and printers cannot break conservation (answer I6). The node editor UI here also serves reaction authoring from Stage 14.
 

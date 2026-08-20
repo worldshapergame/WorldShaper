@@ -194,6 +194,17 @@ void Ui::press_started(u64 id) {
     sound_.say(Cue::Press);
 }
 
+void Ui::caret(f32 x, f32 y0, f32 y1, f64 since) {
+    // Between about a third and full ink, a whole cycle a second. Cosine rather than a square wave
+    // for the reason the icons overshoot: the eye reads acceleration, and a line that eases is a
+    // line that is alive where one that snaps is one that is broken.
+    const f64 age = seconds_ - since;
+    const f32 phase = static_cast<f32>(std::cos(age * 6.2831853));
+    const f32 coverage = 0.35f + 0.65f * (0.5f + 0.5f * phase);
+    const f32 wide = std::max(1.0f, metrics_.scale);
+    draw_.ink(Rect{x, y0, x + wide, y1}, coverage);
+}
+
 void Ui::tooltip(const Rect& over, std::string_view sentence) {
     if (sentence.empty()) return;
     tooltip_.over = over;
@@ -858,13 +869,10 @@ bool Ui::number(u64 id, const Rect& rect, const Number& about, f64& value) {
                       0.35f);
         }
         draw_.text(x, top, buffer_, size);
-        // The caret blinks, which is the one motion in this interface that does not answer a
-        // press — because it is not saying something happened, it is saying where you are.
-        if (std::fmod(seconds_ - caret_since_, 1.0) < 0.5) {
-            const f32 at = x + DrawList::measure(std::string_view(buffer_).substr(0, caret_), size);
-            draw_.ink(Rect{at, rect.y0 + metrics_.px(3.0f), at + std::max(1.0f, metrics_.scale),
-                           rect.y1 - metrics_.px(3.0f)}, 1.0f);
-        }
+        // The one motion in this interface that does not answer a press, because it is not saying
+        // something happened — it is saying where you are.
+        caret(x + DrawList::measure(std::string_view(buffer_).substr(0, caret_), size),
+              rect.y0 + metrics_.px(3.0f), rect.y1 - metrics_.px(3.0f), caret_since_);
     } else {
         label(Rect{rect.x0, rect.y0, rect.x1 - pad, rect.y1}, spell(value, about), Align::Right);
     }
@@ -970,11 +978,9 @@ bool Ui::field(u64 id, const Rect& rect, std::string& value, std::string_view pl
         }
         draw_.text(rect.x0 + pad, top, shown, size);
     }
-    if (typing_ == id && std::fmod(seconds_ - caret_since_, 1.0) < 0.5) {
-        const f32 at = rect.x0 + pad +
-                       DrawList::measure(std::string_view(buffer_).substr(0, caret_), size);
-        draw_.ink(Rect{at, rect.y0 + metrics_.px(3.0f), at + std::max(1.0f, metrics_.scale),
-                       rect.y1 - metrics_.px(3.0f)}, 1.0f);
+    if (typing_ == id) {
+        caret(rect.x0 + pad + DrawList::measure(std::string_view(buffer_).substr(0, caret_), size),
+              rect.y0 + metrics_.px(3.0f), rect.y1 - metrics_.px(3.0f), caret_since_);
     }
     draw_.pop_clip();
 
@@ -1018,17 +1024,59 @@ Rect Ui::begin_scroll(u64 id, const Rect& rect, f32 content_height) {
         offset -= input_.wheel * metrics_.px(48.0f);
         wants_mouse_ = true;
     }
+
+    // --- the bar, which is a control now ----------------------------------------------------
+    //
+    // It was a hairline, on the reasoning that a list you can drag by its bar is a list with two
+    // ways to do one thing. That is right about a settings panel of nine rows and wrong about a
+    // document: a clip fragment is sixteen hundred lines, and a wheel is the only way to cross it —
+    // which is a hundred turns, and no way at all to see where in the file you are without
+    // counting. **Asked for directly.** So it keeps saying how much there is and where you are, and
+    // it now also takes a drag; the wheel is unchanged and is still what most people use.
+    const u64 bar_id = hash_combine(id, 0x5C120211ull);
+    const f32 bar_wide = metrics_.px(7.0f);
+    const f32 tall = (content_height > 0.0f)
+                         ? std::max(metrics_.px(28.0f),
+                                    rect.height() * rect.height() / content_height)
+                         : rect.height();
+    const Rect gutter{rect.x1 - bar_wide, rect.y0, rect.x1, rect.y1};
+    if (most > 0.0f) {
+        const f32 travel = std::max(1.0f, rect.height() - tall);
+        const bool over_gutter = hovering(bar_id, gutter);
+        if (over_gutter && input_.mouse_left_pressed) {
+            active_ = bar_id;
+            const f32 handle_at = rect.y0 + travel * std::clamp(offset / most, 0.0f, 1.0f);
+            // A press ON the handle picks it up where it is; a press anywhere else in the gutter
+            // jumps there first, because a bar you have to drag from one end is a bar that makes
+            // you travel the distance you were trying to skip.
+            if (input_.mouse_y < handle_at || input_.mouse_y >= handle_at + tall) {
+                offset = std::clamp((input_.mouse_y - rect.y0 - tall * 0.5f) / travel, 0.0f, 1.0f) *
+                         most;
+            }
+            grab_x_ = input_.mouse_y - (rect.y0 + travel * std::clamp(offset / most, 0.0f, 1.0f));
+            grab_value_ = offset;
+        }
+        if (active_ == bar_id) {
+            offset = std::clamp((input_.mouse_y - grab_x_ - rect.y0) / travel, 0.0f, 1.0f) * most;
+            wants_mouse_ = true;
+            if (input_.mouse_left_released) active_ = 0;
+        }
+    }
     offset = std::clamp(offset, 0.0f, most);
 
     draw_.push_clip(rect);
     scroll_stack_.push_back(offset);
     if (most > 0.0f) {
-        // A hairline that says how much there is and where you are in it. Not a control: a list
-        // you can drag by its bar is a list with two ways to do one thing.
-        const f32 width = metrics_.px(3.0f);
-        const f32 tall = std::max(metrics_.px(24.0f), rect.height() * rect.height() / content_height);
-        const f32 at = rect.y0 + (rect.height() - tall) * (offset / most);
-        draw_.ink(Rect{rect.x1 - width, at, rect.x1, at + tall}, 0.30f);
+        const f32 travel = std::max(1.0f, rect.height() - tall);
+        const f32 at = rect.y0 + travel * (offset / most);
+        // The track first, faintly, because a handle with nothing behind it says where you are and
+        // not how far there is to go.
+        draw_.ink(Rect{gutter.x0 + metrics_.px(2.0f), gutter.y0, gutter.x1 - metrics_.px(2.0f),
+                       gutter.y1},
+                  0.07f);
+        const bool live = active_ == bar_id || hot_ == bar_id;
+        draw_.ink(Rect{gutter.x0 + metrics_.px(1.0f), at, gutter.x1 - metrics_.px(1.0f), at + tall},
+                  live ? 0.55f : 0.30f);
     }
     return Rect{rect.x0, rect.y0 - offset, rect.x1, rect.y0 - offset + content_height};
 }

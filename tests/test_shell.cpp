@@ -133,3 +133,44 @@ TEST_CASE("the editor is empty until something is opened, and says so rather tha
     CHECK_FALSE(quiet_frame(shell, 0.0).quit);
     CHECK_FALSE(shell.ui().draw().empty());
 }
+
+TEST_CASE("the visual view changes the document, and the file says so") {
+    // The whole of D757 asked as one question: a node added from the palette is a line in the
+    // author's file, the document is dirty, and everything else in it is untouched.
+    Scratch scratch("shell-editor-add");
+    const std::filesystem::path clip = write_file(scratch.root / "clips" / "grow.wsclip", kClip);
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    CHECK(shell.open_editor_view("visual"));
+    CHECK_FALSE(quiet_frame(shell, 0.0).quit);
+
+    CHECK(shell.add_node("sphere").empty());
+    CHECK(shell.choose_node("sphere_1"));
+    CHECK_FALSE(quiet_frame(shell, 0.1).quit);
+
+    // It is not on disk until it is saved, which is what the star beside the name means.
+    std::ifstream on_disk(clip, std::ios::binary);
+    const std::string still((std::istreambuf_iterator<char>(on_disk)),
+                            std::istreambuf_iterator<char>());
+    CHECK(still.find("sphere_1") == std::string::npos);
+
+    // A head the palette does not have is refused rather than written.
+    CHECK_FALSE(shell.add_node("nothing of that name").empty());
+}
+
+TEST_CASE("a node the palette cannot place says so instead of writing a line that cannot parse") {
+    // `paint` has to paint with something. A document with no material in it has nothing for it to
+    // use, and a coat naming a material that does not exist is a document that stops building.
+    Scratch scratch("shell-editor-paint");
+    const std::filesystem::path clip = write_file(scratch.root / "clips" / "bare.wsclip",
+                                                  "let a = box 0 0 0 1 1 1\nsolid a\n");
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    CHECK_FALSE(shell.add_node("paint").empty());
+    CHECK(shell.add_node("material").empty());
+    CHECK(shell.add_node("paint").empty());
+    CHECK_FALSE(quiet_frame(shell, 0.0).quit);
+}

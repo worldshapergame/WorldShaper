@@ -64,6 +64,11 @@ public:
     // any window draws itself.
     void layout(Ui& ui, const Rect& screen);
 
+    // Give a window at least this much of the edge it is on, and never less than it already has.
+    // The editor asks for it once a session: a quarter of the screen is the right size for a list
+    // of names and the wrong size for a document.
+    void widen(u32 window, f32 fraction);
+
     const Rect& rect(u32 window) const;
     // What is left in the middle, which is where the world is and what a window may never cover.
     const Rect& centre() const { return centre_; }

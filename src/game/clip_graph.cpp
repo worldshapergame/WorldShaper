@@ -118,6 +118,19 @@ bool is_shape(const std::string& head) {
            is_moulding(head);
 }
 
+// Everything else the language has a word for: the patterns and the arithmetic. With the shapes,
+// the two child-taking groups and the statements above it, this is `20-clip-forge.md` §2's whole
+// vocabulary — and it is here for exactly one job, which is telling a VERB from a NAME. Nothing
+// about the letters in `box` and `plinth` says which of the two is the language's and which is the
+// author's, so the colouring has to be told, and this is the list.
+bool is_pattern_head(const std::string& head) {
+    return head == "sine" || head == "waves" || head == "noise" || head == "fbm" ||
+           head == "ridged" || head == "rasp" || head == "cells" || head == "cell_edge" ||
+           head == "checker" || head == "stripes" || head == "bricks" || head == "axis" ||
+           head == "distance" || head == "constant" || head == "curvature" ||
+           head == "occlusion" || head == "facing";
+}
+
 // The statements, which is what a document is a list of. `include` is here even though the parser
 // never sees one — it is spliced away before a token is read — because it is a line the author
 // wrote and the editor is about what the author wrote.
@@ -252,7 +265,15 @@ private:
             word.column = token.column;
             word.names_a_part = true;
             node.words.push_back(word);
-            node.inputs.push_back(parameters_[token.text]);
+            ClipLink link;
+            link.from = parameters_[token.text];
+            link.named = true;
+            link.key = key;
+            link.line = token.line;
+            link.column = token.column;
+            link.length = static_cast<u32>(token.text.size());
+            node.links.push_back(link);
+            node.inputs.push_back(link.from);
             return true;
         }
         return false;
@@ -272,6 +293,7 @@ private:
         while (!at_new_statement()) {
             if (peek(1).text != "=") break;
             const std::string key = peek().text;
+            const u32 key_column = peek().column;
             at_ += 2;   // the name and the equals
             any = true;
             u32 index = 0;
@@ -287,7 +309,20 @@ private:
                     word.line = token.line;
                     word.column = token.column;
                     word.names_a_part = bindings_.count(token.text) != 0;
-                    if (word.names_a_part) node.inputs.push_back(bindings_[token.text]);
+                    if (word.names_a_part) {
+                        ClipLink link;
+                        link.from = bindings_[token.text];
+                        link.named = true;
+                        link.key = key;
+                        // The whole of `where=grain`, because taking the name out and leaving
+                        // `where=` behind is a document that no longer parses.
+                        link.line = token.line;
+                        link.column = key_column;
+                        link.length = token.column + static_cast<u32>(token.text.size()) -
+                                      key_column;
+                        node.links.push_back(link);
+                        node.inputs.push_back(link.from);
+                    }
                     node.words.push_back(word);
                 } else {
                     break;
@@ -333,14 +368,29 @@ private:
             at_ = tokens_.size();
             return;
         }
+        node.has_block = true;
+        node.block_line = peek().line;
+        node.block_column = peek().column;
         ++depth_;
         ++at_;
         while (!done() && peek().text != "}") {
+            const Token at_start = peek();
             u32 child = 0;
+            const usize was = at_;
             if (!expression(child)) {
                 ++at_;
                 continue;
             }
+            ClipLink link;
+            link.from = child;
+            // One token consumed and it named something already bound: that is a WIRE, and its
+            // bytes are what a cut erases. Anything longer is a shape written out where it stands,
+            // which has no name to take away.
+            link.named = (at_ == was + 1);
+            link.line = at_start.line;
+            link.column = at_start.column;
+            link.length = static_cast<u32>(at_start.text.size());
+            node.links.push_back(link);
             node.inputs.push_back(child);
             if (child < out_.nodes.size()) {
                 node.last_line = std::max(node.last_line, out_.nodes[child].last_line);
@@ -348,6 +398,8 @@ private:
         }
         if (!done() && peek().text == "}") {
             node.last_line = std::max(node.last_line, peek().line);
+            node.close_line = peek().line;
+            node.close_column = peek().column;
             ++at_;
         }
         --depth_;
@@ -373,8 +425,17 @@ private:
             read_block(node);
             if (node.inputs.empty() && takes_one(node.head)) {
                 // `shell walls 0.1` without braces, which reads better for one child.
+                const Token at_start = peek();
+                const usize was = at_;
                 u32 child = 0;
                 if (expression(child)) {
+                    ClipLink link;
+                    link.from = child;
+                    link.named = (at_ == was + 1);
+                    link.line = at_start.line;
+                    link.column = at_start.column;
+                    link.length = static_cast<u32>(at_start.text.size());
+                    node.links.push_back(link);
                     node.inputs.push_back(child);
                     if (child < out_.nodes.size()) {
                         node.last_line = std::max(node.last_line, out_.nodes[child].last_line);
@@ -397,6 +458,7 @@ private:
         for (const ClipWord& word : node.words) {
             node.last_line = std::max(node.last_line, word.line);
         }
+        note_end(node);
         // A bare word with nothing after it and no head in the language is a name from somewhere
         // else — every part of a world is one, because a world is a manifest and `union { part_site
         // part_podium ... }` names shapes declared in the files it includes.
@@ -406,6 +468,17 @@ private:
         out = static_cast<u32>(out_.nodes.size());
         out_.nodes.push_back(std::move(node));
         return true;
+    }
+
+    // One past the last token this node consumed, which is what a hoist cuts to and what a delete
+    // removes. Taken from the token stream rather than reconstructed from the pieces, because a
+    // node's last token is often a `}` that belongs to none of them.
+    void note_end(ClipNode& node) {
+        if (at_ == 0) return;
+        const Token& last = tokens_[at_ - 1];
+        node.end_line = last.line;
+        node.end_column = last.column + static_cast<u32>(last.text.size());
+        node.last_line = std::max(node.last_line, last.line);
     }
 
     ClipCarries decide_carries(const ClipNode& node) const {
@@ -445,6 +518,7 @@ private:
             node.last_line = std::max(node.last_line, word.line);
         }
         if (at_ > 0) node.last_line = std::max(node.last_line, tokens_[at_ - 1].line);
+        note_end(node);
     }
 
     void statement();
@@ -708,13 +782,447 @@ u32 ClipGraph::find(const std::string& key) const {
     return kNone;
 }
 
+// --- where the author dragged a node ----------------------------------------------------------
+//
+// `  #@ x y` at the end of a node's own line. A comment, so the parser that builds the world never
+// sees it and the file still means exactly what it meant; and IN the file, because
+// `23-shell-and-libraries.md` §4 forbids the game keeping state about a file that the file does not
+// carry — so a clip you send somebody opens laid out the way you left it, and there is no sidecar
+// to lose, to forget, or to leave behind when the file is renamed.
+//
+// Two numbers and nothing else after the marker, so an ordinary comment that happens to contain
+// `#@` is not mistaken for one. What that costs is a layout somebody wrote by hand and got wrong,
+// which is a layout that is quietly ignored rather than a document that breaks.
+namespace {
+
+constexpr const char* kPlacedMarker = "#@";
+
+bool read_placement(const std::string& line, f32& x, f32& y) {
+    const usize at = line.rfind(kPlacedMarker);
+    if (at == std::string::npos) return false;
+    const char* from = line.c_str() + at + 2;
+    char* end = nullptr;
+    const f64 first = std::strtod(from, &end);
+    if (end == from) return false;
+    const char* second_from = end;
+    const f64 second = std::strtod(second_from, &end);
+    if (end == second_from) return false;
+    while (*end == ' ' || *end == '\t' || *end == '\r') ++end;
+    if (*end != '\0') return false;
+    x = static_cast<f32>(first);
+    y = static_cast<f32>(second);
+    return true;
+}
+
+// The line with any placement taken off the end, and the trailing space with it.
+std::string without_placement(const std::string& line) {
+    f32 x = 0.0f;
+    f32 y = 0.0f;
+    if (!read_placement(line, x, y)) return line;
+    usize at = line.rfind(kPlacedMarker);
+    while (at > 0 && (line[at - 1] == ' ' || line[at - 1] == '\t')) --at;
+    return line.substr(0, at);
+}
+
+// A name nothing in the document already uses.
+std::string free_name(const ClipGraph& graph, const std::string& stem) {
+    for (u32 nth = 1; nth < 1000; ++nth) {
+        const std::string want = stem + "_" + std::to_string(nth);
+        bool taken = false;
+        for (const ClipNode& node : graph.nodes) {
+            if (node.name == want) taken = true;
+        }
+        if (!taken) return want;
+    }
+    return stem + "_x";
+}
+
+}  // namespace
+
 ClipGraph read_clip_graph(const std::vector<std::string>& lines) {
     ClipGraph graph;
     const std::vector<Token> tokens = tokenize(lines);
     Reader reader(tokens, lines, graph);
     reader.run();
+
+    // Only a STATEMENT carries a position. A sub-expression is drawn beside whatever uses it, so a
+    // marker on its line would be a second answer to a question its parent has already answered —
+    // and two nodes can start on one line, which would make the marker ambiguous as well.
+    for (ClipNode& node : graph.nodes) {
+        if (!node.statement || node.line == 0 || node.line > lines.size()) continue;
+        node.placed = read_placement(lines[node.line - 1], node.at_x, node.at_y);
+    }
     return graph;
 }
+
+bool clip_head_known(const std::string& word) {
+    return is_statement_head(word) || takes_many(word) || takes_one(word) || is_shape(word) ||
+           is_pattern_head(word) || is_moulding(word) || word == "spiral" || word == "branch" ||
+           word == "revolve" || word == "arc";
+}
+
+// What a word of the language IS, in the three the whole interface is coloured by. Not what part of
+// speech it is: `box` and `fbm` are both verbs and one of them makes matter while the other makes a
+// number, and a colour scheme that put those together would be teaching the grammar rather than the
+// clip.
+ClipPart part_of_word(const std::string& word) {
+    if (is_number(word)) return ClipPart::Value;
+    if (word == "material" || word == "paint" || word == "weather" || word == "variation") {
+        return ClipPart::Material;
+    }
+    if (word == "solid" || word == "region") return ClipPart::Shape;
+    if (is_shape(word) || word == "spiral" || word == "branch" || word == "revolve" ||
+        word == "arc") {
+        return ClipPart::Shape;
+    }
+    if (is_pattern_head(word)) return ClipPart::Value;
+    // What is left of the two child-taking groups: the transforms move matter about and the
+    // arithmetic works on amounts.
+    if (word == "translate" || word == "rotate" || word == "scale" || word == "mirror" ||
+        word == "repeat" || word == "scatter" || word == "around" || word == "twist" ||
+        word == "bend") {
+        return ClipPart::Shape;
+    }
+    if (takes_many(word) || takes_one(word)) return ClipPart::Value;
+    // `let`, `metre`, `bounds`, `param`, `origin`, `include` — and every name the author chose.
+    return ClipPart::Name;
+}
+
+std::vector<ClipSpan> colour_clip_line(const std::string& line) {
+    std::vector<ClipSpan> spans;
+    const auto push = [&](usize from, usize to, ClipPart part) {
+        if (to <= from) return;
+        spans.push_back(ClipSpan{static_cast<u32>(from), static_cast<u32>(to - from), part});
+    };
+
+    usize i = 0;
+    bool first_word = true;
+    bool after_let = false;
+    while (i < line.size()) {
+        const char c = line[i];
+        if (c == ' ' || c == '\t' || c == '\r') {
+            ++i;
+            continue;
+        }
+        if (c == '#') {
+            push(i, line.size(), ClipPart::Comment);
+            break;
+        }
+        if (c == '{' || c == '}' || c == '=' || c == ',') {
+            push(i, i + 1, ClipPart::Grammar);
+            ++i;
+            continue;
+        }
+        const usize begin = i;
+        while (i < line.size() && !separator(line[i])) ++i;
+        const std::string word = line.substr(begin, i - begin);
+
+        // The word right after `let`, and the one right after `material` or `paint`, is what the
+        // line is ABOUT — whatever else it happens to spell. A part called `box` is still a name.
+        ClipPart part = after_let ? ClipPart::Name : part_of_word(word);
+
+        // A key names which argument it is rather than being a kind of thing, so `size=` and
+        // `round=` take no hue however the word is spelled. The value after it still does.
+        usize ahead = i;
+        while (ahead < line.size() && (line[ahead] == ' ' || line[ahead] == '\t')) ++ahead;
+        if (ahead < line.size() && line[ahead] == '=' && part != ClipPart::Value) {
+            part = ClipPart::Name;
+        }
+
+        push(begin, i, part);
+        after_let = first_word && (word == "let" || word == "material" || word == "param");
+        first_word = false;
+    }
+    return spans;
+}
+
+std::string clip_without_layout(const std::string& text) {
+    if (text.find(kPlacedMarker) == std::string::npos) return text;
+    std::string out;
+    out.reserve(text.size());
+    usize at = 0;
+    while (at <= text.size()) {
+        usize end = text.find('\n', at);
+        const bool last = end == std::string::npos;
+        if (last) end = text.size();
+        std::string line = text.substr(at, end - at);
+        // The carriage return goes with the line and comes back with it, so a file with CRLF in it
+        // is not quietly rewritten by being hashed.
+        std::string tail;
+        while (!line.empty() && line.back() == '\r') {
+            tail = "\r" + tail;
+            line.pop_back();
+        }
+        out += without_placement(line) + tail;
+        if (!last) out += '\n';
+        if (last) break;
+        at = end + 1;
+    }
+    return out;
+}
+
+bool place_clip_node(std::vector<std::string>& lines, const ClipNode& node, f32 x, f32 y) {
+    if (node.line == 0 || node.line > lines.size()) return false;
+    char marker[64];
+    std::snprintf(marker, sizeof(marker), "  %s %.1f %.1f", kPlacedMarker, static_cast<f64>(x),
+                  static_cast<f64>(y));
+    lines[node.line - 1] = without_placement(lines[node.line - 1]) + marker;
+    return true;
+}
+
+std::string connect_clip_nodes(std::vector<std::string>& lines, const ClipGraph& graph, u32 from,
+                               u32 to) {
+    if (from >= graph.nodes.size() || to >= graph.nodes.size()) return "nothing to join";
+    if (from == to) return "a thing cannot be made of itself";
+    const ClipNode& source = graph.nodes[from];
+    const ClipNode& target = graph.nodes[to];
+
+    // A wire is a NAME, so the thing being wired has to have one. Everything a `let` binds does; a
+    // shape written out inside somebody else's braces does not, and naming it is a job for the
+    // script view rather than a thing to do silently behind a drag.
+    if (source.name.empty()) {
+        return "that one has no name -- give it one in the script and it can be joined";
+    }
+    if (target.line == 0 || target.line > lines.size()) return "nothing to join it to";
+    for (const ClipLink& link : target.links) {
+        if (link.from == from) return source.name + " is already in there";
+    }
+    // A cycle is a document that cannot be built, and the reader would spin on it.
+    std::vector<u32> stack{from};
+    std::vector<bool> seen(graph.nodes.size(), false);
+    while (!stack.empty()) {
+        const u32 at = stack.back();
+        stack.pop_back();
+        if (at >= graph.nodes.size() || seen[at]) continue;
+        seen[at] = true;
+        if (at == to) return "that would make a ring, and a ring cannot be built";
+        for (u32 input : graph.nodes[at].inputs) stack.push_back(input);
+    }
+
+    // 1. It has braces: the name goes in before the closing one.
+    if (target.has_block && target.close_line > 0 && target.close_line <= lines.size()) {
+        std::string& line = lines[target.close_line - 1];
+        if (target.close_column > line.size() || line[target.close_column] != '}') {
+            return "the document has moved under this -- try again";
+        }
+        line.insert(target.close_column, source.name + " ");
+        return {};
+    }
+    // 2. It takes children and has none written down: give it a pair.
+    if (takes_many(target.head) || takes_one(target.head)) {
+        if (!target.inputs.empty()) {
+            // The braceless one-child form, `shell walls 0.1`. Wrapping it is what makes room.
+            const ClipLink& only = target.links.empty() ? ClipLink{} : target.links.front();
+            if (!target.links.empty() && only.named && only.line > 0 && only.line <= lines.size()) {
+                std::string& line = lines[only.line - 1];
+                if (only.column + only.length > line.size()) {
+                    return "the document has moved under this -- try again";
+                }
+                line.insert(only.column + only.length, " " + source.name + " }");
+                line.insert(only.column, "{ ");
+                return {};
+            }
+            return "write that one's braces in the script first";
+        }
+        std::string& line = lines[target.line - 1];
+        const usize after = target.column + target.head.size();
+        if (after > line.size()) return "the document has moved under this -- try again";
+        line.insert(after, " { " + source.name + " }");
+        return {};
+    }
+    // 3. `solid` and `region` name one expression, so this replaces it.
+    if (target.head == "solid" || target.head == "region") {
+        std::string& line = lines[target.line - 1];
+        const usize after = target.column + target.head.size();
+        if (after > line.size()) return "the document has moved under this -- try again";
+        line = line.substr(0, after) + " " + source.name;
+        return {};
+    }
+    // 4. A coat reads a pattern through `where=`, and a weathering through `on=`.
+    if (target.head == "paint" || target.head == "weather" || target.head == "variation") {
+        const char* key = (target.head == "paint")       ? "where="
+                          : (target.head == "weather") ? "on="
+                                                       : "by=";
+        if (target.word(std::string(key).substr(0, std::strlen(key) - 1)) != nullptr) {
+            return std::string("that one already reads a ") + key;
+        }
+        std::string& line = lines[target.line - 1];
+        line = without_placement(line) + " " + key + source.name;
+        return {};
+    }
+    return target.head + " is not made of anything -- it has no room for a wire";
+}
+
+std::string disconnect_clip_node(std::vector<std::string>& lines, const ClipGraph& graph, u32 to,
+                                 u32 which) {
+    if (to >= graph.nodes.size()) return "nothing to cut";
+    const ClipNode& target = graph.nodes[to];
+    if (which >= target.links.size()) return "nothing to cut";
+    const ClipLink& link = target.links[which];
+    if (!link.named) {
+        return "that one is written out where it stands -- delete the shape rather than the wire";
+    }
+    if (link.line == 0 || link.line > lines.size()) return "nothing to cut";
+    std::string& line = lines[link.line - 1];
+    if (link.column + link.length > line.size()) {
+        return "the document has moved under this -- try again";
+    }
+    usize from = link.column;
+    usize length = link.length;
+    // And the space that was holding it apart from its neighbour, so a block does not fill up with
+    // gaps as things are taken out of it.
+    while (from + length < line.size() && line[from + length] == ' ') ++length;
+    if (from + length >= line.size() || line[from + length] == '}') {
+        while (from > 0 && line[from - 1] == ' ') {
+            --from;
+            ++length;
+        }
+    }
+    line.erase(from, length);
+    return {};
+}
+
+std::string add_clip_node(std::vector<std::string>& lines, const ClipGraph& graph,
+                          const std::string& head, f32 x, f32 y, std::string& made) {
+    const std::string body = clip_node_template(head);
+    if (body.empty()) return "there is no " + head + " to make";
+
+    std::string statement;
+    if (head == "material" || head == "param") {
+        made = free_name(graph, head == "material" ? "colour" : "number");
+        statement = head + " " + made + " " + body;
+    } else if (head == "paint") {
+        // A coat has to paint with something, and the first material the document declares is the
+        // only sensible guess. Without one there is nothing to paint with and saying so is better
+        // than writing a line that cannot parse.
+        std::string material;
+        for (const ClipNode& node : graph.nodes) {
+            if (node.head == "material" && material.empty()) material = node.name;
+        }
+        if (material.empty()) return "declare a material first -- a coat has to paint with one";
+        made = material;
+        statement = "paint " + material;
+    } else {
+        made = free_name(graph, head);
+        statement = "let " + made + " = " + body;
+    }
+
+    // Before the first thing that could USE it, so a name is always bound before it is read. A
+    // `let` after the `solid` that names it parses into nothing, which is a document that opens as
+    // an empty sky — the failure this repository has chased three times.
+    usize at = lines.size();
+    for (const ClipNode& node : graph.nodes) {
+        if (!node.statement) continue;
+        if (node.head != "solid" && node.head != "region" && node.head != "paint" &&
+            node.head != "weather") {
+            continue;
+        }
+        if (node.line > 0 && node.line - 1 < at) at = node.line - 1;
+    }
+    if (head == "material" || head == "param") {
+        // Except these two, which everything else reads: they go at the top, under whatever
+        // settings the file opens with.
+        at = 0;
+        for (const ClipNode& node : graph.nodes) {
+            if (node.head == "metre" || node.head == "meter" || node.head == "bounds" ||
+                node.head == "include" || node.head == "param" || node.head == "material") {
+                at = std::max<usize>(at, node.last_line);
+            }
+        }
+    }
+    at = std::min(at, lines.size());
+
+    char marker[64];
+    std::snprintf(marker, sizeof(marker), "  %s %.1f %.1f", kPlacedMarker, static_cast<f64>(x),
+                  static_cast<f64>(y));
+    lines.insert(lines.begin() + static_cast<isize>(at), statement + marker);
+    return {};
+}
+
+std::string delete_clip_node(std::vector<std::string>& lines, const ClipGraph& graph, u32 node) {
+    if (node >= graph.nodes.size()) return "nothing to take out";
+    const ClipNode& going = graph.nodes[node];
+    if (!going.statement) {
+        return "that one is written inside another -- delete the line it is on in the script";
+    }
+    u32 used_by = 0;
+    for (const ClipNode& other : graph.nodes) {
+        for (u32 input : other.inputs) {
+            if (input == node) ++used_by;
+        }
+    }
+    if (used_by > 0) {
+        return std::to_string(used_by) + (used_by == 1 ? " thing is" : " things are") +
+               " still made of this one";
+    }
+    if (going.line == 0 || going.line > lines.size()) return "nothing to take out";
+    const usize first = going.line - 1;
+    const usize last = std::min<usize>(going.last_line, lines.size());
+    lines.erase(lines.begin() + static_cast<isize>(first), lines.begin() + static_cast<isize>(last));
+    if (lines.empty()) lines.push_back({});
+    return {};
+}
+
+std::string clip_node_template(const std::string& head) {
+    // Every one of these is a shape somebody can SEE the moment it is made: a metre-ish box at the
+    // origin rather than a point, a grain at a size that shows on a wall rather than at nought.
+    // A palette that makes invisible things is a palette a player presses once.
+    static const std::map<std::string, std::string> kTemplates = {
+        {"box", "box -0.5 0 -0.5  0.5 1 0.5"},
+        {"sphere", "sphere 0 0.5 0 r=0.5"},
+        {"cylinder", "cylinder 0 0.5 0 r=0.4 h=1"},
+        {"capsule", "capsule 0 0.2 0  0 1 0 r=0.2"},
+        {"cone", "cone 0 0 0 r=0.5 h=1"},
+        {"torus", "torus 0 0.5 0 ring=0.5 tube=0.15 axis=y"},
+        {"prism", "prism 0 0.5 0 r=0.5 h=1 sides=6"},
+        {"stairs", "stairs 0 0 0  1 1 1 run=0.3 rise=0.18"},
+        {"plane", "plane 0 1 0 0"},
+        {"union", "union { }"},
+        {"difference", "difference { }"},
+        {"intersection", "intersection { }"},
+        {"translate", "translate { } 0 0 0"},
+        {"rotate", "rotate { } x=0 y=0 z=0"},
+        {"scale", "scale { } 1 1 1"},
+        {"mirror", "mirror { } axis=x"},
+        {"repeat", "repeat { } 1 1 1"},
+        {"around", "around { } count=6 axis=y"},
+        {"shell", "shell { } thickness=0.1"},
+        {"round", "round { } by=0.05"},
+        {"offset", "offset { } by=0"},
+        {"displace", "displace { } amount=0.02"},
+        {"fbm", "fbm size=0.2 octaves=4 seed=1"},
+        {"noise", "noise size=0.2 seed=1"},
+        {"ridged", "ridged size=0.25 octaves=3 seed=1"},
+        {"cells", "cells size=0.2 seed=1"},
+        {"sine", "sine axis=x period=0.5"},
+        {"checker", "checker 0.25 0.25 0.25"},
+        {"bricks", "bricks length=0.3 height=0.12 mortar=0.02 facing=z"},
+        {"material", "rgb=180,180,180 rough=200"},
+        {"param", "1"},
+        {"paint", ""},
+    };
+    const auto found = kTemplates.find(head);
+    if (found == kTemplates.end()) return {};
+    if (head == "paint") return "paint";   // has no body of its own, and is not "no such thing"
+    return found->second;
+}
+
+const std::vector<ClipPaletteGroup>& clip_palette() {
+    // Six groups, because the vocabulary is ninety words and a list of ninety is a list nobody
+    // reads. These are `20-clip-forge.md` §2's own groupings, cut to what a player reaches for —
+    // anything not here is still writable in the script view, which is the more powerful of the two
+    // views deliberately (`23-shell-and-libraries.md` §5c).
+    static const std::vector<ClipPaletteGroup> kGroups = {
+        {"shape", {"box", "sphere", "cylinder", "capsule", "cone", "torus", "prism", "stairs"}},
+        {"join", {"union", "difference", "intersection"}},
+        {"move", {"translate", "rotate", "scale", "mirror", "repeat", "around"}},
+        {"change", {"shell", "round", "offset", "displace"}},
+        {"pattern", {"fbm", "noise", "ridged", "cells", "sine", "checker", "bricks"}},
+        {"document", {"material", "paint", "param"}},
+    };
+    return kGroups;
+}
+
 
 u32 clip_number_decimals(const std::string& as_written) {
     const usize point = as_written.find('.');

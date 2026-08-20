@@ -67,7 +67,9 @@ A colour that appears in exactly one place cannot be read as a theme. There are 
 1. **A destructive decision is red.**
 2. **The animated logo mark** — the one *surface* allowed a hue of its own, because it is a picture, not furniture. It is drawn from a seed, so which colours it takes is a choice the seed makes out of twelve schemes, with the player's own logo colour biasing the family rather than replacing it (D463, `23-shell-and-libraries.md` §1). The dark end of every one of those schemes has a floor, and that is a legibility rule rather than a taste: the title room is nearly black, so a scheme free to take its floor to a quarter puts some of the combinations on the screen as a shape you have to look for.
 3. **Node-graph wires**, coloured by what they carry. Three hues because the script language has three value types; a fourth hue would have to mean a fourth kind of value. They are the player's own ink rotated by a third of the circle each, so there is still no palette written down anywhere — an interface whose ink is grey has grey wires. Wires are **stated** (full brightness) rather than inverted, because an inverted two-pixel line over glass of its own brightness is a line that is not there.
-4. **Command-line parts** — verb, subject, value — using the same three rotations, for the same reason: several unlike things on one line, and telling them apart is the whole task. Joining words take no hue; they are grammar, not a kind of thing. Difference from wires: a command line sits over the *world*, so it keeps the brightness the inversion asked for, except that the swing is capped (≈0.45) and the rest spent on hue — otherwise, over a white sky, all three parts come out as three blacks and black has no hue.
+4. **Command-line parts** — and the clip script, which is that argument at length — using the same three rotations, for the same reason: several unlike things on one line, and telling them apart is the whole task. Joining words take no hue; they are grammar, not a kind of thing. A command line sits over the *world*, so it keeps the brightness the inversion asked for, except that the swing is capped (≈0.45) and the rest spent on hue — otherwise, over a white sky, all three parts come out as three blacks and black has no hue. `ui_ink_tinted` in `shaders/ui.glsl` is that rule and `ui::tint_of` is the one place the rotation happens; the shader is HANDED the three colours rather than rotating them, because a wire drawn from host RGB beside a word coloured from a shader's own rotation is one place for the two to disagree.
+
+   **This colour and the one above mean the same three things** (D755). Nothing here required that, and it is what turns two schemes into one: green is a shape in the editor's script and a shape on the wire out of it, blue is a value in both, red is a material in both. What is not one of the three takes no hue at all — the grammar because it is grammar, a comment because it is not the document's meaning, and a **name** because it is the one thing on the line the author chose and the ordinary inverted ink is the strongest mark this interface has.
 5. **The accent in the blind band**, above.
 
 ---
@@ -205,6 +207,23 @@ headings**, and **reference links**. `_` inside a word is not emphasis, so `snak
 survive being written down.
 
 ---
+
+## The caret
+
+**One caret, everywhere text is typed, and it pulses** (D758). A name being renamed, a number being
+typed into, a document in the editor: three carets would be three rhythms, and the eye reads two of
+them as one of them being wrong.
+
+It **pulses rather than blinking**, between about a third of the ink and all of it, and never all
+the way out. A hard blink is a thing that is sometimes not there, and a line that is sometimes not
+there is indistinguishable from a field that has stopped taking characters — which is the one
+question a caret exists to answer. Cosine rather than a square wave, for the reason the icons
+overshoot: the eye reads acceleration, and a line that eases is a line that is alive where one that
+snaps is one that is broken.
+
+It is the one motion in this interface that does not answer a press, and that is not an exception to
+*motion answers a press* so much as its reason: it is not saying that something happened, it is
+saying where you are.
 
 ## Tooltips (the one place there are words)
 

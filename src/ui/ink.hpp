@@ -57,4 +57,35 @@ Colour ink(const Colour& backdrop, const Colour& accent);
 // actually about without a colour getting in the way.
 f32 ink_target(f32 here);
 
+// --- the three hues, and the ONE place they are worked out -------------------------------------
+//
+// `14-ui-style.md` grants two of the five permitted colours to the same three: **node-graph wires**,
+// coloured by what they carry, and **command-line parts** — verb, subject, value. Both on the same
+// condition, which is what keeps "no palette written down anywhere" true: *they are the player's own
+// ink rotated by a third of the circle each, so an interface whose ink is grey has grey wires.*
+//
+// So the rotation keeps the accent's SATURATION and moves only its hue — a grey accent stays grey
+// through all three, which is the property that makes the claim true rather than a promise about
+// it. Brightness is taken to a floor because these are STATED rather than inverted: a dark wire
+// over dark glass is a wire that is not there.
+//
+// **It is here rather than in the shader** because the wires are drawn from host RGB and the code
+// is coloured on the card, and two implementations of one rotation is one place for the wire under
+// a word to be a different colour from the word. The shader is handed these three in its push
+// constants (`src/gpu/shell_pass.cpp`) instead of computing any of them.
+inline constexpr u32 kTints = 3;
+Colour tint_of(const Colour& accent, u32 which);
+// The same, packed as 0xRRGGBB, which is what a `Mark::Hue` carries.
+u32 tint_rgb(const Colour& accent, u32 which);
+
+// What each of the three MEANS, in the two places they are used. One list, because a wire and the
+// word it is named after have to agree.
+//
+//   0  a shape        — a field read as a distance, and the verb of a line
+//   1  a name         — what something is called, and the subject of a line
+//   2  a value        — a number, a pattern, an amount
+inline constexpr u32 kTintShape = 0;
+inline constexpr u32 kTintName = 1;
+inline constexpr u32 kTintValue = 2;
+
 }  // namespace ws::ui

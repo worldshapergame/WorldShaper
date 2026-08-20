@@ -229,6 +229,11 @@ public:
     // way a run with no hand on the mouse can put the parameters panel on screen. Without it the
     // whole left-hand half of this feature is a screen nothing automated ever looks at.
     bool choose_node(std::string_view name);
+    // `--editor-add box`: put a new node in the open document, by the same path the palette takes.
+    // One path rather than two, so that what a scripted run photographs is what a press does — and
+    // so the whole of "the visual view CHANGES the document" is reachable without a hand on the
+    // mouse, which is the only way anything automated ever looks at it (D460).
+    std::string add_node(std::string_view head);
     const std::filesystem::path& editing() const { return editing_; }
 
     // What is being played, so the worlds library can say so and offer the way out.
@@ -287,6 +292,16 @@ private:
     // between the two views: the statement the caret is in is the box that is lit over there, and
     // the box you double-click is the line the caret goes to.
     u32 node_at_line(u32 line) const;
+    // Where every box sits, worked out once when the document is re-read. See the cpp for why the
+    // row is the part worth choosing well.
+    void lay_out_graph();
+    // The editor is given room the first time it is opened. See the cpp for why once and why wider.
+    void give_editor_room();
+    // Everything the graph can do, at the pointer: the palette, and what one node can be told.
+    void draw_graph_menu(const Rect& canvas);
+    // After anything that changed the document from the visual view. `why` empty means it worked;
+    // anything else is the one line the refusal says.
+    void document_changed(const std::string& why);
     // Where an `include` points, by the rule the game resolves one with: beside the file that says
     // it, then the clips the game ships with. Empty when it is nowhere, which is a world whose
     // parts have been deleted and is a thing that has happened three times.
@@ -334,6 +349,8 @@ private:
     u32 window_settings_ = 0;
     u32 window_worlds_ = 0;
     u32 tab_ = 0;               // library, community, editor
+    // The editor has been given room once this session. See draw_library for why once.
+    bool widened_for_editor_ = false;
     u32 view_ = 0;              // and, inside the editor, script or visual
     u32 kind_ = 0;              // which shelf the library window is showing
 
@@ -366,6 +383,17 @@ private:
     std::vector<std::string> lines_;
     u32 caret_line_ = 0;
     u32 caret_column_ = 0;
+    // When typing here began, which is what the caret's pulse is measured from — so it is bright at
+    // the moment of the click rather than wherever the world clock happens to be.
+    f64 caret_since_ = 0.0;
+    // How far the script view is scrolled sideways, and how wide its widest line is. A clip's
+    // comments are sentences and a docked panel is a quarter of a screen, so a document without a
+    // way across it is a document read twenty characters at a time.
+    f32 script_pan_x_ = 0.0f;
+    f32 script_wide_ = 0.0f;
+    // It moved, so the view has to bring it back into sight. Only on a MOVE, because a view that
+    // scrolled to the caret every frame is one that cannot be scrolled away from with the bar.
+    bool caret_moved_ = false;
     bool dirty_ = false;
     ParseReport report_{};
     std::function<ParseReport(const std::string&, const std::filesystem::path&)> parse_;
@@ -399,9 +427,37 @@ private:
     // Where each of the selected node's sliders may travel, worked out once when it is selected. A
     // range recomputed from the value every frame is a handle that never leaves the middle.
     std::vector<std::pair<f64, f64>> node_range_;
+    // Where every box sits, in cells, in step with `graph_.nodes`. Recomputed only when the
+    // document is re-read, because it is a sort per column and this is asked sixty times a second.
+    std::vector<f32> graph_x_;
+    std::vector<f32> graph_y_;
+    f32 graph_wide_ = 0.0f;
+    f32 graph_tall_ = 0.0f;
+
     f32 graph_pan_x_ = 0.0f;
     f32 graph_pan_y_ = 0.0f;
+    // How big the boxes are drawn. The wheel moves it about the pointer; a document opens fitted to
+    // the window, because eighty boxes at full size is three boxes and a lot of grey.
+    f32 graph_zoom_ = 1.0f;
+    bool graph_fitted_ = false;
     bool dragging_graph_ = false;
+
+    // The box being carried, and where the hand took hold of it — in cells, so the box does not
+    // jump to the pointer on the first frame of the drag.
+    u32 dragging_node_ = 0xFFFFFFFFu;
+    f32 drag_grab_x_ = 0.0f;
+    f32 drag_grab_y_ = 0.0f;
+    f32 drag_at_x_ = 0.0f;
+    f32 drag_at_y_ = 0.0f;
+    // The wire being drawn, out of this box and toward the pointer.
+    u32 wiring_from_ = 0xFFFFFFFFu;
+
+    // What the graph's menu is about — a box, or the canvas — and, when it is the canvas, which
+    // group of the palette it is showing and where in the layout a new box would land.
+    u32 menu_about_ = 0xFFFFFFFFu;
+    i32 palette_group_ = -1;
+    f32 menu_x_ = 0.0f;
+    f32 menu_y_ = 0.0f;
     // Which node `node_range_` was worked out for. The ranges must NOT be recomputed when the
     // document is re-read, which happens on every frame of a drag — a handle whose travel is
     // recentred on the value it is showing never leaves the middle of its own slider.

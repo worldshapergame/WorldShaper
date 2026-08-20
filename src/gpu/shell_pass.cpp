@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "core/log.hpp"
+#include "ui/ink.hpp"
 
 namespace ws {
 namespace {
@@ -26,8 +27,12 @@ struct MarksPush {
     f32 pad0;
     f32 accent[3];
     f32 pad1;
+    // The three hues the interface is allowed, from `ui::tint_of`. Sent rather than rotated in the
+    // shader so that a wire and the word it is named after cannot come out different colours; see
+    // src/ui/ink.hpp for why there is exactly one implementation of the rotation.
+    f32 tints[3][4];
 };
-static_assert(sizeof(MarksPush) == 48, "shaders/shell.comp declares this block");
+static_assert(sizeof(MarksPush) == 96, "shaders/shell.comp declares this block");
 
 struct BlurPush {
     i32 source_size[2];
@@ -461,6 +466,14 @@ void ShellPass::draw(VkCommandBuffer cmd, const ui::DrawList& list, u32 slot, co
     push.tile_counts[1] = own.tiles_down;
     push.seconds = seconds;
     for (u32 i = 0; i < 3; ++i) push.accent[i] = accent[i];
+    for (u32 which = 0; which < ui::kTints; ++which) {
+        const ui::Colour tint =
+            ui::tint_of(ui::Colour{accent[0], accent[1], accent[2]}, which);
+        push.tints[which][0] = tint.r;
+        push.tints[which][1] = tint.g;
+        push.tints[which][2] = tint.b;
+        push.tints[which][3] = 1.0f;
+    }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, marks_.pipeline());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, marks_.layout(), 0, 1, &own.set,

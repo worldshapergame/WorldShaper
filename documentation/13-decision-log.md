@@ -15294,3 +15294,79 @@ statement rather than a claim that it is nought. The tail moves about 0.4 ms and
 - **A picture of the thing itself.** The editor shows the document and its graph; it does not sample
   the clip and draw the solid beside them. That is the clip viewer's job (`24-clip-viewer.md`) and
   it is a renderer, not a panel.
+
+## D755–D760 — the editor gets colour, a caret, and a graph you can build in
+
+*Asked for directly on 2026-08-20, after the editor of D743–D754 was looked at: **"make everything
+way simpler and easy to understand and organized without losing potential and also add colors that
+mean different things especially for the script mode (you have to add the vertical pulsating typing
+line which should work from now on on anything you type into) ... add a scrolling bar for script
+mode window, make the visual coding far easier to understand visually and less crowded, also add
+zooming and panning and being able to connect things and move nodes and add new nodes and connect
+them in any logical way youd want actually changing things"**. All of it, and the parts of the
+change before it that had to be rewritten to get there are named below rather than quietly
+replaced.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D755 | **The script and the wires are coloured by the SAME three things, and the three are the player's own ink rotated** | user | `14-ui-style.md` grants two of its five permitted colours to the same three rotations — node-graph wires, and the parts of a command line — and requires only that both be rotations of the accent. Nothing forced them to mean the same thing, and making them mean the same thing is what turns two colour schemes into one: **green is a shape in the script and a shape on the wire out of it**, blue is a value in both, red is a material in both, and the legend over the graph explains the script as well. What is NOT coloured is as much of the decision: the braces and the equals signs take no hue because they are grammar rather than a kind of thing, a comment takes none because it is not the document's meaning, and **a name takes none because it is the one thing on the line the author chose** and the ordinary inverted ink is the strongest mark this interface has. `ui::tint_of` is the one implementation; the shader is HANDED the three in its push constants rather than rotating them, because a wire drawn from host RGB beside a word coloured from a shader's own rotation is one place for the two to disagree |
+| D756 | **Where a box sits lives in the document, as a comment** | — | `23-shell-and-libraries.md` §4: *nothing in the game may keep state about a file that the file does not carry*, because the file can move, be renamed or be deleted without the game watching. A layout is state about a file. So a dragged box writes `  #@ x y` at the end of its own line — inert to the parser, which stops at a `#`, and carried by every copy of the file, so **a clip you send somebody opens laid out the way you left it** and there is no sidecar to lose. Two numbers and nothing else after the marker, so an ordinary comment containing `#@` is not mistaken for one. **And it comes out of the cache key** (`clip_without_layout`), which is D462 one class along: a built world is keyed on the source that made it, so a marker left in that key would throw a finished world away every time a box was nudged — and D462 is the record of what that costs, which is every world on the shelf re-sampling region by region over minutes and looking exactly like the streaming being broken |
+| D757 | **The visual view CHANGES the document: add, join, cut, take out** | user | It drew a document and could move one number. It now writes lines: a palette of six groups under a right-click makes a statement, dragging out of a box's right-hand tab and onto another writes a name into that one's braces, pressing a left-hand tab erases the name that made the wire, and *take out* removes a statement. All of it is surgery on the author's own text — `game/clip_graph.hpp` — and **every refusal says what it is**: a ring is refused because a ring cannot be built, a `box` is refused because it is not made of anything, a shape written inline is refused because it has no name to join with, and *take out* is refused while anything is still made of the thing. The braceless one-child form gains its braces rather than being refused, because `shell post 0.1` is a form the language allows and a form a wire cannot be inserted into |
+| D758 | **One caret, it pulses, and it was drawn on the inverted condition** | trap | *"the vertical pulsating typing line which should work from now on on anything you type into"* — and the reason it did not is one line. The script view draws its caret `if (ui_.wants_keys())`, and `wants_keys()` is true when a FIELD or a slider has taken the characters; the script view's own `edit_keys` runs on `!wants_keys()`. So the caret was shown exactly when the script view was not the thing being typed into and hidden every time it was, which is a text view with no caret in it at all. `Ui::caret` is now the one implementation and every place that takes characters calls it — the rename field, a slider typed into, and the script — because three carets is three rhythms and the eye reads two of them as one being wrong. It PULSES rather than blinking, and never all the way out: a line that is sometimes not there is indistinguishable from a field that has stopped taking characters, which is the one question a caret exists to answer |
+| D759 | **The bar is a control, and the script is set proportionally** | user | The scroll bar was a hairline on the reasoning that a list you can drag by its bar is a list with two ways to do one thing. That is right about a settings panel of nine rows and wrong about a document: a clip fragment is sixteen hundred lines and a wheel is a hundred turns across it with no way to see where you are. It takes a drag now, a press in the gutter jumps, and there is a second one along the bottom for the sideways travel — drawn only when there IS any, because a control that is always there and does nothing most of the time is furniture (D486). **And the code is not monospaced.** A code span steps `kGlyphMonoStep` = six cells a glyph, and at three columns a letter — which is what this typeface is — six is half a line of gaps: twenty characters of a sixty-character line fitted the panel. Nothing in a clip needs columns to line up. The gutter still does, and is set on its own |
+| D760 | **A document opens READABLE rather than complete, and a column that is too tall spills sideways** | correction | The first version fitted the whole graph into the panel, and on `clips/sampler.clip` that is **38%** — a size at which every name is a smudge and the picture says only *there are a lot of them*. A document too big for the window is what the wheel and the drag are for. It opens at no less than 80%, centred when it fits and at the left when it does not, because the left of a graph is what everything else is made of. Beside it: everything a clip declares before it starts joining things up lands in the first column, which on the sampler is twenty-eight boxes in a stack, so a column is allowed to be at most fourteen tall and takes as many sub-columns as it needs — everything of one depth still stands left of everything deeper, so the reading order is untouched and the picture is roughly square, which is what a window is. And the rows within a column are settled by six alternating barycentre passes rather than by the order the lines were written in, which is what stops the wires crossing the whole picture |
+
+### The other half of "simpler", which is what was taken away
+
+- **A box hides what runs behind it.** Nodes were an ink wash over the wires, so a blue name over a
+  green wire came out magenta — a third colour that means nothing, on the one surface the whole
+  colour scheme depends on. A box is a window and draws the glass first.
+- **The editor is given room once a session.** A library window is a quarter of the screen because
+  that is the right size for a list of names, and the graph of a fifty-line clip fitted a
+  quarter-screen panel at 38%. Once, and only ever wider: a player who drags it back has said what
+  they want and is not argued with again.
+- **A node's key is its position and its name**, and the ONE place a key becomes an index is the
+  re-read (D754, unchanged and now load-bearing: the graph is re-read after every edit).
+
+### What it costs, measured
+
+Two arms alternated and each taken twice, at 1600×1000, against the `shell` pass's own 0.6 ms
+budget:
+
+| what is on screen | mean | worst |
+|---|---|---|
+| nothing open | 0.060 / 0.060 | 0.062 |
+| the editor, **visual**, over a 1,602-line 702-node fragment, with a node's parameters beside it | 0.215 / 0.216 | 0.220 |
+| the editor, **script**, coloured, over the same | 0.284 / 0.286 | 0.318 |
+
+and the whole frame, same arms:
+
+| | median | 99th | GPU total | of which `shell` |
+|---|---|---|---|---|
+| nothing open | 3.06 / 3.06 ms | 3.46 / 3.49 | 2.81 / 2.79 | 0.06 |
+| the editor, visual, a node chosen | 3.17 / 3.15 ms | 3.67 / 3.59 | 2.83 / 2.93 | 0.22 |
+
+**The script view is now the expensive one**, which is the reverse of D753's table and is the
+colouring: a line was one mark and is now a mark per run. It is still less than half the budget, and
+the whole editor is a tenth of a millisecond of median frame.
+
+**And the whole-world gate is unmoved**, which is what the cache-key change had to be checked
+against:
+
+```
+scene: 4 chunks, 1429596 solid voxels, 10018 of 10018 nodes sharpened, content efeb39a93c369a2d, shape d41424c8236d15ac
+box against cell: 68324 boxes settled solid and 47943 empty over 2567288 cells; 0 filled that are air and 0 cleared that are matter
+```
+
+### What is still not built, each for a stated reason
+
+- **A shape written inline cannot be joined from.** A wire is a name, and `displace { box 0 0 0 1 1 1
+  g }` has no name to write. It is refused in one line naming the script view as the way to give it
+  one. Hoisting it automatically is a cut and an insert across a span, and it is worth doing when
+  somebody hits it rather than before.
+- **A node's positional arguments are named by a heuristic** — one is the head, three are `x y z`,
+  six are two corners, anything else is numbered. Right for every solid in the language, and a
+  guess.
+- **The palette is thirty-one heads of about ninety.** The rest are still writable in the script
+  view, which `23-shell-and-libraries.md` §5c says is the more powerful of the two views
+  deliberately.

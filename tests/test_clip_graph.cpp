@@ -455,3 +455,321 @@ TEST_CASE("reading the largest clip in the repository costs less than a frame") 
                 which.c_str(), biggest.size(), nodes, each_ms);
     CHECK(each_ms < 16.6);
 }
+
+
+// --- the document as something you can CHANGE from the other view ------------------------------
+//
+// Every one of these is text surgery on the author's own file, so every one of them checks the
+// bytes that did NOT move as carefully as the ones that did. A visual editor that reformats a
+// document is one nobody uses twice.
+
+namespace {
+
+// A small document with one of each thing a wire can be attached to.
+constexpr const char* kWirable =
+    "# a document with room in it\n"
+    "material stone rgb=124,120,112 rough=210\n"
+    "let grain  = fbm size=0.10 octaves=4 seed=3\n"
+    "let plinth = box -6 0 -3   6 0.3 3 round=0.04\n"
+    "let post   = cylinder 0 1 0 r=0.2 h=2\n"
+    "let all    = union { plinth }\n"
+    "let thin   = shell post 0.1\n"
+    "paint stone\n"
+    "solid all\n";
+
+usize count_of(const std::string& text, const std::string& what) {
+    usize seen = 0;
+    usize at = text.find(what);
+    while (at != std::string::npos) {
+        ++seen;
+        at = text.find(what, at + 1);
+    }
+    return seen;
+}
+
+}  // namespace
+
+TEST_CASE("a colour is given to every byte of a line, and grammar takes none") {
+    const std::vector<ClipSpan> spans =
+        colour_clip_line("let plinth = box -6 0 -3 round=0.04  # a comment");
+    REQUIRE(!spans.empty());
+    // In order, and never overlapping: a run that started before the one before it ended would draw
+    // one word in two colours.
+    for (usize i = 1; i < spans.size(); ++i) {
+        CHECK(spans[i].column >= spans[i - 1].column + spans[i - 1].length);
+    }
+    const std::string line = "let plinth = box -6 0 -3 round=0.04  # a comment";
+    const auto part_of = [&](const std::string& word) {
+        const usize at = line.find(word);
+        for (const ClipSpan& span : spans) {
+            if (span.column == at && span.length == word.size()) return span.part;
+        }
+        return ClipPart::Grammar;
+    };
+    CHECK(part_of("let") == ClipPart::Name);        // it binds anything, so it is not a kind
+    CHECK(part_of("plinth") == ClipPart::Name);
+    CHECK(part_of("box") == ClipPart::Shape);
+    CHECK(part_of("-6") == ClipPart::Value);
+    CHECK(part_of("round") == ClipPart::Name);      // a key names WHICH argument, not a kind
+    CHECK(part_of("0.04") == ClipPart::Value);
+    CHECK(part_of("=") == ClipPart::Grammar);
+    // And the comment runs to the end of the line, whatever is in it.
+    CHECK(spans.back().part == ClipPart::Comment);
+    CHECK(spans.back().column + spans.back().length == line.size());
+}
+
+TEST_CASE("a name that is not the language's is a name, whatever it is spelled like") {
+    const std::vector<ClipSpan> spans = colour_clip_line("solid all");
+    REQUIRE(spans.size() == 2);
+    CHECK(spans[0].part == ClipPart::Shape);
+    CHECK(spans[1].part == ClipPart::Name);
+    CHECK(clip_head_known("union"));
+    CHECK(clip_head_known("fbm"));
+    CHECK(clip_head_known("paint"));
+    CHECK_FALSE(clip_head_known("plinth"));
+}
+
+TEST_CASE("the script and the wires are coloured by the same three things") {
+    // The decision that turns two colour schemes into one: a shape is one colour in the script and
+    // the same colour on the wire out of it, so the legend over the graph explains both views.
+    CHECK(clip_part_tint(ClipPart::Shape) == clip_carries_tint(ClipCarries::Shape));
+    CHECK(clip_part_tint(ClipPart::Value) == clip_carries_tint(ClipCarries::Value));
+    CHECK(clip_part_tint(ClipPart::Material) == clip_carries_tint(ClipCarries::Material));
+    // And the three that are not a kind of thing take no colour at all.
+    CHECK(clip_part_tint(ClipPart::Name) == kClipNoTint);
+    CHECK(clip_part_tint(ClipPart::Grammar) == kClipNoTint);
+    CHECK(clip_part_tint(ClipPart::Comment) == kClipNoTint);
+
+    // A material line reads as a material, a pattern as a value, a solid as a shape.
+    const std::vector<ClipSpan> material = colour_clip_line("material stone rgb=124,120,112");
+    REQUIRE(material.size() > 2);
+    CHECK(material[0].part == ClipPart::Material);
+    CHECK(material[1].part == ClipPart::Name);       // the name it is called
+    const std::vector<ClipSpan> grain = colour_clip_line("let g = fbm size=0.1");
+    bool found_a_value_word = false;
+    for (const ClipSpan& span : grain) {
+        if (span.length == 3 && grain.size() > 2) {
+            const std::string word = std::string("let g = fbm size=0.1").substr(span.column, 3);
+            if (word == "fbm") {
+                found_a_value_word = span.part == ClipPart::Value;
+            }
+        }
+    }
+    CHECK(found_a_value_word);
+}
+
+TEST_CASE("joining two things writes one name into the other's braces") {
+    std::vector<std::string> lines = lines_of(kWirable);
+    const ClipGraph before = read_clip_graph(lines);
+    const ClipNode* all = named(before, "all");
+    const ClipNode* post = named(before, "post");
+    REQUIRE(all != nullptr);
+    REQUIRE(post != nullptr);
+
+    const std::string why =
+        connect_clip_nodes(lines, before, before.find(ClipGraph::key_of(*post)),
+                           before.find(ClipGraph::key_of(*all)));
+    CHECK(why.empty());
+
+    const ClipGraph after = read_clip_graph(lines);
+    const ClipNode* joined = named(after, "all");
+    REQUIRE(joined != nullptr);
+    REQUIRE(joined->inputs.size() == 2);
+    CHECK(after.nodes[joined->inputs[0]].name == "plinth");
+    CHECK(after.nodes[joined->inputs[1]].name == "post");
+    // And every other line is what it was.
+    const std::vector<std::string> was = lines_of(kWirable);
+    for (usize i = 0; i < was.size(); ++i) {
+        if (was[i].find("union") != std::string::npos) continue;
+        CHECK(lines[i] == was[i]);
+    }
+}
+
+TEST_CASE("joining refuses a ring, and refuses a thing with no room for a wire") {
+    std::vector<std::string> lines = lines_of(kWirable);
+    const ClipGraph graph = read_clip_graph(lines);
+    const u32 all = graph.find(ClipGraph::key_of(*named(graph, "all")));
+    const u32 plinth = graph.find(ClipGraph::key_of(*named(graph, "plinth")));
+
+    // `all` is already made of `plinth`, so putting `all` into `plinth` would close a ring — and a
+    // ring is a document that cannot be built and a reader that would walk it for ever.
+    const std::string ring = connect_clip_nodes(lines, graph, all, plinth);
+    CHECK_FALSE(ring.empty());
+    // A box is not made of anything, so there is nowhere for a wire to go.
+    const u32 post = graph.find(ClipGraph::key_of(*named(graph, "post")));
+    CHECK_FALSE(connect_clip_nodes(lines, graph, post, plinth).empty());
+    // And nothing was written while it was being refused.
+    CHECK(text_of(lines) == std::string(kWirable).substr(0, text_of(lines).size()));
+}
+
+TEST_CASE("a braceless one-child form gains its braces when a second thing is joined to it") {
+    // `let thin = shell post 0.1` has a child and no braces, which is a form the language allows
+    // and a form a wire cannot be inserted into. Wrapping it is what makes the room.
+    std::vector<std::string> lines = lines_of(kWirable);
+    const ClipGraph graph = read_clip_graph(lines);
+    const u32 thin = graph.find(ClipGraph::key_of(*named(graph, "thin")));
+    const u32 plinth = graph.find(ClipGraph::key_of(*named(graph, "plinth")));
+    CHECK(connect_clip_nodes(lines, graph, plinth, thin).empty());
+
+    const ClipGraph after = read_clip_graph(lines);
+    const ClipNode* joined = named(after, "thin");
+    REQUIRE(joined != nullptr);
+    REQUIRE(joined->inputs.size() == 2);
+    CHECK(after.nodes[joined->inputs[0]].name == "post");
+    CHECK(after.nodes[joined->inputs[1]].name == "plinth");
+    CHECK(joined->has_block);
+}
+
+TEST_CASE("a coat is joined through the key that reads a pattern") {
+    std::vector<std::string> lines = lines_of(kWirable);
+    const ClipGraph graph = read_clip_graph(lines);
+    const u32 grain = graph.find(ClipGraph::key_of(*named(graph, "grain")));
+    u32 coat = ClipGraph::kNone;
+    for (usize i = 0; i < graph.nodes.size(); ++i) {
+        if (graph.nodes[i].head == "paint") coat = static_cast<u32>(i);
+    }
+    REQUIRE(coat != ClipGraph::kNone);
+    CHECK(connect_clip_nodes(lines, graph, grain, coat).empty());
+
+    const ClipGraph after = read_clip_graph(lines);
+    for (const ClipNode& node : after.nodes) {
+        if (node.head != "paint") continue;
+        REQUIRE(node.word("where") != nullptr);
+        CHECK(node.word("where")->text == "grain");
+    }
+}
+
+TEST_CASE("cutting a wire takes the name out and the space with it") {
+    std::vector<std::string> lines = lines_of(kWirable);
+    ClipGraph graph = read_clip_graph(lines);
+    const u32 all = graph.find(ClipGraph::key_of(*named(graph, "all")));
+    REQUIRE(connect_clip_nodes(lines, graph, graph.find(ClipGraph::key_of(*named(graph, "post"))),
+                               all)
+                .empty());
+    graph = read_clip_graph(lines);
+    const ClipNode* joined = named(graph, "all");
+    REQUIRE(joined->links.size() == 2);
+
+    CHECK(disconnect_clip_node(lines, graph, graph.find(ClipGraph::key_of(*joined)), 0).empty());
+    const ClipGraph after = read_clip_graph(lines);
+    const ClipNode* cut = named(after, "all");
+    REQUIRE(cut != nullptr);
+    REQUIRE(cut->inputs.size() == 1);
+    CHECK(after.nodes[cut->inputs[0]].name == "post");
+    // No double spaces left where the name was.
+    for (const std::string& line : lines) CHECK(line.find("{  ") == std::string::npos);
+}
+
+TEST_CASE("a new node is written where its name is bound before anything reads it") {
+    std::vector<std::string> lines = lines_of(kWirable);
+    const ClipGraph graph = read_clip_graph(lines);
+    std::string made;
+    CHECK(add_clip_node(lines, graph, "sphere", 3.0f, 2.0f, made).empty());
+    CHECK(made == "sphere_1");
+
+    const ClipGraph after = read_clip_graph(lines);
+    const ClipNode* fresh = named(after, "sphere_1");
+    REQUIRE(fresh != nullptr);
+    CHECK(fresh->head == "sphere");
+    CHECK(fresh->placed);
+    CHECK(fresh->at_x == doctest::Approx(3.0));
+    CHECK(fresh->at_y == doctest::Approx(2.0));
+    // Before every statement that could read it, which is the whole of why it is not simply
+    // appended: a `let` after the `solid` that names it builds to nothing.
+    const ClipNode* solid = nullptr;
+    for (const ClipNode& node : after.nodes) {
+        if (node.head == "solid") solid = &node;
+    }
+    REQUIRE(solid != nullptr);
+    CHECK(fresh->line < solid->line);
+    // And a second one gets a name of its own rather than the same one.
+    std::string second;
+    CHECK(add_clip_node(lines, after, "sphere", 0.0f, 0.0f, second).empty());
+    CHECK(second == "sphere_2");
+}
+
+TEST_CASE("a node made from the palette is a shape somebody can see") {
+    // A palette that makes invisible things is a palette a player presses once. Every entry has a
+    // template, and every template names its head first.
+    for (const ClipPaletteGroup& group : clip_palette()) {
+        CHECK(!group.name.empty());
+        CHECK(!group.heads.empty());
+        for (const std::string& head : group.heads) {
+            const std::string body = clip_node_template(head);
+            CHECK_MESSAGE(!body.empty(), "no template for " << head);
+            // A `let` names its head first. `material`, `param` and `paint` are statements rather
+            // than expressions and carry only what goes AFTER their own name, which is why they
+            // are assembled by `add_clip_node` and not written out whole here.
+            if (group.name != "document") CHECK(body.compare(0, head.size(), head) == 0);
+        }
+    }
+    CHECK(clip_node_template("nothing of that name").empty());
+}
+
+TEST_CASE("taking a node out is refused while something is still made of it") {
+    std::vector<std::string> lines = lines_of(kWirable);
+    const ClipGraph graph = read_clip_graph(lines);
+    const u32 plinth = graph.find(ClipGraph::key_of(*named(graph, "plinth")));
+    const std::string why = delete_clip_node(lines, graph, plinth);
+    CHECK_FALSE(why.empty());
+    CHECK(text_of(lines) == std::string(kWirable).substr(0, text_of(lines).size()));
+
+    // `grain` is read by nothing, so it goes.
+    const u32 grain = graph.find(ClipGraph::key_of(*named(graph, "grain")));
+    CHECK(delete_clip_node(lines, graph, grain).empty());
+    const ClipGraph after = read_clip_graph(lines);
+    CHECK(named(after, "grain") == nullptr);
+    CHECK(named(after, "plinth") != nullptr);
+    CHECK(count_of(text_of(lines), "fbm") == 0);
+}
+
+TEST_CASE("where a node was dragged is written into the document and read back") {
+    // `23-shell-and-libraries.md` §4: nothing in the game may keep state about a file that the file
+    // does not carry. So a layout lives in the file, as a comment — which means a clip sent to
+    // somebody else opens laid out the way it was left.
+    std::vector<std::string> lines = lines_of(kWirable);
+    ClipGraph graph = read_clip_graph(lines);
+    const ClipNode* plinth = named(graph, "plinth");
+    REQUIRE(plinth != nullptr);
+    CHECK_FALSE(plinth->placed);
+    CHECK(place_clip_node(lines, *plinth, 4.5f, -2.0f));
+
+    graph = read_clip_graph(lines);
+    const ClipNode* moved = named(graph, "plinth");
+    REQUIRE(moved != nullptr);
+    CHECK(moved->placed);
+    CHECK(moved->at_x == doctest::Approx(4.5));
+    CHECK(moved->at_y == doctest::Approx(-2.0));
+    // It is a COMMENT, so the shape is untouched: the numbers are all still there and in order.
+    CHECK(moved->numbers.size() == 7);
+    CHECK(moved->number("round")->value == doctest::Approx(0.04));
+
+    // Moved again, the marker is replaced rather than added to.
+    CHECK(place_clip_node(lines, *moved, 1.0f, 1.0f));
+    CHECK(count_of(lines[moved->line - 1], "#@") == 1);
+}
+
+TEST_CASE("an ordinary comment is not mistaken for a placement") {
+    std::vector<std::string> lines =
+        lines_of("let a = box 0 0 0 1 1 1   # see #@ the note below\nsolid a\n");
+    const ClipGraph graph = read_clip_graph(lines);
+    const ClipNode* a = named(graph, "a");
+    REQUIRE(a != nullptr);
+    CHECK_FALSE(a->placed);
+}
+
+TEST_CASE("where a box sits is not part of what the file builds") {
+    // D462's rule, one class along: a built world is cached under a key hashed from its source, so
+    // anything in the file that is not what the file BUILDS has to come out of that key. Without
+    // this, dragging one box in the editor throws away a built world and the next launch re-samples
+    // it region by region over minutes.
+    std::vector<std::string> lines = lines_of(kWirable);
+    const std::string plain = text_of(lines);
+    ClipGraph graph = read_clip_graph(lines);
+    REQUIRE(place_clip_node(lines, *named(graph, "plinth"), 3.0f, 4.0f));
+    REQUIRE(place_clip_node(lines, *named(graph, "post"), -1.5f, 0.0f));
+    CHECK(text_of(lines) != plain);
+    CHECK(clip_without_layout(text_of(lines)) == plain);
+    // And a document with no markers in it comes back byte for byte, without being rebuilt.
+    CHECK(clip_without_layout(plain) == plain);
+}

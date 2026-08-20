@@ -43,6 +43,7 @@
 #include "forge/measure.hpp"
 #include "forge/sample.hpp"
 #include "forge/world_stipple.hpp"
+#include "game/clip_graph.hpp"
 #include "game/clipboard.hpp"
 #include "game/repeat.hpp"
 #include "game/toolbelt.hpp"
@@ -1292,6 +1293,10 @@ struct Options {
     // nothing about it for a session.
     std::string open_editor;
     std::string editor_view;
+    // `--editor-add box`: add one node to the open document, by the palette's own path. The visual
+    // view can now CHANGE a document, and a change nothing automated can make is a change nothing
+    // automated can check.
+    std::string editor_add;
     // And which node is chosen in it, by the name the document bound. It is the only way a run with
     // no hand on the mouse can put a node's parameters on the left, and that panel is half of what
     // the visual view is for.
@@ -1408,6 +1413,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         if (i + 1 < argc) options.editor_view = argv[++i];
     } else if (arg == "--editor-node") {
         if (i + 1 < argc) options.editor_node = argv[++i];
+    } else if (arg == "--editor-add") {
+        if (i + 1 < argc) options.editor_add = argv[++i];
     } else if (arg == "--logo-seed") {
         options.logo_seed = static_cast<u32>(next_number(options.logo_seed));
     } else if (arg == "--logo-change") {
@@ -7805,7 +7812,7 @@ void Application::build_world() {
                     for (char c : text) {
                         if (c != '\r') out += c;
                     }
-                    return ui::without_author(out);
+                    return ui::without_author(clip_without_layout(out));
                 };
                 if (flatten(path) != flatten(shipped.string())) {
                     WS_LOG_WARN("clip",
@@ -8011,8 +8018,13 @@ void Application::build_world() {
                                 "|stipple-at-coarse=" + (options_.stipple_at_coarse ? "1" : "0") +
                                 "|occlusion-cull=" + (options_.occlusion_cull ? "1" : "0") +
                                 "|clip-coarse=" + std::to_string(options_.clip_coarse);
-        const std::string keyed_on =
-            ui::without_author(source) + "|part=" + options_.clip_part + arm;
+        // Neither WHO made a file nor WHERE its boxes sit is part of what the file builds (D462,
+        // D756), so neither is part of the key. Without this, dragging one box in the editor throws
+        // away a built world and the next launch re-samples it region by region over minutes —
+        // which from inside is a world made of blocks slowly resolving, and looks exactly like the
+        // streaming being broken.
+        const std::string keyed_on = ui::without_author(clip_without_layout(source)) + "|part=" +
+                                     options_.clip_part + arm;
         const u64 key =
             world_cache_key(keyed_on, script.settings.voxels_per_metre, build_stamp());
         // The same world, keyed the way an INSTALL will ask for it. `shipped_stamp` is what
@@ -14030,6 +14042,10 @@ int run_windowed(const Options& options) {
         shell.open_editor(std::filesystem::path(options.open_editor));
         if (!options.editor_view.empty() && !shell.open_editor_view(options.editor_view)) {
             WS_LOG_WARN("shell", "there is no editor view called '{}'", options.editor_view);
+        }
+        if (!options.editor_add.empty()) {
+            const std::string why = shell.add_node(options.editor_add);
+            if (!why.empty()) WS_LOG_WARN("shell", "--editor-add: {}", why);
         }
         if (!options.editor_node.empty() && !shell.choose_node(options.editor_node)) {
             WS_LOG_WARN("shell", "'{}' does not name anything in '{}'", options.editor_node,

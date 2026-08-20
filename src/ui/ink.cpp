@@ -62,4 +62,56 @@ Colour ink(const Colour& backdrop, const Colour& accent) {
                   std::clamp(inverted.b + (tinted.b - inverted.b) * blind, 0.0f, 1.0f)};
 }
 
+Colour tint_of(const Colour& accent, u32 which) {
+    const f32 r = std::clamp(accent.r, 0.0f, 1.0f);
+    const f32 g = std::clamp(accent.g, 0.0f, 1.0f);
+    const f32 b = std::clamp(accent.b, 0.0f, 1.0f);
+    const f32 high = std::max(r, std::max(g, b));
+    const f32 low = std::min(r, std::min(g, b));
+    const f32 chroma = high - low;
+
+    f32 hue = 0.0f;
+    if (chroma > 1.0e-5f) {
+        if (high == r) {
+            hue = std::fmod((g - b) / chroma + 6.0f, 6.0f);
+        } else if (high == g) {
+            hue = (b - r) / chroma + 2.0f;
+        } else {
+            hue = (r - g) / chroma + 4.0f;
+        }
+        hue /= 6.0f;
+    }
+    // Saturation is kept and only the hue turns, which is what makes "an interface whose ink is
+    // grey has grey wires" true rather than promised: a grey accent has no chroma, so all three
+    // rotations of it are the same grey.
+    const f32 saturation = (high > 1.0e-5f) ? (chroma / high) : 0.0f;
+    // Stated rather than inverted, so it needs a brightness of its own. A floor rather than the
+    // accent's own value: a dark wire over dark glass is a wire that is not there.
+    const f32 value = std::max(high, 0.85f);
+
+    hue = std::fmod(hue + static_cast<f32>(which % kTints) / static_cast<f32>(kTints), 1.0f);
+    const f32 sector = hue * 6.0f;
+    const i32 face = static_cast<i32>(std::floor(sector)) % 6;
+    const f32 f = sector - std::floor(sector);
+    const f32 p = value * (1.0f - saturation);
+    const f32 q = value * (1.0f - saturation * f);
+    const f32 t = value * (1.0f - saturation * (1.0f - f));
+    switch (face) {
+        case 0: return Colour{value, t, p};
+        case 1: return Colour{q, value, p};
+        case 2: return Colour{p, value, t};
+        case 3: return Colour{p, q, value};
+        case 4: return Colour{t, p, value};
+        default: return Colour{value, p, q};
+    }
+}
+
+u32 tint_rgb(const Colour& accent, u32 which) {
+    const Colour c = tint_of(accent, which);
+    const auto byte = [](f32 v) {
+        return static_cast<u32>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+    };
+    return (byte(c.r) << 16) | (byte(c.g) << 8) | byte(c.b);
+}
+
 }  // namespace ws::ui

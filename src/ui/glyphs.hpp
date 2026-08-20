@@ -44,6 +44,25 @@ enum GlyphStyle : u32 {
     kMono = 1u << 4,
 };
 
+// Which of the three permitted hues a run is STATED in, in the two bits above the emphases.
+//
+// Nought is the ordinary ink and is what almost everything is: the per-pixel inverse of whatever is
+// behind it, with no colour in it at all. One, two and three are `ui::tint_of`'s three rotations of
+// the player's own accent, and they exist for the fourth of `14-ui-style.md`'s five permitted
+// colours — *command-line parts, verb, subject and value, because several unlike things are on one
+// line and telling them apart is the whole task.* A script is that argument at length.
+//
+// Packed into the STYLE word rather than into a field of its own because a `Command` is sixty-four
+// bytes and every one of them is spoken for. Both the host and the shader test the emphases with
+// `& kBold` and friends, so bits above them are ignored by everything that does not look for them.
+constexpr u32 kTintShift = 5;
+constexpr u32 kTintBits = 3u << kTintShift;
+
+// `style` with a hue on it. `which` is nought for the ordinary ink and 1..3 for the three.
+inline constexpr u32 tinted(u32 style, u32 which) {
+    return (style & ~kTintBits) | ((which & 3u) << kTintShift);
+}
+
 constexpr i32 kGlyphCap = 5;         // rows above the baseline a capital fills
 constexpr i32 kGlyphRows = 6;        // the whole cell, the descender's row included
 constexpr f32 kGlyphMonoStep = 6.0f; // what every glyph steps in a code span: `m` is five wide

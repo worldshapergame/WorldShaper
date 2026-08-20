@@ -65,6 +65,13 @@ layout(push_constant) uniform Push {
 
     vec3 accent;          // the player's colour, used only where inversion is blind
     float pad1;
+
+    // The three hues the interface is allowed, worked out ONCE on the host by `ui::tint_of` and
+    // handed over rather than rotated here. Two of `14-ui-style.md`'s five permitted colours are
+    // these same three — a node-graph wire, and a part of a command line — and a wire drawn from
+    // host RGB beside a word coloured from a shader's own rotation is one place for the two to
+    // disagree about what "a shape" looks like.
+    vec4 tints[3];
 } push;
 
 // The mark, its drawing, its animations, its patterns, its palettes, the folds it arranges itself
@@ -744,7 +751,15 @@ void main() {
             if (on) colour = mix(colour, ui_ink(colour, push.accent), clamp(command.f0, 0.0, 1.0));
         } else if (command.kind == kText) {
             float coverage = text_ink(command, centre) * clamp(command.f0, 0.0, 1.0);
-            if (coverage > 0.0) colour = mix(colour, ui_ink(colour, push.accent), coverage);
+            if (coverage > 0.0) {
+                // Bits five and six of the style are which of the three hues this run is STATED in,
+                // and nought — which is almost everything — is the ordinary inverted ink with no
+                // colour in it at all. See `ui::tinted` in src/ui/glyphs.hpp.
+                uint tint = (command.style >> 5u) & 3u;
+                vec3 want = (tint == 0u) ? ui_ink(colour, push.accent)
+                                         : ui_ink_tinted(colour, push.tints[tint - 1u].rgb);
+                colour = mix(colour, want, coverage);
+            }
         } else if (command.kind == kIcon) {
             if (!inside) continue;
             // The cell, in the 64-unit frame the drawings are stated in, and how much of that one
