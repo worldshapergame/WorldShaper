@@ -394,6 +394,32 @@ detail:
   graph, the material graph and the clip graph are the same editor with different nodes in the
   palette — the player learns it once.
 
+#### One box, one cell — and therefore no overlaps (D780, D781, D782)
+
+**Every box on the graph sits on a whole cell, and a cell holds one.** A drag snaps as it moves
+rather than on release, and lands on the nearest cell nothing is standing on; the layout settles a
+file the same way when it reads one, authored `#@` positions first so a hand-written place keeps its
+cell.
+
+That one rule is what makes the wires possible. A box fills the top-left `kNodeWide` × `kNodeTall`
+of its cell, so:
+
+- the **channel** down the right of every column, and
+- the **lane** along the bottom of every row
+
+have no box in them at any layout, ever. A wire is five segments — out into the source's channel,
+along it to a lane, across the lane, into the target's channel, and in — so it **cannot cross a
+box**, by construction rather than by luck. A wire whose straight run crosses nothing takes the
+straight run; and every wire sharing a channel or a lane gets its own slot in it, so parallel wires
+read as a bundle.
+
+**And the document itself has a box**, at the right, with every answer wired into it. Outside a
+node, every box on the canvas is a statement nothing else uses — which is right, and looks exactly
+like a list until you can see what they are answers *to*. It is not a node: it is not in the file,
+nothing in it can be changed, and it cannot be dragged, joined or taken out.
+
+`Shell::boxes_overlapping()` is the gate and reads nought always.
+
 #### What a text view owes, and now pays (D777, D778, D779)
 
 The script view could be typed into a character at a time and nothing else. Four things fixed that,

@@ -309,3 +309,63 @@ TEST_CASE("who made a file is not edited from in here") {
 
     CHECK(file_text(clip) == with_author);
 }
+
+// --- no two boxes in one place ----------------------------------------------------------------
+//
+// The graph's own promise, and the half of *never overlap* that a test can hold. The other half —
+// a wire never crossing a box — is structural rather than checkable from out here: a box fills the
+// top-left of its cell, so the strip down the right of every column and the strip along the bottom
+// of every row have no box in them at any layout, and a wire only ever turns in those.
+
+TEST_CASE("two boxes may not stand in the same place, however the file asks") {
+    Scratch scratch("shell-no-overlap");
+
+    // Three statements, and a hand-written layout comment putting all three on one cell. Nothing
+    // stops a file saying this: it is a comment, it can be typed, and a document merged from two
+    // branches can say it by accident.
+    const std::filesystem::path clip = write_file(
+        scratch.root / "clips" / "piled.wsclip",
+        "metre 32\n"
+        "let a = box 0 0 0  1 1 1   #@ 2 1\n"
+        "let b = box 2 0 0  3 1 1   #@ 2 1\n"
+        "let c = box 4 0 0  5 1 1   #@ 2 1\n"
+        "let all = union { a b c }\n"
+        "solid all\n");
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    REQUIRE(shell.open_editor_view("visual"));
+    quiet_frame(shell, 0.0);
+    CHECK(shell.boxes_overlapping() == 0);
+
+    // And inside a box, where what is shown is that box and its parts rather than the answers --
+    // which for this document is the union and all three piled-up boxes at once.
+    REQUIRE(shell.choose_node("a"));
+    quiet_frame(shell, 0.1);
+    CHECK(shell.boxes_overlapping() == 0);
+}
+
+TEST_CASE("every document in the repository lays out with nothing on top of anything") {
+    // The layout is worked out from the document, so this is a real sweep rather than a smoke test:
+    // whatever the shipped clips do to it, no cell ends up with two boxes on it.
+    const std::filesystem::path shipped = std::filesystem::path(WS_ASSET_SOURCE_DIR) / ".." / "clips";
+    if (!std::filesystem::exists(shipped)) return;
+
+    Scratch scratch("shell-no-overlap-all");
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+
+    u32 looked_at = 0;
+    for (const std::filesystem::directory_entry& entry :
+         std::filesystem::recursive_directory_iterator(shipped)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".clip") continue;
+        if (++looked_at > 24) break;   // enough to cover every shape of document in there
+        shell.open_editor(entry.path());
+        REQUIRE(shell.open_editor_view("visual"));
+        quiet_frame(shell, static_cast<f64>(looked_at) * 0.1);
+        INFO(entry.path().filename().string());
+        CHECK(shell.boxes_overlapping() == 0);
+    }
+    CHECK(looked_at > 0);
+}

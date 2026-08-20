@@ -15485,3 +15485,46 @@ the file on disk, because the pieces in between are private and a test of them w
 the test's own arithmetic: ctrl-A and a keystroke replace the document; shift and an arrow drag a
 run out and one character stands in for it; opening a document and saving it back changes not one
 byte; and the author line refuses both the direct edit and the selection across it.
+
+## D780–D782 — one box, one cell, and a document you can see the shape of
+
+*Two of the fourteen, and they turn out to be the same change: **"make wires or nodes never be able
+to overlap any of each other even if it requires them moving and adjusting a little ideate an
+advanced good looking system for this"**, and — with a photograph of `clips/weather_demo.clip`
+attached — **"yet the weatherings arent seemingly connected to anything its just cube connected to
+solid which is only because i cascaded it"**.*
+
+*The photograph is the better bug report. Seven boxes in a column, not one wire between them, and a
+reader with no way to tell a graph from a list. They were unconnected because the picture had
+nothing for them to be connected TO.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D780 | **Every box is on a whole cell, and a cell holds one** | user | The rule both halves of *never overlap* come out of. Positions were free-floating floats — a drag wrote `#@ 4.7 2.3` — so two boxes could sit on top of each other and nothing said otherwise. Now a drag **snaps while it is being dragged**, not on release, because a box that floats and then jumps is a box you aimed at one place and got another; and where it lands is the nearest cell nothing else is standing on, settled a ring at a time outwards and written to the document as that. The layout does the same when a file is read, authored positions first and in document order, so a hand-written `#@` keeps its cell and the layout's own guess is what gives way. The alternative was a repulsion pass — push boxes apart until nothing overlaps — which is what a physics engine does to a graph and gives a different picture every time it is run |
+| D781 | **A wire turns only in the channels and the lanes, so it cannot cross a box** | user | And this is what D780 buys. A box fills the top-left `kNodeWide` × `kNodeTall` of its cell, so the strip down the right of every column and the strip along the bottom of every row **have no box in them at any layout**. A wire is five segments — out into the source's channel, along it to a lane, across the lane, into the target's channel, and in — and every turn is in clear ground **by construction rather than by luck**. It was three straight segments with the turn just right of the source, so a wire from column one to column six ran flat through everything in between, which on any real document is most of the picture. Two things keep it from looking over-engineered: a wire whose straight run crosses nothing takes the straight run, because most wires go one column and a wire that detours for no reason is a wire a reader follows twice; and every wire sharing a channel or a lane gets its own slot in it, ordered by where it starts, so parallel wires read as a bundle rather than as one thick line |
+| D782 | **The document has a box, and every answer wires into it** | user | Outside anything, every box on the canvas is a statement nothing else uses (D769) — which is exactly right and looks exactly like a list. `weather_demo` is seven of them. So the file itself gets a box at the right, and the answers wire into it: the metre, the bounds, the variation, the coat, the solid and both weatherings are **connected to the document**, which is both true and the difference between a diagram and a column. It is not a node — it is not in the file, there is nothing in it to change, and it cannot be dragged, joined or taken out — and its name is bold, like the file's name in the header and like a built-in in the library, because it is the same kind of fact |
+
+### What it costs, measured
+
+Same two arms as D753 and D768, same machine, `clips/facility/ballroom.clip` at 1600×1000 with
+`Get-Process WorldShaper` verified at nought immediately before each:
+
+| what is on screen | mean ms | worst | before |
+|---|---|---|---|
+| the editor, **visual** | 0.219 | 0.224 | 0.215 / 0.216 |
+| the editor, **script** | 0.284 | 0.291 | 0.284 / 0.286 |
+
+Unchanged, against the `shell` pass's 0.6 ms budget. A wire is five rectangles rather than three and
+the router is a sort over about as many wires as there are boxes; neither is visible next to the
+text on the same screen.
+
+### And the gate
+
+`Shell::boxes_overlapping()` — **always nought**, asked directly rather than by looking at a
+picture. Two tests hold it: a hand-written document that puts three boxes on one cell on purpose,
+inside a node and out; and a sweep over the shipped clips, every one of which lays out with nothing
+on top of anything. The other half — a wire never crossing a box — is structural and is argued
+above rather than tested, because it is true of every layout by construction and a test could only
+sample.
+
+**837 test cases, 21,248,569 assertions.**

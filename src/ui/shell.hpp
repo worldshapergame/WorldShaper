@@ -231,6 +231,12 @@ public:
     // and, with a list, the only way it can photograph a choice of several, which is the one state
     // a dragged box exists to produce.
     bool choose_node(std::string_view names);
+
+    // How many boxes on the graph stand where another one already is. **Always nought**, and it is
+    // a promise rather than a tidy-up: every box is on a whole cell, and a cell holds one. Asked
+    // directly rather than by looking at a picture, because a picture is what a person has to check
+    // and this is the class of thing that goes wrong when nobody is looking (D460).
+    u32 boxes_overlapping() const;
     // `--editor-enter NAME`: go into the `include` of that name, exactly as pressing its door mark
     // does. The way in and the way back out are a whole state of this tab — the header grows a
     // control, and the document under it is a different one — and a state nothing automated can
@@ -311,6 +317,16 @@ private:
     // Where every box sits, worked out once when the document is re-read. See the cpp for why the
     // row is the part worth choosing well.
     void lay_out_graph();
+    // Where the box that stands for the FILE sits, and whether there is one.
+    //
+    // Outside anything, every box on the canvas is a statement nothing else uses (D769) — and a
+    // reader looking at seven of them side by side asked the obvious question: *the weatherings
+    // aren't seemingly connected to anything.* They are: they are connected to the document. So the
+    // document gets a box at the right and everything that is an answer wires into it, which is
+    // both true and the difference between a diagram and a list.
+    f32 doc_x_ = 0.0f;
+    f32 doc_y_ = 0.0f;
+    bool doc_shown_ = false;
     // Go into a box: from here on the canvas shows that box and what it is made of, and nothing
     // else. Coming back out is `leave_document`, which is one control for both journeys.
     void go_inside(u32 index);

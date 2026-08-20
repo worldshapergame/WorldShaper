@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <fstream>
 #include <iterator>
+#include <map>
+#include <unordered_set>
 
 #include "core/log.hpp"
 #include "core/time.hpp"
@@ -2002,6 +2004,52 @@ bool Shell::a_node_is_selected() const {
            chosen_index_ < graph_.nodes.size();
 }
 
+// --- one box, one cell ---------------------------------------------------------------------
+//
+// **Two boxes may not stand in the same place, and a wire may not cross one.** Asked for directly:
+// *make wires or nodes never be able to overlap any of each other even if it requires them moving
+// and adjusting a little.* Both halves come out of one rule — **every box is on a whole cell** —
+// and the picture is then guaranteed rather than tidied up afterwards:
+//
+// - a box occupies the top-left `kNodeWide` x `kNodeTall` of its cell, so the strip down the right
+//   of every column and the strip along the bottom of every row are clear of boxes for ever;
+// - a wire that only ever turns inside those strips cannot cross a box, whatever the layout does.
+//
+// The alternative was a repulsion pass — push boxes apart until nothing overlaps — which is what a
+// physics engine does to a graph and gives a different picture every time it is run.
+namespace {
+
+u64 cell_key(i32 x, i32 y) {
+    return (static_cast<u64>(static_cast<u32>(x)) << 32) | static_cast<u32>(y);
+}
+
+// The nearest whole cell nothing is standing on, taken and remembered. A ring at a time outwards,
+// so a box pushed off its place lands beside it rather than at the end of the document — and along
+// the row before down it, because a graph is read left to right and a gap in a row is cheaper to
+// follow than a gap in a column.
+void take_free_cell(std::unordered_set<u64>& taken, f32& x, f32& y) {
+    i32 cx = static_cast<i32>(std::lround(x));
+    i32 cy = static_cast<i32>(std::lround(y));
+    for (i32 ring = 0; ring < 96; ++ring) {
+        for (i32 dy = -ring; dy <= ring; ++dy) {
+            for (i32 dx = -ring; dx <= ring; ++dx) {
+                if (std::max(std::abs(dx), std::abs(dy)) != ring) continue;
+                const u64 key = cell_key(cx + dx, cy + dy);
+                if (taken.count(key) != 0) continue;
+                taken.insert(key);
+                x = static_cast<f32>(cx + dx);
+                y = static_cast<f32>(cy + dy);
+                return;
+            }
+        }
+    }
+    taken.insert(cell_key(cx, cy));
+    x = static_cast<f32>(cx);
+    y = static_cast<f32>(cy);
+}
+
+}  // namespace
+
 // --- where every box sits ------------------------------------------------------------------------
 //
 // Worked out once when the document is re-read rather than every frame, and worked out from the
@@ -2191,17 +2239,72 @@ void Shell::lay_out_graph() {
         }
     }
 
+    // And what the author dragged wins over all of it. It is in the document, so it survives the
+    // file being sent to somebody else (D756).
+    //
+    // Placed boxes are settled FIRST and in document order, so an authored position is the one that
+    // keeps its cell and the layout's own guess is what gives way. Two authored boxes on one cell
+    // — a hand-written `#@`, or a file merged from two — is settled by which line comes first,
+    // which is at least an answer a reader can predict.
+    std::unordered_set<u64> taken;
+    for (usize i = 0; i < count; ++i) {
+        if (!node_shown_[i] || !graph_.nodes[i].placed) continue;
+        graph_x_[i] = graph_.nodes[i].at_x;
+        graph_y_[i] = graph_.nodes[i].at_y;
+        take_free_cell(taken, graph_x_[i], graph_y_[i]);
+    }
+    for (usize i = 0; i < count; ++i) {
+        if (!node_shown_[i] || graph_.nodes[i].placed) continue;
+        take_free_cell(taken, graph_x_[i], graph_y_[i]);
+    }
+    // The document's own box, one column past everything and level with the middle of it. Only
+    // outside a node: inside one, what is on the canvas is that box and its parts, and the file is
+    // not what they answer.
+    doc_shown_ = inside_.empty();
+    if (doc_shown_) {
+        f32 most_x = 0.0f;
+        f32 sum_y = 0.0f;
+        u32 shown = 0;
+        for (usize i = 0; i < count; ++i) {
+            if (!node_shown_[i]) continue;
+            most_x = std::max(most_x, graph_x_[i]);
+            sum_y += graph_y_[i];
+            ++shown;
+        }
+        doc_shown_ = shown > 0;
+        doc_x_ = most_x + 1.0f;
+        doc_y_ = (shown > 0) ? std::round(sum_y / static_cast<f32>(shown)) : 0.0f;
+        if (doc_shown_) take_free_cell(taken, doc_x_, doc_y_);
+    }
+
     for (usize i = 0; i < count; ++i) {
         if (!node_shown_[i]) continue;
-        // And what the author dragged wins over all of it. It is in the document, so it survives
-        // the file being sent to somebody else (D756).
-        if (graph_.nodes[i].placed) {
-            graph_x_[i] = graph_.nodes[i].at_x;
-            graph_y_[i] = graph_.nodes[i].at_y;
-        }
         graph_wide_ = std::max(graph_wide_, graph_x_[i] + 1.0f);
         graph_tall_ = std::max(graph_tall_, graph_y_[i] + 1.0f);
     }
+    if (doc_shown_) {
+        graph_wide_ = std::max(graph_wide_, doc_x_ + 1.0f);
+        graph_tall_ = std::max(graph_tall_, doc_y_ + 1.0f);
+    }
+}
+
+u32 Shell::boxes_overlapping() const {
+    std::unordered_set<u64> taken;
+    u32 twice = 0;
+    for (usize i = 0; i < graph_.nodes.size(); ++i) {
+        if (i >= node_shown_.size() || !node_shown_[i]) continue;
+        if (!taken.insert(cell_key(static_cast<i32>(std::lround(graph_x_[i])),
+                                   static_cast<i32>(std::lround(graph_y_[i]))))
+                 .second) {
+            ++twice;
+        }
+    }
+    if (doc_shown_ && !taken.insert(cell_key(static_cast<i32>(std::lround(doc_x_)),
+                                             static_cast<i32>(std::lround(doc_y_))))
+                           .second) {
+        ++twice;
+    }
+    return twice;
 }
 
 void Shell::draw_editor_tab(const Rect& rect) {
@@ -2711,7 +2814,9 @@ void Shell::draw_visual_view(const Rect& page) {
     }
     if (!ui_.input().mouse_middle) dragging_graph_ = false;
 
-    const auto box_of = [&](usize i) {
+    // Which CELL a box is on, which the wires need as much as the drawing does: a wire's whole
+    // guarantee is that it turns in the strips between cells, and those are named by cell.
+    const auto place_of = [&](usize i) {
         f32 lx = graph_x_[i];
         f32 ly = graph_y_[i];
         if (dragging_node_ == i) {
@@ -2724,8 +2829,12 @@ void Shell::draw_visual_view(const Rect& page) {
                 ly = drag_at_y_ + along.second.second;
             }
         }
-        const f32 x = canvas.x0 + graph_pan_x_ + lx * cell_w;
-        const f32 y = canvas.y0 + graph_pan_y_ + ly * cell_h;
+        return std::pair<f32, f32>{lx, ly};
+    };
+    const auto box_of = [&](usize i) {
+        const std::pair<f32, f32> at = place_of(i);
+        const f32 x = canvas.x0 + graph_pan_x_ + at.first * cell_w;
+        const f32 y = canvas.y0 + graph_pan_y_ + at.second * cell_h;
         return Rect{x, y, x + node_w, y + node_h};
     };
     // Where a wire leaves a node, and where its n-th wire arrives.
@@ -2742,39 +2851,208 @@ void Shell::draw_visual_view(const Rect& page) {
                     at + metrics.px(4.0f)};
     };
 
+    // The document's box, worked out before the wires because they arrive at it.
+    const Rect doc_box = [&] {
+        const f32 x = canvas.x0 + graph_pan_x_ + doc_x_ * cell_w;
+        const f32 y = canvas.y0 + graph_pan_y_ + doc_y_ * cell_h;
+        return Rect{x, y, x + node_w, y + node_h};
+    }();
+
     ui_.draw().push_clip(canvas);
 
     // --- the wires, first, so the boxes sit over them -----------------------------------------
+    //
+    // **A wire never crosses a box, and no two wires lie on top of each other.** Asked for
+    // directly. It was three straight segments with the turn just right of the source, so a wire
+    // from column one to column six ran flat through everything in between — which on any real
+    // document is most of the picture, and is why the graph read as a mess of lines rather than as
+    // a diagram.
+    //
+    // What makes it possible is the cell rule above: a box fills the top-left of its cell, so the
+    // **channel** down the right of every column and the **lane** along the bottom of every row are
+    // clear of boxes for ever. A wire is then five segments — out into the source's channel, down
+    // or up it to a lane, along the lane, into the target's channel, and in — and every turn is in
+    // clear ground by construction rather than by luck.
+    //
+    // Two shortcuts keep it from looking over-engineered. A wire whose straight run crosses nothing
+    // takes the straight run: most wires go one column, and a wire that detours for no reason is a
+    // wire a reader follows twice. And every wire sharing a channel or a lane is given its own slot
+    // in it, ordered by where it starts, so parallel wires read as a bundle rather than as one
+    // thick line.
     const f32 thin = std::max(1.0f, metrics.scale * graph_zoom_);
-    for (usize i = 0; i < graph_.nodes.size(); ++i) {
-        if (!node_shown_[i]) continue;
-        const ClipNode& node = graph_.nodes[i];
-        const Rect into = box_of(i);
-        for (usize k = 0; k < node.inputs.size(); ++k) {
-            const u32 input = node.inputs[k];
-            if (input >= graph_.nodes.size() || !node_shown_[input]) continue;
-            const Rect from = box_of(input);
-            if (std::max(from.x1, into.x1) < canvas.x0) continue;
-            if (std::min(from.x0, into.x0) > canvas.x1) continue;
-            const u32 rgb = tint_rgb(ui_.accent(), clip_carries_tint(graph_.nodes[input].carries));
-            const f32 y0 = from.mid_y();
-            usize shown_before = 0;
-            usize shown_all = 0;
-            for (usize other = 0; other < node.inputs.size(); ++other) {
-                if (node.inputs[other] >= graph_.nodes.size() || !node_shown_[node.inputs[other]]) {
-                    continue;
-                }
-                if (other < k) ++shown_before;
-                ++shown_all;
+    {
+        // Which cells have a box on them, so a straight run can be checked against them.
+        std::unordered_set<u64> filled;
+        for (usize i = 0; i < graph_.nodes.size(); ++i) {
+            if (!node_shown_[i]) continue;
+            const std::pair<f32, f32> at = place_of(i);
+            filled.insert(cell_key(static_cast<i32>(std::lround(at.first)),
+                                   static_cast<i32>(std::lround(at.second))));
+        }
+
+        struct Run {
+            Rect from{};            // the box it leaves
+            Rect into{};            // the box it arrives at
+            f32 y0 = 0.0f;          // where it leaves, in screen y
+            f32 y1 = 0.0f;          // where it arrives
+            i32 channel_out = 0;    // the column whose right-hand strip it turns in, when it does
+            i32 channel_in = 0;     // the column left of the target
+            i32 lane = 0;           // the row whose bottom strip it runs along, when it does
+            bool straight = true;   // nothing in the way: no lane needed
+            u32 rgb = 0;
+        };
+        // One place that works out which strips a wire turns in, so the document's own wires are
+        // routed by exactly the same rule as everything else rather than by a second copy of it.
+        const auto route = [&](Run& run, i32 fx, i32 fy, i32 tx) {
+            run.channel_out = fx;
+            run.channel_in = tx - 1;
+            run.straight = tx > fx;
+            for (i32 c = fx + 1; run.straight && c < tx; ++c) {
+                if (filled.count(cell_key(c, fy)) != 0) run.straight = false;
             }
-            const f32 y1 = in_port(into, shown_before, shown_all).y0 + metrics.px(4.0f);
-            const f32 mid = std::min(from.x1 + cell_w * 0.10f, into.x0 - metrics.px(3.0f));
-            ui_.draw().hue(
-                Rect{from.x1, y0 - thin * 0.5f, std::max(mid, from.x1), y0 + thin * 0.5f}, rgb);
-            ui_.draw().hue(
-                Rect{mid - thin * 0.5f, std::min(y0, y1), mid + thin * 0.5f, std::max(y0, y1)}, rgb);
-            ui_.draw().hue(Rect{std::min(mid, into.x0), y1 - thin * 0.5f, into.x0, y1 + thin * 0.5f},
+        };
+        std::vector<Run> runs;
+        for (usize i = 0; i < graph_.nodes.size(); ++i) {
+            if (!node_shown_[i]) continue;
+            const ClipNode& node = graph_.nodes[i];
+            const Rect into = box_of(i);
+            const std::pair<f32, f32> into_at = place_of(i);
+            usize shown_all = 0;
+            for (u32 other : node.inputs) {
+                if (other < graph_.nodes.size() && node_shown_[other]) ++shown_all;
+            }
+            usize shown_before = 0;
+            for (usize k = 0; k < node.inputs.size(); ++k) {
+                const u32 input = node.inputs[k];
+                if (input >= graph_.nodes.size() || !node_shown_[input]) continue;
+                const usize mine = shown_before++;
+                const Rect from = box_of(input);
+                if (std::max(from.x1, into.x1) < canvas.x0) continue;
+                if (std::min(from.x0, into.x0) > canvas.x1) continue;
+                const std::pair<f32, f32> from_at = place_of(input);
+                Run run;
+                run.from = from;
+                run.into = into;
+                run.y0 = from.mid_y();
+                run.y1 = in_port(into, mine, shown_all).mid_y();
+                run.rgb =
+                    tint_rgb(ui_.accent(), clip_carries_tint(graph_.nodes[input].carries));
+                const i32 fx = static_cast<i32>(std::lround(from_at.first));
+                const i32 fy = static_cast<i32>(std::lround(from_at.second));
+                const i32 tx = static_cast<i32>(std::lround(into_at.first));
+                const i32 ty = static_cast<i32>(std::lround(into_at.second));
+                route(run, fx, fy, tx);
+                // The lane nearest the middle of the two ends, so a wire that has to detour does
+                // it by as little as the grid allows.
+                run.lane = static_cast<i32>(std::lround((static_cast<f32>(fy) +
+                                                         static_cast<f32>(ty)) * 0.5f));
+                runs.push_back(run);
+            }
+        }
+
+        // Everything that is an answer wires into the document. This is the whole of what the
+        // picture was missing: seven boxes in a column, none of them joined to anything, and a
+        // reader with no way to tell a graph from a list.
+        if (doc_shown_) {
+            std::vector<u32> answers;
+            for (usize i = 0; i < graph_.nodes.size(); ++i) {
+                if (node_shown_[i]) answers.push_back(static_cast<u32>(i));
+            }
+            std::stable_sort(answers.begin(), answers.end(),
+                             [&](u32 a, u32 b) { return graph_y_[a] < graph_y_[b]; });
+            for (usize k = 0; k < answers.size(); ++k) {
+                const u32 node = answers[k];
+                const Rect from = box_of(node);
+                const std::pair<f32, f32> from_at = place_of(node);
+                Run run;
+                run.from = from;
+                run.into = doc_box;
+                run.y0 = from.mid_y();
+                run.y1 = in_port(doc_box, k, answers.size()).mid_y();
+                run.rgb = tint_rgb(ui_.accent(), clip_carries_tint(graph_.nodes[node].carries));
+                const i32 fx = static_cast<i32>(std::lround(from_at.first));
+                const i32 fy = static_cast<i32>(std::lround(from_at.second));
+                const i32 tx = static_cast<i32>(std::lround(doc_x_));
+                route(run, fx, fy, tx);
+                run.lane = static_cast<i32>(
+                    std::lround((static_cast<f32>(fy) + doc_y_) * 0.5f));
+                runs.push_back(run);
+            }
+        }
+
+        // A slot each, in every strip anything shares. Ordered by where the wire starts, which is
+        // the ordering that makes a bundle of them fan out rather than cross.
+        std::map<i32, std::vector<usize>> down_channel;
+        std::map<i32, std::vector<usize>> along_lane;
+        for (usize r = 0; r < runs.size(); ++r) {
+            if (!runs[r].straight) down_channel[runs[r].channel_out].push_back(r);
+            down_channel[runs[r].channel_in].push_back(r);
+            if (!runs[r].straight) along_lane[runs[r].lane].push_back(r);
+        }
+        std::vector<f32> slot_out(runs.size(), 0.5f);
+        std::vector<f32> slot_in(runs.size(), 0.5f);
+        std::vector<f32> slot_lane(runs.size(), 0.5f);
+        for (auto& strip : down_channel) {
+            std::stable_sort(strip.second.begin(), strip.second.end(),
+                             [&](usize a, usize b) { return runs[a].y0 < runs[b].y0; });
+            const f32 of = static_cast<f32>(strip.second.size() + 1);
+            for (usize k = 0; k < strip.second.size(); ++k) {
+                const usize r = strip.second[k];
+                const f32 where = static_cast<f32>(k + 1) / of;
+                if (!runs[r].straight && runs[r].channel_out == strip.first) slot_out[r] = where;
+                if (runs[r].channel_in == strip.first) slot_in[r] = where;
+            }
+        }
+        for (auto& strip : along_lane) {
+            std::stable_sort(strip.second.begin(), strip.second.end(),
+                             [&](usize a, usize b) { return runs[a].y0 < runs[b].y0; });
+            const f32 of = static_cast<f32>(strip.second.size() + 1);
+            for (usize k = 0; k < strip.second.size(); ++k) {
+                slot_lane[strip.second[k]] = static_cast<f32>(k + 1) / of;
+            }
+        }
+
+        // The strips themselves, in screen coordinates. A channel is what is left of a cell to the
+        // right of its box; a lane is what is left below it.
+        const f32 channel = cell_w - node_w;
+        const f32 lane_deep = cell_h - node_h;
+        const auto channel_x = [&](i32 column, f32 where) {
+            return canvas.x0 + graph_pan_x_ + static_cast<f32>(column) * cell_w + node_w +
+                   channel * where;
+        };
+        const auto lane_y = [&](i32 row, f32 where) {
+            return canvas.y0 + graph_pan_y_ + static_cast<f32>(row) * cell_h + node_h +
+                   lane_deep * where;
+        };
+        const auto flat = [&](f32 x0, f32 x1, f32 y, u32 rgb) {
+            ui_.draw().hue(Rect{std::min(x0, x1), y - thin * 0.5f, std::max(x0, x1),
+                                y + thin * 0.5f},
                            rgb);
+        };
+        const auto upright = [&](f32 x, f32 y0, f32 y1, u32 rgb) {
+            ui_.draw().hue(Rect{x - thin * 0.5f, std::min(y0, y1), x + thin * 0.5f,
+                                std::max(y0, y1)},
+                           rgb);
+        };
+
+        for (usize r = 0; r < runs.size(); ++r) {
+            const Run& run = runs[r];
+            const Rect& from = run.from;
+            const Rect& into = run.into;
+            const f32 turn_in = channel_x(run.channel_in, slot_in[r]);
+            if (run.straight) {
+                flat(from.x1, turn_in, run.y0, run.rgb);
+                upright(turn_in, run.y0, run.y1, run.rgb);
+                flat(turn_in, into.x0, run.y1, run.rgb);
+                continue;
+            }
+            const f32 turn_out = channel_x(run.channel_out, slot_out[r]);
+            const f32 along = lane_y(run.lane, slot_lane[r]);
+            flat(from.x1, turn_out, run.y0, run.rgb);
+            upright(turn_out, run.y0, along, run.rgb);
+            flat(turn_out, turn_in, along, run.rgb);
+            upright(turn_in, along, run.y1, run.rgb);
+            flat(turn_in, into.x0, run.y1, run.rgb);
         }
     }
 
@@ -3051,15 +3329,65 @@ void Shell::draw_visual_view(const Rect& page) {
             }
         }
     }
+
+    // --- the document itself ----------------------------------------------------------------
+    //
+    // Not a node: it is not in the file and there is nothing in it to change. It is the thing every
+    // answer is an answer TO, and drawing it is what turns a column of unconnected statements into
+    // a picture of a document. Its name is bold, like the file's name in the header and like a
+    // built-in in the library, because it is the same kind of fact: a name that is a property of
+    // the thing rather than of anything that has happened to it.
+    if (doc_shown_ && doc_box.x0 < canvas.x1 && doc_box.x1 > canvas.x0) {
+        ui_.draw().glass(doc_box, 1.0f);
+        ui_.draw().ink(doc_box, 0.16f);
+        ui_.draw().edge(doc_box, 0.45f, 1.0f);
+        ui_.draw().push_clip(doc_box);
+        const f32 cell = std::min(metrics.icon() * 0.8f, node_h * 0.55f);
+        const f32 left = doc_box.x0 + metrics.px(3.0f);
+        ui_.draw().icon(Rect{left, doc_box.mid_y() - cell * 0.5f, left + cell,
+                             doc_box.mid_y() + cell * 0.5f},
+                        icon_for_file(editing_), 0.8f);
+        ui_.label(Rect{left + cell + metrics.px(3.0f), doc_box.y0, doc_box.x1, doc_box.y1},
+                  shown_name(editing_), Align::Left, kBold, 0.9f);
+        ui_.draw().pop_clip();
+    }
+
     ui_.draw().pop_clip();
 
     // --- the drag, finished ---------------------------------------------------------------------
     if (dragging_node_ < graph_.nodes.size()) {
-        drag_at_x_ = layout_x(ui_.pointer_x()) - drag_grab_x_;
-        drag_at_y_ = layout_y(ui_.pointer_y()) - drag_grab_y_;
+        // **Snapped while it is being dragged, not when it is dropped.** A box that floats freely
+        // and then jumps on release is a box you aimed at one place and got another; snapping as it
+        // moves means where it looks is where it lands, which is the whole point of a grid.
+        drag_at_x_ = std::round(layout_x(ui_.pointer_x()) - drag_grab_x_);
+        drag_at_y_ = std::round(layout_y(ui_.pointer_y()) - drag_grab_y_);
         if (ui_.input().mouse_left_released) {
             const u32 moved = dragging_node_;
             dragging_node_ = ClipGraph::kNone;
+            // And it lands on a cell nothing is standing on. The layout settles this anyway when
+            // the document is re-read, but the document would then say one thing and the screen
+            // another — and the file is what travels.
+            {
+                std::unordered_set<u64> taken;
+                for (usize i = 0; i < graph_.nodes.size(); ++i) {
+                    if (!node_shown_[i] || i == moved) continue;
+                    bool coming_along = false;
+                    for (const auto& along : drag_with_) {
+                        if (along.first == i) coming_along = true;
+                    }
+                    if (coming_along) continue;
+                    taken.insert(cell_key(static_cast<i32>(std::lround(graph_x_[i])),
+                                          static_cast<i32>(std::lround(graph_y_[i]))));
+                }
+                take_free_cell(taken, drag_at_x_, drag_at_y_);
+                for (auto& along : drag_with_) {
+                    f32 x = drag_at_x_ + along.second.first;
+                    f32 y = drag_at_y_ + along.second.second;
+                    take_free_cell(taken, x, y);
+                    along.second.first = x - drag_at_x_;
+                    along.second.second = y - drag_at_y_;
+                }
+            }
             // Written ONCE, on the release. Writing it every frame of a drag would rewrite the line
             // sixty times a second and re-read the document with it, which is a millisecond a frame
             // spent on a number nobody has finished choosing.
