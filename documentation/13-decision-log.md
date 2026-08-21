@@ -15731,3 +15731,32 @@ the graph view are the same file rather than two models that drift.
 
 Gate: content `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
 **860 test cases, 21,248,933 assertions.**
+
+## D832-D838 - the picture the sockets needed, and a slider with a voice
+
+One message from playing the socket rewrite, and every item in it is the same fault: **a node
+became two cells wide and several cells tall and nothing else was told.** *Wires dont align with
+the nodes properly, sometimes i cant move nodes, the text and numbers for the parameters inside
+nodes are very small*, and then *the wiring is sometimes overly complicated* and *make sure wires
+cannot go through nodes.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D832 | **The layout asks how big a box is BEFORE it places one** | correction | The column pass ran before `cells_tall`/`cells_wide` had been worked out, so it handed every box one cell in each direction — and a box is two cells wide and up to eight tall (D826). Every column was a stack of overlapping rectangles that `take_free_cell` then scattered outwards in rings until they fitted, which is why a picture of five statements had no columns in it. The heights are computed first, a column is now STACKED by them, the stride between depths is `kNodeAcross`, and a column spills sideways at a budget of CELLS rather than of boxes — a fourteen-box column of voxel types is four times the depth of a fourteen-box column of spheres |
+| D833 | **A wire leaves the output DOT** | correction | *Wires dont align with the nodes properly.* A node has one output and it is beside its title (D826); the wire pass went on leaving from `box.mid_y()`, which after the rewrite is a socket row halfway down. Every wire in the picture started two or three rows below the dot it was supposed to be coming out of. The document's own wires and the one being dragged had it too |
+| D834 | **A box is picked up anywhere on it** | correction | *Sometimes i cant move nodes.* The grip was the title bar, because an open box had sliders inside it (D786) that a drag would have fought with. There is nothing inside a box to fight with any more, and a box eight rows tall whose top eighth is the only part that can be picked up is a box that mostly cannot be moved. The dots are on the EDGE and claim the press first, so they are still not draggable-through |
+| D835 | **A row's words are as big as the row** | correction | *The text and numbers for the parameters inside nodes are very small.* They were set at `small_text` whatever the row's height — half what the box has room for. Half again, bounded by the row so they shrink with the zoom; and the VALUE keeps its room while the name gives way, because a row whose value is cut off says nothing at all and a row whose name is cut off still says most of it. The title grew with them: a box's own name had come out smaller than the name of one of its sockets |
+| D836 | **A wire detours only when it MUST** | correction | *The wiring is sometimes overly complicated.* D812 said only the next column across may go straight and proved it by construction. The proof is sound and the rule is stricter than it needs to be — a run of four columns over empty cells collides with nothing either. The rule is now the CHECK rather than the construction, in the two parts the construction guaranteed: nothing in the way in the source's row, and no other straight run at this height over an overlapping stretch. The later run gives way, so the picture does not depend on which wire was noticed first |
+| D837 | **The document's box is a box** | correction | *Make sure wires cannot go through nodes.* It was in neither the filled-cells set nor the crossed-lanes set, so the one box in the picture that everything points at was the one thing a wire was allowed to run through |
+| D838 | **A slider is an instrument** | user | *Make the sound for sliding a slider be more satisfying and become lower pitched the lower the value is and higher pitched the higher the value is, between the biggest range of frequency most humans can hear.* A notch used to be pitched by which WAY the handle went — two notes — which says what the handle already says and nothing about the value. `Cue::Slide` is its own cue, the quietest claim there is so a drag that ends in a commit is heard as a commit, pitched by `slide_pitch` over six octaves: **110 Hz to 7040 Hz**, geometric. Not the twenty-to-twenty-thousand hearing runs to, because neither end of that is any use — below a hundred hertz a laptop speaker moves no air and above eight thousand a short tick is a hiss. And the square content now comes out as the pitch climbs, which is both the anti-aliasing (a square's third harmonic at 7 kHz folds back as a whine) and the voice (a small tick IS duller the higher it is) |
+
+### The title row, which had been made to fit rather than made room
+
+Two lines — the name, and what kind of statement it is under it (D830) — in a row one `node_h`
+tall, which is a little over half a cell. They did not fit, so the arithmetic made them fit by
+shrinking the FIRST until a box's own name was a smudge over its head word. The title row is
+`node_h * 1.7` now and a box is `2 + rows/2` cells rather than `1 + (rows+1)/2`, because the title
+was spending what the rows had been given.
+
+Gate: content `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
+**861 test cases, 21,249,013 assertions.**

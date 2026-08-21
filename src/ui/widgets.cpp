@@ -882,9 +882,19 @@ bool Ui::number(u64 id, const Rect& rect, const Number& about, f64& value) {
         if (want != was) {
             value = want;
             changed = true;
-            // A notch passing under the handle, pitched by which way it went, so a drag is audibly
-            // a direction rather than a rattle.
-            if (about.step > 0.0) sound_.say(Cue::Step, want > was ? 1.12f : 0.89f);
+            // **A notch passing under the handle, pitched by WHERE the handle is.** It used to be
+            // pitched by which WAY it went — two notes, up or down — which says the same thing the
+            // handle already says and says nothing about the value. Now the slider is an
+            // instrument: the bottom of its travel is a low note and the top of it is a high one,
+            // over the six octaves `slide_pitch` spans, so a value has a sound of its own and a
+            // drag is a rising or falling line rather than a rattle.
+            if (about.step > 0.0) {
+                const f64 span_now = about.high - about.low;
+                const f32 through = (span_now > 0.0)
+                                        ? static_cast<f32>((value - about.low) / span_now)
+                                        : 0.5f;
+                sound_.say(Cue::Slide, slide_pitch(through));
+            }
         }
         if (input_.mouse_left_released) {
             active_ = 0;

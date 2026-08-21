@@ -36,7 +36,11 @@ namespace ws::ui {
 // press, because the surprising statement is the one worth the frame.
 enum class Cue : u32 {
     None = 0,
-    Step,      // a slider passing a notch, or a selection moving by one
+    // A slider's handle passing a notch, pitched by WHERE the handle is. It is the quietest claim
+    // there is and it loses to everything, which is the point: a drag that ends in a commit has to
+    // be heard as a commit, and a drag over a control that refuses has to be heard as a refusal.
+    Slide,
+    Step,      // a selection moving by one
     Press,     // a control taking a press
     Open,      // a window, a folder, a tab
     Close,
@@ -111,5 +115,23 @@ private:
 // How long a cue lasts, in seconds. Exposed because the tests measure it and because "off is
 // exactly silent" is only checkable against a window long enough to hold a whole cue.
 f32 cue_seconds(Cue cue);
+
+// **Where a slider's value sounds.** `through` is 0 at the low end of the slider and 1 at the high
+// end, and what comes back is the pitch multiplier for `Cue::Slide`.
+//
+// Asked for directly: *make the sound for sliding a slider become lower pitched the lower the value
+// is and higher pitched the higher the value is, between the biggest range of frequency most humans
+// can hear.* Hearing runs from about 20 Hz to about 20 kHz and neither end of that is any use here:
+// below roughly a hundred hertz a laptop speaker moves no air at all, and above about eight
+// thousand a short tick is a hiss rather than a note. So this is the widest span that is still
+// AUDIBLE on the machine the game is played on — six octaves, A2 to A8, 110 Hz to 7040 Hz.
+//
+// Geometric, because pitch is: a linear map from 110 to 7040 spends five of its six octaves in the
+// top tenth of the slider, so the whole bottom half of the travel would sound the same.
+f32 slide_pitch(f32 through);
+
+// The two ends of that span, for anything that wants to say what it is doing.
+constexpr f32 kSlideLowHertz = 110.0f;
+constexpr f32 kSlideHighHertz = 7040.0f;
 
 }  // namespace ws::ui

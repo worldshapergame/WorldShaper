@@ -1946,6 +1946,10 @@ namespace {
 constexpr f32 kCellWide = 118.0f;
 constexpr f32 kCellTall = 42.0f;
 constexpr f32 kNodeWide = 0.74f;   // of a cell
+// How many CELLS a box covers across. Two, always (D826) — a socket row is a name, a value and a
+// dot, and one cell is not enough for any two of those. Named because the column layout, the
+// document's own place and `cells_wide` all have to agree about it, and they did not.
+constexpr u32 kNodeAcross = 2;
 constexpr f32 kNodeTall = 0.56f;
 // How much edge a wire needs to arrive at, in interface pixels. A box with more inputs than fit at
 // this pitch grows until they do. Four rather than eight because the box has to grow by a cell for
@@ -2343,7 +2347,10 @@ u32 Shell::cells_tall(u32 index) const {
         }
     }
     if (rows == 0) return 1;
-    return std::min<u32>(1 + static_cast<u32>((rows + 1) / 2), 40u);
+    // Two cells for the title and half a cell per row: the title takes about a whole cell now that
+    // it carries the name AND the kind (D830), so the old `1 + half a cell each` left the rows
+    // sharing what the title had already spent.
+    return std::min<u32>(2 + static_cast<u32>(rows / 2), 40u);
 }
 
 // **Two cells wide, always.** A socket row is a name, a value and a dot, and one cell is not enough
@@ -2352,7 +2359,7 @@ u32 Shell::cells_tall(u32 index) const {
 // is a picture a reader measures before reading.
 u32 Shell::cells_wide(u32 index) const {
     (void)index;
-    return 2u;
+    return kNodeAcross;
 }
 
 void Shell::go_inside(u32 index) {
@@ -2587,44 +2594,17 @@ void Shell::lay_out_graph() {
         for (u32 c = columns; c-- > 1;) settle(column[c - 1], used_by);
     }
 
-    // --- and a column that is too tall spills sideways -------------------------------------
+    // --- how big every box is, which the placement below cannot do without ---------------------
     //
-    // Everything a clip declares before it starts joining things up — its metre, its parameters,
-    // its materials and every primitive shape — is made of nothing, so it all lands in the first
-    // column. On `clips/sampler.clip` that is twenty-eight boxes in a stack four columns wide, and
-    // the picture that comes out is a ribbon: it fits the window at 38%, which is a size at which a
-    // name is a smudge.
-    //
-    // So a column is allowed to be at most `kMostRows` tall and takes as many sub-columns as it
-    // needs. Everything of one depth still stands left of everything deeper, so the reading order
-    // is untouched; what changes is that the picture is roughly square, which is what a window is.
-    constexpr u32 kMostRows = 14;
-    std::vector<u32> starts_at(columns, 0);
-    u32 across = 0;
-    for (u32 c = 0; c < columns; ++c) {
-        starts_at[c] = across;
-        const u32 tall = static_cast<u32>(column[c].size());
-        across += std::max(1u, (tall + kMostRows - 1) / kMostRows);
-    }
-
-    for (u32 c = 0; c < columns; ++c) {
-        const u32 wide = std::max(1u, static_cast<u32>(column[c].size() + kMostRows - 1) / kMostRows);
-        const u32 per = std::max(1u, (static_cast<u32>(column[c].size()) + wide - 1) / wide);
-        for (usize k = 0; k < column[c].size(); ++k) {
-            const u32 node = column[c][k];
-            graph_x_[node] = static_cast<f32>(starts_at[c] + k / per);
-            graph_y_[node] = static_cast<f32>(k % per);
-        }
-    }
-
-    // And what the author dragged wins over all of it. It is in the document, so it survives the
-    // file being sent to somebody else (D756).
-    //
-    // Placed boxes are settled FIRST and in document order, so an authored position is the one that
-    // keeps its cell and the layout's own guess is what gives way. Two authored boxes on one cell
-    // — a hand-written `#@`, or a file merged from two — is settled by which line comes first,
-    // which is at least an answer a reader can predict.
-    // The sockets first, because the height of a box is how many it has.
+    // **This is worked out FIRST now, and that is the whole of the second layout fault.** A node is
+    // its sockets (D826), so a box is two cells wide and anything from two to seven cells tall —
+    // and the placement was still handing out one cell per box in both directions, because it ran
+    // before anything had asked how big a box is. Every column came out as a stack of boxes laid
+    // one row apart and several cells tall, all overlapping, and `take_free_cell` then scattered
+    // them outwards in rings until they fitted. That is why a picture of five statements had no
+    // columns in it, and it is most of *the wiring is sometimes overly complicated*: a wire
+    // between two boxes that ought to have been neighbours had to find its way round three others
+    // that had been pushed into the gap.
     sockets_.assign(count, {});
     for (usize i = 0; i < count; ++i) {
         if (node_shown_[i]) sockets_[i] = clip_sockets_of(graph_, static_cast<u32>(i));
@@ -2636,6 +2616,46 @@ void Shell::lay_out_graph() {
         node_tall_[i] = cells_tall(static_cast<u32>(i));
         node_wide_[i] = cells_wide(static_cast<u32>(i));
     }
+
+    // --- and a column that is too tall spills sideways -------------------------------------
+    //
+    // Everything a clip declares before it starts joining things up — its metre, its parameters,
+    // its materials and every primitive shape — is made of nothing, so it all lands in the first
+    // column. On `clips/sampler.clip` that is twenty-eight boxes in a stack four columns wide, and
+    // the picture that comes out is a ribbon: it fits the window at 38%, which is a size at which a
+    // name is a smudge.
+    //
+    // So a column is allowed to be at most `kMostCells` of CELL deep and takes as many sub-columns
+    // as it needs — cells rather than boxes, because a box is no longer a fixed height and a
+    // fourteen-box column of voxel types is four times the depth of a fourteen-box column of
+    // spheres. Everything of one depth still stands left of everything deeper, so the reading
+    // order is untouched; what changes is that the picture is roughly square, which is what a
+    // window is.
+    constexpr u32 kMostCells = 20;
+    u32 across = 0;
+    for (u32 c = 0; c < columns; ++c) {
+        u32 sub = 0;     // which sub-column of this depth we are filling
+        u32 at_y = 0;    // and how far down it we have got
+        for (u32 node : column[c]) {
+            const u32 tall = std::max(1u, node_tall_[node]);
+            if (at_y > 0 && at_y + tall > kMostCells) {
+                ++sub;
+                at_y = 0;
+            }
+            graph_x_[node] = static_cast<f32>(across + kNodeAcross * sub);
+            graph_y_[node] = static_cast<f32>(at_y);
+            at_y += tall;
+        }
+        across += kNodeAcross * (sub + 1);
+    }
+
+    // And what the author dragged wins over all of it. It is in the document, so it survives the
+    // file being sent to somebody else (D756).
+    //
+    // Placed boxes are settled FIRST and in document order, so an authored position is the one that
+    // keeps its cell and the layout's own guess is what gives way. Two authored boxes on one cell
+    // — a hand-written `#@`, or a file merged from two — is settled by which line comes first,
+    // which is at least an answer a reader can predict.
     std::unordered_set<u64> taken;
     for (usize i = 0; i < count; ++i) {
         if (!node_shown_[i] || !graph_.nodes[i].placed) continue;
@@ -2663,7 +2683,7 @@ void Shell::lay_out_graph() {
             ++shown;
         }
         doc_shown_ = shown > 0;
-        doc_x_ = most_x + 1.0f;
+        doc_x_ = most_x + static_cast<f32>(kNodeAcross);
         doc_y_ = (shown > 0) ? std::round(sum_y / static_cast<f32>(shown)) : 0.0f;
         // Everything that is an answer wires into it, so it is the box with the most arriving and
         // the one the crowding was photographed on. Tall enough for all of them, and where the
@@ -2750,6 +2770,18 @@ std::string Shell::new_part(std::string_view kind, std::string_view name) {
     menu_x_ = 0.0f;
     menu_y_ = 0.0f;
     return make_part(which, std::string(name));
+}
+
+bool Shell::choose_node_named(std::string_view name) {
+    if (editing_.empty()) return false;
+    refresh_graph();
+    for (usize i = 0; i < graph_.nodes.size(); ++i) {
+        if (graph_.nodes[i].name != name) continue;
+        choose(static_cast<u32>(i));
+        open_settings();
+        return true;
+    }
+    return false;
 }
 
 u32 Shell::sockets_on(std::string_view name) const {
@@ -3534,14 +3566,22 @@ void Shell::draw_visual_view(const Rect& page) {
     // The title takes a whole cell's worth, so it has room for the name at its own size and the
     // head word under it — and the rows share what is left, which is why a box is one cell plus
     // half a cell per socket.
-    const f32 title_row = node_h;
+    // **The title row holds TWO lines** — the name, and what kind of statement it is under it — so
+    // it is not one node's worth of height but nearly two. It was `node_h`, which is a little over
+    // half a cell, and two lines do not fit in that: the second one was made to fit by shrinking
+    // the FIRST until a box's own name was a smudge over its head word. Never taller than the box,
+    // for the handful of statements that have no sockets at all.
+    const auto title_row_of = [&](const Rect& box) {
+        return std::min(node_h * 1.7f, box.height());
+    };
     const auto row_height_of = [&](const Rect& box, usize rows) {
         if (rows == 0) return box.height();
-        return std::max(metrics.px(2.0f), (box.height() - title_row) / static_cast<f32>(rows));
+        return std::max(metrics.px(2.0f),
+                        (box.height() - title_row_of(box)) / static_cast<f32>(rows));
     };
     const auto socket_row = [&](const Rect& box, usize which, usize of) {
         const f32 tall = row_height_of(box, of);
-        const f32 top = box.y0 + title_row + tall * static_cast<f32>(which);
+        const f32 top = box.y0 + title_row_of(box) + tall * static_cast<f32>(which);
         return Rect{box.x0, top, box.x1, top + tall};
     };
     // The dot itself, on the edge, big enough to hit. A small target is a target nobody hits, and
@@ -3554,8 +3594,8 @@ void Shell::draw_visual_view(const Rect& page) {
     // A node has ONE output, and it is beside its title — which is what says *this whole box is
     // the thing you are dragging*, where a dot beside a row would say only that row.
     const auto out_port = [&](const Rect& box) {
-        return Rect{box.x1 - dot, box.y0 + title_row * 0.5f - dot, box.x1 + dot,
-                    box.y0 + title_row * 0.5f + dot};
+        return Rect{box.x1 - dot, box.y0 + title_row_of(box) * 0.5f - dot, box.x1 + dot,
+                    box.y0 + title_row_of(box) * 0.5f + dot};
     };
 
     // The document's box, worked out before the wires because they arrive at it.
@@ -3615,6 +3655,19 @@ void Shell::draw_visual_view(const Rect& page) {
                 }
             }
         }
+        // **The document's own box is a box too.** It was in neither set, so a wire on its way past
+        // could run straight through it and the one box in the picture that everything points at
+        // was the one thing a wire was allowed to cross. Asked for directly: *make sure wires
+        // cannot go through nodes.*
+        if (doc_shown_) {
+            const i32 dx = static_cast<i32>(std::lround(dragging_doc_ ? doc_drag_x_ : doc_x_));
+            const i32 dy = static_cast<i32>(std::lround(dragging_doc_ ? doc_drag_y_ : doc_y_));
+            const i32 deep = static_cast<i32>(std::max(1u, doc_tall_));
+            for (i32 k = 0; k < deep; ++k) {
+                filled.insert(cell_key(dx, dy + k));
+                if (k + 1 < deep) crossed.insert(cell_key(dx, dy + k));
+            }
+        }
 
         struct Run {
             Rect from{};            // the box it leaves
@@ -3624,6 +3677,9 @@ void Shell::draw_visual_view(const Rect& page) {
             i32 channel_out = 0;    // the column whose right-hand strip it turns in, when it does
             i32 channel_in = 0;     // the column left of the target
             i32 lane = 0;           // the row whose bottom strip it runs along, when it does
+            i32 from_column = 0;    // the source's RIGHTMOST cell, and the row it leaves from
+            i32 from_row = 0;
+            i32 into_column = 0;    // the target's leftmost cell
             bool straight = true;   // nothing in the way: no lane needed
             u32 rgb = 0;
             bool written = true;    // the document says so, rather than the language meaning it
@@ -3638,6 +3694,9 @@ void Shell::draw_visual_view(const Rect& page) {
         const auto route = [&](Run& run, i32 fx, i32 fy, i32 tx) {
             run.channel_out = fx;
             run.channel_in = tx - 1;
+            run.from_column = fx;
+            run.from_row = fy;
+            run.into_column = tx;
             // **Only the next column across goes straight.**
             //
             // It used to go straight whenever nothing was in the way, and that is how two wires of
@@ -3652,7 +3711,6 @@ void Shell::draw_visual_view(const Rect& page) {
             // slot of its own — so the promise holds by the same construction the no-crossing one
             // does (D781) rather than by a check.
             run.straight = tx == fx + 1;
-            (void)fy;
         };
         // And the lane it runs along, if it needs one: the nearest to the middle of its two ends
         // that no open box runs through. Outwards a row at a time, because a lane one row further
@@ -3711,7 +3769,12 @@ void Shell::draw_visual_view(const Rect& page) {
                 Run run;
                 run.from = from;
                 run.into = into;
-                run.y0 = from.mid_y();
+                // **Out of the output DOT, not out of the middle of the box.** A node has one
+                // output and it is beside its title (D826); the wire went on leaving from the
+                // box's vertical centre, which after the rewrite is a socket row halfway down —
+                // so every wire in the picture started a couple of rows below the dot it was
+                // supposed to be coming out of. Reported as *wires dont align with the nodes*.
+                run.y0 = out_port(from).mid_y();
                 run.y1 = in_port(into, mine, shown_all).mid_y();
                 run.rgb =
                     tint_rgb(ui_.accent(), clip_carries_tint(graph_.nodes[input].carries));
@@ -3762,7 +3825,7 @@ void Shell::draw_visual_view(const Rect& page) {
                 Run run;
                 run.from = from;
                 run.into = doc_box;
-                run.y0 = from.mid_y();
+                run.y0 = out_port(from).mid_y();
                 run.y1 = in_port(doc_box, k, answers.size()).mid_y();
                 run.rgb = tint_rgb(ui_.accent(), clip_carries_tint(graph_.nodes[node].carries));
                 const i32 fx = static_cast<i32>(std::lround(from_at.first));
@@ -3772,6 +3835,47 @@ void Shell::draw_visual_view(const Rect& page) {
                 run.lane = clear_lane(
                     static_cast<i32>(std::lround((static_cast<f32>(fy) + doc_y_) * 0.5f)), fx, tx);
                 runs.push_back(run);
+            }
+        }
+
+        // --- and a wire goes straight when it CAN ---------------------------------------------
+        //
+        // Reported: *the wiring is sometimes overly complicated.* D812 said only the next column
+        // across may go straight, and gave a construction proof: one box to a cell means no two
+        // sources share a row, and a run of one column cannot reach far enough to lie on another.
+        // The proof is sound and the rule it justifies is stricter than it needs to be — a run of
+        // four columns over empty cells collides with nothing either, and made a five-segment
+        // detour through a lane for no reason a reader could see.
+        //
+        // So the rule is now the CHECK rather than the construction, in two parts, because the
+        // construction's two guarantees have to be replaced by two tests:
+        //
+        //   1. nothing is in the way — no box sits in the source's row between the two, which is
+        //      what stops a wire running through a box;
+        //   2. no other straight run shares this one's height over an overlapping stretch, which
+        //      is what stops two wires of different colours lying on top of each other.
+        //
+        // The second can only be answered once every run is known, which is why it is here and not
+        // in `route`. The later run gives way, so the picture does not depend on which of two
+        // wires was noticed first.
+        for (Run& run : runs) {
+            if (run.straight || run.into_column <= run.from_column) continue;
+            bool clear = true;
+            for (i32 c = run.from_column + 1; c < run.into_column && clear; ++c) {
+                if (filled.count(cell_key(c, run.from_row)) != 0) clear = false;
+            }
+            run.straight = clear;
+        }
+        for (usize a = 0; a < runs.size(); ++a) {
+            if (!runs[a].straight) continue;
+            for (usize b = 0; b < a; ++b) {
+                if (!runs[b].straight) continue;
+                if (std::abs(runs[a].y0 - runs[b].y0) > thin) continue;
+                if (runs[a].into.x0 < runs[b].from.x1 || runs[b].into.x0 < runs[a].from.x1) {
+                    continue;   // the two stretches do not touch
+                }
+                runs[a].straight = false;
+                break;
             }
         }
 
@@ -3862,7 +3966,7 @@ void Shell::draw_visual_view(const Rect& page) {
     if (wiring_from_ < graph_.nodes.size()) {
         const Rect from = box_of(wiring_from_);
         const u32 rgb = tint_rgb(ui_.accent(), clip_carries_tint(graph_.nodes[wiring_from_].carries));
-        const f32 y0 = from.mid_y();
+        const f32 y0 = out_port(from).mid_y();
         const f32 x1 = ui_.pointer_x();
         const f32 y1 = ui_.pointer_y();
         ui_.draw().hue(Rect{std::min(from.x1, x1), y0 - thin, std::max(from.x1, x1), y0 + thin},
@@ -3952,7 +4056,7 @@ void Shell::draw_visual_view(const Rect& page) {
             // On the title row, not in the middle of the box: a box is its SOCKETS below the
             // title now, so the middle of one is a socket row and the way in was drawn across it.
             const f32 in_wide = std::min(cell, node_h * 0.8f);
-            const f32 in_mid = box.y0 + title_row * 0.5f;
+            const f32 in_mid = box.y0 + title_row_of(box) * 0.5f;
             const Rect in_mark{name_left, in_mid - in_wide * 0.5f, name_left + in_wide,
                                in_mid + in_wide * 0.5f};
             const bool over_mark = in_mark.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
@@ -3983,7 +4087,7 @@ void Shell::draw_visual_view(const Rect& page) {
         // a whole document's worth of boxes the name is the only thing that tells one from another
         // — `port` and `porti` are the same word to a reader and `portico` is not.
         if (detail) {
-            const f32 icon_top = box.y0 + (title_row - cell) * 0.5f;
+            const f32 icon_top = box.y0 + (title_row_of(box) - cell) * 0.5f;
             ui_.draw().icon(Rect{name_left, icon_top, name_left + cell, icon_top + cell},
                             icon_of(node));
             name_left += cell + metrics.px(3.0f);
@@ -4028,16 +4132,19 @@ void Shell::draw_visual_view(const Rect& page) {
         const f32 head_size = metrics.small_text();
         const f32 head_cap = DrawList::cap_height(head_size);
         const bool second_line = detail && head_word != first;
-        f32 title = std::max(metrics.small_text(), metrics.text() * graph_zoom_);
+        // Bigger than the rows below it, which is what makes it a title. The rows grew (D833) and
+        // this did not, so a box's own name came out smaller than the name of one of its sockets.
+        f32 title = std::max(metrics.small_text() * 1.8f, metrics.text() * graph_zoom_);
         // Room for both, with a gap between them that a DESCENDER fits in: `grain` over `param`
         // put the tail of the g through the p until this counted it.
         const f32 gap = metrics.px(3.0f);
         if (second_line) {
-            const f32 room = title_row - head_cap - metrics.px(6.0f) - gap;
+            const f32 room = title_row_of(box) - head_cap - metrics.px(6.0f) - gap;
             if (room > 0.0f) title = std::min(title, room / kGlyphCap);
         }
         const f32 title_top =
-            box.y0 + (second_line ? metrics.px(2.0f) : (title_row - title * kGlyphCap) * 0.5f);
+            box.y0 +
+            (second_line ? metrics.px(2.0f) : (title_row_of(box) - title * kGlyphCap) * 0.5f);
         ui_.draw().push_clip(Rect{box.x0, box.y0, mark_right, box.y1});
         ui_.draw().text(name_left, title_top, first, title,
                         node.name.empty() ? kPlain : kBold, Align::Left, lit);
@@ -4059,29 +4166,34 @@ void Shell::draw_visual_view(const Rect& page) {
         // Modelled on the version this was asked to match: named, typed sockets down the left, one
         // output on the right, a constant shown inline where nothing is wired.
         const std::vector<ClipSocket>& mine = sockets_[i];
-        std::vector<std::string> extra_names;   // the rows the language means rather than says
+        // The rows the language means rather than says, and the nodes they stand for — as one pair
+        // of lists, because an implied node that is not on the screen is skipped here and reading
+        // the row's node back out of `implied_` by the ROW's index then found the wrong one.
+        std::vector<std::string> extra_names;
+        std::vector<u32> extra_from;
         for (u32 input : implied_[i]) {
             if (input >= graph_.nodes.size() || !node_shown_[input]) continue;
             extra_names.push_back(graph_.nodes[input].head == "paint"       ? "coated by"
                                   : graph_.nodes[input].head == "weather"   ? "weathered by"
                                   : graph_.nodes[input].head == "variation" ? "varied by"
                                                                             : "and");
+            extra_from.push_back(input);
         }
         const usize rows = mine.size() + extra_names.size();
         const bool row_detail = detail && rows > 0 &&
                                 row_height_of(box, rows) >= metrics.px(7.0f);
         if (rows > 0) {
-            ui_.draw().ink(Rect{box.x0, box.y0 + title_row - std::max(1.0f, metrics.scale * 0.5f),
-                                box.x1, box.y0 + title_row},
+            const f32 under = box.y0 + title_row_of(box);
+            ui_.draw().ink(Rect{box.x0, under - std::max(1.0f, metrics.scale * 0.5f), box.x1,
+                                under},
                            0.22f * lit);
         }
         for (usize k = 0; k < rows; ++k) {
             const bool is_mine = k < mine.size();
             const ClipSocket* socket = is_mine ? &mine[k] : nullptr;
             const Rect row = socket_row(box, k, rows);
-            const u32 wired_from =
-                is_mine ? (socket->linked ? socket->from : ClipGraph::kNone)
-                        : implied_[i][k - mine.size()];
+            const u32 wired_from = is_mine ? (socket->linked ? socket->from : ClipGraph::kNone)
+                                           : extra_from[k - mine.size()];
             const bool has_wire = wired_from < graph_.nodes.size() && node_shown_[wired_from];
 
             // The dot. Coloured by what the socket TAKES when it is empty and by what is in it when
@@ -4121,15 +4233,13 @@ void Shell::draw_visual_view(const Rect& page) {
             }
             if (!row_detail) continue;
 
-            // The name, and then what is in it.
-            const f32 small = metrics.small_text();
+            // **As big as the row it is in.** It was set at `small_text` whatever the row's
+            // height, which is half the size the box has room for — reported as *the text and
+            // numbers for the parameters inside nodes are very small*. Half again, bounded by the
+            // row so it shrinks with the zoom rather than growing out of its own box.
+            const f32 small = std::min(metrics.small_text() * 1.5f,
+                                       row.height() / static_cast<f32>(kGlyphRows + 1));
             const f32 baseline = row.mid_y() - DrawList::cap_height(small) * 0.5f;
-            // The name starts past the dot, which sits ON the edge and is as wide as it is: a
-            // word beginning at the edge begins underneath it.
-            const f32 word_left = row.x0 + dot + metrics.px(3.0f);
-            ui_.draw().push_clip(Rect{word_left, row.y0, row.x1 - metrics.px(3.0f), row.y1});
-            const std::string& name = is_mine ? socket->name : extra_names[k - mine.size()];
-            ui_.draw().text(word_left, baseline, name, small, kPlain, Align::Left, 0.72f * lit);
             std::string value;
             u32 style = kPlain;
             f32 ink = 0.9f;
@@ -4153,6 +4263,18 @@ void Shell::draw_visual_view(const Rect& page) {
                 value = "--";   // nothing in it, and nothing written: it takes its usual value
                 ink = 0.3f;
             }
+            // The name starts past the dot, which sits ON the edge and is as wide as it is: a
+            // word beginning at the edge begins underneath it. And the VALUE keeps its room while
+            // the name gives way, because a row whose value is cut off says nothing at all and a
+            // row whose name is cut off still says most of it.
+            const f32 value_wide = DrawList::measure(value, small);
+            const f32 word_left = row.x0 + dot + metrics.px(3.0f);
+            const f32 word_right = std::max(word_left, row.x1 - value_wide - metrics.px(8.0f));
+            const std::string& name = is_mine ? socket->name : extra_names[k - mine.size()];
+            ui_.draw().push_clip(Rect{word_left, row.y0, word_right, row.y1});
+            ui_.draw().text(word_left, baseline, name, small, kPlain, Align::Left, 0.72f * lit);
+            ui_.draw().pop_clip();
+            ui_.draw().push_clip(Rect{word_right, row.y0, row.x1 - metrics.px(3.0f), row.y1});
             ui_.draw().text(row.x1 - metrics.px(4.0f), baseline, value, small, style, Align::Right,
                             ink * lit);
             ui_.draw().pop_clip();
@@ -4230,11 +4352,17 @@ void Shell::draw_visual_view(const Rect& page) {
                     caret_moved_ = true;
                     view_ = 0;
                     ui_.sound().say(Cue::Open);
-                } else if (node.statement &&
-                           ui_.pointer_y() <= box.y0 + node_h) {
+                } else if (node.statement) {
                     // A statement can be picked up and put somewhere. A sub-expression cannot: it
                     // is drawn where whatever uses it puts it, and a position written on its line
                     // would be a second answer to a question its parent has already answered.
+                    //
+                    // **Anywhere on the box, not only its title.** The title bar was the grip
+                    // because an open box had sliders inside it (D786) that a drag would have
+                    // fought with; there is nothing inside a box to fight with any more, and a box
+                    // eight rows tall whose top eighth is the only part that can be picked up is
+                    // exactly *sometimes i cant move nodes*. The dots are on the EDGE and take the
+                    // press before this does, so they are not reachable from in here.
                     dragging_node_ = static_cast<u32>(i);
                     drag_at_x_ = graph_x_[i];
                     drag_at_y_ = graph_y_[i];

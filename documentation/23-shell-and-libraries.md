@@ -463,8 +463,15 @@ A socket names what it holds **even when that thing has no box on the screen**: 
 answer and one level under it (D796), so a union's parts are usually a level too deep to draw, and a
 row reading `--` about a part that exists is a lie. It is dimmer when there is nothing to follow.
 
-A box is therefore one cell for the title and half a cell per socket, two cells wide, always — a row
-is a name, a value and a dot, and one cell is not enough for any two of those.
+A box is therefore **two cells for the title and half a cell per socket**, and two cells wide,
+always — a row is a name, a value and a dot, and one cell is not enough for any two of those, and
+the title carries two lines. The layout works those sizes out BEFORE it places anything and stacks
+a column by them (D832); a column spills into a second sub-column at a budget of cells rather than
+of boxes, because a box is no longer a fixed height.
+
+A row's words are as big as the row will hold, and where a name and its value cannot both fit, the
+**value keeps its room**: a row whose value is cut off says nothing at all, and one whose name is
+cut off still says most of it.
 
 #### A document is made of documents (D783, D784)
 

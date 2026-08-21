@@ -249,6 +249,12 @@ public:
     std::string add_part(const std::filesystem::path& from);
     std::string new_part(std::string_view kind, std::string_view name);
 
+    // `--editor-choose NAME`: choose that box, which is what opens the left-hand panel on its
+    // properties. A panel nothing automated can reach is a panel nothing automated ever checks
+    // (D460), and this is the one place in the interface where a dozen sliders are laid out
+    // against each other.
+    bool choose_node_named(std::string_view name);
+
     // How many sockets the box named NAME has. **A box IS its sockets**, so this is how a test
     // asks what a reader would see on it — there is nothing to open any more, because everything a
     // node takes is already written down its left side.

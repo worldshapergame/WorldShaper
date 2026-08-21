@@ -626,7 +626,31 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### A NODE IS ITS SOCKETS, 2026-08-21 — D826–D831. Read this first
+#### THE PICTURE THE SOCKETS NEEDED, 2026-08-21 — D832–D838. Read this first
+
+One message from playing the rewrite below, and every item in it is one fault: **a node became two
+cells wide and several cells tall and nothing else was told.**
+
+| what changed | | how to look at it |
+|---|---|---|
+| **the layout asks how big a box is before it places one** (D832) | it handed out one cell each way, so every column was a pile that `take_free_cell` scattered | `--open-editor clips/sampler.clip --editor-view visual` |
+| **a wire leaves the output DOT** (D833) | it left `box.mid_y()`, which is now a socket row halfway down | — |
+| **a box is picked up anywhere on it** (D834) | the grip was the title bar, from when a box had sliders in it | — |
+| **a row's words are as big as the row** (D835) | and the value keeps its room while the name gives way | — |
+| **a wire detours only when it must** (D836) | D812's construction replaced by D812's two guarantees, as checks | — |
+| **the document's box is a box** (D837) | wires ran through the one box everything points at | — |
+| **a slider is an instrument** (D838) | `Cue::Slide`, 110 Hz to 7040 Hz, geometric | `slide_pitch` |
+| **`--editor-choose NAME`** | chooses a box, which is what opens the panel on its properties | — |
+
+**Still open from that message, and it needs a word from the user before anything is changed:**
+*there's improper rendering when tweaking the parameters of roughness and opacity and seeing them
+behind each other.* Two readings, two different subsystems — the SLIDERS overlapping each other in
+the panel, or two transparent SURFACES seen one behind the other in the world. The panel was
+photographed (`--editor-choose glass`) and its rows do not overlap; the world reading points at
+`kProbeRefractStack` in `shaders/node.glsl`, which is exactly *a second sheet of glass*. Do not
+change the path tracer on a guess.
+
+#### A NODE IS ITS SOCKETS, 2026-08-21 — D826–D831
 
 *This entire thing is uncomprehensible, rewrite the whole way in which nodes connect, rewrite all
 the nodes logic and make it work exactly like on the old version of the game.* The old version is
@@ -682,7 +706,7 @@ had never heard of.
 | **four lessons ship and open in the editor** (D809) | `clips/learn/`, listed when nothing is open | `--open-editor` on a missing file reaches that screen |
 | **`bounds` is gone from the palette and a clip is measured instead of cut** (D810) | it was compulsory paperwork | a clip with no bounds went from a corner to 4.7 M voxels |
 | **going into a box narrows the picture; the box you are in has no way in** (D811) | | — |
-| **a long wire always takes a lane** (D812) | two boxes in one row wired two collinear lines | — |
+| ~~**a long wire always takes a lane** (D812)~~ | superseded by D836: it takes one only when something is in the way | — |
 | **a press that moved nothing is not an edit** (D813) | choosing a box wrote a layout marker | — |
 | **a band's anchor is carried by whatever the canvas panned** (D814) | | — |
 | **swapping a type renames what was named after it** (D815) | | — |

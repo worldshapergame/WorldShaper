@@ -138,3 +138,61 @@ TEST_CASE("a pitch is a multiplier, so one cue says two directions") {
     }
     CHECK(differ);
 }
+
+TEST_CASE("a slider is an instrument: low at the bottom, high at the top") {
+    // *Make the sound for sliding a slider become lower pitched the lower the value is and higher
+    // pitched the higher the value is, between the biggest range of frequency most humans can
+    // hear.* Six octaves of it, geometric, centred so the middle of a slider is the cue's own note.
+    CHECK(slide_pitch(0.5f) == doctest::Approx(1.0f).epsilon(0.001));
+    CHECK(slide_pitch(0.0f) < slide_pitch(0.25f));
+    CHECK(slide_pitch(0.25f) < slide_pitch(0.5f));
+    CHECK(slide_pitch(0.5f) < slide_pitch(0.75f));
+    CHECK(slide_pitch(0.75f) < slide_pitch(1.0f));
+    // The span itself, at the two ends, against the two ends it says it covers.
+    const f32 spread = kSlideHighHertz / kSlideLowHertz;
+    CHECK(slide_pitch(0.0f) == doctest::Approx(1.0f / std::sqrt(spread)).epsilon(0.001));
+    CHECK(slide_pitch(1.0f) == doctest::Approx(std::sqrt(spread)).epsilon(0.001));
+    // Geometric rather than linear: the half-way point is the geometric mean of the two ends and
+    // not their average, which is the whole reason the bottom half of a slider is audible at all.
+    CHECK(slide_pitch(0.5f) * slide_pitch(0.5f) ==
+          doctest::Approx(slide_pitch(0.0f) * slide_pitch(1.0f)).epsilon(0.001));
+    // Anything outside the travel is held at the ends rather than allowed off the keyboard.
+    CHECK(slide_pitch(-3.0f) == doctest::Approx(slide_pitch(0.0f)));
+    CHECK(slide_pitch(9.0f) == doctest::Approx(slide_pitch(1.0f)));
+
+    // And the whole span reaches the waveform: the bottom of a slider and the top of one are not
+    // the same sound, which is what a clamp too narrow for the span quietly made them.
+    Sound low;
+    Sound high;
+    low.configure(kRate);
+    high.configure(kRate);
+    low.set_volume(1.0f);
+    high.set_volume(1.0f);
+    low.say(Cue::Slide, slide_pitch(0.0f));
+    high.say(Cue::Slide, slide_pitch(1.0f));
+    low.settle();
+    high.settle();
+    const std::vector<f32> quiet = render(low);
+    const std::vector<f32> loud = render(high);
+    // How many times each crosses zero in the first eighth of a second, which is a frequency
+    // measured rather than asserted -- the high one has to cross many times more often.
+    const auto crossings = [](const std::vector<f32>& in) {
+        usize count = 0;
+        for (usize i = 2; i < in.size(); i += 2) {
+            if ((in[i - 2] < 0.0f) != (in[i] < 0.0f)) ++count;
+        }
+        return count;
+    };
+    CHECK(crossings(loud) > crossings(quiet) * 8);
+    CHECK(crossings(quiet) > 0);
+
+    // It is the QUIETEST claim there is, so a drag that ends in a commit is heard as a commit and
+    // a drag over something that refuses is heard as a refusal.
+    Sound both;
+    both.configure(kRate);
+    both.set_volume(1.0f);
+    both.say(Cue::Slide, 2.0f);
+    both.say(Cue::Commit);
+    both.settle();
+    CHECK(both.last() == Cue::Commit);
+}

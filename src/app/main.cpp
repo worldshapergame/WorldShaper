@@ -1293,6 +1293,8 @@ struct Options {
     // nothing about it for a session.
     std::string open_editor;
     std::string editor_view;
+    // `--editor-choose NAME`: choose that box, so the settings panel opens on it.
+    std::string editor_choose;
     // `--editor-add box`: add one node to the open document, by the palette's own path. The visual
     // view can now CHANGE a document, and a change nothing automated can make is a change nothing
     // automated can check.
@@ -1424,6 +1426,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         if (i + 1 < argc) options.open_editor = argv[++i];
     } else if (arg == "--editor-view") {
         if (i + 1 < argc) options.editor_view = argv[++i];
+    } else if (arg == "--editor-choose") {
+        if (i + 1 < argc) options.editor_choose = argv[++i];
     } else if (arg == "--editor-node") {
         if (i + 1 < argc) options.editor_node = argv[++i];
     } else if (arg == "--editor-add") {
@@ -2238,6 +2242,7 @@ void print_help() {
         "  --quality N           pin the quality level 0-7 instead of deciding it\n"
         "  --no-auto-quality     leave quality where it is and never adjust it\n"
         "  --paint-with FILE     build with this voxel type, as choosing it on the shelf does\n"
+        "  --editor-choose NAME  choose that box, opening its properties on the left\n"
         "  --editor-part FILE    put that document inside the open one, copied beside it\n"
         "  --editor-new-part K:N make a new clip or material called N and put it in\n"
         "  --benchmark           measure this machine again and save the result\n"
@@ -14118,6 +14123,10 @@ int run_windowed(const Options& options) {
         if (!options.editor_enter.empty()) {
             const std::string why = shell.enter_node(options.editor_enter);
             if (!why.empty()) WS_LOG_WARN("shell", "--editor-enter: {}", why);
+        }
+        if (!options.editor_choose.empty() && !shell.choose_node_named(options.editor_choose)) {
+            WS_LOG_WARN("shell", "--editor-choose: nothing here is called '{}'",
+                        options.editor_choose);
         }
         if (!options.editor_add.empty()) {
             const std::string why = shell.add_node(options.editor_add);
