@@ -1026,3 +1026,75 @@ TEST_CASE("a material offers every property it can take, and one of them can be 
     CHECK(parts == 3);
     CHECK(last == doctest::Approx(3.0));
 }
+
+// --- the clipboard, for boxes ---------------------------------------------------------------------
+
+TEST_CASE("nodes copy out as text and paste back in, renamed where they collide") {
+    std::vector<std::string> lines = lines_of(kWirable);
+    ClipGraph graph = read_clip_graph(lines);
+    const u32 plinth = graph.find(ClipGraph::key_of(*named(graph, "plinth")));
+    const u32 all = graph.find(ClipGraph::key_of(*named(graph, "all")));
+
+    // What goes on the clipboard is the statements THEMSELVES, so it is something a person can
+    // read, paste into a text editor, and paste back.
+    const std::string text = copy_clip_nodes(lines, graph, {plinth, all});
+    CHECK(text.find("plinth") != std::string::npos);
+    CHECK(text.find("union") != std::string::npos);
+
+    std::vector<std::string> made;
+    CHECK(paste_clip_nodes(lines, graph, text, 3.0f, 1.0f, made).empty());
+    REQUIRE(made.size() == 2);
+    CHECK(made[0] == "plinth_2");
+    CHECK(made[1] == "all_2");
+
+    graph = read_clip_graph(lines);
+    const ClipNode* copy = named(graph, "all_2");
+    REQUIRE(copy != nullptr);
+    // The copy is made of the COPIED plinth, not the original -- otherwise pasting gives one new
+    // shape and one new name for the old one, and moving it moves what you copied from.
+    REQUIRE(copy->inputs.size() == 1);
+    CHECK(graph.nodes[copy->inputs.front()].name == "plinth_2");
+    CHECK(copy->placed);
+
+    // Into a document that has none of those names, the names come back exactly as they were.
+    std::vector<std::string> empty = lines_of("metre 32\n");
+    const ClipGraph blank = read_clip_graph(empty);
+    std::vector<std::string> fresh;
+    CHECK(paste_clip_nodes(empty, blank, text, 0.0f, 0.0f, fresh).empty());
+    REQUIRE(fresh.size() == 2);
+    CHECK(fresh[0] == "plinth");
+    CHECK(fresh[1] == "all");
+
+    // And nonsense on the clipboard is refused rather than written.
+    std::vector<std::string> unchanged = lines_of(kWirable);
+    const ClipGraph before = read_clip_graph(unchanged);
+    std::vector<std::string> none;
+    CHECK_FALSE(paste_clip_nodes(unchanged, before, "", 0.0f, 0.0f, none).empty());
+    CHECK(text_of(unchanged) == std::string(kWirable));
+}
+
+TEST_CASE("where the document's own box sits is in the file and out of the cache key") {
+    // It belongs to no statement, so it is a line of its own -- and a line of its own has to come
+    // out of `clip_without_layout` WHOLE, or the document the world was built from and the document
+    // on the disk stop hashing the same (D462).
+    std::vector<std::string> lines = lines_of(kWirable);
+    const std::string plain = text_of(lines);
+
+    CHECK(place_clip_document(lines, 6.0f, 2.0f));
+    ClipGraph graph = read_clip_graph(lines);
+    CHECK(graph.doc_placed);
+    CHECK(graph.doc_x == doctest::Approx(6.0));
+    CHECK(graph.doc_y == doctest::Approx(2.0));
+    CHECK(clip_without_layout(text_of(lines)) == plain);
+
+    // Moved again, there is still one of them.
+    CHECK(place_clip_document(lines, 1.0f, 1.0f));
+    graph = read_clip_graph(lines);
+    CHECK(graph.doc_x == doctest::Approx(1.0));
+    CHECK(count_of(text_of(lines), "#@doc") == 1);
+    CHECK(clip_without_layout(text_of(lines)) == plain);
+
+    // A document that says nothing about it says nothing about it.
+    const ClipGraph quiet = read_clip_graph(lines_of(kWirable));
+    CHECK_FALSE(quiet.doc_placed);
+}

@@ -187,6 +187,13 @@ struct ClipGraph {
     // the normal case for a clip; a Lua mod on the mods shelf is one node and every line.
     u32 opaque_lines = 0;
 
+    // Where the box that stands for the FILE was put, if anybody has moved it. A line of its own —
+    // `#@doc x y` — because it belongs to no statement, and in the file rather than in the game
+    // because §4 forbids the game keeping state about a file that the file does not carry (D445).
+    bool doc_placed = false;
+    f32 doc_x = 0.0f;
+    f32 doc_y = 0.0f;
+
     // A stable name for a node, so a selection survives the document being re-read on the next
     // keystroke. The `let` name where there is one, and "line:column" where there is not — neither
     // of which moves when a number on the line changes.
@@ -331,6 +338,28 @@ const std::vector<ClipProperty>& clip_properties_of(const std::string& head);
 // the same promise `write_clip_number` makes about one number (D746).
 bool write_clip_key(std::vector<std::string>& lines, const ClipNode& node, const std::string& key,
                     const std::string& value);
+
+// --- the clipboard, for boxes rather than for letters -------------------------------------------
+//
+// *Make ctrl-C, X and V also work on the visual node editor for selected nodes.* Asked for directly,
+// and the answer is that a node on a clipboard is TEXT — the statements themselves, exactly as they
+// are written, layout markers and all. That is what makes a node you copied out of one clip pasteable
+// into another, into a text editor, and back; a private in-memory node format would be a clipboard
+// only this window could read, which is not a clipboard (the same argument as `platform/window.hpp`'s).
+std::string copy_clip_nodes(const std::vector<std::string>& lines, const ClipGraph& graph,
+                            const std::vector<u32>& nodes);
+
+// And back in. Names that collide with this document are renamed, and every reference AMONG the
+// pasted statements follows the rename — a reference out of them is left pointing where it pointed,
+// which reads as unresolved and is honest. `x`/`y` is where the top-left of what was copied lands;
+// the rest keep their offsets from it, so a shape and the coat that paints it arrive in formation.
+std::string paste_clip_nodes(std::vector<std::string>& lines, const ClipGraph& graph,
+                             const std::string& text, f32 x, f32 y,
+                             std::vector<std::string>& made);
+
+// Where the document's own box sits, written as a line of its own at the top of the file. Replaces
+// the line if one is already there, so moving it twice leaves one.
+bool place_clip_document(std::vector<std::string>& lines, f32 x, f32 y);
 
 // `include "some.clip"`, written in at the top with everything else the document reads from
 // elsewhere — and with the same `#@` marker, so a part dropped on the canvas stays where it was

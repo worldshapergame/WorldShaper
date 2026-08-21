@@ -108,6 +108,9 @@ public:
     const Metrics& metrics() const { return metrics_; }
     Rect screen() const { return Rect{0.0f, 0.0f, static_cast<f32>(width_), static_cast<f32>(height_)}; }
     f64 seconds() const { return seconds_; }
+    // How long the last frame took, clamped. Anything that moves at a rate rather than in steps
+    // needs it — an edge pan, a scroll that carries on.
+    f32 dt() const { return dt_; }
 
     // Whether the shell has taken the pointer or the keyboard this frame, so the game underneath
     // knows not to also act on them. Asked AFTER `end`.

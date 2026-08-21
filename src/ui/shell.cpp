@@ -1714,10 +1714,25 @@ namespace {
 
 // How big a node's own square of the layout is, in interface pixels before the zoom. A node is
 // drawn inside it with room to spare, and the room is where the wires run.
-constexpr f32 kCellWide = 106.0f;
-constexpr f32 kCellTall = 38.0f;
-constexpr f32 kNodeWide = 0.80f;   // of a cell
-constexpr f32 kNodeTall = 0.62f;
+// A cell, and how much of it a box fills. What is LEFT is where the wires run (D781), so these four
+// numbers are the width of every channel and every lane in the picture.
+//
+// They were 106/38 at 0.80/0.62, which leaves a channel of 21 interface pixels. Reported with a
+// photograph of a world of forty-two parts: *sometimes wires are too close together*. Forty-two
+// wires in twenty-one pixels is half a pixel each, and no routing rule fixes a channel that narrow.
+// Now the box gives up a tenth of its width and a fourteenth of its height, and the cell is a
+// little larger, which is 33 pixels of channel and 19 of lane — a little over half as much again.
+//
+// The other half of that report is answered in `cells_tall`: a box gets taller when it has more
+// wires arriving than its edge has room for.
+constexpr f32 kCellWide = 118.0f;
+constexpr f32 kCellTall = 42.0f;
+constexpr f32 kNodeWide = 0.74f;   // of a cell
+constexpr f32 kNodeTall = 0.56f;
+// How much edge a wire needs to arrive at, in interface pixels. A box with more inputs than fit at
+// this pitch grows until they do. Four rather than eight because the box has to grow by a cell for
+// every seven wires, and a document of forty parts would otherwise be a picture mostly of one box.
+constexpr f32 kPortPitch = 4.0f;
 constexpr f32 kZoomLeast = 0.30f;
 constexpr f32 kZoomMost = 2.40f;
 // Below this the words on a node are not words any more, so the node draws its name and nothing
@@ -2102,13 +2117,28 @@ void Shell::open_node(u32 index, bool open) {
 // row's worth of pixels each — the same height they have in the panel on the left, because they
 // are the same rows.
 u32 Shell::cells_tall(u32 index) const {
-    if (index >= graph_.nodes.size() || !node_is_open(index)) return 1;
-    usize rows = 0;
-    for (const ClipProperty& offer : clip_properties_of(graph_.nodes[index].head)) {
-        rows += offer.parts;
+    if (index >= graph_.nodes.size()) return 1;
+    u32 tall = 1;
+    if (node_is_open(index)) {
+        usize rows = 0;
+        for (const ClipProperty& offer : clip_properties_of(graph_.nodes[index].head)) {
+            rows += offer.parts;
+        }
+        if (rows > 0) tall = 1 + static_cast<u32>((rows + 1) / 2);
     }
-    if (rows == 0) return 1;
-    return 1 + static_cast<u32>((rows + 1) / 2);
+    // And tall enough for its wires to land apart from one another. A box takes as many inputs as
+    // the author wrote and its edge is one cell high, so a union of twenty gets twenty wires into
+    // twenty-three pixels — which is the crowding that was reported, and it is not a routing fault
+    // but a box that is the wrong size for what arrives at it.
+    usize wires = 0;
+    for (u32 input : graph_.nodes[index].inputs) {
+        if (input < node_shown_.size() && node_shown_[input]) ++wires;
+    }
+    if (wires > 1) {
+        const f32 want = static_cast<f32>(wires) * kPortPitch;
+        tall = std::max(tall, static_cast<u32>(std::ceil(want / (kCellTall * kNodeTall))));
+    }
+    return std::min(tall, 24u);
 }
 
 u32 Shell::cells_wide(u32 index) const {
@@ -2333,7 +2363,22 @@ void Shell::lay_out_graph() {
         doc_shown_ = shown > 0;
         doc_x_ = most_x + 1.0f;
         doc_y_ = (shown > 0) ? std::round(sum_y / static_cast<f32>(shown)) : 0.0f;
-        if (doc_shown_) take_free_cell(taken, doc_x_, doc_y_);
+        // Everything that is an answer wires into it, so it is the box with the most arriving and
+        // the one the crowding was photographed on. Tall enough for all of them, and where the
+        // author put it if the author has put it anywhere.
+        doc_tall_ = 1;
+        if (shown > 1) {
+            const f32 want = static_cast<f32>(shown) * kPortPitch;
+            doc_tall_ = std::min(24u, static_cast<u32>(std::ceil(want / (kCellTall * kNodeTall))));
+        }
+        // Centred on the middle of what wires into it rather than starting there, so growing it
+        // does not push the whole picture down and shrink the size it opens at.
+        doc_y_ = std::max(0.0f, doc_y_ - std::floor(static_cast<f32>(doc_tall_ - 1) * 0.5f));
+        if (graph_.doc_placed) {
+            doc_x_ = graph_.doc_x;
+            doc_y_ = graph_.doc_y;
+        }
+        if (doc_shown_) take_free_cell(taken, doc_x_, doc_y_, doc_tall_);
     }
 
     for (usize i = 0; i < count; ++i) {
@@ -2343,7 +2388,7 @@ void Shell::lay_out_graph() {
     }
     if (doc_shown_) {
         graph_wide_ = std::max(graph_wide_, doc_x_ + 1.0f);
-        graph_tall_ = std::max(graph_tall_, doc_y_ + 1.0f);
+        graph_tall_ = std::max(graph_tall_, doc_y_ + static_cast<f32>(doc_tall_));
     }
 }
 
@@ -2539,6 +2584,29 @@ void Shell::draw_editor_tab(const Rect& rect) {
         if (ui_.input().was_pressed(Key::Z)) {
             step_back();
             return;
+        }
+        // And the three a node editor owes, on the same keys as the script view's — but only when
+        // the graph is the view showing, or one ctrl-C would mean two things.
+        if (view_ == 1) {
+            if (ui_.input().was_pressed(Key::C) || ui_.input().was_pressed(Key::X)) {
+                copy_chosen_nodes(ui_.input().was_pressed(Key::X));
+                return;
+            }
+            if (ui_.input().was_pressed(Key::V)) {
+                paste_nodes(menu_x_, menu_y_);
+                return;
+            }
+            if (ui_.input().was_pressed(Key::A)) {
+                std::vector<u32> all;
+                for (usize i = 0; i < graph_.nodes.size(); ++i) {
+                    if (node_shown_[i] && graph_.nodes[i].statement) {
+                        all.push_back(static_cast<u32>(i));
+                    }
+                }
+                choose_many(all);
+                ui_.sound().say(Cue::Step);
+                return;
+            }
         }
     }
 
@@ -2744,8 +2812,17 @@ void Shell::draw_script_view(const Rect& page) {
         caret_moved_ = true;
         ui_.stop_typing();
     }
-    if (selecting_ && ui_.input().mouse_left &&
-        page.holds(ui_.pointer_x(), ui_.pointer_y())) {
+    if (selecting_ && ui_.input().mouse_left) {
+        // Past the edge of the page the view comes along, so a selection can be longer than the
+        // window is. Sideways moves the text under the caret; up and down moves the scroll, which
+        // this view keeps in `Ui` and reads back on the next frame.
+        // A scroll offset counts DOWN the document while a pan counts the content up the screen,
+        // so both are held negated here and put back the right way round.
+        f32 sideways = -script_pan_x_;
+        f32 down = -ui_.scroll_of(scroll_id);
+        pan_at_edge(page, sideways, down, 520.0f);
+        script_pan_x_ = std::clamp(-sideways, 0.0f, std::max(0.0f, across));
+        ui_.set_scroll(scroll_id, std::max(0.0f, -down));
         at_pointer(caret_line_, caret_column_);
         caret_since_ = seconds_;
     }
@@ -2874,6 +2951,84 @@ void Shell::step_forward() {
     caret_moved_ = true;
     caret_since_ = seconds_;
     ui_.sound().say(Cue::Open);
+}
+
+// --- the keys a node editor owes ---------------------------------------------------------------
+//
+// The same three the script view has, on the same keys, through the same system clipboard. What
+// goes on it is the statements as TEXT — see `game/clip_graph.hpp` for why that and not a private
+// format — so a node copied here pastes into a text editor, into another clip, and back.
+void Shell::copy_chosen_nodes(bool cut) {
+    if (chosen_set_.empty()) {
+        say("nothing chosen", 1.5);
+        ui_.sound().say(Cue::Refuse);
+        return;
+    }
+    const std::string text = copy_clip_nodes(lines_, graph_, chosen_set_);
+    if (text.empty()) {
+        say("nothing here can be copied on its own", 2.5);
+        ui_.sound().say(Cue::Refuse);
+        return;
+    }
+    set_clipboard_text(text);
+    if (!cut) {
+        say(chosen_set_.size() == 1 ? "copied" : ("copied " + std::to_string(chosen_set_.size())),
+            1.5);
+        ui_.sound().say(Cue::Step);
+        return;
+    }
+    remember("cut");
+    const std::vector<u32> going = chosen_set_;
+    choose(ClipGraph::kNone);
+    document_changed(delete_clip_nodes(lines_, graph_, going));
+}
+
+void Shell::paste_nodes(f32 x, f32 y) {
+    const std::string text = clipboard_text();
+    std::vector<std::string> made;
+    remember("paste");
+    const std::string why = paste_clip_nodes(lines_, graph_, text, x, y, made);
+    document_changed(why);
+    if (!why.empty()) return;
+    // What arrived is what is chosen, so the next thing a hand does is about the thing that just
+    // appeared — the same rule duplicate follows.
+    std::vector<u32> fresh;
+    for (const std::string& name : made) {
+        for (usize i = 0; i < graph_.nodes.size(); ++i) {
+            if (graph_.nodes[i].name == name) fresh.push_back(static_cast<u32>(i));
+        }
+    }
+    choose_many(fresh);
+    say(made.size() == 1 ? "pasted" : ("pasted " + std::to_string(made.size())), 2.0);
+}
+
+// A selection pulled past the edge of its window takes the window with it.
+//
+// Asked for directly: *make it so that the text select of script and the box select of node visual
+// editor drag and pan around the window across its edges.* Without it a selection can only ever be
+// as long as what is on the screen, which on a sixteen-hundred-line clip is one screen in forty.
+// The speed grows with how far past the edge the hand is, because a fixed rate is either too slow
+// to cross a document or too fast to stop on a line.
+void Shell::pan_at_edge(const Rect& area, f32& pan_x, f32& pan_y, f32 rate) {
+    const Metrics& metrics = ui_.metrics();
+    const f32 margin = metrics.px(18.0f);
+    const f32 x = ui_.pointer_x();
+    const f32 y = ui_.pointer_y();
+    const auto past = [&](f32 over) {
+        // In margins, capped, so a pointer a mile off the window is not a hundred times faster than
+        // one just outside it.
+        return std::clamp(over / margin, 0.0f, 3.0f);
+    };
+    f32 dx = 0.0f;
+    f32 dy = 0.0f;
+    if (x < area.x0 + margin) dx = past(area.x0 + margin - x);
+    if (x > area.x1 - margin) dx = -past(x - (area.x1 - margin));
+    if (y < area.y0 + margin) dy = past(area.y0 + margin - y);
+    if (y > area.y1 - margin) dy = -past(y - (area.y1 - margin));
+    if (dx == 0.0f && dy == 0.0f) return;
+    const f32 step = rate * metrics.scale * ui_.dt();
+    pan_x += dx * step;
+    pan_y += dy * step;
 }
 
 void Shell::document_changed(const std::string& why) {
@@ -3038,9 +3193,12 @@ void Shell::draw_visual_view(const Rect& page) {
 
     // The document's box, worked out before the wires because they arrive at it.
     const Rect doc_box = [&] {
-        const f32 x = canvas.x0 + graph_pan_x_ + doc_x_ * cell_w;
-        const f32 y = canvas.y0 + graph_pan_y_ + doc_y_ * cell_h;
-        return Rect{x, y, x + node_w, y + node_h};
+        const f32 at_x = dragging_doc_ ? doc_drag_x_ : doc_x_;
+        const f32 at_y = dragging_doc_ ? doc_drag_y_ : doc_y_;
+        const f32 x = canvas.x0 + graph_pan_x_ + at_x * cell_w;
+        const f32 y = canvas.y0 + graph_pan_y_ + at_y * cell_h;
+        return Rect{x, y, x + node_w,
+                    y + static_cast<f32>(std::max(1u, doc_tall_) - 1) * cell_h + node_h};
     }();
 
     ui_.draw().push_clip(canvas);
@@ -3605,9 +3763,34 @@ void Shell::draw_visual_view(const Rect& page) {
     // built-in in the library, because it is the same kind of fact: a name that is a property of
     // the thing rather than of anything that has happened to it.
     if (doc_shown_ && doc_box.x0 < canvas.x1 && doc_box.x1 > canvas.x0) {
+        // It is not a node — there is nothing in it to change and no wire leaves it — but it IS a
+        // box on the canvas, and a box on a canvas that cannot be moved is the one thing in the
+        // picture a player cannot arrange. Asked for directly. Where it goes is written into the
+        // document on its own line, so it travels with the file like every other position (D756).
+        const bool over_doc = doc_box.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
+        if (over_doc && ui_.pressed_in(doc_box) && !ui_.any_menu_open()) {
+            hit_a_node = true;
+            dragging_doc_ = true;
+            doc_drag_x_ = doc_x_;
+            doc_drag_y_ = doc_y_;
+            doc_grab_x_ = layout_x(ui_.pointer_x()) - doc_x_;
+            doc_grab_y_ = layout_y(ui_.pointer_y()) - doc_y_;
+        }
+        if (dragging_doc_) {
+            doc_drag_x_ = std::round(layout_x(ui_.pointer_x()) - doc_grab_x_);
+            doc_drag_y_ = std::round(layout_y(ui_.pointer_y()) - doc_grab_y_);
+            if (ui_.input().mouse_left_released) {
+                dragging_doc_ = false;
+                remember("move");
+                place_clip_document(lines_, doc_drag_x_, doc_drag_y_);
+                document_changed({});
+                ui_.draw().pop_clip();
+                return;
+            }
+        }
         ui_.draw().glass(doc_box, 1.0f);
-        ui_.draw().ink(doc_box, 0.16f);
-        ui_.draw().edge(doc_box, 0.45f, 1.0f);
+        ui_.draw().ink(doc_box, over_doc ? 0.22f : 0.16f);
+        ui_.draw().edge(doc_box, over_doc ? 0.65f : 0.45f, 1.0f);
         ui_.draw().push_clip(doc_box);
         const f32 cell = std::min(metrics.icon() * 0.8f, node_h * 0.55f);
         const f32 left = doc_box.x0 + metrics.px(3.0f);
@@ -3697,6 +3880,9 @@ void Shell::draw_visual_view(const Rect& page) {
     Rect band{};
     bool band_done = false;
     if (may_band && ui_.band(id_of("editor.graph.band"), canvas, band, band_done)) {
+        // And the canvas comes along when the band is pulled past its edge, for the same reason
+        // the script view's selection does.
+        if (!band_done) pan_at_edge(canvas, graph_pan_x_, graph_pan_y_, 620.0f);
         std::vector<u32> inside;
         for (usize i = 0; i < graph_.nodes.size(); ++i) {
             if (!node_shown_[i]) continue;

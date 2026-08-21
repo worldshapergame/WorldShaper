@@ -368,6 +368,23 @@ private:
     f32 doc_x_ = 0.0f;
     f32 doc_y_ = 0.0f;
     bool doc_shown_ = false;
+    // And it can be picked up like anything else. Where it was put is written into the document as
+    // its own `#@` comment, because a layout that does not travel with the file is state the game
+    // keeps about a file, and §4 forbids that (D445).
+    u32 doc_tall_ = 1;
+    bool dragging_doc_ = false;
+    f32 doc_grab_x_ = 0.0f;
+    f32 doc_grab_y_ = 0.0f;
+    f32 doc_drag_x_ = 0.0f;
+    f32 doc_drag_y_ = 0.0f;
+
+    // What the keys a node editor owes do. The clipboard is the SYSTEM's, and what goes on it is
+    // the statements as text — see `game/clip_graph.hpp`.
+    void copy_chosen_nodes(bool cut);
+    void paste_nodes(f32 x, f32 y);
+    // Drags the canvas when a band or a text selection is pulled past the edge of its window, so a
+    // selection can be longer than the window is.
+    void pan_at_edge(const Rect& area, f32& pan_x, f32& pan_y, f32 rate);
     // Go into a box: from here on the canvas shows that box and what it is made of, and nothing
     // else. Coming back out is `leave_document`, which is one control for both journeys.
     void go_inside(u32 index);

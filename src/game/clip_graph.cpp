@@ -815,6 +815,29 @@ u32 ClipGraph::find(const std::string& key) const {
 namespace {
 
 constexpr const char* kPlacedMarker = "#@";
+// And the document's own, on a line of its own. A different spelling, because a line that is
+// nothing but a placement has to be recognisable as one — `without_placement` would otherwise
+// leave an empty line behind and the file would not come back byte for byte.
+constexpr const char* kDocumentMarker = "#@doc";
+
+// Whether this line is nothing but where the document's own box sits.
+static bool is_document_placement(const std::string& line, f32& x, f32& y) {
+    usize at = line.find_first_not_of(" \t");
+    if (at == std::string::npos) return false;
+    if (line.compare(at, std::strlen(kDocumentMarker), kDocumentMarker) != 0) return false;
+    const char* rest = line.c_str() + at + std::strlen(kDocumentMarker);
+    f64 read_x = 0.0;
+    f64 read_y = 0.0;
+    int used = 0;
+    if (std::sscanf(rest, "%lf %lf%n", &read_x, &read_y, &used) != 2) return false;
+    // Nothing after the two numbers, or it is a comment that merely starts the same way.
+    const char* tail = rest + used;
+    while (*tail == ' ' || *tail == '\t' || *tail == '\r') ++tail;
+    if (*tail != '\0') return false;
+    x = static_cast<f32>(read_x);
+    y = static_cast<f32>(read_y);
+    return true;
+}
 
 bool read_placement(const std::string& line, f32& x, f32& y) {
     const usize at = line.rfind(kPlacedMarker);
@@ -870,6 +893,14 @@ ClipGraph read_clip_graph(const std::vector<std::string>& lines) {
     for (ClipNode& node : graph.nodes) {
         if (!node.statement || node.line == 0 || node.line > lines.size()) continue;
         node.placed = read_placement(lines[node.line - 1], node.at_x, node.at_y);
+    }
+    // And where the box that stands for the FILE was put, which belongs to no statement and so has
+    // a line of its own.
+    for (const std::string& line : lines) {
+        if (is_document_placement(line, graph.doc_x, graph.doc_y)) {
+            graph.doc_placed = true;
+            break;
+        }
     }
     return graph;
 }
@@ -956,7 +987,7 @@ std::vector<ClipSpan> colour_clip_line(const std::string& line) {
 }
 
 std::string clip_without_layout(const std::string& text) {
-    if (text.find(kPlacedMarker) == std::string::npos) return text;
+    if (text.find(kPlacedMarker) == std::string::npos) return text;   // covers `#@doc` too
     std::string out;
     out.reserve(text.size());
     usize at = 0;
@@ -972,12 +1003,38 @@ std::string clip_without_layout(const std::string& text) {
             tail = "\r" + tail;
             line.pop_back();
         }
+        f32 ignore_x = 0.0f;
+        f32 ignore_y = 0.0f;
+        if (is_document_placement(line, ignore_x, ignore_y)) {
+            // The whole LINE goes, newline and all, because leaving an empty one behind is a
+            // document the cache key would see as different from the one it was built from.
+            if (!last) at = end + 1;
+            if (last) break;
+            continue;
+        }
         out += without_placement(line) + tail;
         if (!last) out += '\n';
         if (last) break;
         at = end + 1;
     }
     return out;
+}
+
+bool place_clip_document(std::vector<std::string>& lines, f32 x, f32 y) {
+    char marker[64];
+    std::snprintf(marker, sizeof(marker), "%s %.1f %.1f", kDocumentMarker, static_cast<f64>(x),
+                  static_cast<f64>(y));
+    for (std::string& line : lines) {
+        f32 was_x = 0.0f;
+        f32 was_y = 0.0f;
+        if (!is_document_placement(line, was_x, was_y)) continue;
+        line = marker;
+        return true;
+    }
+    // At the very top, above everything: it is about the file rather than about any statement in it,
+    // and a reader looking for what the file IS reads the first line.
+    lines.insert(lines.begin(), marker);
+    return true;
 }
 
 bool place_clip_node(std::vector<std::string>& lines, const ClipNode& node, f32 x, f32 y) {
@@ -1382,6 +1439,167 @@ std::string duplicate_clip_nodes(std::vector<std::string>& lines, const ClipGrap
     // in above.
     usize at = 0;
     for (u32 node : order) at = std::max<usize>(at, graph.nodes[node].last_line);
+    at = std::min(at, lines.size());
+    lines.insert(lines.begin() + static_cast<isize>(at), written.begin(), written.end());
+    return {};
+}
+
+std::string copy_clip_nodes(const std::vector<std::string>& lines, const ClipGraph& graph,
+                            const std::vector<u32>& nodes) {
+    std::vector<u32> order;
+    for (u32 node : nodes) {
+        if (node >= graph.nodes.size()) continue;
+        if (!graph.nodes[node].statement) continue;
+        order.push_back(node);
+    }
+    if (order.empty()) return {};
+    // In the order they are WRITTEN, because a paint stack is an order and a material has to come
+    // before the coat that names it.
+    std::sort(order.begin(), order.end(),
+              [&](u32 a, u32 b) { return graph.nodes[a].line < graph.nodes[b].line; });
+
+    std::string out;
+    std::vector<bool> done(lines.size() + 1, false);
+    for (u32 node : order) {
+        const ClipNode& one = graph.nodes[node];
+        if (one.line == 0 || one.line > lines.size()) continue;
+        const u32 last = std::min<u32>(one.last_line, static_cast<u32>(lines.size()));
+        for (u32 line = one.line; line <= last; ++line) {
+            if (done[line]) continue;   // two statements on one line are copied once
+            done[line] = true;
+            out += lines[line - 1];
+            out += "\n";
+        }
+    }
+    return out;
+}
+
+std::string paste_clip_nodes(std::vector<std::string>& lines, const ClipGraph& graph,
+                             const std::string& text, f32 x, f32 y,
+                             std::vector<std::string>& made) {
+    made.clear();
+    if (text.empty()) return "there is nothing on the clipboard";
+
+    std::vector<std::string> incoming{std::string()};
+    for (char c : text) {
+        if (c == '\n') {
+            incoming.emplace_back();
+        } else if (c != '\r') {
+            incoming.back() += c;
+        }
+    }
+    while (!incoming.empty() && incoming.back().empty()) incoming.pop_back();
+    if (incoming.empty()) return "there is nothing on the clipboard";
+
+    const ClipGraph in = read_clip_graph(incoming);
+    bool any = false;
+    for (const ClipNode& node : in.nodes) {
+        if (node.statement) any = true;
+    }
+    if (!any) return "what is on the clipboard is not a statement";
+
+    // A free name for each thing the pasted text binds. Its own name where nothing here has it —
+    // pasting into an empty document should give back exactly what was copied.
+    std::vector<std::string> taken;
+    for (const ClipNode& node : graph.nodes) {
+        if (!node.name.empty()) taken.push_back(node.name);
+    }
+    std::map<std::string, std::string> renamed;
+    for (const ClipNode& node : in.nodes) {
+        if (!node.statement || node.name.empty() || node.name_length == 0) continue;
+        if (renamed.count(node.name) != 0) continue;
+        std::string want = node.name;
+        for (u32 nth = 2; nth < 1000; ++nth) {
+            if (std::find(taken.begin(), taken.end(), want) == taken.end()) break;
+            want = node.name + "_" + std::to_string(nth);
+        }
+        taken.push_back(want);
+        renamed[node.name] = want;
+        made.push_back(want);
+    }
+
+    // Where the pasted set sits now, so it can be moved to where the pointer is without losing the
+    // shape it was copied in.
+    f32 least_x = 0.0f;
+    f32 least_y = 0.0f;
+    bool placed_any = false;
+    for (const ClipNode& node : in.nodes) {
+        if (!node.statement || !node.placed) continue;
+        if (!placed_any) {
+            least_x = node.at_x;
+            least_y = node.at_y;
+            placed_any = true;
+        }
+        least_x = std::min(least_x, node.at_x);
+        least_y = std::min(least_y, node.at_y);
+    }
+
+    struct Patch {
+        u32 line = 0;
+        u32 column = 0;
+        u32 length = 0;
+        std::string text;
+    };
+    std::vector<Patch> patches;
+    std::map<u32, std::pair<f32, f32>> place_at;   // first line of a statement -> where it goes
+    for (const ClipNode& node : in.nodes) {
+        if (!node.statement) continue;
+        if (!node.name.empty() && node.name_length > 0) {
+            const auto to = renamed.find(node.name);
+            if (to != renamed.end()) {
+                patches.push_back(Patch{node.name_line, node.name_column, node.name_length,
+                                        to->second});
+            }
+        }
+        for (const ClipLink& link : node.links) {
+            if (!link.named || link.from >= in.nodes.size()) continue;
+            const auto to = renamed.find(in.nodes[link.from].name);
+            if (to == renamed.end()) continue;
+            const std::string text_of =
+                link.key.empty() ? to->second : (link.key + "=" + to->second);
+            patches.push_back(Patch{link.line, link.column, link.length, text_of});
+        }
+        const f32 at_x = placed_any ? (x + node.at_x - least_x) : x;
+        const f32 at_y = placed_any ? (y + node.at_y - least_y) : y;
+        place_at[node.line] = {at_x, at_y};
+    }
+
+    std::vector<std::string> written;
+    for (u32 line = 1; line <= static_cast<u32>(incoming.size()); ++line) {
+        std::string one = without_placement(incoming[line - 1]);
+        std::vector<Patch> here;
+        for (const Patch& patch : patches) {
+            if (patch.line == line) here.push_back(patch);
+        }
+        // Right to left, so a replacement never moves the column of one still to be applied.
+        std::sort(here.begin(), here.end(),
+                  [](const Patch& a, const Patch& b) { return a.column > b.column; });
+        for (const Patch& patch : here) {
+            if (patch.column + patch.length > one.size()) continue;
+            one.replace(patch.column, patch.length, patch.text);
+        }
+        const auto where = place_at.find(line);
+        if (where != place_at.end()) {
+            char marker[64];
+            std::snprintf(marker, sizeof(marker), "  %s %.1f %.1f", kPlacedMarker,
+                          static_cast<f64>(where->second.first),
+                          static_cast<f64>(where->second.second));
+            one += marker;
+        }
+        written.push_back(one);
+    }
+
+    // Before the first thing that could USE what has just arrived, so a name is bound before it is
+    // read — the same rule `add_clip_node` follows and for the same reason.
+    usize at = lines.size();
+    for (const ClipNode& node : graph.nodes) {
+        if (!node.statement) continue;
+        if (node.head != "solid" && node.head != "region" && node.head != "paint" &&
+            node.head != "weather") {
+            continue;
+        }
+        if (node.line > 0 && node.line - 1 < at) at = node.line - 1;
+    }
     at = std::min(at, lines.size());
     lines.insert(lines.begin() + static_cast<isize>(at), written.begin(), written.end());
     return {};
