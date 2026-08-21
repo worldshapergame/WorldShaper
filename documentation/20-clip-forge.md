@@ -317,7 +317,18 @@ does not build. `clip_may_join` (`game/clip_graph.hpp`) decides, before a byte i
 | `variation` | a pattern | `by=` |
 | the arithmetic and the patterns | a number | a name inside its `{ }` |
 
-Anything else is refused with one line saying what would work instead. While a wire is being
+Anything else is either **made** or refused. Two things that cannot be wired but plainly mean
+something together are written as the statement a person would have typed (D821):
+
+| dropped together | what gets written |
+|---|---|
+| a voxel type and a pattern | `paint TYPE where=PATTERN above=0.5` |
+| a voxel type and a shape | `paint TYPE` |
+| a pattern and a shape | `let X_displaced = displace { X } by=P amount=0.05` |
+| two shapes | `let joined = union { A B }` |
+| two patterns | `let blended = blend { P Q } by=0.5` |
+
+Anything left over is refused with one line saying what would work instead. While a wire is being
 dragged the editor lights every box that could take it and dims the rest, so the table above is
 something a player sees rather than something they read.
 

@@ -242,6 +242,10 @@ public:
         // where deleting one means going to another tab, finding it again and deleting it there is
         // a list nobody prunes.
         bool removable = false;
+        // One line about what this row is, shown when a pointer rests on it. A menu of eighty words
+        // is a menu that has to be able to explain itself, or the only way to find out what `cells`
+        // does is to add one and look.
+        std::string_view about;
     };
     // Opens at a point; only one menu is open at a time.
     void open_menu(u64 id, f32 x, f32 y);
@@ -267,6 +271,14 @@ public:
     // composite in. Choosing an item closes it; so does a press anywhere else, and so does Escape.
     i32 menu(u64 id, const MenuItem* items, u32 count);
     i32 menu(u64 id, const MenuItem* items, u32 count, i32& removed);
+    // The same menu with a field at the top of it that the caller has already filtered by.
+    //
+    // `text` is the caller's own buffer, kept between frames; the menu types into it and reports
+    // that it changed so the caller can filter and come back. The field takes the keyboard the
+    // moment the menu opens, so a player presses right-click and types — which is the whole point
+    // of a search that has to be reached with a pointer otherwise.
+    i32 menu(u64 id, const MenuItem* items, u32 count, i32& removed, std::string* text,
+             std::string_view placeholder = {});
 
     // A press with nothing drawn for it: the hit box, the tooltip and the sound, and not one mark.
     // The logo is what this is for — it is a picture that answers a press, and a hover wash over it
@@ -285,11 +297,32 @@ public:
     // rectangle — carrying a window to another edge is the only one so far.
     f32 pointer_x() const { return input_.mouse_x; }
     f32 pointer_y() const { return input_.mouse_y; }
+    // A press inside a rectangle — **and not through anything drawn over it**.
+    //
+    // These were a raw hit test and nothing else, so a press landed on every rectangle that
+    // contained the point rather than on the one on top: reported as *sometimes clicking on a
+    // button will click on the button behind it*. `hovering` has refused a claimed point since the
+    // title's buttons were being pressed through the docked windows; these two never learned the
+    // same rule, and every control that is not a `button` — every node on the canvas, every row of
+    // the script view, the graph itself — is written in terms of these.
+    //
+    // The CLIP is checked as well, which is the other half of the same fault: a rectangle scrolled
+    // out of its own list is still a rectangle, and a press at its remembered position landed on it
+    // through whatever is now drawn there.
     bool pressed_in(const Rect& rect) const {
-        return input_.mouse_left_pressed && rect.holds(input_.mouse_x, input_.mouse_y);
+        return input_.mouse_left_pressed && reaches(rect);
     }
     bool right_pressed_in(const Rect& rect) const {
-        return input_.mouse_right_pressed && rect.holds(input_.mouse_x, input_.mouse_y);
+        return input_.mouse_right_pressed && reaches(rect);
+    }
+    // Whether the pointer is in this rectangle and nothing drawn later is over it.
+    bool reaches(const Rect& rect) const {
+        if (!rect.holds(input_.mouse_x, input_.mouse_y)) return false;
+        if (!draw_.clip().holds(input_.mouse_x, input_.mouse_y)) return false;
+        for (const Rect& claimed : claims_) {
+            if (claimed.holds(input_.mouse_x, input_.mouse_y)) return false;
+        }
+        return true;
     }
     bool released() const { return input_.mouse_left_released; }
     const InputState& input() const { return input_; }

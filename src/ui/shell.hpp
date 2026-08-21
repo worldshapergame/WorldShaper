@@ -469,6 +469,14 @@ private:
     void give_editor_room();
     // Everything the graph can do, at the pointer: the palette, and what one node can be told.
     void draw_graph_menu(const Rect& canvas);
+    // What is typed into the add menu's search. Kept between frames because the menu is redrawn
+    // from nothing every one of them, and cleared when the menu closes.
+    //
+    // *Add a search bar for the right click list for nodes, i cant find the coat node.* Eighty
+    // words in ten folds is a palette you have to already know the shape of; a search is how you
+    // find a word you know the NAME of, and `clip_head_matches` is how you find one you only know
+    // the job of.
+    std::string palette_search_;
     // --- a part: another clip, or a material ---------------------------------------------------
     //
     // *There is no node for adding a clip into the editor either an empty one or one from your clip

@@ -4499,17 +4499,9 @@ std::string time_left(f64 seconds) {
 // by content and a mismatch is discarded — but a collision that costs a rebuild every time you
 // swap between them is a cache that stopped working for the one player who hit it.
 std::string Application::cache_file_for(const std::string& world_path, const char* suffix) {
-    std::error_code error;
-    const std::filesystem::path full =
-        std::filesystem::absolute(std::filesystem::path(world_path), error);
-    const std::string text = error ? world_path : full.lexically_normal().string();
-    u64 hash = 0xCBF29CE484222325ull;
-    for (char c : text) hash = hash_combine(hash, static_cast<u64>(static_cast<u8>(c)));
-    char stamp[24];
-    std::snprintf(stamp, sizeof(stamp), "-%016llx", static_cast<unsigned long long>(hash));
-    const std::filesystem::path into = ui::default_root() / "cache";
-    std::filesystem::create_directories(into, error);
-    return (into / (std::filesystem::path(world_path).stem().string() + stamp + suffix)).string();
+    // One implementation, in `ui::library`, because DELETING a world has to find the same file.
+    // Two copies of this arithmetic is how a deleted world's cache comes to outlive it.
+    return ui::cache_file_for(ui::default_root(), world_path, suffix);
 }
 
 std::string Application::loading_cache_path() const {

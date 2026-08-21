@@ -626,7 +626,17 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### TYPES, LESSONS AND NO BOUNDS, 2026-08-21 — D807–D818. Read this first
+#### A SEARCHABLE PALETTE AND WIRES THAT SPEAK, 2026-08-21 — D819–D825. Read this first
+
+| what changed | | how to look at it |
+|---|---|---|
+| **deleting a world deletes its CACHE** (D819) | it is named for the path, so the next world of that name inherited it — chisel marks and all | `ui::cache_file_for` |
+| **the palette is searchable** (D820), and a word answers to *coat*, *noise*, *subtract*, *voronoi* | `clip_head_help` / `clip_head_matches` | right-click the canvas and type |
+| **two things that cannot be wired but mean something together make it** (D821) | a voxel type and a pattern make a coat | `clip_join_makes` |
+| **a press does not reach through what is drawn over it** (D822) | `pressed_in` was a raw hit test | — |
+| **a wire carries the word it is** (D823) | `where`, `by`, `on`, `coats` | — |
+
+#### TYPES, LESSONS AND NO BOUNDS, 2026-08-21 — D807–D818
 
 **The two reports that matter most in this wave are the same fault seen twice**: the rules of the
 graph were right and invisible. *I can barely understand how things connect and work*, and *if i

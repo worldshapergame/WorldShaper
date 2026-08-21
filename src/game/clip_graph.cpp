@@ -1739,6 +1739,9 @@ std::string clip_node_template(const std::string& head) {
 
 std::string clip_head_shown(const std::string& head) {
     if (head == "material") return "voxel type";
+    // Every document in this repository calls a `paint` a COAT, and a player who has read one goes
+    // looking for a coat. Reported: *i cant find the coat node.* The keyword does not change.
+    if (head == "paint") return "coat";
     return head;
 }
 
@@ -1851,6 +1854,129 @@ std::string clip_may_join(const ClipNode& target, const ClipNode& source, std::s
     }
 
     return target.head + " is not made of anything -- it has no room for a wire";
+}
+
+ClipJoinKind clip_join_makes(const ClipNode& a, const ClipNode& b) {
+    // Only things the document has NAMED can be joined this way, because what gets written is a new
+    // statement that names them both.
+    if (a.name.empty() || b.name.empty()) return ClipJoinKind::None;
+    if (a.unresolved || b.unresolved) return ClipJoinKind::None;
+    if (a.head == "include" || b.head == "include") return ClipJoinKind::None;
+    const ClipCarries one = a.carries;
+    const ClipCarries two = b.carries;
+
+    const auto both = [&](ClipCarries x, ClipCarries y) {
+        return (one == x && two == y) || (one == y && two == x);
+    };
+    if (both(ClipCarries::Material, ClipCarries::Value)) return ClipJoinKind::Coat;
+    if (both(ClipCarries::Material, ClipCarries::Shape)) return ClipJoinKind::Coat;
+    if (both(ClipCarries::Value, ClipCarries::Shape)) return ClipJoinKind::Displace;
+    if (one == ClipCarries::Shape && two == ClipCarries::Shape) return ClipJoinKind::Union;
+    if (one == ClipCarries::Value && two == ClipCarries::Value) return ClipJoinKind::Blend;
+    return ClipJoinKind::None;
+}
+
+std::string join_clip_nodes(std::vector<std::string>& lines, const ClipGraph& graph, u32 from,
+                            u32 to, f32 x, f32 y, std::string& made) {
+    made.clear();
+    if (from >= graph.nodes.size() || to >= graph.nodes.size()) return "nothing to join";
+    if (from == to) return "a thing cannot be joined to itself";
+    const ClipNode& a = graph.nodes[from];
+    const ClipNode& b = graph.nodes[to];
+    const ClipJoinKind kind = clip_join_makes(a, b);
+    if (kind == ClipJoinKind::None) return "those two do not make anything together";
+
+    // Which of the two is which, by what it carries rather than by which end was dragged: a player
+    // pulling a wire from a pattern to a voxel type means the same thing as the other way round.
+    const ClipNode* material = nullptr;
+    const ClipNode* pattern = nullptr;
+    const ClipNode* shape = nullptr;
+    const ClipNode* second_shape = nullptr;
+    const ClipNode* second_pattern = nullptr;
+    for (const ClipNode* one : {&a, &b}) {
+        if (one->carries == ClipCarries::Material && material == nullptr) {
+            material = one;
+        } else if (one->carries == ClipCarries::Value && pattern == nullptr) {
+            pattern = one;
+        } else if (one->carries == ClipCarries::Value) {
+            second_pattern = one;
+        } else if (one->carries == ClipCarries::Shape && shape == nullptr) {
+            shape = one;
+        } else if (one->carries == ClipCarries::Shape) {
+            second_shape = one;
+        }
+    }
+
+    std::string statement;
+    bool at_the_top = false;
+    switch (kind) {
+        case ClipJoinKind::Coat:
+            // A coat, which is what a voxel type and anything else mean together. With a pattern it
+            // gets a `where=`; with a shape there is nothing in the language to scope it to, so it
+            // is a plain coat and the shape is left alone — which is honest, and is what the
+            // refusal used to say in words.
+            made = material->name;
+            statement = "paint " + material->name;
+            if (pattern != nullptr) statement += " where=" + pattern->name + " above=0.5";
+            break;
+        case ClipJoinKind::Displace:
+            made = free_name(graph, shape->name + "_displaced");
+            statement = "let " + made + " = displace { " + shape->name + " } by=" + pattern->name +
+                        " amount=0.05";
+            at_the_top = true;
+            break;
+        case ClipJoinKind::Union:
+            made = free_name(graph, "joined");
+            statement = "let " + made + " = union { " + shape->name + " " +
+                        (second_shape != nullptr ? second_shape->name : shape->name) + " }";
+            at_the_top = true;
+            break;
+        case ClipJoinKind::Blend:
+            made = free_name(graph, "blended");
+            statement = "let " + made + " = blend { " + pattern->name + " " +
+                        (second_pattern != nullptr ? second_pattern->name : pattern->name) +
+                        " } by=0.5";
+            at_the_top = true;
+            break;
+        case ClipJoinKind::None:
+            return "those two do not make anything together";
+    }
+
+    // Before the first thing that could read it, so a name is bound before it is used — the same
+    // rule `add_clip_node` follows. A coat goes at the END of the coats instead, because a paint
+    // stack is an order and a new coat goes over the last (`20-clip-forge.md` §2).
+    usize at = lines.size();
+    if (at_the_top) {
+        for (const ClipNode& node : graph.nodes) {
+            if (!node.statement) continue;
+            if (node.head != "solid" && node.head != "region" && node.head != "paint" &&
+                node.head != "weather") {
+                continue;
+            }
+            if (node.line > 0 && node.line - 1 < at) at = node.line - 1;
+        }
+    } else {
+        at = 0;
+        for (const ClipNode& node : graph.nodes) {
+            if (node.head == "paint" || node.head == "material" || node.head == "metre" ||
+                node.head == "bounds" || node.head == "include" || node.head == "param") {
+                at = std::max<usize>(at, node.last_line);
+            }
+        }
+        // And never after the solid, which reads everything above it.
+        for (const ClipNode& node : graph.nodes) {
+            if (node.head == "solid" && node.line > 0) {
+                at = std::min<usize>(at, node.line - 1);
+            }
+        }
+    }
+    at = std::min(at, lines.size());
+
+    char marker[64];
+    std::snprintf(marker, sizeof(marker), "  %s %.1f %.1f", kPlacedMarker, static_cast<f64>(x),
+                  static_cast<f64>(y));
+    lines.insert(lines.begin() + static_cast<isize>(at), statement + marker);
+    return {};
 }
 
 u32 clip_wrapper_of(const ClipGraph& graph, u32 node, const std::string& head) {
@@ -2057,6 +2183,123 @@ bool write_clip_key(std::vector<std::string>& lines, const ClipNode& node, const
     while (tail > 0 && (line[tail - 1] == ' ' || line[tail - 1] == '\t')) --tail;
     line = line.substr(0, tail) + " " + key + "=" + value + line.substr(tail);
     return true;
+}
+
+const ClipWordHelp& clip_head_help(const std::string& head) {
+    // What each word does, in one line, and what else somebody might call it. The `also` column is
+    // where the vocabulary of every OTHER voxel game goes: a player who has used one comes looking
+    // for *add*, *subtract*, *noise* and *scatter*, and the answer is here rather than nowhere.
+    static const std::map<std::string, ClipWordHelp> kHelp = {
+        {"box", {"A rectangular block between two corners", {"cube", "block", "cuboid"}}},
+        {"sphere", {"A ball of a radius", {"ball", "orb"}}},
+        {"cylinder", {"A round column of a radius and a height", {"tube", "pillar", "column"}}},
+        {"capsule", {"A cylinder with a dome on each end", {"pill"}}},
+        {"cone", {"A cone standing on its base", {"spike"}}},
+        {"torus", {"A ring of a tube thickness", {"ring", "donut", "doughnut"}}},
+        {"arc", {"Part of a ring, from one turn to another", {"bend", "curve"}}},
+        {"prism", {"A column with a chosen number of sides", {"hexagon", "polygon"}}},
+        {"plane", {"A half-space: everything on one side of a flat surface", {"floor", "ground"}}},
+        {"tetra", {"A four-sided solid: the simplest one there is", {"pyramid", "triangle"}}},
+        {"cube", {"A cube standing on a point, of a radius", {"box", "hexahedron"}}},
+        {"octa", {"An eight-sided solid: two pyramids base to base", {"diamond", "crystal"}}},
+        {"dodeca", {"A twelve-sided solid of pentagons", {"crystal", "die"}}},
+        {"icosa", {"A twenty-sided solid of triangles", {"crystal", "die", "ball"}}},
+        {"wedge", {"A block cut away along one diagonal", {"ramp", "slope", "roof"}}},
+        {"stairs", {"A flight of steps between two corners", {"steps", "staircase"}}},
+        {"fillet", {"A moulding: a plain square band", {"moulding", "trim", "edge"}}},
+        {"ovolo", {"A moulding: a convex quarter round", {"moulding", "trim", "bullnose"}}},
+        {"cavetto", {"A moulding: a concave quarter hollow", {"moulding", "trim", "cove"}}},
+        {"bead", {"A moulding: a half-round bead", {"moulding", "trim", "round"}}},
+        {"astragal", {"A moulding: a bead with a fillet each side", {"moulding", "trim"}}},
+        {"scotia", {"A moulding: a deep hollow of two arcs", {"moulding", "trim", "cove"}}},
+        {"cyma", {"A moulding: the S, convex then hollow", {"moulding", "trim", "ogee"}}},
+        {"cyma_reversa", {"A moulding: the S the other way about", {"moulding", "trim", "ogee"}}},
+        {"rasp", {"Harsh, grainy noise", {"noise", "grit", "sand"}}},
+        {"add", {"Two numbers added together", {"plus", "sum"}}},
+        {"multiply", {"Two numbers multiplied", {"times", "product", "scale"}}},
+        {"min", {"Whichever of two numbers is smaller", {"lowest", "darkest"}}},
+        {"max", {"Whichever of two numbers is larger", {"highest", "brightest"}}},
+        {"blend", {"Part way between two numbers", {"mix", "lerp", "average", "fade"}}},
+        {"remap", {"One range of numbers stretched onto another", {"range", "levels"}}},
+        {"abs", {"A number with its sign taken off", {"absolute", "positive"}}},
+        {"negate", {"A number with its sign turned round", {"invert", "flip", "minus"}}},
+        {"step", {"Nought below a threshold and one above it", {"threshold", "cutoff", "hard"}}},
+        {"smoothstep", {"The same, eased across a band", {"threshold", "soft", "fade"}}},
+        {"clamp", {"A number held between two limits", {"limit", "range"}}},
+        {"power", {"A number raised to a power", {"exponent", "contrast", "curve"}}},
+        {"spiral", {"A helix winding about an axis", {"helix", "screw"}}},
+        {"branch", {"A tree of tapering limbs", {"tree", "root"}}},
+        {"union", {"Everything in it, joined into one shape", {"add", "join", "combine", "or"}}},
+        {"difference",
+         {"The first shape with the rest taken out of it", {"subtract", "cut", "remove", "minus"}}},
+        {"intersection",
+         {"Only where every shape in it overlaps", {"and", "common", "overlap"}}},
+        {"translate", {"Moved by an offset", {"move", "offset", "shift"}}},
+        {"rotate", {"Turned about the origin, in turns", {"turn", "spin", "angle"}}},
+        {"scale", {"Stretched along each axis", {"stretch", "resize", "size"}}},
+        {"mirror", {"Reflected across an axis", {"flip", "symmetry", "reflect"}}},
+        {"repeat", {"Copied on a grid, for ever", {"array", "grid", "tile", "copy"}}},
+        {"around", {"Copied round a circle", {"radial", "polar", "circle"}}},
+        {"scatter", {"Copied on a grid, each one nudged and turned", {"random", "jitter"}}},
+        {"twist", {"Wrung about an axis", {"wring"}}},
+        {"bend", {"Curved about an axis", {"curve"}}},
+        {"shell", {"Hollowed out, leaving a skin", {"hollow", "empty", "thickness"}}},
+        {"round", {"Its edges rounded off", {"fillet", "bevel", "smooth"}}},
+        {"offset", {"Grown or shrunk in every direction", {"inflate", "shrink", "grow"}}},
+        {"displace", {"Its surface pushed in and out by a pattern", {"bump", "relief", "rough"}}},
+        {"revolve", {"A profile spun about an axis", {"lathe", "turn"}}},
+        {"fbm", {"Cloudy noise at several sizes at once", {"noise", "cloud", "perlin", "grain"}}},
+        {"noise", {"Plain noise at one size", {"random", "grain"}}},
+        {"ridged", {"Noise with sharp ridges", {"mountain", "erode"}}},
+        {"cells", {"Cell noise: rounded lumps that tile space", {"voronoi", "worley", "pebble"}}},
+        {"cell_edge", {"The boundaries between those cells", {"voronoi", "crack", "web"}}},
+        {"sine", {"A wave", {"wave", "ripple"}}},
+        {"waves", {"Several waves crossing", {"wave", "ripple", "water"}}},
+        {"checker", {"A checkerboard", {"chequer", "tile", "squares"}}},
+        {"stripes", {"Stripes along an axis", {"bands", "lines"}}},
+        {"bricks", {"Courses of bricks, with a joint between them", {"brick", "wall", "masonry"}}},
+        {"axis", {"How far along an axis a point is", {"gradient", "position", "height"}}},
+        {"distance", {"How far from a point", {"radial", "gradient", "falloff"}}},
+        {"occlusion", {"How enclosed a place is", {"ao", "shadow", "crevice"}}},
+        {"curvature", {"Whether a surface bulges or hollows here", {"edge", "corner", "arris"}}},
+        {"facing", {"Which way the surface points", {"normal", "slope", "up"}}},
+        {"param", {"A number the document names, so one edit changes every use", {"variable"}}},
+        {"constant", {"A fixed number", {"number", "value"}}},
+        {"material",
+         {"A voxel type: a colour, and how it takes light", {"voxel type", "colour", "color"}}},
+        {"paint",
+         {"A coat: puts a voxel type on the world, where a pattern says",
+          {"coat", "colour", "color", "apply", "texture"}}},
+        {"weather", {"Age, crack, overgrow or bleach the world", {"age", "erode", "crack"}}},
+        {"variation",
+         {"Every voxel wanders a little from the type it was placed with", {"noise", "wobble"}}},
+        {"metre", {"How many voxels to a metre", {"meter", "resolution", "scale"}}},
+        {"origin", {"Where the middle of this clip is", {"pivot", "centre", "center"}}},
+        {"solid", {"Which shape the world is made of", {"output", "result", "final"}}},
+        {"region", {"Names part of the world, so other things can talk about it", {"zone"}}},
+    };
+    static const ClipWordHelp kNone;
+    const auto at = kHelp.find(head);
+    return at == kHelp.end() ? kNone : at->second;
+}
+
+bool clip_head_matches(const std::string& head, const std::string& text) {
+    if (text.empty()) return true;
+    const auto folded = [](std::string in) {
+        for (char& c : in) {
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+            if (c == '_' || c == '-') c = ' ';
+        }
+        return in;
+    };
+    const std::string want = folded(text);
+    if (folded(head).find(want) != std::string::npos) return true;
+    if (folded(clip_head_shown(head)).find(want) != std::string::npos) return true;
+    const ClipWordHelp& help = clip_head_help(head);
+    for (const std::string& other : help.also) {
+        if (folded(other).find(want) != std::string::npos) return true;
+    }
+    return folded(help.about).find(want) != std::string::npos;
 }
 
 const std::vector<ClipPaletteGroup>& clip_palette() {

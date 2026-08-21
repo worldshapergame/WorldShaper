@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 
 #include "core/crash.hpp"
+#include "core/hash.hpp"
 #include "core/log.hpp"
 #include "platform/desktop.hpp"
 
@@ -141,6 +143,21 @@ bool write_author(const std::filesystem::path& path, const Kind& kind,
     }
     out.write(body.data(), static_cast<std::streamsize>(body.size()));
     return out.good();
+}
+
+std::string cache_file_for(const std::filesystem::path& root, const std::string& world_path,
+                           const char* suffix) {
+    std::error_code error;
+    const std::filesystem::path full =
+        std::filesystem::absolute(std::filesystem::path(world_path), error);
+    const std::string text = error ? world_path : full.lexically_normal().string();
+    u64 hash = 0xCBF29CE484222325ull;
+    for (char c : text) hash = hash_combine(hash, static_cast<u64>(static_cast<u8>(c)));
+    char stamp[24];
+    std::snprintf(stamp, sizeof(stamp), "-%016llx", static_cast<unsigned long long>(hash));
+    const std::filesystem::path into = root / "cache";
+    std::filesystem::create_directories(into, error);
+    return (into / (std::filesystem::path(world_path).stem().string() + stamp + suffix)).string();
 }
 
 std::vector<std::string> where_includes_live(const std::filesystem::path& root) {
@@ -611,6 +628,17 @@ std::string Library::erase(const std::vector<Entry>& entries) {
             const std::filesystem::path from = entry.path.string() + sidecar;
             std::error_code beside;
             if (std::filesystem::exists(from, beside) && !beside) send_to_recycle_bin(from);
+        }
+        // **And what this machine worked out about it, which does not live beside it** (D493).
+        //
+        // The cache is named for the world's PATH, so leaving it behind does not merely waste the
+        // disk: the next world to take that name finds it, and because both were made by pressing
+        // *new* they start from the same text, so its key matches and the new world opens as the
+        // old one. Reported as a deleted world coming back. Deleted outright rather than sent to
+        // the bin — it is not the player's, it is derived, and it is worthless anywhere else.
+        for (const char* suffix : {".world", ".load"}) {
+            std::error_code derived;
+            std::filesystem::remove(cache_file_for(root_, entry.path.string(), suffix), derived);
         }
         if (!pieces.empty()) send_to_recycle_bin(pieces);
     }

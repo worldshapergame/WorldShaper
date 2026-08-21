@@ -349,6 +349,24 @@ struct ClipProperty {
 // keyword is a promise to every clip ever written.
 std::string clip_head_shown(const std::string& head);
 
+// One line saying what a word of the language DOES, and the other words somebody might look for it
+// under.
+//
+// *I can't find the coat node.* It is called `paint`, and *coat* is what every document in this
+// repository calls it in prose — so the word a player has read is not the word the palette lists.
+// Rather than rename a keyword, the palette is searchable and a word answers to more than its own
+// spelling: `paint` answers to *coat*, `fbm` to *noise*, `union` to *add* and *join*.
+struct ClipWordHelp {
+    std::string about;                  // one line, for the tooltip
+    std::vector<std::string> also;      // other things to look for it under
+};
+const ClipWordHelp& clip_head_help(const std::string& head);
+
+// Whether this word is what somebody typing `text` is looking for. Matches the word, what it is
+// called on screen, the other names it answers to, and its own description — in that order of
+// obviousness, and anywhere in each rather than only at the start (the library's own rule).
+bool clip_head_matches(const std::string& head, const std::string& text);
+
 // Empty for a head that has no such table — which is most of them, and means "list what is
 // written", exactly as before.
 const std::vector<ClipProperty>& clip_properties_of(const std::string& head);
@@ -367,6 +385,37 @@ const std::vector<ClipProperty>& clip_properties_of(const std::string& head);
 // player. `key` comes back holding the key the wire should be written under, which is how a coat
 // reads a pattern through `where=` and a voxel type through neither.
 std::string clip_may_join(const ClipNode& target, const ClipNode& source, std::string& key);
+
+// --- and what to BUILD when the two do not fit but the intent is obvious --------------------------
+//
+// *Instead of when i connect a voxel type to a pattern it rejects it, make it understand that what i
+// want is for that voxel type to be applied to that pattern.* Asked for directly, and it is right:
+// a refusal is the correct answer to a wire that means nothing and the wrong one to a wire that
+// means something the language spells with a third word.
+//
+// A voxel type and a pattern joined together mean *this type, where that pattern says* — which is a
+// COAT, and a coat is a statement rather than a wire. So the join makes one. The same reasoning
+// gives four more:
+//
+//   voxel type -> pattern, or pattern -> voxel type   a coat, `paint TYPE where=PATTERN`
+//   voxel type -> shape, or shape -> voxel type       a coat of that type, and the shape is what
+//                                                     the world is made of if nothing else is
+//   pattern -> shape                                  a displacement, `displace { SHAPE } by=P`
+//   shape -> shape                                    a union of the two
+//   pattern -> pattern                                a blend of the two
+//
+// Every one of them writes what a person would have typed, so the script view is the explanation.
+// `made` comes back holding the name of whatever was written, so the interface can choose it.
+enum class ClipJoinKind : u8 { None, Coat, Displace, Union, Blend };
+
+// What joining these two would MAKE, or `None` when nothing sensible would come of it. Asked before
+// anything is written, so the interface can say what a drop is going to do before the hand lets go.
+ClipJoinKind clip_join_makes(const ClipNode& a, const ClipNode& b);
+
+// And does it. `from` and `to` are in the order the wire was dragged; the writer works out which is
+// which. Empty on success, one line otherwise.
+std::string join_clip_nodes(std::vector<std::string>& lines, const ClipGraph& graph, u32 from,
+                            u32 to, f32 x, f32 y, std::string& made);
 
 // --- a shape that is hollow, and a shape that is stretched --------------------------------------
 //

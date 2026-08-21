@@ -615,12 +615,18 @@ void Ui::open_menu(u64 id, f32 x, f32 y) {
 
 i32 Ui::menu(u64 id, const MenuItem* items, u32 count) {
     i32 ignored = -1;
-    return menu(id, items, count, ignored);
+    return menu(id, items, count, ignored, nullptr);
 }
 
 i32 Ui::menu(u64 id, const MenuItem* items, u32 count, i32& removed) {
+    return menu(id, items, count, removed, nullptr);
+}
+
+i32 Ui::menu(u64 id, const MenuItem* items, u32 count, i32& removed, std::string* text,
+             std::string_view placeholder) {
     removed = -1;
-    if (menu_ != id || count == 0) return -1;
+    if (menu_ != id) return -1;
+    if (count == 0 && text == nullptr) return -1;
 
     const f32 row = metrics_.row();
     const f32 pad = metrics_.px(4.0f);
@@ -628,6 +634,7 @@ i32 Ui::menu(u64 id, const MenuItem* items, u32 count, i32& removed) {
     for (u32 i = 0; i < count; ++i) {
         widest = std::max(widest, DrawList::measure(items[i].label, metrics_.text()));
     }
+    if (text != nullptr) widest = std::max(widest, metrics_.px(140.0f));
     bool any_removable = false;
     for (u32 i = 0; i < count; ++i) {
         if (items[i].removable) any_removable = true;
@@ -636,7 +643,8 @@ i32 Ui::menu(u64 id, const MenuItem* items, u32 count, i32& removed) {
     // sideways depending on whether the row above it can be taken out.
     const f32 gutter = any_removable ? metrics_.icon() + metrics_.px(6.0f) : 0.0f;
     const f32 width = widest + metrics_.icon() + metrics_.px(24.0f) + gutter;
-    const f32 height = row * static_cast<f32>(count) + pad * 2.0f;
+    const f32 height =
+        row * static_cast<f32>(count) + pad * 2.0f + (text != nullptr ? row + pad : 0.0f);
     // Flipped rather than clamped when it would run off: a menu whose last item is under the edge
     // of the screen is a menu missing the item somebody was reaching for.
     f32 x = menu_x_;
@@ -652,9 +660,28 @@ i32 Ui::menu(u64 id, const MenuItem* items, u32 count, i32& removed) {
     draw_.edge(box, 0.6f);
 
     i32 chosen = -1;
+    f32 top = box.y0 + pad;
+    if (text != nullptr) {
+        const u64 field_id = hash_combine(id, 0x5EA2C4ull);
+        const Rect where{box.x0 + pad, top, box.x1 - pad, top + row};
+        // Focused the moment the menu opens, so right-click-and-type works. `menu_opened_frame_`
+        // is the one frame on which that is true, and taking it every frame would fight a player
+        // who clicked into something else.
+        if (frame_ == menu_opened_frame_ + 1 && typing_ != field_id) type_into(field_id, *text);
+        std::string held = *text;
+        if (field(field_id, where, held, placeholder)) *text = held;
+        // A field reports on ENTER, and a search has to answer while it is being typed — so what
+        // is in the buffer is read directly rather than waited for.
+        if (typing_ == field_id) *text = buffer_;
+        top += row + pad;
+        if (count == 0) {
+            draw_.text(box.x0 + pad + metrics_.px(4.0f), top, "nothing of that name",
+                       metrics_.text(), kPlain, Align::Left, 0.5f);
+        }
+    }
     for (u32 i = 0; i < count; ++i) {
-        const Rect cell{box.x0 + pad, box.y0 + pad + row * static_cast<f32>(i), box.x1 - pad,
-                        box.y0 + pad + row * static_cast<f32>(i + 1)};
+        const Rect cell{box.x0 + pad, top + row * static_cast<f32>(i), box.x1 - pad,
+                        top + row * static_cast<f32>(i + 1)};
         const u64 own = hash_combine(id, i + 1);
         // The remove mark takes the right of the row, and the row itself stops at it — otherwise
         // pressing *delete this* would also be pressing *choose this*, which is the worst possible
@@ -681,6 +708,9 @@ i32 Ui::menu(u64 id, const MenuItem* items, u32 count, i32& removed) {
         // changes with the selection is a menu whose items are never in the same place twice.
         icon_and_label(body, items[i].icon, items[i].label, 1.0f, items[i].enabled ? 1.0f : 0.35f,
                        false);
+        if (over && !items[i].about.empty() && seconds_ - hover_since_ > kRestSeconds) {
+            tooltip(body, items[i].about);
+        }
     }
     draw_.pop_clip();
 
@@ -690,6 +720,10 @@ i32 Ui::menu(u64 id, const MenuItem* items, u32 count, i32& removed) {
                            !box.holds(input_.mouse_x, input_.mouse_y);
     if (chosen >= 0 || removed >= 0 || input_.was_pressed(Key::Escape) ||
         (elsewhere && frame_ != menu_opened_frame_)) {
+        if (text != nullptr) {
+            text->clear();
+            stop_typing();
+        }
         menu_ = 0;
     }
     // While it is up it owns the pointer, so a click meant for it never also reaches the world.

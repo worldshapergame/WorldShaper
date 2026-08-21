@@ -1323,3 +1323,104 @@ TEST_CASE("what may be wired is asked before it is written, so the picture can s
     CHECK(clip_may_join(find("solid"), shape, key).empty());
     CHECK_FALSE(clip_may_join(find("solid"), type, key).empty());
 }
+
+// --- what two things MEAN together ----------------------------------------------------------------
+
+TEST_CASE("two things that cannot be wired but mean something together make it") {
+    // *Instead of when i connect a voxel type to a pattern it rejects it, make it understand that
+    // what i want is for that voxel type to be applied to that pattern.* A refusal is the right
+    // answer to a wire that means nothing and the wrong one to a wire that means something the
+    // language spells with a third word.
+    std::vector<std::string> lines = lines_of(
+        "metre 32\n"
+        "material stone rgb=170,166,158\n"
+        "let grain = fbm size=0.2 octaves=3 seed=1\n"
+        "let rough = fbm size=0.6 octaves=2 seed=5\n"
+        "let a = box 0 0 0  1 1 1\n"
+        "let b = box 2 0 0  3 1 1\n"
+        "solid a\n");
+    ClipGraph graph = read_clip_graph(lines);
+    const auto at = [&](const char* name) {
+        return graph.find(ClipGraph::key_of(*named(graph, name)));
+    };
+
+    // A voxel type and a pattern is a COAT, and it reads the same both ways round.
+    CHECK(clip_join_makes(*named(graph, "stone"), *named(graph, "grain")) == ClipJoinKind::Coat);
+    CHECK(clip_join_makes(*named(graph, "grain"), *named(graph, "stone")) == ClipJoinKind::Coat);
+    CHECK(clip_join_makes(*named(graph, "grain"), *named(graph, "a")) == ClipJoinKind::Displace);
+    CHECK(clip_join_makes(*named(graph, "a"), *named(graph, "b")) == ClipJoinKind::Union);
+    CHECK(clip_join_makes(*named(graph, "grain"), *named(graph, "rough")) == ClipJoinKind::Blend);
+
+    std::string made;
+    CHECK(join_clip_nodes(lines, graph, at("grain"), at("stone"), 2.0f, 1.0f, made).empty());
+    CHECK(made == "stone");
+    CHECK(text_of(lines).find("paint stone where=grain above=0.5") != std::string::npos);
+    // A coat goes AFTER the voxel types and BEFORE the solid, because a name has to be bound before
+    // it is read and a solid reads everything above it.
+    ClipGraph after = read_clip_graph(lines);
+    u32 coat_line = 0;
+    u32 solid_line = 0;
+    u32 type_line = 0;
+    for (const ClipNode& node : after.nodes) {
+        if (node.head == "paint") coat_line = node.line;
+        if (node.head == "solid") solid_line = node.line;
+        if (node.head == "material") type_line = node.line;
+    }
+    CHECK(type_line < coat_line);
+    CHECK(coat_line < solid_line);
+
+    // A pattern and a shape is a displacement, written the way a person would have typed it.
+    graph = read_clip_graph(lines);
+    CHECK(join_clip_nodes(lines, graph, at("grain"), at("a"), 3.0f, 0.0f, made).empty());
+    CHECK(text_of(lines).find("displace { a } by=grain") != std::string::npos);
+
+    // And two shapes are a union of both, not of one twice.
+    graph = read_clip_graph(lines);
+    CHECK(join_clip_nodes(lines, graph, at("a"), at("b"), 0.0f, 0.0f, made).empty());
+    CHECK(text_of(lines).find("union { a b }") != std::string::npos);
+
+    // Everything written parses back into a graph that says what it looks like.
+    const ClipGraph again = read_clip_graph(lines);
+    CHECK(again.nodes.size() > after.nodes.size());
+    for (const ClipNode& node : again.nodes) {
+        CHECK_FALSE(node.opaque);
+    }
+}
+
+TEST_CASE("a word of the language can be found by what it does") {
+    // *Add a search bar for the right click list for nodes, i cant find the coat node.* It is
+    // called `paint`, and every document in this repository calls it a coat.
+    CHECK(clip_head_matches("paint", "coat"));
+    CHECK(clip_head_matches("paint", "paint"));
+    CHECK(clip_head_matches("paint", "colour"));
+    CHECK(clip_head_shown("paint") == "coat");
+    CHECK(clip_head_shown("material") == "voxel type");
+
+    // The vocabulary of every other voxel game, which is what a player arrives with.
+    CHECK(clip_head_matches("union", "add"));
+    CHECK(clip_head_matches("difference", "subtract"));
+    CHECK(clip_head_matches("fbm", "noise"));
+    CHECK(clip_head_matches("cells", "voronoi"));
+    CHECK(clip_head_matches("shell", "hollow"));
+    CHECK(clip_head_matches("scale", "stretch"));
+    CHECK(clip_head_matches("material", "voxel type"));
+
+    // And what it DOES, when the name is no help at all.
+    CHECK(clip_head_matches("occlusion", "enclosed"));
+    CHECK(clip_head_matches("plane", "ground"));
+
+    // Case and separators do not matter; nonsense matches nothing; empty matches everything.
+    CHECK(clip_head_matches("union", "ADD"));
+    CHECK(clip_head_matches("cell_edge", "cell edge"));
+    CHECK_FALSE(clip_head_matches("box", "trombone"));
+    CHECK(clip_head_matches("box", ""));
+
+    // Every word the palette offers has a line about it, or the search has nothing to read and the
+    // tooltip has nothing to say.
+    for (const ClipPaletteGroup& group : clip_palette()) {
+        for (const std::string& head : group.heads) {
+            INFO(head);
+            CHECK_FALSE(clip_head_help(head).about.empty());
+        }
+    }
+}

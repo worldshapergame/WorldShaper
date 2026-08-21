@@ -3408,6 +3408,7 @@ void Shell::draw_visual_view(const Rect& page) {
             ui_.right_pressed_in(canvas)) {
             menu_about_ = ClipGraph::kNone;
             palette_group_ = -1;
+            palette_search_.clear();
             menu_x_ = 0.0f;
             menu_y_ = 0.0f;
             ui_.open_menu(id_of("editor.graph.menu"), ui_.pointer_x(), ui_.pointer_y());
@@ -3551,6 +3552,20 @@ void Shell::draw_visual_view(const Rect& page) {
     // in it, ordered by where it starts, so parallel wires read as a bundle rather than as one
     // thick line.
     const f32 thin = std::max(1.0f, metrics.scale * graph_zoom_);
+    // Whether there is room to letter a wire. The same threshold the boxes use for their own
+    // detail, worked out here because the wires are drawn first.
+    const bool detail_words = graph_zoom_ >= kZoomForDetail;
+    // **The words are collected here and drawn after the BOXES.** A box is a window and is in front
+    // of what is behind it (D753), so a word drawn with its wire is a word the next box covers —
+    // which is what happened: `coats` came out as `oats` under the box beside it.
+    struct WireWord {
+        std::string text;
+        f32 x = 0.0f;
+        f32 y = 0.0f;
+        bool written = true;
+    };
+    std::vector<WireWord> wire_words;
+    const f32 word_size = metrics.small_text();
     {
         // Which cells have a box on them, so a straight run can be checked against them.
         std::unordered_set<u64> filled;
@@ -3585,6 +3600,12 @@ void Shell::draw_visual_view(const Rect& page) {
             bool straight = true;   // nothing in the way: no lane needed
             u32 rgb = 0;
             bool written = true;    // the document says so, rather than the language meaning it
+            // The word this wire is, which is the whole of why a reader could not tell what was
+            // joined to what: a line between two boxes says THAT they are joined and nothing about
+            // HOW. `where`, `by`, `on`, `coats`, `made of` — that is the missing half.
+            std::string word;
+            u32 from_node = 0;
+            u32 into_node = 0;
         };
         // One place that works out which strips a wire turns in, so the document's own wires are
         // routed by exactly the same rule as everything else rather than by a second copy of it.
@@ -3662,6 +3683,21 @@ void Shell::draw_visual_view(const Rect& page) {
                 run.rgb =
                     tint_rgb(ui_.accent(), clip_carries_tint(graph_.nodes[input].carries));
                 run.written = arriving[k].second;
+                run.from_node = input;
+                run.into_node = static_cast<u32>(i);
+                // What the document calls this wire. A key when it has one — `where=grain` is a
+                // wire whose word is `where` — and the relationship's own word when the language
+                // means it rather than saying it.
+                if (arriving[k].second) {
+                    for (const ClipLink& link : node.links) {
+                        if (link.from == input && !link.key.empty()) run.word = link.key;
+                    }
+                } else {
+                    run.word = (graph_.nodes[input].head == "paint")       ? "coats"
+                               : (graph_.nodes[input].head == "weather")   ? "weathers"
+                               : (graph_.nodes[input].head == "variation") ? "varies"
+                                                                           : "";
+                }
                 const i32 fx = static_cast<i32>(std::lround(from_at.first));
                 const i32 fy = static_cast<i32>(std::lround(from_at.second));
                 const i32 tx = static_cast<i32>(std::lround(into_at.first));
@@ -3775,6 +3811,17 @@ void Shell::draw_visual_view(const Rect& page) {
                                 std::max(y0, y1)},
                            rgb, written ? 1.0f : 0.62f);
         };
+        // **The word a wire is.** A line between two boxes says THAT they are joined and nothing
+        // about HOW, which is the whole of *i really cant tell how things connect*. `where`, `by`,
+        // `on`, `coats` — one word, on the wire, in the wire's own colour.
+        //
+        // Only at the detail size: a word on every wire at a third of full size is a smear, and a
+        // graph zoomed out is a picture of the SHAPE of a document rather than of its grammar.
+        const auto label_wire = [&](const std::string& word, f32 x, f32 y, bool written) {
+            if (word.empty() || !detail_words) return;
+            if (x < canvas.x0 || x > canvas.x1) return;
+            wire_words.push_back(WireWord{word, x, y, written});
+        };
 
         for (usize r = 0; r < runs.size(); ++r) {
             const Run& run = runs[r];
@@ -3785,6 +3832,13 @@ void Shell::draw_visual_view(const Rect& page) {
                 flat(from.x1, turn_in, run.y0, run.rgb, run.written);
                 upright(turn_in, run.y0, run.y1, run.rgb, run.written);
                 flat(turn_in, into.x0, run.y1, run.rgb, run.written);
+                // On the longer of the two flat stretches, because a word on a stretch shorter
+                // than itself is a word over a box.
+                if (turn_in - from.x1 >= into.x0 - turn_in) {
+                    label_wire(run.word, (from.x1 + turn_in) * 0.5f, run.y0, run.written);
+                } else {
+                    label_wire(run.word, (turn_in + into.x0) * 0.5f, run.y1, run.written);
+                }
                 continue;
             }
             const f32 turn_out = channel_x(run.channel_out, slot_out[r]);
@@ -3794,6 +3848,8 @@ void Shell::draw_visual_view(const Rect& page) {
             flat(turn_out, turn_in, along, run.rgb, run.written);
             upright(turn_in, along, run.y1, run.rgb, run.written);
             flat(turn_in, into.x0, run.y1, run.rgb, run.written);
+            // The lane run is the long one on a wire that takes a lane, so the word goes there.
+            label_wire(run.word, (turn_out + turn_in) * 0.5f, along, run.written);
         }
     }
 
@@ -3842,9 +3898,12 @@ void Shell::draw_visual_view(const Rect& page) {
         if (wiring_from_ < graph_.nodes.size() && wiring_from_ != i) {
             std::string ignored;
             could_take =
-                clip_may_join(node, graph_.nodes[wiring_from_], ignored).empty() &&
-                std::none_of(node.links.begin(), node.links.end(),
-                             [&](const ClipLink& link) { return link.from == wiring_from_; });
+                (clip_may_join(node, graph_.nodes[wiring_from_], ignored).empty() &&
+                 std::none_of(node.links.begin(), node.links.end(),
+                              [&](const ClipLink& link) { return link.from == wiring_from_; })) ||
+                // Or the two make something TOGETHER, which is a drop that works even though no
+                // wire can be drawn between them.
+                clip_join_makes(node, graph_.nodes[wiring_from_]) != ClipJoinKind::None;
         }
 
         // The glass FIRST, so the wires running past behind it are hidden rather than showing
@@ -4150,6 +4209,19 @@ void Shell::draw_visual_view(const Rect& page) {
         }
     }
 
+    // --- and the words the wires are, over everything they run past --------------------------
+    for (const WireWord& word : wire_words) {
+        const f32 wide = DrawList::measure(word.text, word_size);
+        const f32 tall = DrawList::line_height(word_size);
+        const Rect over{word.x - wide * 0.5f - metrics.px(3.0f), word.y - tall * 0.5f,
+                        word.x + wide * 0.5f + metrics.px(3.0f), word.y + tall * 0.5f};
+        // The glass first, so the wire does not run through the middle of its own name.
+        ui_.draw().glass(over, 1.0f);
+        ui_.draw().ink(over, 0.10f);
+        ui_.draw().text(over.x0 + metrics.px(3.0f), over.y0, word.text, word_size, kPlain,
+                        Align::Left, word.written ? 0.95f : 0.72f);
+    }
+
     // --- the document itself ----------------------------------------------------------------
     //
     // Not a node: it is not in the file and there is nothing in it to change. It is the thing every
@@ -4278,7 +4350,36 @@ void Shell::draw_visual_view(const Rect& page) {
         wiring_from_ = ClipGraph::kNone;
         if (dropped_on < graph_.nodes.size()) {
             remember("wire");
-            document_changed(connect_clip_nodes(lines_, graph_, from, dropped_on));
+            // **A wire first, and what the two MEAN together when a wire will not do.**
+            //
+            // A voxel type dropped on a union is refused, because a union is made of shapes. A
+            // voxel type dropped on a PATTERN is not a wire at all — neither can hold the other —
+            // and it plainly means *that type, where that pattern says*, which the language spells
+            // with a third word. Asked for directly, and the rule is that the interface writes what
+            // a person would have typed rather than inventing something only it understands.
+            const std::string wired = connect_clip_nodes(lines_, graph_, from, dropped_on);
+            if (wired.empty()) {
+                document_changed({});
+                return;
+            }
+            if (clip_join_makes(graph_.nodes[from], graph_.nodes[dropped_on]) !=
+                ClipJoinKind::None) {
+                // Where the pointer let go, so what is made appears where it was asked for.
+                std::string made;
+                const std::string why =
+                    join_clip_nodes(lines_, graph_, from, dropped_on,
+                                    std::round(layout_x(ui_.pointer_x())),
+                                    std::round(layout_y(ui_.pointer_y())), made);
+                document_changed(why);
+                if (why.empty()) {
+                    for (usize i = 0; i < graph_.nodes.size(); ++i) {
+                        if (graph_.nodes[i].name == made) choose(static_cast<u32>(i));
+                    }
+                    say("made " + made, 2.5);
+                }
+                return;
+            }
+            document_changed(wired);
             return;
         }
     }
@@ -4331,6 +4432,7 @@ void Shell::draw_visual_view(const Rect& page) {
     if (over_canvas && !hit_a_node && !ui_.any_menu_open() && ui_.right_pressed_in(canvas)) {
         menu_about_ = ClipGraph::kNone;
         palette_group_ = -1;
+        palette_search_.clear();
         menu_x_ = layout_x(ui_.pointer_x());
         menu_y_ = layout_y(ui_.pointer_y());
         ui_.open_menu(id_of("editor.graph.menu"), ui_.pointer_x(), ui_.pointer_y());
@@ -4578,6 +4680,31 @@ void Shell::draw_graph_menu(const Rect& canvas) {
             acts.push_back(Act::TakePart);
             args.push_back(static_cast<i32>(&one - part_choices_.data()));
         }
+    } else if (!palette_search_.empty()) {
+        // **A search is flat.** Folds are how eighty words fit on a screen; a search is what you
+        // reach for when you already know what you are looking for, and putting the answers back
+        // into the folds they came from would be answering a different question.
+        //
+        // Every word of the language, matched on its own spelling, on what it is called on screen,
+        // on the other names it answers to and on what it does — so *coat* finds `paint`, *noise*
+        // finds `fbm`, and *subtract* finds `difference`.
+        i32 which = 0;
+        for (const ClipPaletteGroup& group : clip_palette()) {
+            i32 head_at = 0;
+            for (const std::string& head : group.heads) {
+                if (clip_head_matches(head, palette_search_)) {
+                    labels.push_back(clip_head_shown(head));
+                    items.push_back({Icon::New, labels.back(), true, false,
+                                     clip_head_help(head).about});
+                    acts.push_back(Act::Head);
+                    // The group it came from travels with it, because `Act::Head` reads the head
+                    // out of `palette_group_` and a flat list has no one group.
+                    args.push_back(which * 1000 + head_at);
+                }
+                ++head_at;
+            }
+            ++which;
+        }
     } else if (palette_group_ < 0) {
         // A whole clip and a whole material come FIRST, above the words of the language: they are
         // the two biggest things a document can be made of, and the palette's own groups are the
@@ -4604,7 +4731,8 @@ void Shell::draw_graph_menu(const Rect& canvas) {
             i32 head_at = 0;
             for (const std::string& head : groups[which].heads) {
                 labels.push_back(clip_head_shown(head));
-                items.push_back({Icon::New, labels.back(), true});
+                items.push_back({Icon::New, labels.back(), true, false,
+                                 clip_head_help(head).about});
                 acts.push_back(Act::Head);
                 args.push_back(head_at++);
             }
@@ -4613,7 +4741,15 @@ void Shell::draw_graph_menu(const Rect& canvas) {
     for (usize i = 0; i < items.size(); ++i) items[i].label = labels[i];
 
     i32 removed = -1;
-    const i32 picked = ui_.menu(id, items.data(), static_cast<u32>(items.size()), removed);
+    // The search is offered where the WORDS are: over a node it is a list of four actions and a
+    // field there is furniture, and over a shelf's files it is the file names that matter.
+    const bool searchable = !about_a_node && palette_group_ != kPartClips &&
+                            palette_group_ != kPartMaterials;
+    const i32 picked =
+        searchable
+            ? ui_.menu(id, items.data(), static_cast<u32>(items.size()), removed, &palette_search_,
+                       "what are you looking for?")
+            : ui_.menu(id, items.data(), static_cast<u32>(items.size()), removed);
     if (removed >= 0 && static_cast<usize>(removed) < args.size() &&
         acts[static_cast<usize>(removed)] == Act::TakePart) {
         const usize which = static_cast<usize>(args[static_cast<usize>(removed)]);
@@ -4748,9 +4884,14 @@ void Shell::draw_graph_menu(const Rect& canvas) {
         }
         case Act::Head: {
             const std::vector<ClipPaletteGroup>& groups = clip_palette();
-            const usize which = static_cast<usize>(palette_group_);
-            const usize head = static_cast<usize>(args[at]);
+            // A search is flat, so the row carries the group it came from: group * 1000 + word.
+            const bool from_search = !palette_search_.empty();
+            const usize which = from_search ? static_cast<usize>(args[at] / 1000)
+                                            : static_cast<usize>(palette_group_);
+            const usize head = from_search ? static_cast<usize>(args[at] % 1000)
+                                           : static_cast<usize>(args[at]);
             palette_group_ = -1;
+            palette_search_.clear();
             if (which >= groups.size() || head >= groups[which].heads.size()) return;
             // Through the same one path a scripted run takes, so the thing a photograph proves is
             // the thing a press does.

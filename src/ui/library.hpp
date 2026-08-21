@@ -104,6 +104,19 @@ std::filesystem::path default_root();
 // in two functions of `main.cpp`, which is exactly how those two come to disagree.
 std::vector<std::string> where_includes_live(const std::filesystem::path& root = default_root());
 
+// Where what this machine worked out about a world is kept (D493): under the data root, in
+// `cache\`, named for the world's stem and a hash of its full path.
+//
+// **It is here rather than in `main.cpp` because DELETING a world has to be able to find it.** It
+// was private to the application, so a world went to the recycle bin and the megabytes this machine
+// had derived from it stayed — and, far worse, the next world to take that name took that cache
+// with it. Reported: *if i create a world and edit it then delete it then create a new world with
+// the same name it will have the same nodes as the deleted world.* The file is keyed by content as
+// well, so it is only wrong when the two worlds start from the same text — which is exactly what
+// happens when both were made by pressing *new*.
+std::string cache_file_for(const std::filesystem::path& root, const std::string& world_path,
+                           const char* suffix);
+
 
 // The six shelves the game ships with, in the order they are offered.
 const std::vector<Kind>& shipped_kinds();
