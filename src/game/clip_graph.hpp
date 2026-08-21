@@ -353,6 +353,21 @@ std::string clip_head_shown(const std::string& head);
 // written", exactly as before.
 const std::vector<ClipProperty>& clip_properties_of(const std::string& head);
 
+// --- what may be wired into what ----------------------------------------------------------------
+//
+// **A wire had no type at all, and that is a bug rather than a looseness.** Reported: *if i take a
+// voxel type node and connect it to an union it doesnt connect but creates another node that is a
+// clip with the same name and at the top says unknown shape or pattern.* Nothing was created — the
+// name was written into `union { }`, the union read it as a shape it had never heard of, and the
+// graph drew that unresolved name as a box of its own. Every one of those three surprises is the
+// same missing check.
+//
+// So a wire is refused unless the thing on the end of it is a kind the target can read, and the
+// refusal says what WOULD work. `why` is empty when it is allowed; otherwise it is one line for the
+// player. `key` comes back holding the key the wire should be written under, which is how a coat
+// reads a pattern through `where=` and a voxel type through neither.
+std::string clip_may_join(const ClipNode& target, const ClipNode& source, std::string& key);
+
 // --- a shape that is hollow, and a shape that is stretched --------------------------------------
 //
 // *Add a hollow parameter to the settings of shape nodes and parameters to stretch them.* Asked for

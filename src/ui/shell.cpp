@@ -2433,12 +2433,35 @@ void Shell::lay_out_graph() {
             for (u32 input : implied_[i]) node_shown_[input] = true;
         }
     } else {
+        // **Inside a box is that box and what is under it, and nothing else.**
+        //
+        // Reported twice in one message: *going inside a node shouldnt show the nodes that are
+        // outside of it*, and *the nodes inside solid of the weather demo clip are already shown
+        // without having to go inside of the solid node*. Both are the same thing — going in has to
+        // NARROW the picture or there was no point going in.
+        //
+        // Two levels, matching what the outside shows (an answer and what it is made of), so
+        // pressing the way in is always the same move: you keep the same depth of view and drop
+        // everything that is not under this one.
         const u32 here = graph_.find(inside_.back());
         node_shown_[here] = true;
-        for (u32 input : graph_.nodes[here].inputs) {
-            if (input < count) node_shown_[input] = true;
+        std::vector<u32> front{here};
+        for (u32 level = 0; level < 2 && !front.empty(); ++level) {
+            std::vector<u32> next;
+            for (u32 one : front) {
+                for (u32 input : graph_.nodes[one].inputs) {
+                    if (input >= count || node_shown_[input]) continue;
+                    node_shown_[input] = true;
+                    next.push_back(input);
+                }
+                for (u32 input : implied_[one]) {
+                    if (input >= count || node_shown_[input]) continue;
+                    node_shown_[input] = true;
+                    next.push_back(input);
+                }
+            }
+            front = std::move(next);
         }
-        for (u32 input : implied_[here]) node_shown_[input] = true;
     }
 
     // How far a SHOWN node is from a shown leaf, which is not what the document's own depth says
@@ -3752,6 +3775,11 @@ void Shell::draw_visual_view(const Rect& page) {
         for (u32 input : node.inputs) {
             if (input < graph_.nodes.size()) has_parts = true;
         }
+        // **The box you are already standing in has no way in.** Reported: *once inside for example
+        // a solid you can keep clicking on the button to go inside of it, this doesnt make sense.*
+        // It did nothing except grow the trail behind you, so the way out took as many presses as
+        // the way in had wasted.
+        if (!inside_.empty() && inside_.back() == ClipGraph::key_of(node)) has_parts = false;
         if (has_parts) {
             const f32 in_wide = std::min(cell, node_h * 0.8f);
             const Rect in_mark{name_left, box.mid_y() - in_wide * 0.5f, name_left + in_wide,
@@ -4046,6 +4074,10 @@ void Shell::draw_visual_view(const Rect& page) {
             doc_drag_y_ = std::round(layout_y(ui_.pointer_y()) - doc_grab_y_);
             if (ui_.input().mouse_left_released) {
                 dragging_doc_ = false;
+                if (doc_drag_x_ == doc_x_ && doc_drag_y_ == doc_y_ && graph_.doc_placed) {
+                    ui_.draw().pop_clip();
+                    return;   // it went nowhere, so nothing was written
+                }
                 remember("move");
                 place_clip_document(lines_, doc_drag_x_, doc_drag_y_);
                 document_changed({});
@@ -4106,6 +4138,23 @@ void Shell::draw_visual_view(const Rect& page) {
             // Written ONCE, on the release. Writing it every frame of a drag would rewrite the line
             // sixty times a second and re-read the document with it, which is a millisecond a frame
             // spent on a number nobody has finished choosing.
+            // **A press that did not MOVE anything is not an edit.** Choosing a box is a drag of
+            // zero distance as far as this code is concerned, and it was writing a `#@` marker on
+            // every one — so looking at a document marked it as needing saving. Reported as
+            // *some actions dont change anything yet still require you to save*.
+            bool moved_at_all = drag_at_x_ != graph_x_[moved] || drag_at_y_ != graph_y_[moved] ||
+                                !graph_.nodes[moved].placed;
+            if (!moved_at_all) {
+                for (const auto& along : drag_with_) {
+                    if (along.first < graph_.nodes.size() && !graph_.nodes[along.first].placed) {
+                        moved_at_all = true;
+                    }
+                }
+            }
+            if (!moved_at_all) {
+                drag_with_.clear();
+                return;
+            }
             remember("move");
             bool wrote = place_clip_node(lines_, graph_.nodes[moved], drag_at_x_, drag_at_y_);
             for (const auto& along : drag_with_) {
@@ -4146,8 +4195,15 @@ void Shell::draw_visual_view(const Rect& page) {
     bool band_done = false;
     if (may_band && ui_.band(id_of("editor.graph.band"), canvas, band, band_done)) {
         // And the canvas comes along when the band is pulled past its edge, for the same reason
-        // the script view's selection does.
-        if (!band_done) pan_at_edge(canvas, graph_pan_x_, graph_pan_y_, 620.0f);
+        // the script view's selection does — with the band's own anchor carried by exactly the
+        // same amount, so the corner the player put down stays on what they put it on.
+        if (!band_done) {
+            const f32 was_x = graph_pan_x_;
+            const f32 was_y = graph_pan_y_;
+            pan_at_edge(canvas, graph_pan_x_, graph_pan_y_, 620.0f);
+            ui_.nudge_band(id_of("editor.graph.band"), graph_pan_x_ - was_x,
+                           graph_pan_y_ - was_y);
+        }
         std::vector<u32> inside;
         for (usize i = 0; i < graph_.nodes.size(); ++i) {
             if (!node_shown_[i]) continue;
@@ -4697,7 +4753,41 @@ void Shell::draw_head_choice(const Rect& row, const ClipNode& node) {
             wrote = write_clip_target(lines_, node, part_choices_[at].filename().string());
         }
     } else if (at < alike.size()) {
+        // **And the name comes with it.** The palette names what it makes after the word it made —
+        // a new cone is called `cone` — so swapping the word left a wedge visibly called cone on
+        // the canvas. Reported directly. Only when the name IS the old word (or that word and a
+        // number): a name somebody chose is theirs.
+        const std::string& was = node.head;
+        const bool named_after_it =
+            node.name == was ||
+            (node.name.size() > was.size() + 1 && node.name.compare(0, was.size(), was) == 0 &&
+             node.name[was.size()] == '_');
         wrote = write_clip_head(lines_, node, alike[at]);
+        if (wrote && named_after_it && node.name_length > 0 && node.name_line > 0 &&
+            node.name_line <= lines_.size()) {
+            std::string want = alike[at] + node.name.substr(was.size());
+            for (const ClipNode& other : graph_.nodes) {
+                if (other.name == want) want.clear();
+            }
+            if (!want.empty()) {
+                std::string& line = lines_[node.name_line - 1];
+                // The word moved when the head was rewritten, so a name written AFTER it moves
+                // with it and a name written before it does not. `let cone = cone` is the second
+                // case and `material stone` is the first, and both exist.
+                const isize shift = static_cast<isize>(alike[at].size()) -
+                                    static_cast<isize>(was.size());
+                const bool after_the_word =
+                    node.name_line == node.word_line && node.name_column > node.word_column;
+                const usize at_name =
+                    after_the_word
+                        ? static_cast<usize>(static_cast<isize>(node.name_column) + shift)
+                        : node.name_column;
+                if (at_name + node.name_length <= line.size() &&
+                    line.compare(at_name, node.name_length, node.name) == 0) {
+                    line.replace(at_name, node.name_length, want);
+                }
+            }
+        }
     }
     if (wrote) {
         document_changed({});
@@ -4716,7 +4806,9 @@ usize Shell::draw_shape_extras(const ClipNode& node, const Rect& area, const Rec
     const u64 fold = id_of("node.fold", id_of("shape"));
     const u32 skin = clip_wrapper_of(graph_, chosen_index_, "shell");
     const u32 stretched = clip_wrapper_of(graph_, chosen_index_, "scale");
-    const bool changed = skin != ClipGraph::kNone || stretched != ClipGraph::kNone;
+    const u32 turned = clip_wrapper_of(graph_, chosen_index_, "rotate");
+    const bool changed = skin != ClipGraph::kNone || stretched != ClipGraph::kNone ||
+                         turned != ClipGraph::kNone;
 
     f32 y = area.y0;
     usize drawn = 0;
@@ -4729,10 +4821,13 @@ usize Shell::draw_shape_extras(const ClipNode& node, const Rect& area, const Rec
     if (state.reset) {
         remember("shape");
         bool touched = false;
-        if (skin != ClipGraph::kNone) touched |= unwrap_clip_node(lines_, graph_, skin);
-        refresh_graph();
-        const u32 again = clip_wrapper_of(graph_, chosen_index_, "scale");
-        if (again != ClipGraph::kNone) touched |= unwrap_clip_node(lines_, graph_, again);
+        // One at a time, re-reading between: every unwrap moves the columns of everything after it
+        // on the line, so a graph read before one is a graph that lies to the next.
+        for (const char* head : {"shell", "scale", "rotate"}) {
+            refresh_graph();
+            const u32 wrapper = clip_wrapper_of(graph_, chosen_index_, head);
+            if (wrapper != ClipGraph::kNone) touched |= unwrap_clip_node(lines_, graph_, wrapper);
+        }
         if (touched) document_changed({});
         return drawn;
     }
@@ -4749,17 +4844,24 @@ usize Shell::draw_shape_extras(const ClipNode& node, const Rect& area, const Rec
         f64 high;
         const char* about;
     };
-    static const Row kRows[4] = {
+    static const Row kRows[7] = {
         {"hollow", "thickness", "shell", 0.0, 0.0, 1.0,
          "How thick a skin to leave. Nought is solid all the way through"},
         {"stretch x", "x", "scale", 1.0, 0.05, 8.0, "How far it is stretched east to west"},
         {"stretch y", "y", "scale", 1.0, 0.05, 8.0, "And up and down"},
         {"stretch z", "z", "scale", 1.0, 0.05, 8.0, "And north to south"},
+        // In TURNS, which is what the language counts angles in everywhere else: 0.25 is a right
+        // angle. Degrees would be one unit in this panel and another in every clip ever written.
+        {"turn x", "x", "rotate", 0.0, -0.5, 0.5, "Tipped forward and back, in turns"},
+        {"turn y", "y", "rotate", 0.0, -0.5, 0.5, "Spun about the upright, in turns"},
+        {"turn z", "z", "rotate", 0.0, -0.5, 0.5, "Rolled from side to side, in turns"},
     };
 
-    for (u32 i = 0; i < 4; ++i) {
+    for (u32 i = 0; i < 7; ++i) {
         const Row& want = kRows[i];
-        const u32 on = (std::string(want.head) == "shell") ? skin : stretched;
+        const u32 on = (std::string(want.head) == "shell")   ? skin
+                       : (std::string(want.head) == "scale") ? stretched
+                                                             : turned;
         const ClipNumber* written =
             (on != ClipGraph::kNone) ? graph_.nodes[on].number(want.key) : nullptr;
         const f64 now = (written != nullptr) ? written->value : want.unwrapped;
@@ -5063,7 +5165,7 @@ void Shell::draw_node_parameters(const Rect& rect) {
     // skin and a number cannot be stretched.
     const bool has_shape_rows = node.statement && node.carries == ClipCarries::Shape;
     const usize shape_rows =
-        has_shape_rows ? (1 + (ui_.section_open(id_of("node.fold", id_of("shape"))) ? 4 : 0)) : 0;
+        has_shape_rows ? (1 + (ui_.section_open(id_of("node.fold", id_of("shape"))) ? 7 : 0)) : 0;
 
     const Rect list{column.box.x0, column.y, column.box.x1, column.box.y1};
     const f32 row_height = metrics.row() + metrics.px(4.0f);

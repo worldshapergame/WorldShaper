@@ -317,6 +317,13 @@ public:
     // novelty budget on *selecting things* has spent it in the worst possible place. `begin_band`
     // is called with the empty space of a list; it reports the box while it is being dragged.
     bool band(u64 id, const Rect& rect, Rect& box, bool& finished);
+    // Move a live band's ANCHOR, for a caller whose content moved under it.
+    //
+    // The anchor is a screen point, and the thing it was put on is not: when a box-select drags
+    // past the edge and the canvas pans to follow, the corner the player put down stays on the
+    // same pixel and slides across the picture. Reported directly. The caller knows how far it
+    // panned, so it says, and the corner stays on what it was put on.
+    void nudge_band(u64 id, f32 dx, f32 dy);
 
     // --- the caret, and it is the same caret everywhere ------------------------------------------
     //

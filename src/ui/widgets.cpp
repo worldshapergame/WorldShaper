@@ -1157,6 +1157,14 @@ bool Ui::band(u64 id, const Rect& rect, Rect& box, bool& finished) {
     return true;
 }
 
+void Ui::nudge_band(u64 id, f32 dx, f32 dy) {
+    if (active_ != id) return;
+    const auto at = bands_.find(id);
+    if (at == bands_.end()) return;
+    at->second.x0 += dx;
+    at->second.y0 += dy;
+}
+
 f32 Ui::scroll_overflow(u64 id, const Rect& room, std::string_view text) {
     const f32 wide = DrawList::measure(text, metrics_.text());
     const f32 over = wide - room.width();

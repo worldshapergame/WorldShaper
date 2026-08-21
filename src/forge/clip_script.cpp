@@ -1178,6 +1178,7 @@ void Parser::statement() {
     if (head == "bounds") {
         script_.settings.low = {value_or(0), value_or(0), value_or(0)};
         script_.settings.high = {value_or(1), value_or(1), value_or(1)};
+        script_.said_bounds = true;
         return;
     }
     if (head == "param") {
@@ -1982,6 +1983,37 @@ Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const T
     // path was dead code being reported as a measurement. See `forge::accelerate_unions_from`.
     if (g_accelerate_from != Field::kAccelerateNever) script.field.accelerate_from(g_accelerate_from);
     script.field.build_bounds();
+
+    // **A document that does not say where it ends is measured rather than cut.**
+    //
+    // `SampleSettings` starts at a one-metre box at the origin, so a clip without a `bounds` line
+    // was clipped to one metre — which is why every clip in this repository has one, and why
+    // editing anything meant adjusting it. Reported directly: *remove the bounds node, there
+    // shouldnt be bounds and its annoying because you have to adjust it all the time; it shouldnt
+    // be cut if it goes out of bounds because theres no bounds.*
+    //
+    // The shapes already know how far they reach — `build_bounds` has just worked it out for every
+    // node, because the sampler's own descent needs it. So the extent comes from the solid, with a
+    // voxel of margin so a surface exactly on the edge is not half-sampled. An author who WRITES a
+    // `bounds` still gets exactly what they wrote: saying where a clip ends is a legitimate thing
+    // to say, and the fault was only ever that it was compulsory.
+    if (!script.said_bounds && script.has_solid) {
+        const Field::Aabb box = script.field.bounds_of(script.solid);
+        const f64 margin = 1.0 / static_cast<f64>(std::max(1, script.settings.voxels_per_metre));
+        // A node that reaches everywhere — a plane, a half-space — comes back enormous, and a box
+        // that size is not something to sample. Left as it was in that case, which is the one place
+        // an author does have to say.
+        const f64 kMost = 1.0e6;
+        const bool sane = !box.infinite() && box.low.x > -kMost && box.low.y > -kMost &&
+                          box.low.z > -kMost && box.high.x < kMost && box.high.y < kMost &&
+                          box.high.z < kMost && box.high.x > box.low.x &&
+                          box.high.y > box.low.y && box.high.z > box.low.z;
+        if (sane) {
+            script.settings.low = {box.low.x - margin, box.low.y - margin, box.low.z - margin};
+            script.settings.high = {box.high.x + margin, box.high.y + margin, box.high.z + margin};
+        }
+    }
+
     if (!script.has_solid && script.errors.empty()) {
         script.errors.push_back(ScriptError{0, "the file never says which shape is the solid"});
     }

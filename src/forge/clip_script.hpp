@@ -155,6 +155,11 @@ struct Script {
 
     u32 solid = 0;
     bool has_solid = false;
+    // Whether the document SAID where it ends. When it does not, the extent is measured from the
+    // solid rather than left at the one-metre box `SampleSettings` starts at — see the note in
+    // `parse_clip_script`, and D-something: a `bounds` line that is compulsory is a line every
+    // author has to keep adjusting for no reason they chose.
+    bool said_bounds = false;
 
     // Every name the file bound, in order, with the node it ended up meaning. Kept so the tools
     // can talk about a clip in the author's own words — "the canopy is four centimetres off the

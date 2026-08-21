@@ -1069,6 +1069,32 @@ std::string connect_clip_nodes(std::vector<std::string>& lines, const ClipGraph&
     for (const ClipLink& link : target.links) {
         if (link.from == from) return source.name + " is already in there";
     }
+    // **What kind of thing it is decides whether it can go there at all.** Without this a voxel
+    // type went into a `union { }`, the union read it as a shape it had never heard of, and the
+    // document grew an unresolved name that the graph drew as a box of its own.
+    std::string key;
+    const std::string refused = clip_may_join(target, source, key);
+    if (!refused.empty()) return refused;
+    // A coat's voxel type goes where its own material name is written, rather than under a key.
+    if (key == "*") {
+        if (target.words.empty()) return "that coat has no voxel type to change";
+        const ClipWord& was = target.words.front();
+        if (was.line == 0 || was.line > lines.size()) return "the document has moved -- try again";
+        std::string& line = lines[was.line - 1];
+        if (was.column + was.text.size() > line.size()) {
+            return "the document has moved under this -- try again";
+        }
+        line.replace(was.column, was.text.size(), source.name);
+        return {};
+    }
+    if (!key.empty()) {
+        if (target.word(key) != nullptr) {
+            return std::string("that one already reads a ") + key + "=";
+        }
+        std::string& line = lines[target.line - 1];
+        line = without_placement(line) + " " + key + "=" + source.name;
+        return {};
+    }
     // A cycle is a document that cannot be built, and the reader would spin on it.
     std::vector<u32> stack{from};
     std::vector<bool> seen(graph.nodes.size(), false);
@@ -1118,18 +1144,6 @@ std::string connect_clip_nodes(std::vector<std::string>& lines, const ClipGraph&
         const usize after = target.column + target.head.size();
         if (after > line.size()) return "the document has moved under this -- try again";
         line = line.substr(0, after) + " " + source.name;
-        return {};
-    }
-    // 4. A coat reads a pattern through `where=`, and a weathering through `on=`.
-    if (target.head == "paint" || target.head == "weather" || target.head == "variation") {
-        const char* key = (target.head == "paint")       ? "where="
-                          : (target.head == "weather") ? "on="
-                                                       : "by=";
-        if (target.word(std::string(key).substr(0, std::strlen(key) - 1)) != nullptr) {
-            return std::string("that one already reads a ") + key;
-        }
-        std::string& line = lines[target.line - 1];
-        line = without_placement(line) + " " + key + source.name;
         return {};
     }
     return target.head + " is not made of anything -- it has no room for a wire";
@@ -1770,6 +1784,75 @@ const std::vector<ClipProperty>& clip_properties_of(const std::string& head) {
     return kNone;
 }
 
+std::string clip_may_join(const ClipNode& target, const ClipNode& source, std::string& key) {
+    key.clear();
+    const ClipCarries has = source.carries;
+    const std::string what = (has == ClipCarries::Shape)      ? "a shape"
+                             : (has == ClipCarries::Material) ? "a voxel type"
+                                                              : "a number";
+
+    // An unresolved name is a name from somewhere else — a part of a world, declared in a file this
+    // document includes. Nothing here can say what kind it is, so nothing here refuses it.
+    if (source.unresolved || source.head == "include") return {};
+
+    // Everything that JOINS or MOVES matter is made of matter.
+    if (takes_many(target.head) || takes_one(target.head)) {
+        if (target.head == "displace" && has == ClipCarries::Value) {
+            // A displacement reads a field to push the surface by, and that is a number.
+            key = "by";
+            return {};
+        }
+        if (has == ClipCarries::Shape) return {};
+        if (has == ClipCarries::Material) {
+            return "a " + target.head + " is made of shapes. To make something out of " +
+                   source.name + ", wire it into a coat instead -- a coat is what puts a voxel " +
+                   "type on matter";
+        }
+        return "a " + target.head + " is made of shapes, and " + source.name + " is " + what;
+    }
+
+    if (target.head == "solid" || target.head == "region") {
+        if (has == ClipCarries::Shape) return {};
+        return target.head + " names the shape the world is made of, and " + source.name + " is " +
+               what;
+    }
+
+    // A coat takes BOTH: the voxel type it paints with, and the field that says where.
+    if (target.head == "paint") {
+        if (has == ClipCarries::Material) {
+            key = "*";   // it goes where the coat's own material name is, rather than under a key
+            return {};
+        }
+        if (has == ClipCarries::Value) {
+            key = "where";
+            return {};
+        }
+        return "a coat paints a voxel type where a pattern says. " + source.name + " is " + what;
+    }
+    if (target.head == "weather") {
+        if (has == ClipCarries::Value) {
+            key = "on";
+            return {};
+        }
+        return "a weathering is aimed by a pattern, and " + source.name + " is " + what;
+    }
+    if (target.head == "variation") {
+        if (has == ClipCarries::Value) {
+            key = "by";
+            return {};
+        }
+        return "a variation is driven by a pattern, and " + source.name + " is " + what;
+    }
+
+    // The arithmetic and the patterns read numbers.
+    if (target.carries == ClipCarries::Value) {
+        if (has == ClipCarries::Value) return {};
+        return target.head + " works on numbers, and " + source.name + " is " + what;
+    }
+
+    return target.head + " is not made of anything -- it has no room for a wire";
+}
+
 u32 clip_wrapper_of(const ClipGraph& graph, u32 node, const std::string& head) {
     u32 at = node;
     for (u32 depth = 0; depth < 32 && at < graph.nodes.size(); ++depth) {
@@ -2002,7 +2085,12 @@ const std::vector<ClipPaletteGroup>& clip_palette() {
         // Reported directly: *many nodes are inside the document category which makes no sense.*
         {"voxel type", {"material", "paint"}},
         {"finish", {"weather", "variation"}},
-        {"document", {"metre", "bounds", "origin", "solid", "region"}},
+        // **No `bounds`.** A clip that does not say where it ends is measured from its own solid
+        // now, so the line was compulsory paperwork: reported as *remove the bounds node, there
+        // shouldnt be bounds and its annoying because you have to adjust it all the time*. The
+        // WORD still parses, because every clip in this repository has one and a keyword is a
+        // promise; it is simply not offered to anybody making something new.
+        {"document", {"metre", "origin", "solid", "region"}},
     };
     return kGroups;
 }
