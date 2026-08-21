@@ -372,7 +372,7 @@ TEST_CASE("every document in the repository lays out with nothing on top of anyt
 
 // --- a document made of documents ---------------------------------------------------------------
 
-TEST_CASE("a clip off the shelf is copied beside the document and included by name") {
+TEST_CASE("a clip off the shelf is named by the document and stays on the shelf") {
     Scratch scratch("shell-part-take");
     const std::filesystem::path world =
         write_file(scratch.root / "worlds" / "site.wsworld", "metre 32\n");
@@ -386,10 +386,12 @@ TEST_CASE("a clip off the shelf is copied beside the document and included by na
     quiet_frame(shell, 0.0);
 
     REQUIRE(shell.add_part(scratch.root / "clips" / "porch.wsclip").empty());
-    // Copied BESIDE the document, not pointed at where it lives: an include resolves beside the
-    // file doing the including and then in the game's own clips, and nowhere else — so a world
-    // pointing at the player's own shelf would open on their machine and on nobody else's.
-    CHECK(std::filesystem::exists(scratch.root / "worlds" / "porch.wsclip"));
+    // ONE copy of a thing, on the shelf that kind of thing lives on. It used to be copied beside
+    // the document so the include would resolve; the shelves are one of the places an include is
+    // looked for now (`ui::where_includes_live`), and a clip that exists twice is a clip a player
+    // edits the wrong one of.
+    CHECK_FALSE(std::filesystem::exists(scratch.root / "worlds" / "porch.wsclip"));
+    CHECK(std::filesystem::exists(scratch.root / "clips" / "porch.wsclip"));
 
     shell.frame(with_ctrl(Key::S), 1280, 800, 0.1);
     const std::string text = file_text(world);
@@ -400,7 +402,7 @@ TEST_CASE("a clip off the shelf is copied beside the document and included by na
     CHECK(shell.boxes_overlapping() == 0);
 }
 
-TEST_CASE("a new clip and a new material are made beside the document and put in it") {
+TEST_CASE("a new clip and a new material are made on their shelves and put in the document") {
     Scratch scratch("shell-part-new");
     const std::filesystem::path world =
         write_file(scratch.root / "worlds" / "site.wsworld", "metre 32\n");
@@ -414,15 +416,18 @@ TEST_CASE("a new clip and a new material are made beside the document and put in
     REQUIRE(shell.new_part("clip", "front porch").empty());
     REQUIRE(shell.new_part("material", "old brass").empty());
     // A name is a FILE name, not a sentence: the space becomes an underscore and nothing else
-    // survives that a quoted include could not carry.
-    CHECK(std::filesystem::exists(scratch.root / "worlds" / "front_porch.clip"));
-    CHECK(std::filesystem::exists(scratch.root / "worlds" / "old_brass.wsmat"));
+    // survives that a quoted include could not carry. And it lands on the shelf that kind of thing
+    // lives on, which is where a player looks for it afterwards — reported as *newly created
+    // materials on the node editor or clips dont show on your material or clips library*.
+    CHECK(std::filesystem::exists(scratch.root / "clips" / "front_porch.wsclip"));
+    CHECK(std::filesystem::exists(scratch.root / "materials" / "old_brass.wsmat"));
+    CHECK_FALSE(std::filesystem::exists(scratch.root / "worlds" / "front_porch.wsclip"));
 
     // Neither is empty. An empty clip builds to nothing, which is indistinguishable from a document
     // that failed to load.
-    const std::string clip = file_text(scratch.root / "worlds" / "front_porch.clip");
+    const std::string clip = file_text(scratch.root / "clips" / "front_porch.wsclip");
     CHECK(clip.find("solid") != std::string::npos);
-    const std::string material = file_text(scratch.root / "worlds" / "old_brass.wsmat");
+    const std::string material = file_text(scratch.root / "materials" / "old_brass.wsmat");
     CHECK(material.find("material old_brass") != std::string::npos);
     CHECK(material.find("ior=") != std::string::npos);
     CHECK(material.find("metal=") != std::string::npos);
@@ -433,7 +438,7 @@ TEST_CASE("a new clip and a new material are made beside the document and put in
 
     shell.frame(with_ctrl(Key::S), 1280, 800, 0.1);
     const std::string text = file_text(world);
-    CHECK(text.find("include \"front_porch.clip\"") != std::string::npos);
+    CHECK(text.find("include \"front_porch.wsclip\"") != std::string::npos);
     CHECK(text.find("include \"old_brass.wsmat\"") != std::string::npos);
 
     // A second one of the same name is refused rather than written over.

@@ -346,6 +346,19 @@ private:
     // How many cells tall each shown box is. One, unless it is open — and the layout reserves every
     // cell it covers, so a tall box cannot land on anything and nothing can land on it.
     std::vector<u32> node_tall_;
+    // --- the wires the LANGUAGE has and the document does not spell out ---------------------------
+    //
+    // A `paint` coats the solid. A `weather` weathers it. A `variation` varies it. None of those
+    // three NAMES the solid — the language applies them to whatever the document ends up being — so
+    // none of them had a wire, and the picture came out as a row of statements each joined to the
+    // file and to nothing else. Reported twice: *i only see everything separately connected to
+    // weather demo instead of one node connected to another*, and then *not every node should be
+    // connected to the final node as this doesnt make much sense*.
+    //
+    // So the relationship the language has is drawn even though no name carries it. These wires are
+    // dimmer and have no tab to cut, because there is nothing in the file to cut: they are what the
+    // words MEAN rather than what the document says.
+    std::vector<std::vector<u32>> implied_;
     // And how many across. An open box is two cells wide: a property row is a name and a number
     // side by side, and at one cell `translucent` and its value came out on top of one another.
     std::vector<u32> node_wide_;

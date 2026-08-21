@@ -95,6 +95,16 @@ enum class Sort : u32 { Name, Date, Author, Size, Count };
 // gets, and what a portable install would get.
 std::filesystem::path default_root();
 
+// Every folder an `include` is looked for in when it is not beside the file that asked for it, in
+// the order they are tried: the clips the game ships with (D494) and then the player's own clips and
+// materials shelves.
+//
+// One list, in one place, because the game and the EDITOR both splice includes and a document that
+// parses in one and not the other is worse than one that parses in neither. It was two expressions
+// in two functions of `main.cpp`, which is exactly how those two come to disagree.
+std::vector<std::string> where_includes_live(const std::filesystem::path& root = default_root());
+
+
 // The six shelves the game ships with, in the order they are offered.
 const std::vector<Kind>& shipped_kinds();
 

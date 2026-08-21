@@ -7794,9 +7794,11 @@ void Application::build_world() {
         // The clips the game ships with are where an include that is not beside its own file is
         // looked for (D494). That is what lets `facility.wsworld` be one file on the shelf: the
         // twenty-two pieces it is assembled out of live with the game, are never copied anywhere,
-        // and therefore cannot be deleted out from under it.
-        const std::string source = forge::expand_includes(
-            path, origin, trouble, (std::filesystem::path(Window::base_path()) / "clips").string());
+        // and therefore cannot be deleted out from under it. And then the player's own shelves,
+        // because a clip a player made lives in their clips library and a document that names one
+        // should find it there rather than only in a copy beside itself.
+        const std::string source =
+            forge::expand_includes(path, origin, trouble, ws::ui::where_includes_live());
 
         // AND THE FILE ITSELF, when it is a copy of one the game ships.
         //
@@ -14019,8 +14021,8 @@ int run_windowed(const Options& options) {
     // statement 'include'*. It also means a world whose pieces have been deleted says so here, by
     // name, rather than in a log nobody opens.
     TagRegistry editor_tags;
-    const std::string shipped_clips =
-        (std::filesystem::path(Window::base_path()) / "clips").string();
+    const std::vector<std::string> include_folders =
+        ws::ui::where_includes_live(shell.library().root());
     shell.set_parser([&](const std::string& text, const std::filesystem::path& path) {
         ui::ParseReport report;
         // A parse that interns materials into a table on every keystroke is a table that grows
@@ -14030,7 +14032,7 @@ int run_windowed(const Options& options) {
         std::vector<forge::SourceLine> origin;
         std::vector<forge::ScriptError> trouble;
         const std::string spliced =
-            forge::expand_includes_of(text, path.string(), origin, trouble, shipped_clips);
+            forge::expand_includes_of(text, path.string(), origin, trouble, include_folders);
         forge::Script script;
         if (trouble.empty()) {
             script = forge::parse_clip_script(spliced, scratch, editor_tags);

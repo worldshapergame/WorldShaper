@@ -1994,7 +1994,8 @@ Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const T
 // the disk instead would answer a question nobody asked.
 static std::string splice_includes(const std::string* body, const std::string& path,
                                    std::vector<SourceLine>& origin,
-                                   std::vector<ScriptError>& errors, const std::string& beside) {
+                                   std::vector<ScriptError>& errors,
+                                   const std::vector<std::string>& beside) {
     std::vector<std::string> open;   // the include stack, for cycle detection
     std::string out;
 
@@ -2078,11 +2079,17 @@ static std::string splice_includes(const std::string* body, const std::string& p
                 // copies the facility's parts beside their own world and edits them gets their
                 // edits, and one who never copies anything still opens the world.
                 if ((!std::filesystem::exists(resolved, missing) || missing) && !beside.empty()) {
-                    missing.clear();
-                    const std::filesystem::path fallback =
-                        (std::filesystem::path(beside) / named).lexically_normal();
-                    if (std::filesystem::exists(fallback, missing) && !missing) {
-                        resolved = fallback.string();
+                    // In the order given: the game's own clips first, then wherever else the caller
+                    // says this kind of thing is kept. First one that exists wins, and if none do
+                    // the message names the file rather than the folders.
+                    for (const std::string& where : beside) {
+                        missing.clear();
+                        const std::filesystem::path fallback =
+                            (std::filesystem::path(where) / named).lexically_normal();
+                        if (std::filesystem::exists(fallback, missing) && !missing) {
+                            resolved = fallback.string();
+                            break;
+                        }
                     }
                 } else if (!beside.empty()) {
                     // A copy beside the world WON, and the game ships a different one. Said out
@@ -2104,7 +2111,7 @@ static std::string splice_includes(const std::string* body, const std::string& p
                     // was invisible, so this makes it visible and leaves the choice alone: an
                     // include that is shadowed says so, by name, with both dates.
                     const std::filesystem::path shipped =
-                        (std::filesystem::path(beside) / named).lexically_normal();
+                        (std::filesystem::path(beside.front()) / named).lexically_normal();
                     std::error_code either;
                     if (std::filesystem::exists(shipped, either) && !either &&
                         shipped.lexically_normal() !=
@@ -2167,13 +2174,14 @@ static std::string splice_includes(const std::string* body, const std::string& p
 }
 
 std::string expand_includes(const std::string& path, std::vector<SourceLine>& origin,
-                            std::vector<ScriptError>& errors, const std::string& beside) {
+                            std::vector<ScriptError>& errors,
+                            const std::vector<std::string>& beside) {
     return splice_includes(nullptr, path, origin, errors, beside);
 }
 
 std::string expand_includes_of(const std::string& text, const std::string& path,
                                std::vector<SourceLine>& origin, std::vector<ScriptError>& errors,
-                               const std::string& beside) {
+                               const std::vector<std::string>& beside) {
     return splice_includes(&text, path, origin, errors, beside);
 }
 

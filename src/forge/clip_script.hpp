@@ -253,14 +253,21 @@ Script load_clip_script(const std::string& path, VoxelTypeTable& types, const Ta
 // Exposed for tests; load_clip_script is what callers want.
 //
 // `beside` is where an include is looked for when it is not next to the file that asked for it —
-// the folder of clips the game ships with (D494). It is a FALLBACK and not a search path: a file
-// sitting next to the one including it always wins, so a player who copies the facility's parts
-// into their own folder and edits them gets their own edits. Without it, a world assembled out of
-// pieces could only ever be opened from the one folder those pieces were copied into, and deleting
-// that folder — which looks like an ordinary folder — emptied the world.
+// the folder of clips the game ships with (D494), and now the player's OWN clips and materials
+// shelves as well. They are FALLBACKS and not a search path: a file sitting next to the one
+// including it always wins, so a player who copies the facility's parts into their own folder and
+// edits them gets their own edits. Without them, a world assembled out of pieces could only ever be
+// opened from the one folder those pieces were copied into, and deleting that folder — which looks
+// like an ordinary folder — emptied the world.
+//
+// **The player's shelves are in the list because a library is where a player's things LIVE.** A
+// clip made in the editor used to be written beside the document so that the include would resolve,
+// and it was then in no library at all — reported as *newly created materials on the node editor or
+// clips dont show on your material or clips library*, which it did not, because it was in the
+// worlds folder. What a document names is now looked for where that kind of thing is kept.
 std::string expand_includes(const std::string& path, std::vector<SourceLine>& origin,
                             std::vector<ScriptError>& errors,
-                            const std::string& beside = {});
+                            const std::vector<std::string>& beside = {});
 
 // The same splice, for text that has NOT been written to disk yet — which is the editor, asking on
 // every keystroke whether what is in front of the player parses.
@@ -273,7 +280,7 @@ std::string expand_includes(const std::string& path, std::vector<SourceLine>& or
 // exactly the file the game makes when a player presses *new*.
 std::string expand_includes_of(const std::string& text, const std::string& path,
                                std::vector<SourceLine>& origin, std::vector<ScriptError>& errors,
-                               const std::string& beside = {});
+                               const std::vector<std::string>& beside = {});
 
 }  // namespace forge
 }  // namespace ws

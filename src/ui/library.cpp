@@ -1,5 +1,7 @@
 #include "ui/library.hpp"
 
+#include "platform/window.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -135,6 +137,14 @@ bool write_author(const std::filesystem::path& path, const Kind& kind,
     }
     out.write(body.data(), static_cast<std::streamsize>(body.size()));
     return out.good();
+}
+
+std::vector<std::string> where_includes_live(const std::filesystem::path& root) {
+    std::vector<std::string> folders;
+    folders.push_back((std::filesystem::path(Window::base_path()) / "clips").string());
+    folders.push_back((root / "clips").string());
+    folders.push_back((root / "materials").string());
+    return folders;
 }
 
 bool is_author_line(std::string_view line) {

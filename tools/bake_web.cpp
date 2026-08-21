@@ -2657,7 +2657,7 @@ int main(int argc, char** argv) {
         std::vector<ws::forge::SourceLine> origin;
         std::vector<ws::forge::ScriptError> errors;
         const std::string text =
-            ws::forge::expand_includes(path.string(), origin, errors, options.clips.string());
+            ws::forge::expand_includes(path.string(), origin, errors, {options.clips.string()});
         if (!errors.empty()) return 0;   // 0 never matches a stored key, so it rebakes
         return fnv1a(reinterpret_cast<const u8*>(text.data()), text.size());
     };

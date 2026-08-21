@@ -723,7 +723,7 @@ TEST_CASE("a part beside the world wins over the one the game ships, and is the 
     {
         std::vector<SourceLine> origin;
         std::vector<ScriptError> errors;
-        const std::string text = expand_includes(manifest, origin, errors, shipped);
+        const std::string text = expand_includes(manifest, origin, errors, {shipped});
         CHECK(errors.empty());
         // The player's copy, not the game's. The 9s are the shipped file and must not appear.
         CHECK(text.find("1 1 1") != std::string::npos);
@@ -737,7 +737,7 @@ TEST_CASE("a part beside the world wins over the one the game ships, and is the 
     {
         std::vector<SourceLine> origin;
         std::vector<ScriptError> errors;
-        const std::string text = expand_includes(manifest, origin, errors, shipped);
+        const std::string text = expand_includes(manifest, origin, errors, {shipped});
         CHECK(errors.empty());
         CHECK(text.find("9 9 9") != std::string::npos);
     }
@@ -748,7 +748,7 @@ TEST_CASE("a part beside the world wins over the one the game ships, and is the 
     {
         std::vector<SourceLine> origin;
         std::vector<ScriptError> errors;
-        expand_includes(manifest, origin, errors, shipped);
+        expand_includes(manifest, origin, errors, {shipped});
         REQUIRE(errors.size() == 1);
         CHECK(errors[0].message.find("parts/roof.clip") != std::string::npos);
     }

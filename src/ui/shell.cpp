@@ -1908,13 +1908,18 @@ bool Shell::choose_node(std::string_view names) {
 // Beside always wins, because that is what lets a player copy a building's parts next to their own
 // world and edit them.
 std::filesystem::path Shell::follow_include(const std::string& named) const {
+    // The same places, in the same order, as the splicer looks in — because a door that opens a
+    // different file from the one the world is built out of is worse than a door that does not
+    // open. `ui::where_includes_live` is the one list.
     std::error_code error;
     const std::filesystem::path beside = (editing_.parent_path() / named).lexically_normal();
     if (std::filesystem::exists(beside, error) && !error) return beside;
-    error.clear();
-    const std::filesystem::path shipped =
-        (library_.shipped_root() / "clips" / named).lexically_normal();
-    if (std::filesystem::exists(shipped, error) && !error) return shipped;
+    for (const std::string& where : where_includes_live(library_.root())) {
+        error.clear();
+        const std::filesystem::path there =
+            (std::filesystem::path(where) / named).lexically_normal();
+        if (std::filesystem::exists(there, error) && !error) return there;
+    }
     return {};
 }
 
@@ -2134,6 +2139,11 @@ u32 Shell::cells_tall(u32 index) const {
     for (u32 input : graph_.nodes[index].inputs) {
         if (input < node_shown_.size() && node_shown_[input]) ++wires;
     }
+    if (index < implied_.size()) {
+        for (u32 input : implied_[index]) {
+            if (input < node_shown_.size() && node_shown_[input]) ++wires;
+        }
+    }
     if (wires > 1) {
         const f32 want = static_cast<f32>(wires) * kPortPitch;
         tall = std::max(tall, static_cast<u32>(std::ceil(want / (kCellTall * kNodeTall))));
@@ -2188,12 +2198,48 @@ void Shell::lay_out_graph() {
     graph_tall_ = 0.0f;
     if (count == 0) return;
 
+    // --- the wires the language has ------------------------------------------------------------
+    //
+    // A coat, a weathering and a variation act on the SOLID, and none of them says so: the language
+    // applies them to whatever the document turns out to be. Drawn anyway, because a picture that
+    // leaves out the one relationship a reader is looking for is a picture of a list.
+    //
+    // Whichever solid comes AFTER them in the file, or the last one if they come after all of them —
+    // which is the order the language applies them in, so it is the one a reader can predict.
+    implied_.assign(count, {});
+    {
+        std::vector<u32> solids;
+        for (usize i = 0; i < count; ++i) {
+            if (graph_.nodes[i].statement && graph_.nodes[i].head == "solid") {
+                solids.push_back(static_cast<u32>(i));
+            }
+        }
+        if (!solids.empty()) {
+            for (usize i = 0; i < count; ++i) {
+                const ClipNode& node = graph_.nodes[i];
+                if (!node.statement) continue;
+                if (node.head != "paint" && node.head != "weather" && node.head != "variation") {
+                    continue;
+                }
+                u32 onto = solids.back();
+                for (u32 solid : solids) {
+                    if (graph_.nodes[solid].line > node.line) {
+                        onto = solid;
+                        break;
+                    }
+                }
+                if (onto != i) implied_[onto].push_back(static_cast<u32>(i));
+            }
+        }
+    }
+
     // Who is made of whom, the other way round. Both the fold and the sort going right to left
     // need it, so it is worked out once and kept.
     for (usize i = 0; i < count; ++i) {
         for (u32 input : graph_.nodes[i].inputs) {
             if (input < count) used_by_[input].push_back(static_cast<u32>(i));
         }
+        for (u32 input : implied_[i]) used_by_[input].push_back(static_cast<u32>(i));
     }
     // --- what is on screen ---------------------------------------------------------------------
     //
@@ -2210,13 +2256,34 @@ void Shell::lay_out_graph() {
     // stopped existing.
     while (!inside_.empty() && graph_.find(inside_.back()) == ClipGraph::kNone) inside_.pop_back();
     if (inside_.empty()) {
+        // **An answer, and what it is made of.** The answers alone was the picture that was
+        // reported: *i only see everything separately connected to weather demo instead of one node
+        // connected to another because it defines things of it.* And it was exactly backwards — a
+        // box is an answer when NOTHING uses it, so the answers-only view hides every box that is
+        // joined to something and shows only the ones that are not. A `paint stone` stood alone
+        // because the material it names was used, and a `solid block` stood alone because the shape
+        // it names was used.
+        //
+        // One level below each answer fixes that and costs almost nothing: `weather_demo` goes from
+        // seven boxes to nine and every wire in the document is on the screen; `clips/sampler.clip`
+        // from nine to seventeen of its fifty statements. Two levels is where it stops being a
+        // picture — a union of thirty parts is a wall — and going INTO a box is what that is for.
         for (usize i = 0; i < count; ++i) node_shown_[i] = used_by_[i].empty();
+        std::vector<bool> answers = node_shown_;
+        for (usize i = 0; i < count; ++i) {
+            if (!answers[i]) continue;
+            for (u32 input : graph_.nodes[i].inputs) {
+                if (input < count) node_shown_[input] = true;
+            }
+            for (u32 input : implied_[i]) node_shown_[input] = true;
+        }
     } else {
         const u32 here = graph_.find(inside_.back());
         node_shown_[here] = true;
         for (u32 input : graph_.nodes[here].inputs) {
             if (input < count) node_shown_[input] = true;
         }
+        for (u32 input : implied_[here]) node_shown_[input] = true;
     }
 
     // How far a SHOWN node is from a shown leaf, which is not what the document's own depth says
@@ -2230,6 +2297,9 @@ void Shell::lay_out_graph() {
             u32 want = 0;
             for (u32 input : graph_.nodes[i].inputs) {
                 if (input < count && node_shown_[input]) want = std::max(want, depth[input] + 1);
+            }
+            for (u32 input : implied_[i]) {
+                if (node_shown_[input]) want = std::max(want, depth[input] + 1);
             }
             if (want > depth[i]) {
                 depth[i] = want;
@@ -2284,6 +2354,9 @@ void Shell::lay_out_graph() {
         if (!node_shown_[i]) continue;
         for (u32 input : graph_.nodes[i].inputs) {
             if (input < count && node_shown_[input]) inputs_of[i].push_back(input);
+        }
+        for (u32 input : implied_[i]) {
+            if (node_shown_[input]) inputs_of[i].push_back(input);
         }
     }
     for (u32 pass = 0; pass < 6; ++pass) {
@@ -2353,10 +2426,11 @@ void Shell::lay_out_graph() {
     if (doc_shown_) {
         f32 most_x = 0.0f;
         f32 sum_y = 0.0f;
-        u32 shown = 0;
+        u32 shown = 0;   // how many wire INTO it, which is what decides how tall it has to be
         for (usize i = 0; i < count; ++i) {
             if (!node_shown_[i]) continue;
             most_x = std::max(most_x, graph_x_[i]);
+            if (!used_by_[i].empty()) continue;
             sum_y += graph_y_[i];
             ++shown;
         }
@@ -3256,6 +3330,7 @@ void Shell::draw_visual_view(const Rect& page) {
             i32 lane = 0;           // the row whose bottom strip it runs along, when it does
             bool straight = true;   // nothing in the way: no lane needed
             u32 rgb = 0;
+            bool written = true;    // the document says so, rather than the language meaning it
         };
         // One place that works out which strips a wire turns in, so the document's own wires are
         // routed by exactly the same rule as everything else rather than by a second copy of it.
@@ -3292,14 +3367,23 @@ void Shell::draw_visual_view(const Rect& page) {
             const ClipNode& node = graph_.nodes[i];
             const Rect into = box_of(i);
             const std::pair<f32, f32> into_at = place_of(i);
-            usize shown_all = 0;
+            // What the document says first, then what the language means. Both arrive at the same
+            // edge, so they are counted together.
+            std::vector<std::pair<u32, bool>> arriving;
             for (u32 other : node.inputs) {
-                if (other < graph_.nodes.size() && node_shown_[other]) ++shown_all;
+                if (other < graph_.nodes.size() && node_shown_[other]) {
+                    arriving.emplace_back(other, true);
+                }
             }
+            for (u32 other : implied_[i]) {
+                if (other < graph_.nodes.size() && node_shown_[other]) {
+                    arriving.emplace_back(other, false);
+                }
+            }
+            const usize shown_all = arriving.size();
             usize shown_before = 0;
-            for (usize k = 0; k < node.inputs.size(); ++k) {
-                const u32 input = node.inputs[k];
-                if (input >= graph_.nodes.size() || !node_shown_[input]) continue;
+            for (usize k = 0; k < arriving.size(); ++k) {
+                const u32 input = arriving[k].first;
                 const usize mine = shown_before++;
                 const Rect from = box_of(input);
                 if (std::max(from.x1, into.x1) < canvas.x0) continue;
@@ -3312,6 +3396,7 @@ void Shell::draw_visual_view(const Rect& page) {
                 run.y1 = in_port(into, mine, shown_all).mid_y();
                 run.rgb =
                     tint_rgb(ui_.accent(), clip_carries_tint(graph_.nodes[input].carries));
+                run.written = arriving[k].second;
                 const i32 fx = static_cast<i32>(std::lround(from_at.first));
                 const i32 fy = static_cast<i32>(std::lround(from_at.second));
                 const i32 tx = static_cast<i32>(std::lround(into_at.first));
@@ -3331,9 +3416,18 @@ void Shell::draw_visual_view(const Rect& page) {
         // picture was missing: seven boxes in a column, none of them joined to anything, and a
         // reader with no way to tell a graph from a list.
         if (doc_shown_) {
+            // **Only what nothing else uses.** Reported directly: *not every node should be
+            // connected to the final node as this doesnt make much sense.* It was every box on the
+            // canvas, which was the same set until a box began showing what it is MADE of — after
+            // that a material wired both into the coat that names it and into the file, which says
+            // the file is made of the material and of the coat separately, and it is not.
+            //
+            // A box reaches the document when nothing at all reads it: the solid, the settings that
+            // frame the world, and each part a manifest is assembled from. Everything else reaches
+            // it through whatever uses it, which is what a graph is for.
             std::vector<u32> answers;
             for (usize i = 0; i < graph_.nodes.size(); ++i) {
-                if (node_shown_[i]) answers.push_back(static_cast<u32>(i));
+                if (node_shown_[i] && used_by_[i].empty()) answers.push_back(static_cast<u32>(i));
             }
             std::stable_sort(answers.begin(), answers.end(),
                              [&](u32 a, u32 b) { return graph_y_[a] < graph_y_[b]; });
@@ -3401,15 +3495,20 @@ void Shell::draw_visual_view(const Rect& page) {
             return canvas.y0 + graph_pan_y_ + static_cast<f32>(row) * cell_h + node_h +
                    lane_deep * where;
         };
-        const auto flat = [&](f32 x0, f32 x1, f32 y, u32 rgb) {
-            ui_.draw().hue(Rect{std::min(x0, x1), y - thin * 0.5f, std::max(x0, x1),
-                                y + thin * 0.5f},
-                           rgb);
+        // A wire the document SAYS is solid; a wire the language MEANS is half as strong and half
+        // as thick, so it reads as a relationship rather than as a line somebody drew. There is
+        // nothing in the file to cut, and it has no tab for that reason.
+        const auto flat = [&](f32 x0, f32 x1, f32 y, u32 rgb, bool written) {
+            const f32 wide = written ? thin : std::max(1.0f, thin * 0.5f);
+            ui_.draw().hue(Rect{std::min(x0, x1), y - wide * 0.5f, std::max(x0, x1),
+                                y + wide * 0.5f},
+                           rgb, written ? 1.0f : 0.62f);
         };
-        const auto upright = [&](f32 x, f32 y0, f32 y1, u32 rgb) {
-            ui_.draw().hue(Rect{x - thin * 0.5f, std::min(y0, y1), x + thin * 0.5f,
+        const auto upright = [&](f32 x, f32 y0, f32 y1, u32 rgb, bool written) {
+            const f32 wide = written ? thin : std::max(1.0f, thin * 0.5f);
+            ui_.draw().hue(Rect{x - wide * 0.5f, std::min(y0, y1), x + wide * 0.5f,
                                 std::max(y0, y1)},
-                           rgb);
+                           rgb, written ? 1.0f : 0.62f);
         };
 
         for (usize r = 0; r < runs.size(); ++r) {
@@ -3418,18 +3517,18 @@ void Shell::draw_visual_view(const Rect& page) {
             const Rect& into = run.into;
             const f32 turn_in = channel_x(run.channel_in, slot_in[r]);
             if (run.straight) {
-                flat(from.x1, turn_in, run.y0, run.rgb);
-                upright(turn_in, run.y0, run.y1, run.rgb);
-                flat(turn_in, into.x0, run.y1, run.rgb);
+                flat(from.x1, turn_in, run.y0, run.rgb, run.written);
+                upright(turn_in, run.y0, run.y1, run.rgb, run.written);
+                flat(turn_in, into.x0, run.y1, run.rgb, run.written);
                 continue;
             }
             const f32 turn_out = channel_x(run.channel_out, slot_out[r]);
             const f32 along = lane_y(run.lane, slot_lane[r]);
-            flat(from.x1, turn_out, run.y0, run.rgb);
-            upright(turn_out, run.y0, along, run.rgb);
-            flat(turn_out, turn_in, along, run.rgb);
-            upright(turn_in, along, run.y1, run.rgb);
-            flat(turn_in, into.x0, run.y1, run.rgb);
+            flat(from.x1, turn_out, run.y0, run.rgb, run.written);
+            upright(turn_out, run.y0, along, run.rgb, run.written);
+            flat(turn_out, turn_in, along, run.rgb, run.written);
+            upright(turn_in, along, run.y1, run.rgb, run.written);
+            flat(turn_in, into.x0, run.y1, run.rgb, run.written);
         }
     }
 
@@ -3641,8 +3740,13 @@ void Shell::draw_visual_view(const Rect& page) {
                 hit_a_node = true;
                 ui_.sound().say(Cue::Step);
             }
+            // The tabs are on the wires the DOCUMENT says, and the count includes the ones the
+            // language means — otherwise a tab would sit where no wire arrives.
             usize shown_inputs = 0;
             for (u32 input : node.inputs) {
+                if (input < graph_.nodes.size() && node_shown_[input]) ++shown_inputs;
+            }
+            for (u32 input : implied_[i]) {
                 if (input < graph_.nodes.size() && node_shown_[input]) ++shown_inputs;
             }
             usize drawn = 0;
@@ -3969,24 +4073,23 @@ void Shell::gather_parts(u32 kind) {
     }
 }
 
-// A part off a shelf, copied beside the document and included by name.
+// A part off a shelf, named by the document.
+//
+// **D783 reversed.** It used to be COPIED beside the document, on the reasoning that an include
+// resolves beside the file and then in the game's clips and nowhere else, so a world naming the
+// player's own shelf would open on their machine and on nobody else's. That reasoning is still
+// true about SENDING and was wrong about everything else: it meant a clip made in the editor was
+// written into the worlds folder and appeared in no library at all — reported as *newly created
+// materials on the node editor or clips dont show on your material or clips library*.
+//
+// So the shelves are where an include is looked for now (`ui::where_includes_live`), one copy of a
+// thing exists, and it lives where that kind of thing lives. Gathering a world's parts beside it is
+// what PACKAGING is for, and packaging is the thing to build when sending exists.
 std::string Shell::take_part(const std::filesystem::path& from) {
     if (editing_.empty()) return "nothing is open";
-    const std::string name = from.filename().string();
-    const std::filesystem::path beside = editing_.parent_path() / name;
-    std::error_code error;
-    if (same_file(from) != same_file(beside)) {
-        if (std::filesystem::exists(beside, error) && !error) {
-            // Already here under that name, and it is not this file. Included as it stands rather
-            // than overwritten: a copy that silently replaces one is a copy that loses work.
-        } else {
-            error.clear();
-            std::filesystem::copy_file(from, beside, error);
-            if (error) return "could not copy " + name + " beside this document";
-        }
-    }
     remember("part");
-    const std::string why = add_clip_include(lines_, graph_, name, menu_x_, menu_y_);
+    const std::string why =
+        add_clip_include(lines_, graph_, from.filename().string(), menu_x_, menu_y_);
     document_changed(why);
     return why;
 }
@@ -4008,11 +4111,17 @@ std::string Shell::make_part(u32 kind, const std::string& name) {
     }
     if (stem.empty()) return "give it a name first";
     const bool clips = kind == 1;
-    const std::string file = stem + (clips ? ".clip" : ".wsmat");
-    const std::filesystem::path at = editing_.parent_path() / file;
+    // On its OWN shelf, which is where that kind of thing lives and where a player will look for it
+    // afterwards. The document names it and `ui::where_includes_live` is what finds it.
+    const std::string file = stem + (clips ? ".wsclip" : ".wsmat");
+    const std::filesystem::path shelf = library_.root() / (clips ? "clips" : "materials");
     std::error_code error;
+    std::filesystem::create_directories(shelf, error);
+    error.clear();
+    const std::filesystem::path at = shelf / file;
     if (std::filesystem::exists(at, error) && !error) {
-        return "there is already a " + file + " beside this document";
+        return "there is already a " + file + " on your " + (clips ? "clips" : "materials") +
+               " shelf";
     }
     // A new part is not an empty file. An empty clip builds to nothing, and a document that
     // includes nothing is indistinguishable from a document that failed to load — the failure this
@@ -4038,6 +4147,7 @@ std::string Shell::make_part(u32 kind, const std::string& name) {
         }
     }
     remember("part");
+    library_.refresh(true);
     const std::string why = add_clip_include(lines_, graph_, file, menu_x_, menu_y_);
     document_changed(why);
     return why;
