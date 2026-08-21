@@ -418,6 +418,8 @@ private:
         node.line = head_token.line;
         node.last_line = head_token.line;
         node.column = head_token.column;
+        node.word_line = head_token.line;
+        node.word_column = head_token.column;
 
         read_positional(node);
         read_keys(node);
@@ -506,6 +508,8 @@ private:
         node.line = head_token.line;
         node.last_line = head_token.line;
         node.column = head_token.column;
+        node.word_line = head_token.line;
+        node.word_column = head_token.column;
         out_.nodes.push_back(std::move(node));
         ++out_.statements;
         return static_cast<u32>(out_.nodes.size() - 1);
@@ -645,6 +649,8 @@ void Reader::statement() {
             expr.statement = true;
             expr.line = head_token.line;
             expr.column = head_token.column;
+            // `expr.word_line`/`word_column` are left alone on purpose: they are where `box` is,
+            // and this statement begins at `let`.
             expr.last_line = std::max(expr.last_line, head_token.line);
             if (tail) {
                 // The expression was built for this statement and nothing else refers to it, so
@@ -1762,6 +1768,120 @@ const std::vector<ClipProperty>& clip_properties_of(const std::string& head) {
     if (head == "material") return kMaterial;
     if (head == "variation") return kVariation;
     return kNone;
+}
+
+u32 clip_wrapper_of(const ClipGraph& graph, u32 node, const std::string& head) {
+    u32 at = node;
+    for (u32 depth = 0; depth < 32 && at < graph.nodes.size(); ++depth) {
+        if (graph.nodes[at].head == head) return at;
+        if (graph.nodes[at].inputs.size() != 1) break;
+        at = graph.nodes[at].inputs.front();
+    }
+    return ClipGraph::kNone;
+}
+
+bool wrap_clip_node(std::vector<std::string>& lines, const ClipGraph& graph, u32 node,
+                    const std::string& head, const std::string& args) {
+    if (node >= graph.nodes.size()) return false;
+    const ClipNode& one = graph.nodes[node];
+    if (!one.statement) return false;
+    if (one.word_line == 0 || one.word_line > lines.size()) return false;
+    if (one.end_line == 0 || one.end_line > lines.size()) return false;
+    if (one.word_column > lines[one.word_line - 1].size()) return false;
+    if (one.end_column > lines[one.end_line - 1].size()) return false;
+
+    // In front of the WORD rather than in front of the statement, or `let a = box` becomes
+    // `shell { let a = box } 0.05`, which is not a document.
+    //
+    // The tail FIRST, because inserting the head would move the end column when both are on one
+    // line — which is the ordinary right-to-left rule every writer in this file follows.
+    const std::string tail = " } " + args;
+    lines[one.end_line - 1].insert(one.end_column, tail);
+    lines[one.word_line - 1].insert(one.word_column, head + " { ");
+    return true;
+}
+
+bool unwrap_clip_node(std::vector<std::string>& lines, const ClipGraph& graph, u32 wrapper) {
+    if (wrapper >= graph.nodes.size()) return false;
+    const ClipNode& one = graph.nodes[wrapper];
+    if (one.inputs.size() != 1) return false;
+    if (!one.has_block) return false;
+    const ClipNode& inside = graph.nodes[one.inputs.front()];
+    if (one.word_line == 0 || one.word_line > lines.size()) return false;
+    if (one.end_line == 0 || one.end_line > lines.size()) return false;
+    if (inside.word_line == 0 || inside.word_line > lines.size()) return false;
+
+    // What comes off is `head {` before what is inside, and `}` plus whatever followed it after —
+    // and both spans are read from the document rather than assumed, because the author's own
+    // spacing is theirs (D746).
+    if (one.end_line != inside.last_line) {
+        // The tail is on a later line than the thing it closes. Cutting across lines here would
+        // take the author's own line breaks with it, so this one is left for the script view.
+        return false;
+    }
+    if (one.word_line != inside.word_line) return false;
+    if (inside.word_column < one.word_column) return false;
+    if (one.end_column > lines[one.end_line - 1].size()) return false;
+
+    std::string& tail_line = lines[one.end_line - 1];
+    const usize close = tail_line.rfind('}', one.end_column == 0 ? 0 : one.end_column - 1);
+    if (close == std::string::npos || close < inside.word_column) return false;
+    // From the `}` to the end of the wrapper, and any space in front of the brace.
+    usize from = close;
+    while (from > inside.word_column &&
+           (tail_line[from - 1] == ' ' || tail_line[from - 1] == '\t')) {
+        --from;
+    }
+    tail_line = tail_line.substr(0, from) + tail_line.substr(one.end_column);
+    // And the head and its brace, off the front.
+    lines[one.word_line - 1] = lines[one.word_line - 1].substr(0, one.word_column) +
+                               lines[one.word_line - 1].substr(inside.word_column);
+    return true;
+}
+
+const std::vector<std::string>& clip_heads_like(const std::string& head) {
+    static const std::vector<std::string> kNone;
+    for (const ClipPaletteGroup& group : clip_palette()) {
+        for (const std::string& one : group.heads) {
+            if (one != head) continue;
+            // Not every group is a set of interchangeable words. `number` holds `param` beside
+            // `add`, and `document` holds `metre` beside `solid`; swapping across those is not
+            // changing a node's type, it is writing a different statement.
+            if (group.name == "shape" || group.name == "moulding" || group.name == "join" ||
+                group.name == "move" || group.name == "change" || group.name == "pattern") {
+                return group.heads;
+            }
+            return kNone;
+        }
+    }
+    return kNone;
+}
+
+bool write_clip_head(std::vector<std::string>& lines, const ClipNode& node,
+                     const std::string& head) {
+    if (head.empty() || head == node.head) return false;
+    if (node.word_line == 0 || node.word_line > lines.size()) return false;
+    std::string& line = lines[node.word_line - 1];
+    if (node.word_column + node.head.size() > line.size()) return false;
+    // Checked against what is actually there, exactly as `write_clip_number` checks a span: a
+    // graph read before an edit and used after one is how a writer comes to overwrite the wrong
+    // bytes (D746).
+    if (line.compare(node.word_column, node.head.size(), node.head) != 0) return false;
+    line.replace(node.word_column, node.head.size(), head);
+    return true;
+}
+
+bool write_clip_target(std::vector<std::string>& lines, const ClipNode& node,
+                       const std::string& file) {
+    if (file.empty() || file.find('"') != std::string::npos) return false;
+    if (node.line == 0 || node.line > lines.size()) return false;
+    std::string& line = lines[node.line - 1];
+    const usize open = line.find('"', node.word_column);
+    if (open == std::string::npos) return false;
+    const usize close = line.find('"', open + 1);
+    if (close == std::string::npos) return false;
+    line = line.substr(0, open + 1) + file + line.substr(close);
+    return true;
 }
 
 bool erase_clip_key(std::vector<std::string>& lines, const ClipNode& node,

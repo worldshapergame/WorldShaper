@@ -400,6 +400,16 @@ private:
     // How many rows `draw_property_rows` will draw, given the same `folding`. Asked before the
     // scroll region is opened, because a scroll needs its content height up front.
     usize property_rows_of(const ClipNode& node, bool folding) const;
+    // The head word of the chosen node, as a control: pressing it lists what that node could be
+    // instead and choosing one rewrites the word. See `clip_heads_like` for what "could be" means.
+    void draw_head_choice(const Rect& row, const ClipNode& node);
+    // Hollow, and how far it is stretched along each axis: two things the LANGUAGE has as
+    // operations (`shell { }` and `scale { }`) and a node's settings did not offer. A row that goes
+    // off nought wraps the statement in the word the language uses; a row that comes back to nought
+    // takes the wrapper off again, so the document says what a person would have typed.
+    usize draw_shape_extras(const ClipNode& node, const Rect& area, const Rect& clip_to,
+                            f32 row_height);
+    bool head_menu_door_ = false;   // the open head menu is listing FILES rather than words
 
     // Where the box that stands for the FILE sits, and whether there is one.
     //

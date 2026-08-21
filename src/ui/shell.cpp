@@ -4614,6 +4614,195 @@ std::string Shell::shown_name(const std::filesystem::path& path) const {
 // are the same code in one place. `area` is where the rows start and how wide they are; anything
 // falling outside `clip_to` is skipped rather than drawn, which is what makes a scrolled panel and
 // a box scrolled off the edge of the graph cost the same as each other: nothing.
+// What it IS, and what it could be instead.
+//
+// The word was drawn and nothing else — `all` is a union and `grain` is an fbm, and that row is
+// where that is said. Now it is also where it is CHANGED: a shape can become another shape, a
+// pattern another pattern, a clip another clip. What a node can become is its own palette group
+// (`clip_heads_like`), because that is already the answer to *which of these words are alike*.
+//
+// A node with nothing to become is still drawn, in the same place, as plain text. A control that
+// appears and disappears as the selection moves is a row a player has to read before using.
+void Shell::draw_head_choice(const Rect& row, const ClipNode& node) {
+    const Metrics& metrics = ui_.metrics();
+    const std::string shown = clip_head_shown(node.head);
+    const bool is_door = node.head == "include" && !node.target.empty();
+    const std::vector<std::string>& alike = clip_heads_like(node.head);
+    const bool can_swap = is_door || alike.size() > 1;
+
+    const f32 wide = DrawList::measure(shown, metrics.text()) + metrics.px(14.0f);
+    const Rect cell{std::max(row.x0, row.x1 - wide), row.y0, row.x1, row.y1};
+    const u64 id = id_of("node.head");
+    const bool over = can_swap && cell.holds(ui_.pointer_x(), ui_.pointer_y());
+    if (over) ui_.draw().ink(cell, 0.14f);
+    ui_.draw().text(cell.x1 - (can_swap ? metrics.px(10.0f) : 0.0f),
+                    cell.mid_y() - DrawList::cap_height(metrics.text()) * 0.5f, shown,
+                    metrics.text(), tinted(kPlain, clip_carries_tint(node.carries) + 1),
+                    Align::Right, over ? 1.0f : 0.9f);
+    if (!can_swap) return;
+    // A chevron, so a word that can be changed does not look like a word that cannot.
+    const f32 mark = std::min(metrics.icon() * 0.6f, cell.height() * 0.6f);
+    ui_.draw().icon(Rect{cell.x1 - mark, cell.mid_y() - mark * 0.5f, cell.x1,
+                         cell.mid_y() + mark * 0.5f},
+                    Icon::Expanded, over ? 0.9f : 0.45f);
+    if (over && ui_.pressed_in(cell) && !ui_.any_menu_open()) {
+        if (is_door) gather_parts(1);
+        head_menu_door_ = is_door;
+        ui_.open_menu(id, cell.x0, cell.y1);
+    }
+    if (!ui_.menu_open(id)) return;
+
+    std::vector<Ui::MenuItem> items;
+    std::vector<std::string> labels;
+    if (head_menu_door_) {
+        for (const std::filesystem::path& one : part_choices_) {
+            labels.push_back(shown_name(one));
+            items.push_back({Icon::Clip, labels.back(), true});
+        }
+    } else {
+        for (const std::string& one : alike) {
+            labels.push_back(clip_head_shown(one));
+            items.push_back({Icon::New, labels.back(), one != node.head});
+        }
+    }
+    for (usize i = 0; i < items.size(); ++i) items[i].label = labels[i];
+
+    const i32 picked = ui_.menu(id, items.data(), static_cast<u32>(items.size()));
+    if (picked < 0) return;
+    const usize at = static_cast<usize>(picked);
+    remember("kind");
+    bool wrote = false;
+    if (head_menu_door_) {
+        if (at < part_choices_.size()) {
+            wrote = write_clip_target(lines_, node, part_choices_[at].filename().string());
+        }
+    } else if (at < alike.size()) {
+        wrote = write_clip_head(lines_, node, alike[at]);
+    }
+    if (wrote) {
+        document_changed({});
+    } else {
+        say("that one cannot become this", 2.5);
+        ui_.sound().say(Cue::Refuse);
+    }
+}
+
+usize Shell::draw_shape_extras(const ClipNode& node, const Rect& area, const Rect& clip_to,
+                               f32 row_height) {
+    const Metrics& metrics = ui_.metrics();
+    if (!node.statement || node.carries != ClipCarries::Shape) return 0;
+    if (chosen_index_ >= graph_.nodes.size()) return 0;
+
+    const u64 fold = id_of("node.fold", id_of("shape"));
+    const u32 skin = clip_wrapper_of(graph_, chosen_index_, "shell");
+    const u32 stretched = clip_wrapper_of(graph_, chosen_index_, "scale");
+    const bool changed = skin != ClipGraph::kNone || stretched != ClipGraph::kNone;
+
+    f32 y = area.y0;
+    usize drawn = 0;
+    const Rect head_row{area.x0, y, area.x1, y + std::min(row_height, metrics.row())};
+    y += row_height;
+    ++drawn;
+    const Ui::Fold state = (head_row.y1 >= clip_to.y0 && head_row.y0 <= clip_to.y1)
+                               ? ui_.section(fold, head_row, "shape", changed)
+                               : Ui::Fold{ui_.section_open(fold), false};
+    if (state.reset) {
+        remember("shape");
+        bool touched = false;
+        if (skin != ClipGraph::kNone) touched |= unwrap_clip_node(lines_, graph_, skin);
+        refresh_graph();
+        const u32 again = clip_wrapper_of(graph_, chosen_index_, "scale");
+        if (again != ClipGraph::kNone) touched |= unwrap_clip_node(lines_, graph_, again);
+        if (touched) document_changed({});
+        return drawn;
+    }
+    if (!state.open) return drawn;
+
+    const f32 gutter = metrics.icon() + metrics.px(2.0f);
+    // `hollow`, then `stretch` along each axis. Four rows, each holding one number of one wrapper.
+    struct Row {
+        const char* label;
+        const char* key;      // the key on the wrapper that carries it
+        const char* head;     // the word the language wraps with
+        f64 unwrapped;        // what it means when there is no wrapper at all
+        f64 low;
+        f64 high;
+        const char* about;
+    };
+    static const Row kRows[4] = {
+        {"hollow", "thickness", "shell", 0.0, 0.0, 1.0,
+         "How thick a skin to leave. Nought is solid all the way through"},
+        {"stretch x", "x", "scale", 1.0, 0.05, 8.0, "How far it is stretched east to west"},
+        {"stretch y", "y", "scale", 1.0, 0.05, 8.0, "And up and down"},
+        {"stretch z", "z", "scale", 1.0, 0.05, 8.0, "And north to south"},
+    };
+
+    for (u32 i = 0; i < 4; ++i) {
+        const Row& want = kRows[i];
+        const u32 on = (std::string(want.head) == "shell") ? skin : stretched;
+        const ClipNumber* written =
+            (on != ClipGraph::kNone) ? graph_.nodes[on].number(want.key) : nullptr;
+        const f64 now = (written != nullptr) ? written->value : want.unwrapped;
+
+        const Rect whole{area.x0, y, area.x1, y + std::min(row_height, metrics.row())};
+        const Rect row{whole.x0 + gutter, whole.y0, whole.x1, whole.y1};
+        y += row_height;
+        ++drawn;
+        if (whole.y1 < clip_to.y0 || whole.y0 > clip_to.y1) continue;
+
+        {
+            const Rect back{whole.x0, whole.y0, whole.x0 + gutter, whole.y1};
+            const bool off_default = std::abs(now - want.unwrapped) > 1e-9;
+            if (ui_.reset_button(id_of("node.shape.back", i), back, off_default,
+                                 "Put this back")) {
+                remember("shape");
+                bool touched = false;
+                if (on != ClipGraph::kNone) {
+                    // Back to its default is back to NOT BEING THERE, when nothing else on the
+                    // wrapper is doing anything either — otherwise the document keeps a `scale`
+                    // that scales by one, which is a word that does nothing.
+                    touched = write_clip_key(lines_, graph_.nodes[on], want.key,
+                                             spell_clip_number(want.unwrapped, "0.00"));
+                }
+                if (touched) document_changed({});
+                return drawn;
+            }
+        }
+
+        const std::string tooltip = want.about;
+        Number about;
+        about.label = want.label;
+        about.tooltip = tooltip;
+        about.low = want.low;
+        about.high = want.high;
+        about.step = 0.01;
+        about.decimals = 2;
+        f64 value = now;
+        if (!ui_.number(id_of("node.shape", i), row, about, value) || value == now) continue;
+
+        remember("shape");
+        if (on != ClipGraph::kNone) {
+            if (written != nullptr) {
+                if (write_clip_number(lines_, *written, spell_clip_number(value, written->text))) {
+                    document_changed({});
+                }
+            } else if (write_clip_key(lines_, graph_.nodes[on], want.key,
+                                      spell_clip_number(value, "0.00"))) {
+                document_changed({});
+            }
+            return drawn;
+        }
+        // Nothing wrapping it yet, so the wrapper goes on — written with the key this row carries
+        // and nothing else, because a `scale` that also says `y=1 z=1` is two words that do nothing
+        // beside one that does.
+        const std::string args =
+            std::string(want.key) + "=" + spell_clip_number(value, "0.00");
+        if (wrap_clip_node(lines_, graph_, chosen_index_, want.head, args)) document_changed({});
+        return drawn;
+    }
+    return drawn;
+}
+
 usize Shell::property_rows_of(const ClipNode& node, bool folding) const {
     const std::vector<ClipProperty>& offers = clip_properties_of(node.head);
     usize rows = 0;
@@ -4803,10 +4992,7 @@ void Shell::draw_node_parameters(const Rect& rect) {
         }
         // What it is, in the language's own word and in the colour that word has everywhere else:
         // `all` is a union and `grain` is an fbm, and this row is where that is said.
-        const std::string shown_head = clip_head_shown(node.head);
-        ui_.draw().text(row.x1, row.mid_y() - DrawList::cap_height(metrics.text()) * 0.5f,
-                        shown_head, metrics.text(),
-                        tinted(kPlain, clip_carries_tint(node.carries) + 1), Align::Right, 0.9f);
+        draw_head_choice(row, node);
     }
 
     if (node.opaque) {
@@ -4852,10 +5038,17 @@ void Shell::draw_node_parameters(const Rect& rect) {
     // What is FOLDED AWAY takes no room, so the scroll's content is what will actually be drawn.
     const usize offered_rows = property_rows_of(node, true);
 
+    // Two things the LANGUAGE has as operations and this panel now offers as properties: how hollow
+    // it is and how far it is stretched. Only on something that makes matter — a pattern has no
+    // skin and a number cannot be stretched.
+    const bool has_shape_rows = node.statement && node.carries == ClipCarries::Shape;
+    const usize shape_rows =
+        has_shape_rows ? (1 + (ui_.section_open(id_of("node.fold", id_of("shape"))) ? 4 : 0)) : 0;
+
     const Rect list{column.box.x0, column.y, column.box.x1, column.box.y1};
     const f32 row_height = metrics.row() + metrics.px(4.0f);
     const f32 rows = static_cast<f32>((offers.empty() ? node.numbers.size() : offered_rows) +
-                                      node.words.size() + made_of.size() + 2);
+                                      shape_rows + node.words.size() + made_of.size() + 2);
     const Rect inner = ui_.begin_scroll(id_of("node.scroll"), list, rows * row_height);
     f32 y = inner.y0;
 
@@ -4869,6 +5062,11 @@ void Shell::draw_node_parameters(const Rect& rect) {
         const usize laid = draw_property_rows(node, Rect{inner.x0, y, inner.x1, inner.y1}, list,
                                              row_height, id_of("node.panel"), true);
         y += static_cast<f32>(laid) * row_height;
+    }
+    if (has_shape_rows) {
+        y += static_cast<f32>(draw_shape_extras(node, Rect{inner.x0, y, inner.x1, inner.y1}, list,
+                                                row_height)) *
+             row_height;
     }
     // The same gutter the offered rows use, down the left, so a panel of positions and a panel of
     // properties are the same panel.

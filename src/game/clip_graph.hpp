@@ -140,9 +140,18 @@ struct ClipNode {
     // Where each input is written, in step with `inputs`. See ClipLink.
     std::vector<ClipLink> links;
 
-    u32 line = 0;         // where its head is, 1-based
+    u32 line = 0;         // where the STATEMENT starts, 1-based
     u32 last_line = 0;    // and the last line it covers
-    u32 column = 0;       // where its head starts on that line
+    u32 column = 0;       // where it starts on that line
+    // And where its own WORD is, which for `let a = box ...` is the `box` rather than the `let`.
+    //
+    // The two differ on exactly the statements that bind a name, and they are the two different
+    // questions anything that rewrites a document has to ask: *where does this statement begin*,
+    // which is what a delete cuts from, and *where is the word that says what this is*, which is
+    // what a type swap replaces and what a wrapper is inserted in front of. Answering the second
+    // with the first put `cone` over `let` and wrapped a name in a `shell { }`.
+    u32 word_line = 0;
+    u32 word_column = 0;
     // And where the name it is BOUND to is written — the word after `let`, or after `material` or
     // `param`. A copy has to be given a name of its own, and that means knowing which bytes the old
     // one occupies rather than searching the line for a word that may appear in it twice.
@@ -343,6 +352,58 @@ std::string clip_head_shown(const std::string& head);
 // Empty for a head that has no such table — which is most of them, and means "list what is
 // written", exactly as before.
 const std::vector<ClipProperty>& clip_properties_of(const std::string& head);
+
+// --- a shape that is hollow, and a shape that is stretched --------------------------------------
+//
+// *Add a hollow parameter to the settings of shape nodes and parameters to stretch them.* Asked for
+// directly, and the language already has both: `shell { ... } 0.05` makes a solid into a skin of
+// that thickness, and `scale { ... } 2 1 2` stretches one. What it did not have was a way to ask
+// for either from a node's own settings, which is where somebody who has just made a box looks.
+//
+// So they are OPERATIONS the interface offers as properties. A row that goes from nought wraps the
+// statement's expression in the word the language uses; a row that goes back to nought takes the
+// wrapper off again. The document ends up saying exactly what a person would have typed, which is
+// the whole of why it is done this way rather than by inventing a `hollow=` key that only the
+// editor understands.
+
+// Which node in a statement's own chain has this head, or `kNone`. A chain is a node, the single
+// thing it is made of, the single thing THAT is made of, and so on — which is what a stack of
+// wrappers round one shape is.
+u32 clip_wrapper_of(const ClipGraph& graph, u32 node, const std::string& head);
+
+// Wraps a statement's whole expression in `head { ... } args`. The statement keeps its name, its
+// comment and its `#@` marker: only the expression between them is enclosed.
+bool wrap_clip_node(std::vector<std::string>& lines, const ClipGraph& graph, u32 node,
+                    const std::string& head, const std::string& args);
+
+// And takes one off: the wrapper named by `wrapper` goes, and what it was made of stays.
+bool unwrap_clip_node(std::vector<std::string>& lines, const ClipGraph& graph, u32 wrapper);
+
+// --- swapping one word of the language for another ----------------------------------------------
+//
+// *Make it so that nodes that should allow for it you can easily change their type, like switch a
+// cube node for a cone node because its just a shape one, or a clip one for a different clip, by
+// using a dropdown to list what they are instead of plain text.* Asked for directly.
+//
+// What a node CAN become is its own palette group and nothing else: a `box` can be a `cone` because
+// both are shapes and take a place and a size, and a `box` cannot be a `union` because a union is
+// made of things and a box is not. The group is the answer the palette already gives, so this is
+// the palette read backwards rather than a second table to keep in step.
+//
+// Empty for a head that is in no group — `metre`, `solid`, `include` — which is how the interface
+// knows not to offer the choice at all.
+const std::vector<std::string>& clip_heads_like(const std::string& head);
+
+// Writes a different head word over this node's. The numbers and keys after it are left exactly
+// where they are: a `cone` reads `r=` and `h=` where a `cylinder` reads the same two, and where the
+// new word does not want a key the reader ignores it rather than failing — which is the behaviour
+// that makes this safe to offer at all.
+bool write_clip_head(std::vector<std::string>& lines, const ClipNode& node,
+                     const std::string& head);
+
+// And the file an `include` names, in place, between the quotation marks that are already there.
+bool write_clip_target(std::vector<std::string>& lines, const ClipNode& node,
+                       const std::string& file);
 
 // Takes a `key=...` back OUT of a statement, so it goes back to whatever the reader uses when the
 // document is silent. That is what *put this back* means for a property whose default is a silence.

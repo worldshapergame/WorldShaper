@@ -1098,3 +1098,132 @@ TEST_CASE("where the document's own box sits is in the file and out of the cache
     const ClipGraph quiet = read_clip_graph(lines_of(kWirable));
     CHECK_FALSE(quiet.doc_placed);
 }
+
+// --- changing what a node IS ----------------------------------------------------------------------
+
+TEST_CASE("a shape can be swapped for another shape, and a clip for another clip") {
+    // *Nodes that should allow for it you can easily change their type, like switch a cube node for
+    // a cone node because its just a shape one.* What a node can BECOME is its own palette group,
+    // which is the answer the palette already gives to *which of these words are alike*.
+    CHECK(clip_heads_like("box").size() > 4);
+    CHECK(clip_heads_like("cone").size() > 4);
+    // A group whose words are not interchangeable offers nothing: `param` beside `add` is not a
+    // choice, it is a different statement.
+    CHECK(clip_heads_like("param").empty());
+    CHECK(clip_heads_like("solid").empty());
+    CHECK(clip_heads_like("metre").empty());
+
+    std::vector<std::string> lines =
+        lines_of("let a = box 0 0 0  1 1 1 round=0.04   #@ 2.0 1.0\ninclude \"porch.clip\"\n");
+    ClipGraph graph = read_clip_graph(lines);
+    const ClipNode* a = named(graph, "a");
+    REQUIRE(a != nullptr);
+
+    // The numbers and keys after the word stay exactly where they are: a cone reads the same place
+    // a box does, and a key the new word does not want is ignored rather than fatal.
+    CHECK(write_clip_head(lines, *a, "cone"));
+    CHECK(lines[0].find("cone 0 0 0  1 1 1 round=0.04") != std::string::npos);
+    CHECK(count_of(lines[0], "#@") == 1);
+    graph = read_clip_graph(lines);
+    a = named(graph, "a");
+    REQUIRE(a != nullptr);
+    CHECK(a->head == "cone");
+    CHECK(a->placed);
+
+    // A graph read before an edit and used after one must not overwrite the wrong bytes: the span
+    // is checked against what is actually there.
+    ClipNode stale = *a;
+    stale.word_column = 200;
+    CHECK_FALSE(write_clip_head(lines, stale, "sphere"));
+    stale = *a;
+    stale.head = "not what is there";
+    CHECK_FALSE(write_clip_head(lines, stale, "sphere"));
+
+    // And the file an include names, in place.
+    const ClipNode* door = nullptr;
+    for (const ClipNode& node : graph.nodes) {
+        if (node.head == "include") door = &node;
+    }
+    REQUIRE(door != nullptr);
+    CHECK(write_clip_target(lines, *door, "terrace.wsclip"));
+    CHECK(lines[1] == "include \"terrace.wsclip\"");
+    CHECK_FALSE(write_clip_target(lines, *door, "has\"quote.clip"));
+}
+
+TEST_CASE("hollow and stretch are the words the language already has") {
+    // *Add a hollow parameter to the settings of shape nodes and parameters to stretch them.* Both
+    // exist as OPERATIONS -- `shell { } thickness=` and `scale { } x= y= z=` -- so a row that goes
+    // off nought wraps the statement in the word a person would have typed, and a row that comes
+    // back takes it off again. The document never learns a key only the editor understands.
+    std::vector<std::string> lines = lines_of("let a = box 0 0 0  1 1 1   #@ 2.0 1.0\nsolid a\n");
+    ClipGraph graph = read_clip_graph(lines);
+    u32 a = graph.find(ClipGraph::key_of(*named(graph, "a")));
+
+    CHECK(clip_wrapper_of(graph, a, "shell") == ClipGraph::kNone);
+    REQUIRE(wrap_clip_node(lines, graph, a, "shell", "thickness=0.05"));
+    CHECK(lines[0].find("shell { box 0 0 0  1 1 1 } thickness=0.05") != std::string::npos);
+    // The name, the comment and the marker are outside the wrapper: only the expression is enclosed.
+    CHECK(lines[0].compare(0, 8, "let a = ") == 0);
+    CHECK(count_of(lines[0], "#@") == 1);
+
+    graph = read_clip_graph(lines);
+    a = graph.find(ClipGraph::key_of(*named(graph, "a")));
+    const u32 skin = clip_wrapper_of(graph, a, "shell");
+    REQUIRE(skin != ClipGraph::kNone);
+    CHECK(graph.nodes[skin].head == "shell");
+    REQUIRE(graph.nodes[skin].number("thickness") != nullptr);
+    CHECK(graph.nodes[skin].number("thickness")->value == doctest::Approx(0.05));
+    // And the shape is still in there, still a box, still where it was put.
+    REQUIRE(graph.nodes[skin].inputs.size() == 1);
+    CHECK(graph.nodes[graph.nodes[skin].inputs.front()].head == "box");
+    CHECK(graph.nodes[skin].placed);
+
+    // Off again, and the document is what it was.
+    REQUIRE(unwrap_clip_node(lines, graph, skin));
+    REQUIRE(named(read_clip_graph(lines), "a") != nullptr);
+    CHECK(lines[0].find("shell") == std::string::npos);
+    CHECK(lines[0].find("let a = box 0 0 0  1 1 1") != std::string::npos);
+    CHECK(count_of(lines[0], "#@") == 1);
+    graph = read_clip_graph(lines);
+    CHECK(named(graph, "a")->head == "box");
+
+    // Stretch is the same machinery with a different word.
+    a = graph.find(ClipGraph::key_of(*named(graph, "a")));
+    REQUIRE(wrap_clip_node(lines, graph, a, "scale", "x=2.00"));
+    graph = read_clip_graph(lines);
+    a = graph.find(ClipGraph::key_of(*named(graph, "a")));
+    const u32 stretched = clip_wrapper_of(graph, a, "scale");
+    REQUIRE(stretched != ClipGraph::kNone);
+    REQUIRE(graph.nodes[stretched].number("x") != nullptr);
+    CHECK(graph.nodes[stretched].number("x")->value == doctest::Approx(2.0));
+}
+
+TEST_CASE("a key can be taken back out of a statement") {
+    std::vector<std::string> lines =
+        lines_of("material stone rgb=124,120,112 rough=210 metal=40   #@ 1.0 2.0\n");
+    ClipGraph graph = read_clip_graph(lines);
+    const ClipNode* stone = named(graph, "stone");
+    REQUIRE(stone != nullptr);
+
+    // *Put this back* for a property whose default is a SILENCE means taking the key out.
+    CHECK(erase_clip_key(lines, *stone, "rough"));
+    CHECK(lines[0].find("rough=") == std::string::npos);
+    // The space in front goes with it, so a line does not keep a gap where a key was.
+    CHECK(lines[0].find("rgb=124,120,112 metal=40") != std::string::npos);
+    CHECK(count_of(lines[0], "#@") == 1);
+    // One that is not there is not an edit.
+    CHECK_FALSE(erase_clip_key(lines, *stone, "rough"));
+    CHECK_FALSE(erase_clip_key(lines, *stone, "sheen"));
+}
+
+TEST_CASE("what a new one is made with is what put-it-back puts back") {
+    // Nothing in the language says what a box's third number ought to be. The palette has to make a
+    // box somebody can SEE, and the number it makes it with is exactly that answer.
+    f64 value = 0.0;
+    CHECK(clip_default_number("box", "", 4, value));
+    CHECK(value == doctest::Approx(1.0));
+    CHECK(clip_default_number("sphere", "r", 0, value));
+    CHECK(value == doctest::Approx(0.5));
+    CHECK_FALSE(clip_default_number("box", "nonsense", 0, value));
+    CHECK_FALSE(clip_default_number("not a word", "", 0, value));
+}
