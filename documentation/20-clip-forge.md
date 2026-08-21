@@ -202,6 +202,39 @@ says it is, so a positive value eats into the solid and a negative one grows it.
 negated at first and stood proud of the face like veins, and the block came out bigger than it
 started.
 
+## 6b. A property can be read from a pattern
+
+```
+material stone rgb=grain,170,158 rough=wear
+```
+
+**Any numeric slot of a `material` may name a field instead of holding a number.** The red of every
+stone voxel is then whatever `grain` says where that voxel is, and the green and the blue beside it
+are still the numbers they were. `rgb` takes three, and `rough`, `metal`, `emit` and `opacity` take
+one each — the properties the per-voxel record actually holds.
+
+Asked for directly: *i cant seem to connect something like a pattern of noise to the rgb red of a
+voxel type even though its the same blue type of wire.* It was the same kind of wire, and the
+language had nowhere to put it.
+
+**A pattern runs from -1 to 1**, not from 0 to 1: `value_noise` ends on `accum * 2 - 1` and `fbm` is
+a normalised sum of it, and `sine`, `waves` and `ridged` are the same shape. So that is the range
+that is mapped across the property, and anything outside it is held at the ends. To aim a narrower
+band, shape the field first with `remap`, `clamp`, `smoothstep` or `abs` — which is what the
+arithmetic words are for.
+
+A driven property is applied by the **variation pass** (§7), at the same world position, into the
+same record, and it is deduplicated and budgeted by the same machinery. So it costs one field
+evaluation per voxel per driven channel, and nothing at all in a clip that has none.
+
+Two things this is not:
+
+- A slot may also name a **parameter**, and that has always meant a number — `rgb=redness,90,70`
+  where `param redness` was declared reads the dial, exactly as it does anywhere else. Only a name
+  bound by `let` is a field.
+- `absorb` and `ior` cannot be driven. Both feed the marcher's medium rather than a face's shading,
+  and a per-voxel index of refraction is a different change.
+
 ## 7. No two voxels alike
 
 A real surface has no two square centimetres the same. Photograph a concrete wall or scan a
@@ -233,6 +266,14 @@ Two honest limits:
 
 Players can turn it off. Omit `variation` and every voxel of a material is identical, which is
 faster to build and smaller to store.
+
+**Where this actually runs.** Once, over the whole clip, before the up-front coarse paste — and that
+paste has been off by default since D673, so between then and D845 *nothing in the game was varied
+at all*. Every `variation` statement in every clip in this repository was inert. It now runs per
+node, at the paste, on one thread: the type table is one table and the order records enter it is
+what makes a world build the same way twice. The budget is spent across the whole world rather than
+per node, and the variants already made are kept across nodes so that reaching the ceiling costs
+quality evenly instead of costing the last half of a building all of it.
 
 ## 8. What this is for
 

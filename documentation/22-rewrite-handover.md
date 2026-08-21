@@ -626,7 +626,35 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### THE PICTURE THE SOCKETS NEEDED, 2026-08-21 — D832–D838. Read this first
+#### A VOXEL TYPE CAN READ A PATTERN, 2026-08-21 — D839–D847. Read this first
+
+*I cant seem to connect something like a pattern of noise to the rgb red of a voxel type even though
+its the same blue type of wire.*
+
+| what changed | | how to look at it |
+|---|---|---|
+| **any numeric slot of a `material` may name a field** (D839) | `material stone rgb=grain,170,158` | `documentation/20-clip-forge.md` §6b |
+| **a pattern runs from -1 to 1** (D840) | mapping 0..1 drew a flat black wall | measured in `tests/test_weathering.cpp` |
+| **a driven field is a compile root** (D841) | two clips driving from two different patterns had the SAME content hash | — |
+| **`key=` is written whole or not at all** (D842, D843) | a wire into one slot rewrites the list; a cut puts a number back | `write_clip_slot` |
+| **variation runs in the LADDER** (D845) | it has not run in this game since D673 turned the coarse paste off | `weather_demo` against its own control arm |
+| **the budget and the reuse pool are world-wide** (D846) | the facility reaches the ceiling and says so | — |
+| **an open menu owns the ground it stands on** (D847) | a press on a menu row also pressed what was under it | `tests/test_widgets.cpp` |
+
+**D845 is the one to read twice.** Every `variation` statement in every clip in this repository was
+inert, which means every screenshot in this documentation taken since D673 is of an unvaried world.
+It costs nothing measurable — `weather_demo` settles in 199 ms either way — and it changes the
+content hash of every clip that has one. The gate clip has none, which is why the gate did not move.
+
+**Still open, and it needs a word from the user before anything is changed:** *there's improper
+rendering when tweaking the parameters of roughness and opacity and seeing them behind each other.*
+Two readings, two different subsystems — the SLIDERS overlapping each other in the panel, or two
+transparent SURFACES seen one behind the other in the world. The panel was photographed
+(`--editor-choose glass`) and its rows do not overlap; the world reading points at
+`kProbeRefractStack` in `shaders/node.glsl`, which is exactly *a second sheet of glass*. Do not
+change the path tracer on a guess.
+
+#### THE PICTURE THE SOCKETS NEEDED, 2026-08-21 — D832–D838
 
 One message from playing the rewrite below, and every item in it is one fault: **a node became two
 cells wide and several cells tall and nothing else was told.**
@@ -641,14 +669,6 @@ cells wide and several cells tall and nothing else was told.**
 | **the document's box is a box** (D837) | wires ran through the one box everything points at | — |
 | **a slider is an instrument** (D838) | `Cue::Slide`, 110 Hz to 7040 Hz, geometric | `slide_pitch` |
 | **`--editor-choose NAME`** | chooses a box, which is what opens the panel on its properties | — |
-
-**Still open from that message, and it needs a word from the user before anything is changed:**
-*there's improper rendering when tweaking the parameters of roughness and opacity and seeing them
-behind each other.* Two readings, two different subsystems — the SLIDERS overlapping each other in
-the panel, or two transparent SURFACES seen one behind the other in the world. The panel was
-photographed (`--editor-choose glass`) and its rows do not overlap; the world reading points at
-`kProbeRefractStack` in `shaders/node.glsl`, which is exactly *a second sheet of glass*. Do not
-change the path tracer on a guess.
 
 #### A NODE IS ITS SOCKETS, 2026-08-21 — D826–D831
 

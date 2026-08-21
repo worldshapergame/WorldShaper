@@ -15760,3 +15760,32 @@ was spending what the rows had been given.
 
 Gate: content `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
 **861 test cases, 21,249,013 assertions.**
+
+## D839-D846 - a voxel type can read a pattern, and variation finally runs
+
+*I cant seem to connect something like a pattern of noise to the rgb red of a voxel type even though
+its the same blue type of wire.* It was the same kind of wire. The language had nowhere to put it,
+and underneath that, the pass that would have applied it had not run in this game for months.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D839 | **Any numeric slot of a `material` may name a FIELD** | user | `material stone rgb=grain,170,158` — the red is whatever `grain` says at each voxel and the green and blue are the numbers they were. `rgb`, `rough`, `metal`, `emit` and `opacity`, which are the properties the per-voxel record holds; not `ior` or `absorb`, which feed the marcher's medium rather than a face's shading. A slot naming a **parameter** still means a number, because it always has |
+| D840 | **A pattern runs from -1 to 1** | correction | Measured, not assumed: the test probes `fbm size=0.35` at three points and reads -0.5, -0.2, -0.1. `value_noise` ends `accum * 2 - 1`. Mapping 0..1 across the property — which is what `variation by=` does and what this did first — clamps the whole bottom half of a noise field to nothing, and a red driven by an fbm came out flat BLACK. An author who wants a narrower band aims it with `remap` or `smoothstep` |
+| D841 | **A driven field is a COMPILE ROOT** | correction | The identical trap `variation by=` fell into and left a comment about (*the fifth thing that builds, and it was missed*). `compile_field` renumbers, so an index not handed in as a root is aimed at whatever now occupies it. It failed in the quietest way there is: two clips driving a red from two DIFFERENT patterns — an fbm and a checker — came out with the **same content hash**, because both indices had been renumbered onto the same surviving node |
+| D842 | **`key=` is written whole or not at all** | build | `rgb=124` is not a colour and `rgb=,170,158` is not a document. So a wire into one slot rewrites the whole list, spelling every other slot from what is already there; and taking one out puts a NUMBER back in its place. `write_clip_slot`, and the editor's `rgb red` socket is what a person drags onto |
+| D843 | **A key's numbers keep their SLOTS** | correction | `Keys::numbers` packs only the numeric parts of a list, so the moment one slot holds a name every slot after it is one place out: `rgb=grain,170,158` gives `{170, 158}` and reading slot nought out of that is the green. Both readers — the forge's and the graph's — now record each part where it was written, and `ClipWord` gained the `index` a `ClipNumber` always had |
+| D844 | **The record is compared, not only its key** | build | The slab table packed a base id and four channels into sixty-four bits exactly, so equal keys were equal records by construction. A driven property can move three more channels and they do not fit, so the key is a hash now and the probe carries on past a collision — exact rather than merging two different records that happened to hash alike |
+| D845 | **Variation runs in the LADDER, which is where the world is built** | correction | It ran once over the whole clip before the up-front coarse paste, and that paste has been off by default since D673 — so **nothing in the game has been varied at all since then**. Every `variation` statement in every clip in this repository was inert, which is most of *the materials you made are way too simple* and *wood just looks like a blob of light brown*: a wall of one material really was millions of voxels sharing one record. Per node, at the paste, on ONE thread, because the type table is one table and the order records enter it is what makes a world build the same way twice. Measured on `weather_demo` against its own control arm (the `variation` line commented out), twice each: settling 198/199 ms without and 206/199 ms with — indistinguishable |
+| D846 | **The budget is world-wide, and so is the reuse pool** | correction | `Variation::budget` is a rail against overrunning the renderer's fixed type table, written for ONE call over a whole clip. A call per node would give every node the whole million. The count lives on the application and `types_.intern` deduplicates across calls, so a record a neighbouring node already made costs nothing — and the variants already made are kept across nodes too, or the part of a building that loaded after the ceiling was reached would have no variation at all while the part before it did. The facility does reach the ceiling, and says so |
+
+### And one the same message caught
+
+**An open menu owns the ground it stands on** (D847). *When you press on something on the right
+click menu of the visual node editor it might press whats behind it as well.* A menu is drawn AFTER
+everything it covers, and a claim only refuses a point to something tested LATER — so a menu that
+claims where it is drawn claims nothing at all. It claims last frame's box at the start of this one
+instead, which is what the docked windows have done since they were pressed through. D822 fixed the
+same shape of fault one layer up and this one was still open underneath it.
+
+Gate: content `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
+**865 test cases, 21,249,049 assertions.**

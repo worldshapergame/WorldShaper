@@ -459,6 +459,13 @@ A drop is refused unless the kinds match, and the refusal names both sides — e
 mean something together, which is D821's five joins. **Pressing a full socket empties it**, which is
 what a press on a socket meant in the version this matches.
 
+A key with several slots is several sockets — `rgb red`, `rgb green`, `rgb blue` — and each is its
+own place to drop a wire. Since a `key=` is written whole or not at all (`rgb=124` is not a colour),
+a wire into one slot rewrites the list with every other slot spelled as it stands, and taking one
+out puts a NUMBER back rather than leaving a hole. Dropping a pattern onto `rgb red` is what
+*i cant seem to connect a pattern of noise to the rgb red of a voxel type* asked for, and what it
+writes is `rgb=grain,170,158` — see `documentation/20-clip-forge.md` §6b.
+
 A socket names what it holds **even when that thing has no box on the screen**: the picture is an
 answer and one level under it (D796), so a union's parts are usually a level too deep to draw, and a
 row reading `--` about a part that exists is a lie. It is dimmer when there is nothing to follow.

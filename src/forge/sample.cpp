@@ -164,9 +164,18 @@ struct alignas(64) LocalTable {
     }
 
     // The slot for this key, adding it when new.
+    //
+    // **The RECORD is compared, not only the key.** The key used to pack the base id and the four
+    // channels variation touches into sixty-four bits exactly, so equal keys were equal records by
+    // construction — and a driven property (`DrivenChannel`) can move three more channels, which
+    // do not fit. So the key is a hash now and the probe carries on past a collision, which keeps
+    // the table exact rather than merging two different records that happened to hash alike.
     u32 slot_for(u64 key, const VisualRecord& record, VoxelTypeId base) {
         u64 at = (key * 0x9E3779B97F4A7C15ull) >> 32 & mask;
-        while (keys[at] != 0 && keys[at] != key) at = (at + 1) & mask;
+        while (keys[at] != 0 &&
+               (keys[at] != key || bases[slots[at]] != base || !(records[slots[at]] == record))) {
+            at = (at + 1) & mask;
+        }
         if (keys[at] == key) {
             ++counts[slots[at]];
             return slots[at];
@@ -183,11 +192,42 @@ struct alignas(64) LocalTable {
     }
 };
 
+// Everything a perturbation or a driven property may move, mixed into one word. FNV-1a, because
+// the inputs are eight bytes and a byte at a time is as fast as anything cleverer at that size —
+// and never zero, because zero is the table's empty slot.
+u64 record_key(VoxelTypeId base, const VisualRecord& record) {
+    u64 h = 1469598103934665603ull;
+    const auto mix = [&h](u64 v) { h = (h ^ v) * 1099511628211ull; };
+    mix(static_cast<u64>(base));
+    mix(record.red);
+    mix(record.green);
+    mix(record.blue);
+    mix(record.opacity);
+    mix(record.roughness);
+    mix(record.metallic);
+    mix(record.emissive);
+    return h | 1ull;
+}
+
+// The byte of a record one driven property writes.
+u8& channel_of(VisualRecord& record, DrivenChannel::Which which) {
+    switch (which) {
+        case DrivenChannel::Which::Red: return record.red;
+        case DrivenChannel::Which::Green: return record.green;
+        case DrivenChannel::Which::Blue: return record.blue;
+        case DrivenChannel::Which::Opacity: return record.opacity;
+        case DrivenChannel::Which::Roughness: return record.roughness;
+        case DrivenChannel::Which::Metallic: return record.metallic;
+        case DrivenChannel::Which::Emissive: break;
+    }
+    return record.emissive;
+}
+
 }  // namespace
 
 VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& field,
                                 const Variation& variation, const SampleSettings& settings,
-                                const SampleResult& placed, JobSystem* jobs) {
+                                const SampleResult& placed, JobSystem* jobs, VariationPool* pool) {
     VariationReport report;
     if (clip.empty() || !variation.any()) return report;
 
@@ -223,6 +263,8 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
             u64 count = 0;
             VoxelTypeId cached_base = kAir;
             VisualRecord cached_source{};
+            u32 cached_first = 0;   // this base's run in `variation.driven`
+            u32 cached_last = 0;
             for (usize zi = edge[s]; zi < edge[s + 1]; ++zi) {
                 const i32 z = static_cast<i32>(zi);
                 const i64 wz = placed.origin_voxel[2] + z;
@@ -236,11 +278,18 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
                         ++count;
                         const i64 wx = placed.origin_voxel[0] + x;
 
+                        // Where this voxel is, in the field's own coordinates. Worked out once
+                        // and shared, because a driven property and a scaled perturbation both
+                        // want it and a clip can have several of each.
+                        const bool wants_place = variation.has_by || !variation.driven.empty();
+                        const Vec3 p =
+                            wants_place ? Vec3{(static_cast<f64>(wx) + centre_shift) * voxel,
+                                               (static_cast<f64>(wy) + centre_shift) * voxel,
+                                               (static_cast<f64>(wz) + centre_shift) * voxel}
+                                        : Vec3{0.0, 0.0, 0.0};
+
                         f64 scale = 1.0;
                         if (variation.has_by) {
-                            const Vec3 p{(static_cast<f64>(wx) + centre_shift) * voxel,
-                                         (static_cast<f64>(wy) + centre_shift) * voxel,
-                                         (static_cast<f64>(wz) + centre_shift) * voxel};
                             scale = std::clamp(field.eval(variation.by, p), 0.0, 1.0);
                         }
 
@@ -250,27 +299,67 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
                         if (base != cached_base) {
                             cached_base = base;
                             cached_source = types.visual_of(base);
+                            // And which stretch of the driven list belongs to it. They are sorted
+                            // by type, so one base's properties are one contiguous run and the
+                            // lookup is two walks rather than a search per voxel.
+                            cached_first = 0;
+                            cached_last = 0;
+                            for (u32 d = 0; d < static_cast<u32>(variation.driven.size()); ++d) {
+                                if (variation.driven[d].type != base) continue;
+                                if (cached_last == cached_first) cached_first = d;
+                                cached_last = d + 1;
+                            }
                         }
                         const VisualRecord& source = cached_source;
                         VisualRecord record = source;
+
+                        // **The properties this type reads from a field**, before the
+                        // perturbation, so a driven colour is varied like any other colour rather
+                        // than instead of one.
+                        for (u32 d = cached_first; d < cached_last; ++d) {
+                            const DrivenChannel& one = variation.driven[d];
+                            // The run is contiguous in every document this can read, and the guard
+                            // is here so that a list that is not still gives the right answer
+                            // rather than another type's colour.
+                            if (one.type != base) continue;
+                            // **A pattern in this language runs from -1 to 1**, not from 0 to 1:
+                            // `value_noise` ends `accum * 2 - 1` and `fbm` is a normalised sum of
+                            // it, and `sine`, `waves` and `ridged` are the same shape. Mapping
+                            // from 0 to 1 -- which is what `variation by=` does, and what this did
+                            // first -- clamps the whole bottom half of a noise field to nothing,
+                            // and a red driven by an fbm came out flat BLACK across the block.
+                            // Measured, not assumed: the test probes three points and reads -0.5,
+                            // -0.2, -0.1.
+                            //
+                            // Anything outside is held at the ends, and an author who wants a
+                            // narrower band aims it with `remap`, `clamp` or `smoothstep`, which
+                            // is what the arithmetic words are for.
+                            const f64 at =
+                                std::clamp((field.eval(one.field, p) + 1.0) * 0.5, 0.0, 1.0);
+                            const f64 span = static_cast<f64>(one.high) - static_cast<f64>(one.low);
+                            channel_of(record, one.which) = static_cast<u8>(
+                                std::lround(static_cast<f64>(one.low) + at * span));
+                        }
+
                         if (scale > 0.0) {
                             const f64 c = variation.colour * scale;
                             const f64 r = variation.roughness * scale;
                             const u64 h = hash_voxel(wx, wy, wz, variation.seed);
-                            record.red = nudge(source.red, c, signed_slice(h, 0));
-                            record.green = nudge(source.green, c, signed_slice(h, 1));
-                            record.blue = nudge(source.blue, c, signed_slice(h, 2));
-                            record.roughness = nudge(source.roughness, r, signed_slice(h, 3));
+                            // **From `record`, not from `source`.** A driven property has already
+                            // written into `record` above, and perturbing from the base record
+                            // threw that away — a red read from a field came out flat, because
+                            // this line put the material's own red back over it every voxel.
+                            // Identical to what it was when nothing is driven, because `record` is
+                            // then a copy of `source` and this is the same arithmetic on the same
+                            // bytes.
+                            record.red = nudge(record.red, c, signed_slice(h, 0));
+                            record.green = nudge(record.green, c, signed_slice(h, 1));
+                            record.blue = nudge(record.blue, c, signed_slice(h, 2));
+                            record.roughness = nudge(record.roughness, r, signed_slice(h, 3));
                         }
 
-                        // A key that is never zero, because zero is the empty slot: the base id
-                        // is at least one for any voxel that is not air.
-                        const u64 key = (static_cast<u64>(base) << 40) |
-                                        (static_cast<u64>(record.red) << 32) |
-                                        (static_cast<u64>(record.green) << 24) |
-                                        (static_cast<u64>(record.blue) << 16) |
-                                        (static_cast<u64>(record.roughness) << 8);
-                        clip.voxels[index] = table.slot_for(key, record, base) + 1;
+                        clip.voxels[index] =
+                            table.slot_for(record_key(base, record), record, base) + 1;
                     }
                 }
             }
@@ -354,7 +443,8 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
     // Interned on one thread, because the type table is one table and the order records enter it
     // is what makes a clip build the same way twice.
     std::vector<std::vector<VoxelTypeId>> part_id(parts);
-    std::unordered_map<VoxelTypeId, std::vector<VoxelTypeId>> spent;   // base -> variants made
+    VariationPool mine;                          // base -> variants made
+    VariationPool& spent = (pool != nullptr) ? *pool : mine;
     u64 minted = 0;
     for (usize p = 0; p < parts; ++p) {
         const LocalTable& sink = merged[p];
@@ -373,11 +463,13 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
                 // picked by position so the choice is stable, which keeps the surface varied —
                 // just no longer uniquely so — and keeps the renderer's table within its buffer.
                 report.reused += sink.counts[i];
-                const std::vector<VoxelTypeId>& pool = spent[base];
-                part_id[p][i] = pool.empty() ? base : pool[i % pool.size()];
+                const std::vector<VoxelTypeId>& made = spent[base];
+                part_id[p][i] = made.empty() ? base : made[i % made.size()];
             }
         }
     }
+
+    report.minted = minted;
 
     std::vector<std::vector<VoxelTypeId>> resolve(slab_count);
     for (usize s = 0; s < slab_count; ++s) {

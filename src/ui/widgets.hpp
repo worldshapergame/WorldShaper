@@ -464,6 +464,14 @@ private:
     f32 menu_x_ = 0.0f;
     f32 menu_y_ = 0.0f;
     u64 menu_opened_frame_ = 0;
+    // Where the open menu was drawn last frame, so that it can CLAIM that rectangle at the start of
+    // this one. A menu is drawn after everything it covers, and a claim only refuses a point to
+    // something tested LATER — so a menu that claims where it is drawn claims nothing at all, and
+    // a press on one of its rows also reached whatever was underneath. Reported: *when you press on
+    // something on the right click menu of the visual node editor it might press whats behind it as
+    // well.* The docked windows have claimed a frame late for the same reason since they were
+    // pressed through (Shell::frame).
+    Rect menu_box_{};
 
     // Scroll offsets, rubber bands and which sections are folded survive a frame; nothing else
     // does. A fold is state about the INTERFACE rather than about the game, so it lives here and

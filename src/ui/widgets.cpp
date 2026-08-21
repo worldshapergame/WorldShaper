@@ -109,6 +109,9 @@ void Ui::begin(const InputState& input, u32 width, u32 height, f64 seconds, f32 
     draw_.begin(width, height);
     scroll_stack_.clear();
     claims_.clear();
+    // An open menu owns the ground it stands on, from the frame after it is first drawn. See
+    // `menu_box_` for why it cannot be claimed where it is drawn.
+    if (menu_ != 0) claims_.push_back(menu_box_);
 
     // A control that has not been drawn for a while is a control that no longer exists; its
     // animation goes with it. Pruned lazily rather than per frame, because the map is tens of
@@ -609,6 +612,9 @@ void Ui::open_menu(u64 id, f32 x, f32 y) {
     menu_ = id;
     menu_x_ = x;
     menu_y_ = y;
+    // Nothing yet: the box a DIFFERENT menu stood on is not this one's, and claiming it would
+    // refuse presses in a corner of the screen with nothing in it.
+    menu_box_ = Rect{x, y, x, y};
     menu_opened_frame_ = frame_;
     sound_.say(Cue::Open);
 }
@@ -716,6 +722,7 @@ i32 Ui::menu(u64 id, const MenuItem* items, u32 count, i32& removed, std::string
 
     // Anything else closes it. The frame it opened on is excluded, or the press that opened it
     // would also be the press that dismissed it.
+    menu_box_ = box;
     const bool elsewhere = (input_.mouse_left_pressed || input_.mouse_right_pressed) &&
                            !box.holds(input_.mouse_x, input_.mouse_y);
     if (chosen >= 0 || removed >= 0 || input_.was_pressed(Key::Escape) ||

@@ -27,6 +27,7 @@
 // always rectangular.
 
 #include <functional>
+#include <unordered_map>
 #include <vector>
 
 #include "core/types.hpp"
@@ -182,7 +183,34 @@ SampleSettings node_sample_settings(const SampleSettings& base, const NodeKey& k
 // no eye can resolve. So the amounts below set how finely the perturbation is quantised, the
 // measurement reports how many distinct records actually resulted and how large the biggest
 // group of identical voxels is, and the author can see exactly how close to unique they are.
+// **One property of one voxel type, read from a FIELD instead of from a number.**
+//
+// `material stone rgb=grain,170,158` says the red of every stone voxel is whatever `grain` says at
+// that voxel, and the green and blue are what they always were. Asked for directly: *i cant seem to
+// connect a pattern of noise to the rgb red of a voxel type.*
+//
+// This is not a second mechanism. Per-voxel variation already mints a visual record per voxel, dedupes
+// them, and stops at a budget so the renderer's type table cannot be overrun — everything a
+// position-driven property needs. So a driven channel is applied in the SAME pass, at the same world
+// position, into the same record, and costs one field evaluation per voxel per driven channel.
+struct DrivenChannel {
+    // Which channel of `VisualRecord` this writes. The mutable ones only: a driven `ior` would have
+    // to re-derive the medium the marcher walks, which is a different change.
+    enum class Which : u8 { Red, Green, Blue, Opacity, Roughness, Metallic, Emissive };
+
+    VoxelTypeId type = 0;   // the base record this belongs to, before any perturbation
+    Which which = Which::Red;
+    u32 field = 0;          // the node in the clip's field to evaluate
+    // What the field's 0 and 1 map to, as the byte the record holds. Written out rather than assumed
+    // to be 0 and 255, because a property whose useful range is narrower can say so later.
+    u8 low = 0;
+    u8 high = 255;
+};
+
 struct Variation {
+    // Properties read from a field rather than written as a number. Empty in nearly every clip.
+    std::vector<DrivenChannel> driven;
+
     // How far a channel may stray, as a fraction of full scale. 0 turns it off.
     f64 colour = 0.0;
     f64 roughness = 0.0;
@@ -199,7 +227,9 @@ struct Variation {
     // records and reuses what it has, so the ceiling costs quality and never correctness.
     u32 budget = 1000000;
 
-    bool any() const { return colour > 0.0 || roughness > 0.0; }
+    // A driven property makes the pass run even when nothing asked for perturbation, because
+    // the pass is what applies it.
+    bool any() const { return colour > 0.0 || roughness > 0.0 || !driven.empty(); }
 };
 
 // The result of sampling, with the numbers a caller needs to place it in the world.
@@ -450,6 +480,11 @@ struct VariationReport {
     u64 distinct_types = 0;
     u64 largest_group = 0;   // how many voxels share the most common record
     u64 reused = 0;          // voxels that had to share a record because the budget ran out
+    // Records this call added to the type table that were not already in it. Not the same as
+    // `distinct_types`, which counts what this clip USES: a record another node already interned
+    // costs nothing, and the ladder runs this per node, so the budget has to be spent against what
+    // was actually created rather than against what was found.
+    u64 minted = 0;
 
     // What each phase cost, in milliseconds. Reported rather than inferred, because the three do
     // very different work — one is parallel and arithmetic, one is serial and hash-bound, one is
@@ -475,9 +510,18 @@ struct VariationReport {
 bool thin_feature_here(const Field& field, u32 root, Vec3 p, f64 outside_by, f64 voxel,
                        u64* evaluations = nullptr);
 
+// The variants already made for each base record, so that the budget's fallback still has
+// something to reuse. **Only needed when this is called more than once for one world**, which is
+// what the ladder does: `spent` is built up as records are minted, and a call that starts with an
+// empty one after the budget has run out has nothing to fall back to but the flat base — so the
+// part of a building that loaded after the ceiling was reached would have no variation at all
+// while the part before it did, with a seam between them.
+using VariationPool = std::unordered_map<VoxelTypeId, std::vector<VoxelTypeId>>;
+
 VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& field,
                                 const Variation& variation, const SampleSettings& settings,
-                                const SampleResult& placed, JobSystem* jobs = nullptr);
+                                const SampleResult& placed, JobSystem* jobs = nullptr,
+                                VariationPool* pool = nullptr);
 
 }  // namespace forge
 }  // namespace ws

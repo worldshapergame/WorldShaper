@@ -85,6 +85,10 @@ struct ClipNumber {
 // A word that is not a number: `axis=y`, `where=grain`, an included file's name.
 struct ClipWord {
     std::string key;      // empty for a positional word
+    // Which slot of `key=a,b,c` this is. A key can hold a NAME in one slot and numbers in the
+    // others — `rgb=grain,170,158` is a field, a green and a blue — so a word has a position in
+    // its list exactly as a number does.
+    u32 index = 0;
     std::string text;
     u32 line = 0;
     u32 column = 0;
@@ -423,6 +427,14 @@ struct ClipSocket {
     u32 number_at = 0;              // into `node.numbers`
     bool has_word = false;
     u32 word_at = 0;                // into `node.words`
+
+    // How many slots the key this belongs to has, and what this slot takes when nothing is written
+    // there. A `key=` is written whole or not at all — `rgb=124` is not a colour — so putting a
+    // wire into one slot has to spell every other slot, and taking one out has to put a number
+    // back rather than leave a hole.
+    u32 parts = 1;
+    f64 fallback = 0.0;
+    u32 decimals = 0;
 };
 
 // Every socket a node has, in the order they are drawn: its bare name first, then its positional

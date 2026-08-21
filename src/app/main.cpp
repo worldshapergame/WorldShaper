@@ -3273,6 +3273,19 @@ private:
     u64 paste_slices_ = 0;   // how many frames the backlog has been drained over, in total
     u32 refine_scale_ = 1;      // what the world is at now; 1 is the clip's own detail
     i32 refine_authored_ = 0;   // voxels per metre the clip asked for
+    // **What is left of the variation budget**, across every node the ladder builds.
+    //
+    // `Variation::budget` is a safety rail rather than a dial: the renderer's type table is a fixed
+    // GPU buffer, and a world that asks for more records than it holds used to take the renderer
+    // down with an assertion. The rail was written for ONE call over a whole clip; the ladder makes
+    // one call per node, so the count has to live out here or every node would get the whole
+    // million to itself. `types_.intern` deduplicates across calls, so a record a neighbouring node
+    // already made costs nothing and is not counted.
+    u64 variation_left_ = 0;
+    bool variation_spent_said_ = false;
+    // And the variants already made, kept across every node so that the ceiling costs quality
+    // EVENLY rather than costing the second half of a building all of it. See `VariationPool`.
+    forge::VariationPool variation_pool_;
     i64 refine_at_[3]{0, 0, 0};
     std::string refine_cache_path_;
     u64 refine_cache_key_ = 0;
@@ -6140,7 +6153,7 @@ Application::PasteRun Application::drain_paste_backlog() {
         // the check is AFTER the first job rather than before it, so the budget bounds the overrun
         // to one node instead of bounding the progress to nothing.
         if (bricks >= budget && run.jobs > 0) break;
-        const RefineJob& job = paste_backlog_[paste_backlog_at_++];
+        RefineJob& job = paste_backlog_[paste_backlog_at_++];
         ++run.jobs;
         if (job.result == nullptr || job.result->clip.empty()) continue;
         // R11h: a batch picked BEFORE an edit pre-sampled its volume is still in the sampler's
@@ -6161,6 +6174,42 @@ Application::PasteRun Application::drain_paste_backlog() {
             }
             if (over_presampled) continue;
         }
+
+        // **Every voxel gets its own version of its material, and this is where that happens.**
+        //
+        // It used to happen once, over the whole clip, before the up-front coarse paste -- and that
+        // paste has been off by default since D673, so *nothing in the game has been varied at all*.
+        // Every `variation` statement in every clip in this repository has been inert, which is
+        // most of *the materials you made are way too simple* and *wood just looks like a blob of
+        // light brown*: a wall of one material really was millions of voxels sharing one record.
+        //
+        // Per node, at the paste, on ONE thread: the type table is one table and the order records
+        // enter it is what makes a world build the same way twice, so this cannot go where the
+        // sampling does. The dedupe is the table's own -- a record a neighbouring node already made
+        // is found rather than minted -- which is what keeps a world-wide budget meaningful when it
+        // is spent a node at a time.
+        //
+        // This is also what carries a property read from a FIELD (`DrivenChannel`), because that is
+        // applied in the same pass: `material stone rgb=grain,170,158` does nothing at all until
+        // the pass that reads `grain` at each voxel actually runs.
+        if (refine_script_ != nullptr && refine_script_->variation.any()) {
+            forge::Variation want = refine_script_->variation;
+            want.budget = static_cast<u32>(std::min<u64>(variation_left_, 0xFFFFFFFFull));
+            const forge::VariationReport varied = forge::apply_variation(
+                job.result->clip, types_, refine_script_->field, want, job.settings, *job.result,
+                nullptr, &variation_pool_);
+            variation_left_ -= std::min<u64>(variation_left_, varied.minted);
+            if (variation_left_ == 0 && !variation_spent_said_) {
+                variation_spent_said_ = true;
+                WS_LOG_INFO("clip",
+                            "the variation budget is spent; the rest of this world reuses the "
+                            "records already made, which costs quality and never correctness");
+            }
+            // The ids under every voxel have just changed, and the coarse pyramid over them is
+            // what the ghost march reads.
+            job.result->clip.build_coarse();
+        }
+
         const i64 scale = static_cast<i64>(job.scale);
         const i64 lo[3] = {job.result->origin_voxel[0] * scale + refine_at_[0],
                            job.result->origin_voxel[1] * scale + refine_at_[1],
@@ -7627,6 +7676,9 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
     refine_at_[1] = options_.clip_at[1];
     refine_at_[2] = options_.clip_at[2];
     refine_script_ = std::make_unique<forge::Script>(std::move(script));
+    variation_left_ = refine_script_->variation.budget;
+    variation_spent_said_ = false;
+    variation_pool_.clear();
     refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
                                       refine_script_->paint);
     apply_slack_ceiling();
@@ -8411,7 +8463,10 @@ void Application::build_world() {
                 refine_at_[1] = options_.clip_at[1];
                 refine_at_[2] = options_.clip_at[2];
                 refine_script_ = std::make_unique<forge::Script>(std::move(script));
-                refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
+                variation_left_ = refine_script_->variation.budget;
+    variation_spent_said_ = false;
+    variation_pool_.clear();
+    refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
                                                   refine_script_->paint);
                 apply_slack_ceiling();
                 log_the_plan("the ladder");

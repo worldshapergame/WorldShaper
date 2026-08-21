@@ -297,6 +297,14 @@ private:
             at_ += 2;   // the name and the equals
             any = true;
             u32 index = 0;
+            // Where the link for this key's FIRST slot went, if one was made. A wire in slot nought
+            // of a key with one slot is `where=grain`, and cutting it takes the whole key; a wire
+            // in slot nought of a key with three is `rgb=grain,170,158`, and cutting the whole key
+            // takes the colour with it. Which of the two it is, is not known until the list ends.
+            usize first_link = node.links.size();
+            bool linked_first = false;
+            u32 first_column = 0;
+            u32 first_length = 0;
             for (;;) {
                 if (read_value(node, key, index)) {
                     ++index;
@@ -305,6 +313,7 @@ private:
                     const Token& token = take();
                     ClipWord word;
                     word.key = key;
+                    word.index = index;
                     word.text = token.text;
                     word.line = token.line;
                     word.column = token.column;
@@ -320,9 +329,21 @@ private:
                         link.column = key_column;
                         link.length = token.column + static_cast<u32>(token.text.size()) -
                                       key_column;
+                        if (index == 0) {
+                            first_link = node.links.size();
+                            linked_first = true;
+                            first_column = token.column;
+                            first_length = static_cast<u32>(token.text.size());
+                        } else {
+                            // Not the whole key: the slot's own word, so the commas and the
+                            // numbers beside it survive the cut.
+                            link.column = token.column;
+                            link.length = static_cast<u32>(token.text.size());
+                        }
                         node.links.push_back(link);
                         node.inputs.push_back(link.from);
                     }
+                    ++index;
                     node.words.push_back(word);
                 } else {
                     break;
@@ -332,6 +353,12 @@ private:
                     continue;
                 }
                 break;
+            }
+            // The list has ended, so how many slots it had is now known — and a wire in slot
+            // nought of a list with more than one is the slot's own word after all.
+            if (linked_first && index > 1 && first_link < node.links.size()) {
+                node.links[first_link].column = first_column;
+                node.links[first_link].length = first_length;
             }
         }
         return any;
@@ -1908,85 +1935,100 @@ std::vector<ClipSocket> clip_sockets_of(const ClipGraph& graph, u32 node) {
         out.push_back(std::move(socket));
     }
 
-    // 3. Its keys, in the order they are written — and the ones it OFFERS but does not write, so a
-    //    voxel type shows every property it can take whether or not it takes it (D786).
-    std::vector<std::string> keys_done;
-    for (usize i = 0; i < one.numbers.size(); ++i) {
-        const ClipNumber& number = one.numbers[i];
+    // 3. Its keys. **One socket per SLOT**, and a slot is found wherever it happens to be written.
+    //
+    // A key can hold a number in one slot and a NAME in another — `rgb=grain,170,158` is a field, a
+    // green and a blue — so the list of slots cannot be built by walking the numbers and then
+    // walking the words: each of those knows about half the key. The keys are gathered first, with
+    // how many slots each turned out to have, and then every slot goes looking for itself.
+    struct KeyRun {
+        std::string key;
+        u32 parts = 1;
+        const ClipProperty* offer = nullptr;
+        ClipCarries takes = ClipCarries::Value;
+    };
+    std::vector<KeyRun> runs;
+    const auto note = [&](const std::string& key, u32 parts, const ClipProperty* offer,
+                          ClipCarries takes) {
+        for (KeyRun& run : runs) {
+            if (run.key != key) continue;
+            run.parts = std::max(run.parts, parts);
+            if (run.offer == nullptr) run.offer = offer;
+            return;
+        }
+        runs.push_back(KeyRun{key, parts, offer, takes});
+    };
+    const auto offer_for = [&](const std::string& key) -> const ClipProperty* {
+        for (const ClipProperty& offer : clip_properties_of(one.head)) {
+            if (offer.key == key) return &offer;
+        }
+        return nullptr;
+    };
+    for (const ClipNumber& number : one.numbers) {
         if (number.key.empty()) continue;
-        u32 parts = 0;
-        for (const ClipNumber& other : one.numbers) {
-            if (other.key == number.key) ++parts;
-        }
-        ClipSocket socket;
-        socket.name = number.key;
-        if (parts == 3) {
-            static const char* kChannel[3]{" red", " green", " blue"};
-            socket.name += kChannel[number.index % 3];
-        } else if (parts > 1) {
-            socket.name += " " + std::to_string(number.index + 1);
-        }
-        socket.takes = ClipCarries::Value;
-        socket.where = ClipSocket::Where::Number;
-        socket.key = number.key;
-        socket.index = number.index;
-        socket.has_number = true;
-        socket.number_at = static_cast<u32>(i);
-        if (const ClipLink* link = link_for(number.key, 0); link != nullptr && link->named) {
-            socket.linked = true;
-            socket.from = link->from;
-        }
-        keys_done.push_back(number.key);
-        out.push_back(std::move(socket));
+        note(number.key, number.index + 1, offer_for(number.key), ClipCarries::Value);
     }
-    // A key whose value is a NAME rather than a number — `where=grain`, `axis=y`.
-    for (usize w = 0; w < one.words.size(); ++w) {
-        const ClipWord& word = one.words[w];
+    for (const ClipWord& word : one.words) {
         if (word.key.empty()) continue;
-        if (std::find(keys_done.begin(), keys_done.end(), word.key) != keys_done.end()) continue;
-        ClipSocket socket;
-        socket.name = word.key;
-        socket.takes = word.names_a_part ? ClipCarries::Value : ClipCarries::Value;
-        socket.where = ClipSocket::Where::Key;
-        socket.key = word.key;
-        socket.has_word = true;
-        socket.word_at = static_cast<u32>(w);
-        if (const ClipLink* link = link_for(word.key, 0); link != nullptr && link->named) {
-            socket.linked = true;
-            socket.from = link->from;
-        }
-        keys_done.push_back(word.key);
-        out.push_back(std::move(socket));
+        note(word.key, word.index + 1, offer_for(word.key), ClipCarries::Value);
     }
     // The keys this KIND of statement takes a NAME in and this one does not write — a coat's
     // `where`, a weathering's `on`. Without these there is no socket to drop a pattern on until
     // somebody has already typed one.
     for (const auto& takes : wire_keys_of(one.head)) {
-        if (std::find(keys_done.begin(), keys_done.end(), takes.first) != keys_done.end()) continue;
-        ClipSocket socket;
-        socket.name = takes.first;
-        socket.takes = takes.second;
-        socket.where = ClipSocket::Where::Key;
-        socket.key = takes.first;
-        keys_done.push_back(takes.first);
-        out.push_back(std::move(socket));
+        note(takes.first, 1, offer_for(takes.first), takes.second);
     }
-    // And the ones this KIND of statement offers and this one does not write.
+    // And the ones this KIND of statement offers, whether or not it writes them (D786).
     for (const ClipProperty& offer : clip_properties_of(one.head)) {
-        if (std::find(keys_done.begin(), keys_done.end(), offer.key) != keys_done.end()) continue;
-        for (u32 part = 0; part < offer.parts; ++part) {
+        note(offer.key, offer.parts, &offer, ClipCarries::Value);
+    }
+
+    for (const KeyRun& run : runs) {
+        const u32 parts = std::max(1u, run.parts);
+        for (u32 part = 0; part < parts; ++part) {
             ClipSocket socket;
-            socket.name = offer.key;
-            if (offer.parts == 3) {
+            socket.name = run.key;
+            if (parts == 3) {
                 static const char* kChannel[3]{" red", " green", " blue"};
                 socket.name += kChannel[part];
-            } else if (offer.parts > 1) {
+            } else if (parts > 1) {
                 socket.name += " " + std::to_string(part + 1);
             }
-            socket.takes = ClipCarries::Value;
+            socket.takes = run.takes;
             socket.where = ClipSocket::Where::Key;
-            socket.key = offer.key;
+            socket.key = run.key;
             socket.index = part;
+            socket.parts = parts;
+            socket.fallback = (run.offer != nullptr) ? run.offer->fallback : 0.0;
+            socket.decimals = (run.offer != nullptr) ? run.offer->decimals : 0;
+
+            for (usize i = 0; i < one.numbers.size(); ++i) {
+                if (one.numbers[i].key != run.key || one.numbers[i].index != part) continue;
+                socket.where = ClipSocket::Where::Number;
+                socket.has_number = true;
+                socket.number_at = static_cast<u32>(i);
+                break;
+            }
+            for (usize w = 0; w < one.words.size(); ++w) {
+                if (one.words[w].key != run.key || one.words[w].index != part) continue;
+                socket.has_word = true;
+                socket.word_at = static_cast<u32>(w);
+                if (one.words[w].names_a_part) {
+                    for (const ClipLink& link : one.links) {
+                        if (link.key != run.key || !link.named) continue;
+                        if (link.line != one.words[w].line ||
+                            link.column > one.words[w].column ||
+                            link.column + link.length <
+                                one.words[w].column + one.words[w].text.size()) {
+                            continue;
+                        }
+                        socket.linked = true;
+                        socket.from = link.from;
+                        break;
+                    }
+                }
+                break;
+            }
             out.push_back(std::move(socket));
         }
     }
@@ -2021,6 +2063,39 @@ std::vector<ClipSocket> clip_sockets_of(const ClipGraph& graph, u32 node) {
     }
 
     return out;
+}
+
+// **Write one SLOT of a key, spelling every other slot as it stands.**
+//
+// A key is written whole or not at all — `rgb=124` is not a colour and `rgb=,170,158` is not a
+// document — so putting a name into one slot means rewriting the list, and taking one out means
+// putting a number back in its place rather than leaving a hole.
+//
+// Everything not being changed is spelled from what is already there: a number keeps its own text,
+// including how it was written, and a slot nothing has ever written takes the property's usual
+// value. That is D745's rule applied to a comma list — the bytes that come out are the bytes a
+// person would have typed.
+static bool write_clip_slot(std::vector<std::string>& lines, const ClipNode& node,
+                            const ClipSocket& where, const std::string& text) {
+    std::string value;
+    for (u32 part = 0; part < std::max(1u, where.parts); ++part) {
+        if (part > 0) value += ",";
+        if (part == where.index) {
+            value += text;
+            continue;
+        }
+        const std::string* had = nullptr;
+        for (const ClipNumber& number : node.numbers) {
+            if (number.key == where.key && number.index == part) had = &number.text;
+        }
+        for (const ClipWord& word : node.words) {
+            if (word.key == where.key && word.index == part) had = &word.text;
+        }
+        value += (had != nullptr)
+                     ? *had
+                     : spell_clip_number(where.fallback, where.decimals > 0 ? "0.00" : "0");
+    }
+    return write_clip_key(lines, node, where.key, value);
 }
 
 std::string connect_clip_socket(std::vector<std::string>& lines, const ClipGraph& graph, u32 target,
@@ -2091,20 +2166,20 @@ std::string connect_clip_socket(std::vector<std::string>& lines, const ClipGraph
             line = line.substr(0, after) + " " + from.name + line.substr(after);
             return {};
         }
-        case ClipSocket::Where::Number: {
-            // A number that has become a name: written as its own key, because a positional number
-            // has no name to put a reference under.
+        case ClipSocket::Where::Number:
+        case ClipSocket::Where::Key: {
+            // A positional number is part of the statement's own shape and has no name to put a
+            // reference under: `box grain 0 -1 ...` would be read as a shape with five numbers.
             if (where.key.empty()) {
                 return std::string(where.name) +
                        " is a number of this statement's own shape -- type into it instead";
             }
-            std::string& line = lines[into.line - 1];
-            line = without_placement(line) + " " + where.key + "=" + from.name;
-            return {};
-        }
-        case ClipSocket::Where::Key: {
-            std::string& line = lines[into.line - 1];
-            line = without_placement(line) + " " + where.key + "=" + from.name;
+            // **One slot of the key**, with the rest of the list spelled as it stands. This is
+            // what makes *drag a noise onto the rgb red* mean something: the red becomes the
+            // field's name and the green and the blue are still the numbers they were.
+            if (!write_clip_slot(lines, into, where, from.name)) {
+                return "the document has moved under this -- try again";
+            }
             return {};
         }
         case ClipSocket::Where::Child: {
@@ -2134,6 +2209,17 @@ std::string disconnect_clip_socket(std::vector<std::string>& lines, const ClipGr
     const std::vector<ClipSocket> sockets = clip_sockets_of(graph, target);
     if (socket >= sockets.size()) return "there is no such socket";
     const ClipSocket& where = sockets[socket];
+
+    // **One slot of a key with several goes back to being a NUMBER**, because a key is written
+    // whole or not at all: taking the name out of `rgb=grain,170,158` and leaving `rgb=,170,158`
+    // is a document that no longer reads.
+    if (where.parts > 1 && !where.key.empty() && (where.linked || where.has_word)) {
+        const std::string put_back =
+            spell_clip_number(where.fallback, where.decimals > 0 ? "0.00" : "0");
+        return write_clip_slot(lines, into, where, put_back)
+                   ? std::string()
+                   : "the document has moved under this -- try again";
+    }
 
     // A wire is a NAME, and the span it occupies was recorded where it was read.
     if (where.linked) {

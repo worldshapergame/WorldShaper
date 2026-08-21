@@ -190,3 +190,44 @@ TEST_CASE("a switch answers on the release, like everything else") {
     bench.ui.end();
     CHECK(value);
 }
+
+TEST_CASE("an open menu owns the ground it stands on") {
+    // *When you press on something on the right click menu of the visual node editor it might press
+    // whats behind it as well.* A menu is drawn AFTER everything it covers, and a claim only refuses
+    // a point to something tested LATER — so a menu that claims where it is drawn claims nothing at
+    // all. It claims last frame's box at the start of this one instead, which is what the docked
+    // windows have done since they were pressed through.
+    Bench bench;
+    const Ui::MenuItem items[3] = {{Icon::None, "one", true, false, ""},
+                               {Icon::None, "two", true, false, ""},
+                               {Icon::None, "three", true, false, ""}};
+    const u64 kMenu = 77;
+    const Rect under{100.0f, 100.0f, 400.0f, 400.0f};   // the canvas the menu stands on
+
+    // Frame one: the menu is opened and drawn. Nothing is pressed.
+    bench.hand(150.0f, 150.0f, false);
+    bench.clock += 1.0 / 60.0;
+    bench.ui.begin(bench.input, 800, 600, bench.clock, 2.0f);
+    bench.ui.open_menu(kMenu, 140.0f, 140.0f);
+    bench.ui.menu(kMenu, items, 3);
+    bench.ui.end();
+
+    // Frame two: a press on the menu's first row. What is UNDER it must not see the press.
+    bench.hand(150.0f, 150.0f, true, true);
+    bench.clock += 1.0 / 60.0;
+    bench.ui.begin(bench.input, 800, 600, bench.clock, 2.0f);
+    const bool reached_through = bench.ui.pressed_in(under);
+    bench.ui.menu(kMenu, items, 3);
+    bench.ui.end();
+    CHECK_FALSE(reached_through);
+
+    // And with no menu open, the same press reaches the same rectangle — otherwise this would pass
+    // for the wrong reason.
+    Bench plain;
+    plain.hand(150.0f, 150.0f, true, true);
+    plain.clock += 1.0 / 60.0;
+    plain.ui.begin(plain.input, 800, 600, plain.clock, 2.0f);
+    const bool reached = plain.ui.pressed_in(under);
+    plain.ui.end();
+    CHECK(reached);
+}

@@ -10,6 +10,9 @@
 
 #include <doctest/doctest.h>
 
+#include <set>
+#include <string>
+
 #include "forge/clip_script.hpp"
 #include "forge/field.hpp"
 #include "forge/measure.hpp"
@@ -376,4 +379,122 @@ solid walls
     CHECK(gap.any);
     CHECK(gap.contiguous);
     CHECK(b.variety.voxels == b.measurement.solid);
+}
+
+// --- a property read from a field -----------------------------------------------------------------
+//
+// *I cant seem to connect something like a pattern of noise to the rgb red of a voxel type even
+// though its the same blue type of wire.* It was the same kind of wire and the language had nowhere
+// to put it: a voxel type's properties were numbers and only numbers, so every voxel of a type was
+// the same colour before variation perturbed it and the same colour after.
+//
+// Checked as a PROPERTY rather than as a picture: the driven channel takes many values across the
+// block and the two beside it take exactly one, which is the whole claim and cannot be true by
+// accident.
+
+namespace {
+
+struct Painted {
+    VoxelTypeTable types;
+    Script script;
+    SampleResult result;
+    VariationReport variety;
+    std::set<VoxelTypeId> before;   // the ids the paint put down, before any record was minted
+
+    u8 one_of(u8 VisualRecord::*channel) {
+        for (VoxelTypeId id : result.clip.voxels) {
+            if (id != kAir) return types.visual_of(id).*channel;
+        }
+        return 0;
+    }
+
+    // How many different values one channel of the record takes, over every voxel that is not air.
+    usize spread(u8 VisualRecord::*channel) {
+        std::set<u8> seen;
+        for (VoxelTypeId id : result.clip.voxels) {
+            if (id == kAir) continue;
+            seen.insert(types.visual_of(id).*channel);
+        }
+        return seen.size();
+    }
+};
+
+void paint_it(Painted& out, const std::string& text) {
+    TagRegistry tags;
+    out.script = parse_clip_script(text, out.types, tags);
+    REQUIRE(out.script.ok());
+    out.result = sample(out.script.field, out.script.solid, out.script.paint,
+                        out.script.settings, nullptr);
+    for (VoxelTypeId id : out.result.clip.voxels) {
+        if (id != kAir) out.before.insert(id);
+    }
+    out.variety = apply_variation(out.result.clip, out.types, out.script.field,
+                                  out.script.variation, out.script.settings, out.result);
+}
+
+}  // namespace
+
+TEST_CASE("a voxel type's colour can be read from a field") {
+    const std::string driven =
+        "metre 32\n"
+        "let grain = fbm size=0.35 octaves=4 seed=3\n"
+        "material speckle rgb=grain,90,70 rough=200\n"
+        "let wall = box -1 0 -1  1 1 1\n"
+        "solid wall\n"
+        "paint speckle\n";
+
+    Painted made;
+    paint_it(made, driven);
+
+    // The language read it: one property of one type, pointing at the field `grain` names.
+    REQUIRE(made.script.variation.driven.size() == 1);
+    CHECK(made.script.variation.driven[0].which == DrivenChannel::Which::Red);
+    // The field it points at really is a pattern and not a constant.
+    CHECK(made.script.field.eval(made.script.variation.driven[0].field, Vec3{0.1, 0.2, 0.3}) !=
+          made.script.field.eval(made.script.variation.driven[0].field, Vec3{3.1, 1.2, 2.3}));
+    // And it is filed against the type the paint actually put down.
+    REQUIRE(made.before.size() == 1);
+    CHECK(made.script.variation.driven[0].type == *made.before.begin());
+
+    // And the pass applied it: the red takes many values over the block, the green and the blue
+    // take exactly the one the document wrote.
+    CHECK(made.variety.voxels > 1000);
+    // **A pattern runs from -1 to 1 and not from 0 to 1**, which is the whole of why the first
+    // version of this drew a flat black wall. Probed rather than assumed.
+    const u32 f = made.script.variation.driven[0].field;
+    CHECK(made.script.field.eval(f, Vec3{0.0, 0.5, 0.0}) < 0.0);
+    CHECK(made.script.field.eval(f, Vec3{0.0, 0.5, 0.0}) > -1.0);
+    CHECK(made.spread(&VisualRecord::red) > 8);
+    CHECK(made.spread(&VisualRecord::green) == 1);
+    CHECK(made.spread(&VisualRecord::blue) == 1);
+
+    // The control arm: the same document with a NUMBER in that slot. Same shape, same paint, same
+    // everything -- and one red.
+    const std::string flat =
+        "metre 32\n"
+        "let grain = fbm size=0.35 octaves=4 seed=3\n"
+        "material speckle rgb=128,90,70 rough=200\n"
+        "let wall = box -1 0 -1  1 1 1\n"
+        "solid wall\n"
+        "paint speckle\n";
+
+    Painted plain;
+    paint_it(plain, flat);
+    CHECK(plain.script.variation.driven.empty());
+    CHECK(plain.spread(&VisualRecord::red) == 1);
+    CHECK(plain.spread(&VisualRecord::green) == 1);
+
+    // Nothing was minted at all in the control, because nothing asked for any: a clip with no
+    // driven property and no variation pays for neither.
+    CHECK(plain.variety.voxels == 0);
+}
+
+TEST_CASE("a property driven by something that names nothing is refused with a line") {
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const Script script = parse_clip_script(
+        "metre 32\nmaterial speckle rgb=nosuchthing,90,70\nlet wall = box 0 0 0 1 1 1\n"
+        "solid wall\n",
+        types, tags);
+    CHECK_FALSE(script.ok());
 }

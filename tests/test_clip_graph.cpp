@@ -1565,3 +1565,71 @@ TEST_CASE("joining a socket writes what a person would have typed") {
     CHECK(text_of(lines).find("union { a }") != std::string::npos);
     CHECK(text_of(lines) != before);
 }
+
+TEST_CASE("a pattern can be wired into one channel of a voxel type") {
+    // *I cant seem to connect something like a pattern of noise to the rgb red of a voxel type
+    // even though its the same blue type of wire.* A key is written whole or not at all -- `rgb=124`
+    // is not a colour -- so a wire into one slot has to spell every other slot, and taking one out
+    // has to put a number back rather than leave a hole.
+    std::vector<std::string> lines = lines_of(
+        "metre 32\n"
+        "let grain = fbm size=0.2\n"
+        "material stone rgb=176,170,158 rough=232\n"
+        "let a = box 0 0 0  1 1 1\n"
+        "solid a\n");
+    ClipGraph graph = read_clip_graph(lines);
+    const auto named_at = [&](const char* name) {
+        return graph.find(ClipGraph::key_of(*named(graph, name)));
+    };
+    const auto socket_of = [&](u32 node, const char* name) {
+        const std::vector<ClipSocket> in = clip_sockets_of(graph, node);
+        for (usize i = 0; i < in.size(); ++i) {
+            if (in[i].name == name) return static_cast<u32>(i);
+        }
+        return ClipGraph::kNone;
+    };
+
+    // Every channel is its own socket, named for the channel rather than for the key.
+    const u32 red = socket_of(named_at("stone"), "rgb red");
+    REQUIRE(red != ClipGraph::kNone);
+    REQUIRE(socket_of(named_at("stone"), "rgb green") != ClipGraph::kNone);
+
+    CHECK(connect_clip_socket(lines, graph, named_at("stone"), red, named_at("grain")).empty());
+    CHECK(text_of(lines).find("rgb=grain,170,158") != std::string::npos);
+    // And nothing else on the line moved.
+    CHECK(text_of(lines).find("rough=232") != std::string::npos);
+
+    // Read back, the red is a WIRE and the green beside it is still a number.
+    graph = read_clip_graph(lines);
+    const std::vector<ClipSocket> now = clip_sockets_of(graph, named_at("stone"));
+    bool saw_red = false;
+    bool saw_green = false;
+    for (const ClipSocket& one : now) {
+        if (one.name == "rgb red") {
+            saw_red = true;
+            CHECK(one.linked);
+            CHECK(graph.nodes[one.from].name == "grain");
+        }
+        if (one.name == "rgb green") {
+            saw_green = true;
+            CHECK_FALSE(one.linked);
+            CHECK(one.has_number);
+        }
+    }
+    CHECK(saw_red);
+    CHECK(saw_green);
+
+    // Taking it out puts a NUMBER back in that slot, not a hole.
+    const u32 again = socket_of(named_at("stone"), "rgb red");
+    CHECK(disconnect_clip_socket(lines, graph, named_at("stone"), again).empty());
+    CHECK(text_of(lines).find("rgb=grain") == std::string::npos);
+    CHECK(text_of(lines).find(",170,158") != std::string::npos);
+    // Still a colour of three numbers, so the document still reads.
+    graph = read_clip_graph(lines);
+    const std::vector<ClipSocket> after = clip_sockets_of(graph, named_at("stone"));
+    for (const ClipSocket& one : after) {
+        if (one.name != "rgb red") continue;
+        CHECK_FALSE(one.linked);
+        CHECK(one.has_number);
+    }
+}

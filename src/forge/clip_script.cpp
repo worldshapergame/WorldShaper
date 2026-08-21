@@ -560,6 +560,18 @@ private:
     struct Keys {
         std::map<std::string, std::vector<f64>> numbers;
         std::map<std::string, std::string> words;
+        // **Every part of a key as it was WRITTEN, in order.** `numbers` and `words` each keep
+        // their own kind and neither keeps the position, which is fine while a key is all numbers
+        // or all words and useless the moment one is both: `rgb=grain,170,158` is a name in slot
+        // nought and numbers in one and two, and there was nowhere to record which was which.
+        std::map<std::string, std::vector<std::string>> parts;
+
+        // The raw text written in one slot of a key, or empty when nothing is written there.
+        std::string part_at(const std::string& key, usize index) const {
+            auto it = parts.find(key);
+            if (it == parts.end() || index >= it->second.size()) return {};
+            return it->second[index];
+        }
 
         f64 number(const std::string& key, f64 fallback) const {
             auto it = numbers.find(key);
@@ -583,6 +595,28 @@ private:
         }
     };
 
+    // **One slot of a key, as a number.** `numbers` packs only the numeric parts of a list, so the
+    // moment one slot holds a NAME every slot after it is one place out: `rgb=grain,170,158` gives
+    // `numbers = {170, 158}`, and reading slot nought out of that is the green.
+    //
+    // A parameter counts as a number, because it is one: a name a `param` bound is usable anywhere
+    // a number is, and a clip that exposes its colour as a dial must go on working.
+    f64 part_number(const Keys& keys, const char* key, usize index, f64 fallback) const {
+        const std::string text = keys.part_at(key, index);
+        if (text.empty()) return fallback;
+        if (is_number(text)) return std::strtod(text.c_str(), nullptr);
+        if (parameters_.count(text) != 0) return script_.field.get_parameter(text.c_str(), fallback);
+        return fallback;   // a field drives it, and the pass says what it is at each voxel
+    }
+
+    // And the FIELD written in one slot, if one is: not a number, not a parameter, and a name the
+    // document has bound. Empty otherwise.
+    std::string part_field(const Keys& keys, const char* key, usize index) const {
+        const std::string text = keys.part_at(key, index);
+        if (text.empty() || is_number(text) || parameters_.count(text) != 0) return {};
+        return text;
+    }
+
     // Reads `key=value` and `key=a,b,c` until something that is not one.
     void keys_into(Keys& keys) {
         while (!done() && !at_new_statement()) {
@@ -591,13 +625,17 @@ private:
             at_ += 2;   // the name and the equals
             std::vector<f64> numbers;
             std::string word;
+            std::vector<std::string> parts;
             while (true) {
                 f64 v = 0.0;
+                const std::string wrote = done() ? std::string() : peek().text;
                 if (value(v)) {
                     numbers.push_back(v);
+                    parts.push_back(wrote);
                 } else if (!done() && peek().text != "," && peek().text != "{" &&
                            peek().text != "}") {
                     word = take();
+                    parts.push_back(word);
                 } else {
                     break;
                 }
@@ -609,6 +647,7 @@ private:
             }
             if (!numbers.empty()) keys.numbers[key] = numbers;
             if (!word.empty()) keys.words[key] = word;
+            if (!parts.empty()) keys.parts[key] = parts;
         }
     }
 
@@ -1193,16 +1232,54 @@ void Parser::statement() {
         Keys keys;
         keys_into(keys);
         VisualRecord visual;
-        auto rgb = keys.numbers.find("rgb");
-        if (rgb != keys.numbers.end() && rgb->second.size() >= 3) {
-            visual.red = static_cast<u8>(rgb->second[0]);
-            visual.green = static_cast<u8>(rgb->second[1]);
-            visual.blue = static_cast<u8>(rgb->second[2]);
+
+        // **A property may name a FIELD instead of holding a number.**
+        //
+        // `material stone rgb=grain,170,158 rough=wear` -- the red of every stone voxel is whatever
+        // `grain` says where that voxel is, and its roughness is whatever `wear` says. Asked for
+        // directly: *i cant seem to connect a pattern of noise to the rgb red of a voxel type even
+        // though its the same blue type of wire.* It was the same kind of wire and the language had
+        // nowhere to put it.
+        //
+        // The slot still holds its usual number in the RECORD, because a record is what the type
+        // table interns and every voxel starts from one; what is collected here is a note that
+        // says *and then read this field at each voxel*, which the variation pass applies. So a
+        // driven property costs nothing at all in a clip that has none.
+        std::vector<std::pair<DrivenChannel::Which, std::pair<std::string, u32>>> wants;
+        const auto driven_by = [&](const char* key, usize part, DrivenChannel::Which which) {
+            const std::string named = part_field(keys, key, part);
+            if (named.empty()) return;
+            wants.emplace_back(which, std::pair<std::string, u32>{named, 0});
+        };
+        driven_by("rgb", 0, DrivenChannel::Which::Red);
+        driven_by("rgb", 1, DrivenChannel::Which::Green);
+        driven_by("rgb", 2, DrivenChannel::Which::Blue);
+        driven_by("opacity", 0, DrivenChannel::Which::Opacity);
+        driven_by("rough", 0, DrivenChannel::Which::Roughness);
+        driven_by("metal", 0, DrivenChannel::Which::Metallic);
+        driven_by("emit", 0, DrivenChannel::Which::Emissive);
+        for (auto& want : wants) {
+            auto bound = bindings_.find(want.second.first);
+            if (bound == bindings_.end()) {
+                fail("material " + name + " is driven by " + want.second.first +
+                     ", which does not name anything");
+                return;
+            }
+            want.second.second = bound->second;
         }
-        visual.roughness = static_cast<u8>(keys.number("rough", 200.0));
-        visual.metallic = static_cast<u8>(keys.number("metal", 0.0));
-        visual.opacity = static_cast<u8>(keys.number("opacity", 255.0));
-        visual.emissive = static_cast<u8>(keys.number("emit", 0.0));
+
+        // Slot by slot, so that a list with a NAME in it still delivers the numbers beside it.
+        // `rgb=grain,170,158` is a field, a green and a blue, and reading it as *two numbers, so
+        // not a colour at all* left every channel at nought and drew black on black.
+        if (keys.parts.count("rgb") != 0) {
+            visual.red = static_cast<u8>(part_number(keys, "rgb", 0, 0.0));
+            visual.green = static_cast<u8>(part_number(keys, "rgb", 1, 0.0));
+            visual.blue = static_cast<u8>(part_number(keys, "rgb", 2, 0.0));
+        }
+        visual.roughness = static_cast<u8>(part_number(keys, "rough", 0, 200.0));
+        visual.metallic = static_cast<u8>(part_number(keys, "metal", 0, 0.0));
+        visual.opacity = static_cast<u8>(part_number(keys, "opacity", 0, 255.0));
+        visual.emissive = static_cast<u8>(part_number(keys, "emit", 0, 0.0));
         visual.translucency = static_cast<u8>(keys.number("translucent", 0.0));
         // Beer-Lambert, per metre, one byte a channel. Declared in clips/glass_test.clip since
         // the day it was written and read by nothing until now, so every coloured pane in the
@@ -1231,6 +1308,24 @@ void Parser::statement() {
         behaviour.material = static_cast<u32>(script_.material_names.size() + 1);
         (void)tags_;
         const VoxelTypeId type = types_.intern(visual, behaviour);
+        // Now that the base record has an id, the notes can be filed against it. A name declared
+        // again replaces its old notes rather than adding to them, for the same reason it replaces
+        // its palette entry: a fragment is allowed to override a material the contract declared.
+        {
+            auto& driven = script_.variation.driven;
+            driven.erase(std::remove_if(driven.begin(), driven.end(),
+                                        [&](const DrivenChannel& one) {
+                                            return one.type == type;
+                                        }),
+                         driven.end());
+            for (const auto& want : wants) {
+                DrivenChannel one;
+                one.type = type;
+                one.which = want.first;
+                one.field = want.second.second;
+                driven.push_back(one);
+            }
+        }
         // Whether this NAME is new, decided before the map is written, because that is the only
         // thing that says whether the tool's palette gains an entry or replaces one.
         //
@@ -1865,6 +1960,17 @@ void compile_whole_script(Script& script) {
     // nothing caught it; `weather_demo.clip` and anything an author writes tomorrow do.
     const usize variation_at = script.variation.has_by ? roots.size() : 0;
     if (script.variation.has_by) roots.push_back(script.variation.by);
+    // **And the SIXTH, which walked straight into the fifth's trap.** A voxel type whose colour is
+    // read from a field (`DrivenChannel`) asks that field at every voxel, so it is a root exactly
+    // as `variation by=` is — and left out of this list it is aimed at whatever now occupies its
+    // old index. It failed in the same quiet way, and worse: two clips driving a red from two
+    // DIFFERENT patterns came out with the same content hash, because both indices had been
+    // renumbered onto the same surviving node.
+    std::vector<usize> driven_at(script.variation.driven.size(), 0);
+    for (usize i = 0; i < script.variation.driven.size(); ++i) {
+        driven_at[i] = roots.size();
+        roots.push_back(script.variation.driven[i].field);
+    }
     std::vector<usize> test_at(script.paint.size(), 0);
     std::vector<usize> place_at(script.paint.size(), 0);
     for (usize i = 0; i < script.paint.size(); ++i) {
@@ -1908,6 +2014,9 @@ void compile_whole_script(Script& script) {
     script.solid = rep.roots[0];
     if (script.settings.has_bounds) script.settings.bounds = rep.roots[bounds_at];
     if (script.variation.has_by) script.variation.by = rep.roots[variation_at];
+    for (usize i = 0; i < script.variation.driven.size(); ++i) {
+        script.variation.driven[i].field = rep.roots[driven_at[i]];
+    }
     for (usize i = 0; i < script.paint.size(); ++i) {
         script.paint[i].test = rep.roots[test_at[i]];
         if (script.paint[i].has_place) script.paint[i].place = rep.roots[place_at[i]];
