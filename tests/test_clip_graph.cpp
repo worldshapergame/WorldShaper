@@ -1633,3 +1633,56 @@ TEST_CASE("a pattern can be wired into one channel of a voxel type") {
         CHECK(one.has_number);
     }
 }
+
+TEST_CASE("a name written below the thing that reads it is moved above it") {
+    // Reported with the parser's own line: *material colour_1 is driven by waver_1, which does not
+    // name anything.* The pattern was written four lines BELOW the voxel type that now names it,
+    // and both readers in this project bind in document order — so a backwards reference is not a
+    // wire at all: the forge refuses the clip and the graph draws no wire. A wire on a canvas knows
+    // nothing about which of its two boxes was typed first, so the editor moves one.
+    std::vector<std::string> lines = lines_of(
+        "metre 32\n"
+        "material colour_1 rgb=176,170,158\n"
+        "let size_1 = param 0.4\n"
+        "let waver_1 = waves size=size_1\n"
+        "let a = box 0 0 0  1 1 1\n"
+        "solid a\n");
+    ClipGraph graph = read_clip_graph(lines);
+    const auto named_at = [&](const char* name) {
+        return graph.find(ClipGraph::key_of(*named(graph, name)));
+    };
+    const auto socket_of = [&](u32 node, const char* name) {
+        const std::vector<ClipSocket> in = clip_sockets_of(graph, node);
+        for (usize i = 0; i < in.size(); ++i) {
+            if (in[i].name == name) return static_cast<u32>(i);
+        }
+        return ClipGraph::kNone;
+    };
+
+    const u32 red = socket_of(named_at("colour_1"), "rgb red");
+    REQUIRE(red != ClipGraph::kNone);
+    CHECK(connect_clip_socket(lines, graph, named_at("colour_1"), red, named_at("waver_1"))
+              .empty());
+
+    const std::string now = text_of(lines);
+    CHECK(now.find("rgb=waver_1,170,158") != std::string::npos);
+    // The pattern is above the voxel type now -- and so is the parameter the pattern is made of,
+    // because moving a binding earlier is only safe if its own dependencies come with it.
+    CHECK(now.find("let waver_1") < now.find("material colour_1"));
+    CHECK(now.find("let size_1") < now.find("let waver_1"));
+    // Nothing was lost or duplicated on the way.
+    CHECK(now.find("let a = box") != std::string::npos);
+    CHECK(now.find("solid a") != std::string::npos);
+    CHECK(count_of(now, "let waver_1") == 1);
+    CHECK(count_of(now, "let size_1") == 1);
+
+    // And it is a real wire to the reader that refused it: read back, the red is linked.
+    graph = read_clip_graph(lines);
+    bool linked = false;
+    for (const ClipSocket& one : clip_sockets_of(graph, named_at("colour_1"))) {
+        if (one.name != "rgb red") continue;
+        linked = one.linked;
+        CHECK(graph.nodes[one.from].name == "waver_1");
+    }
+    CHECK(linked);
+}

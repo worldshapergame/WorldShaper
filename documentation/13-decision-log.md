@@ -15789,3 +15789,28 @@ same shape of fault one layer up and this one was still open underneath it.
 
 Gate: content `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
 **865 test cases, 21,249,049 assertions.**
+
+## D848 - a name is moved above the thing that reads it
+
+*I still cant even connect a waves pattern to any value of a voxel type*, with the parser's own line
+in the picture: **`line 3: material colour_1 is driven by waver_1, which does not name anything`**.
+
+`waver_1` was written four lines BELOW the voxel type that now names it. Both readers in this
+project bind in document order, so a backwards reference is not a wire at all — to the forge it is
+an unknown name and the whole clip is refused, and to the graph it is a plain word, so the wire the
+player just drew does not even appear. And the palette adds a new node at the END of the document,
+which means **every pattern a player adds is below every voxel type they already had**: the feature
+D839 added could not be reached by the gesture it was added for.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D848 | **A wire lifts its source above its target when the document reads the other way round** | correction | A wire on a canvas knows nothing about which of its two boxes was typed first, so the editor moves one. The SOURCE goes up rather than the target going down, because moving a binding earlier is always safe — everything that read it still reads it, only sooner — and everything the source is itself made of comes with it, in the order it was written, or a lifted statement would land above its own dependencies. After every refusal, so a join that is going to be refused leaves the document exactly as it was: it was written before the ring check first, and refusing a ring then reordered the file |
+
+**And a handle does not survive it.** `ClipGraph::key_of` is a name and a POSITION, so every key the
+caller is holding is stale the moment lines move. The lift reports the line each of the two ends is
+on afterwards, the document is read again, and the join is made against the document as it now
+stands — once, because after the lift the source is above the target and the second pass cannot take
+that branch.
+
+Gate: content `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
+**866 test cases, 21,249,060 assertions.**

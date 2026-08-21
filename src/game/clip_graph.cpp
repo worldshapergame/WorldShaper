@@ -1079,6 +1079,112 @@ bool place_clip_node(std::vector<std::string>& lines, const ClipNode& node, f32 
     return true;
 }
 
+// **A name has to be bound before it is read**, and a wire drawn on a canvas has no idea which of
+// its two boxes was typed first.
+//
+// Reported with the parser's own line: *material colour_1 is driven by waver_1, which does not name
+// anything* — because `waver_1` was written four lines BELOW the voxel type that now names it. Both
+// readers in this project bind in document order, so a backwards reference is not a wire at all: to
+// the forge it is an unknown name and the clip is refused, and to the graph it is a plain word and
+// the wire the player just drew simply does not appear.
+//
+// So the source is LIFTED to just above the target, and everything the source is itself made of
+// comes with it. Moving a binding earlier is always safe — everything that read it still reads it,
+// only sooner — provided its own dependencies move too, which is why this takes the whole closure
+// rather than the one statement.
+//
+// Returns how many lines were moved in front of the target, or -1 when something in the way cannot
+// be moved at all (a sub-expression has no line of its own to lift). `source_now` and `target_now`
+// come back holding the line each of the two is on AFTERWARDS, because `ClipGraph::key_of` is a
+// name and a POSITION — so the keys the caller is holding are stale the moment this returns, and
+// re-reading the document and looking the two up again needs the new positions to look them up by.
+static isize lift_clip_before(std::vector<std::string>& lines, const ClipGraph& graph, u32 source,
+                              u32 target, u32& source_now, u32& target_now) {
+    if (source >= graph.nodes.size() || target >= graph.nodes.size()) return -1;
+    const u32 at = graph.nodes[target].line;
+    source_now = graph.nodes[source].line;
+    target_now = at;
+    if (at == 0) return -1;
+
+    // The source and everything under it that is written at or after the target.
+    std::vector<bool> moving(graph.nodes.size(), false);
+    std::vector<u32> stack{source};
+    while (!stack.empty()) {
+        const u32 one = stack.back();
+        stack.pop_back();
+        if (one >= graph.nodes.size() || moving[one]) continue;
+        const ClipNode& node = graph.nodes[one];
+        if (node.line < at || one == target) continue;   // already bound in time, or is the target
+        if (!node.statement) return -1;                  // written inside something else
+        moving[one] = true;
+        for (u32 input : node.inputs) stack.push_back(input);
+    }
+
+    std::vector<u32> order;
+    for (usize i = 0; i < moving.size(); ++i) {
+        if (moving[i]) order.push_back(static_cast<u32>(i));
+    }
+    if (order.empty()) return 0;
+    // In the order they were written, so what they are made of still comes first among themselves.
+    std::sort(order.begin(), order.end(),
+              [&](u32 a, u32 b) { return graph.nodes[a].line < graph.nodes[b].line; });
+
+    std::vector<std::string> taken;
+    usize source_at = 0;   // where the source's own block starts among the ones being moved
+    for (u32 one : order) {
+        const ClipNode& node = graph.nodes[one];
+        const usize first = node.line - 1;
+        const usize last = std::min<usize>(node.last_line, lines.size());
+        if (first >= lines.size() || last <= first) return -1;
+        if (one == source) source_at = taken.size();
+        taken.insert(taken.end(), lines.begin() + static_cast<isize>(first),
+                     lines.begin() + static_cast<isize>(last));
+    }
+    // Cut from the BOTTOM, so taking one out cannot move the ones still to go. Every one of them is
+    // below the target, so the target's own line is untouched by all of this.
+    for (usize k = order.size(); k-- > 0;) {
+        const ClipNode& node = graph.nodes[order[k]];
+        const usize first = node.line - 1;
+        const usize last = std::min<usize>(node.last_line, lines.size());
+        lines.erase(lines.begin() + static_cast<isize>(first),
+                    lines.begin() + static_cast<isize>(last));
+    }
+    lines.insert(lines.begin() + static_cast<isize>(at - 1), taken.begin(), taken.end());
+    source_now = at + static_cast<u32>(source_at);
+    target_now = at + static_cast<u32>(taken.size());
+    return static_cast<isize>(taken.size());
+}
+
+// Whether `source` is written where `target` can read it, and the move that makes it so. Empty when
+// nothing had to happen or when the move worked; a line to show the player otherwise.
+static std::string bind_before_read(std::vector<std::string>& lines, const ClipGraph& graph,
+                                    u32 source, u32 target, bool& moved, u32& source_now,
+                                    u32& target_now) {
+    moved = false;
+    if (source >= graph.nodes.size() || target >= graph.nodes.size()) return {};
+    const ClipNode& from = graph.nodes[source];
+    const ClipNode& into = graph.nodes[target];
+    source_now = from.line;
+    target_now = into.line;
+    if (from.line == 0 || into.line == 0 || from.line < into.line) return {};
+    if (lift_clip_before(lines, graph, source, target, source_now, target_now) < 0) {
+        return from.name + " is written after " + (into.name.empty() ? into.head : into.name) +
+               ", and cannot be moved above it -- move it up in the script and try again";
+    }
+    moved = true;
+    return {};
+}
+
+// The two of them found again in a document that has just been re-read, by the positions the move
+// left them on. A key is a name and a position, so this is the only honest way to carry a handle
+// across an edit that moves lines.
+static bool found_again(const ClipGraph& again, const ClipNode& was, u32 line_now, u32& out) {
+    ClipNode moved = was;
+    moved.line = line_now;
+    out = again.find(ClipGraph::key_of(moved));
+    return out != ClipGraph::kNone;
+}
+
 std::string connect_clip_nodes(std::vector<std::string>& lines, const ClipGraph& graph, u32 from,
                                u32 to) {
     if (from >= graph.nodes.size() || to >= graph.nodes.size()) return "nothing to join";
@@ -1132,6 +1238,27 @@ std::string connect_clip_nodes(std::vector<std::string>& lines, const ClipGraph&
         seen[at] = true;
         if (at == to) return "that would make a ring, and a ring cannot be built";
         for (u32 input : graph.nodes[at].inputs) stack.push_back(input);
+    }
+
+    // **A name has to be bound before it is read here too** — a shape dropped on a union it was
+    // written below is the same fault as a pattern dropped on a voxel type. After every refusal,
+    // because a join that is going to be refused must leave the document exactly as it was.
+    {
+        bool moved = false;
+        u32 from_now = 0;
+        u32 to_now = 0;
+        const std::string why = bind_before_read(lines, graph, from, to, moved, from_now, to_now);
+        if (!why.empty()) return why;
+        if (moved) {
+            const ClipGraph again = read_clip_graph(lines);
+            u32 now_to = 0;
+            u32 now_from = 0;
+            if (!found_again(again, target, to_now, now_to) ||
+                !found_again(again, source, from_now, now_from)) {
+                return "the document has moved under this -- try again";
+            }
+            return connect_clip_nodes(lines, again, now_from, now_to);
+        }
     }
 
     // 1. It has braces: the name goes in before the closing one.
@@ -2132,6 +2259,29 @@ std::string connect_clip_socket(std::vector<std::string>& lines, const ClipGraph
         for (u32 input : graph.nodes[at].inputs) stack.push_back(input);
     }
     if (into.line == 0 || into.line > lines.size()) return "nothing to join it to";
+
+    // **And it has to be bound before it is read**, which a wire on a canvas knows nothing about.
+    // The move changes every line number in `graph`, so the graph is read again and the join is
+    // made against the document as it now stands. Once only: after the lift the source is above the
+    // target, so the second pass cannot take this branch.
+    {
+        bool moved = false;
+        u32 from_now = 0;
+        u32 into_now = 0;
+        const std::string why =
+            bind_before_read(lines, graph, source, target, moved, from_now, into_now);
+        if (!why.empty()) return why;
+        if (moved) {
+            const ClipGraph again = read_clip_graph(lines);
+            u32 now_into = 0;
+            u32 now_from = 0;
+            if (!found_again(again, into, into_now, now_into) ||
+                !found_again(again, from, from_now, now_from)) {
+                return "the document has moved under this -- try again";
+            }
+            return connect_clip_socket(lines, again, now_into, socket, now_from);
+        }
+    }
 
     // Whatever is WIRED into the socket comes out first, so joining twice replaces rather than
     // doubles. A bare name is replaced in place below; a number is left alone, because taking a

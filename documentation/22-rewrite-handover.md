@@ -626,7 +626,22 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### A VOXEL TYPE CAN READ A PATTERN, 2026-08-21 — D839–D847. Read this first
+#### A NAME IS MOVED ABOVE THE THING THAT READS IT, 2026-08-21 — D848. Read this first
+
+*I still cant even connect a waves pattern to any value of a voxel type* — with the parser's own
+line: `material colour_1 is driven by waver_1, which does not name anything`.
+
+**The palette adds a new node at the END of the document**, so every pattern a player adds is below
+every voxel type they already had — and both readers here bind in document order, so a backwards
+reference is not a wire at all. `connect_clip_socket` and `connect_clip_nodes` now LIFT the source
+above the target, taking everything the source is made of with it, and then re-read the document and
+join against it. The lift happens after every refusal, so a join that is going to be refused leaves
+the file exactly as it was.
+
+`ClipGraph::key_of` is a name and a POSITION, so a handle does not survive lines moving: the lift
+reports the line each end is on afterwards and the two are looked up by that.
+
+#### A VOXEL TYPE CAN READ A PATTERN, 2026-08-21 — D839–D847
 
 *I cant seem to connect something like a pattern of noise to the rgb red of a voxel type even though
 its the same blue type of wire.*
