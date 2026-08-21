@@ -3813,7 +3813,7 @@ void Shell::draw_visual_view(const Rect& page) {
         }
 
         const f32 title = std::max(metrics.small_text(), metrics.text() * graph_zoom_);
-        const std::string first = node.name.empty() ? node.head : node.name;
+        const std::string first = node.name.empty() ? clip_head_shown(node.head) : node.name;
         ui_.draw().push_clip(Rect{box.x0, box.y0, mark_right, box.y1});
         ui_.draw().text(name_left,
                         box.y0 + (detail ? metrics.px(3.0f) : (node_h - title * kGlyphCap) * 0.5f),
@@ -3831,9 +3831,10 @@ void Shell::draw_visual_view(const Rect& page) {
             f32 spent = 0.0f;
             if (!node.name.empty()) {
                 const u32 which = clip_carries_tint(node.carries);
-                ui_.draw().text(left, under_y, node.head, small, tinted(kPlain, which + 1),
+                const std::string head_word = clip_head_shown(node.head);
+                ui_.draw().text(left, under_y, head_word, small, tinted(kPlain, which + 1),
                                 Align::Left, 0.85f);
-                spent = DrawList::measure(node.head, small) + metrics.px(5.0f);
+                spent = DrawList::measure(head_word, small) + metrics.px(5.0f);
             }
             const std::string values = summary_of(node);
             if (!values.empty() && left + spent < right) {
@@ -3862,7 +3863,7 @@ void Shell::draw_visual_view(const Rect& page) {
                 const f32 each = body.height() / static_cast<f32>(rows);
                 ui_.draw().push_clip(body);
                 draw_property_rows(node, body, body, each,
-                                   hash_combine(id_of("node.inside"), i));
+                                   hash_combine(id_of("node.inside"), i), false);
                 ui_.draw().pop_clip();
             }
             // The body holds the pointer: a press on a slider is not a press on the box, or every
@@ -4273,11 +4274,11 @@ std::string Shell::make_part(u32 kind, const std::string& name) {
         clips ? ("# " + stem +
                  "\nlet " + stem + "_shape = box -1 0 -1   1 1 1  round=0.02\nsolid " + stem +
                  "_shape\n")
-              : ("# " + stem +
-                 "\n# What this is made of. Every one of these can be left out and takes its\n"
-                 "# usual value; what is written here is what makes it look like something.\n"
-                 "material " + stem +
-                 " rgb=170,166,158 rough=200 metal=0 emit=0 ior=1 opacity=255\n");
+              // **The bare minimum that works**, asked for directly. A name and a colour is a
+              // voxel type; everything else it can take is offered on the node with its usual
+              // value beside it (D786), so writing them all out was a file full of defaults
+              // pretending to be decisions.
+              : ("# " + stem + "\nmaterial " + stem + " rgb=180,178,172\n");
     {
         std::ofstream out(at, std::ios::binary | std::ios::trunc);
         if (!out) return "could not make " + file + " beside this document";
@@ -4424,7 +4425,7 @@ void Shell::draw_graph_menu(const Rect& canvas) {
         if (which < groups.size()) {
             i32 head_at = 0;
             for (const std::string& head : groups[which].heads) {
-                labels.push_back(head);
+                labels.push_back(clip_head_shown(head));
                 items.push_back({Icon::New, labels.back(), true});
                 acts.push_back(Act::Head);
                 args.push_back(head_at++);
@@ -4613,25 +4614,101 @@ std::string Shell::shown_name(const std::filesystem::path& path) const {
 // are the same code in one place. `area` is where the rows start and how wide they are; anything
 // falling outside `clip_to` is skipped rather than drawn, which is what makes a scrolled panel and
 // a box scrolled off the edge of the graph cost the same as each other: nothing.
-void Shell::draw_property_rows(const ClipNode& node, const Rect& area, const Rect& clip_to,
-                              f32 row_height, u64 salt) {
+usize Shell::property_rows_of(const ClipNode& node, bool folding) const {
+    const std::vector<ClipProperty>& offers = clip_properties_of(node.head);
+    usize rows = 0;
+    std::string group;
+    for (const ClipProperty& offer : offers) {
+        if (folding && offer.group != group) {
+            group = offer.group;
+            ++rows;   // the heading
+            if (!ui_.section_open(id_of("node.fold", id_of(group)))) continue;
+        }
+        if (folding && !ui_.section_open(id_of("node.fold", id_of(group)))) {
+            continue;
+        }
+        rows += offer.parts;
+    }
+    return rows;
+}
+
+usize Shell::draw_property_rows(const ClipNode& node, const Rect& area, const Rect& clip_to,
+                                f32 row_height, u64 salt, bool folding) {
     const Metrics& metrics = ui_.metrics();
     const std::vector<ClipProperty>& offers = clip_properties_of(node.head);
     const Rect inner = area;
     const Rect& list = clip_to;
     f32 y = area.y0;
     usize row_at = 0;
+    usize drawn = 0;
+    std::string group;
+    bool showing = true;
+
+    // The gutter every row's *put this back* lives in, down the left, reserved whether or not any
+    // row has one — a word that shifts sideways depending on whether the row above it is at its
+    // default is a word that never sits in the same place twice.
+    const f32 gutter = folding ? metrics.icon() + metrics.px(2.0f) : 0.0f;
+
     for (const ClipProperty& offer : offers) {
-        for (u32 part = 0; part < offer.parts; ++part) {
-            const Rect row{inner.x0, y, inner.x1, y + std::min(row_height, metrics.row())};
+        if (folding && offer.group != group) {
+            group = offer.group;
+            const u64 fold = id_of("node.fold", id_of(group));
+            // A heading says whether anything under it has been changed, so a player can find a
+            // changed value without opening every fold to look for it.
+            bool any_written = false;
+            for (const ClipProperty& under : offers) {
+                if (under.group != group) continue;
+                for (const ClipNumber& number : node.numbers) {
+                    if (number.key == under.key) any_written = true;
+                }
+            }
+            const Rect head_row{inner.x0, y, inner.x1, y + std::min(row_height, metrics.row())};
             y += row_height;
+            ++drawn;
+            const Ui::Fold state = (head_row.y1 >= list.y0 && head_row.y0 <= list.y1)
+                                       ? ui_.section(fold, head_row, group, any_written)
+                                       : Ui::Fold{ui_.section_open(fold), false};
+            showing = state.open;
+            if (state.reset) {
+                // Every key under this heading goes back to being unwritten at once.
+                remember("value");
+                bool touched = false;
+                for (const ClipProperty& under : offers) {
+                    if (under.group != group) continue;
+                    touched |= erase_clip_key(lines_, node, under.key);
+                }
+                if (touched) document_changed({});
+                return drawn;
+            }
+        }
+        if (folding && !showing) continue;
+
+        for (u32 part = 0; part < offer.parts; ++part) {
+            const Rect whole{inner.x0, y, inner.x1, y + std::min(row_height, metrics.row())};
+            const Rect row{whole.x0 + gutter, whole.y0, whole.x1, whole.y1};
+            y += row_height;
+            ++drawn;
             const usize mine = row_at++;
-            if (row.y1 < list.y0 || row.y0 > list.y1) continue;
+            if (whole.y1 < list.y0 || whole.y0 > list.y1) continue;
 
             // What the document says about this one, if it says anything.
             const ClipNumber* written = nullptr;
             for (const ClipNumber& number : node.numbers) {
                 if (number.key == offer.key && number.index == part) written = &number;
+            }
+
+            // **Put it back**, which for a property whose default is a SILENCE means taking the key
+            // out of the line. Drawn only when there is something to put back, because a control
+            // that is always there and does nothing most of the time is furniture (D486) — and its
+            // absence is also the answer to *is this one changed*.
+            if (folding) {
+                const Rect back{whole.x0, whole.y0, whole.x0 + gutter, whole.y1};
+                if (ui_.reset_button(hash_combine(salt, mine * 2 + 1), back, written != nullptr,
+                                     "Put this back to its usual value")) {
+                    remember("value");
+                    if (erase_clip_key(lines_, node, offer.key)) document_changed({});
+                    return drawn;
+                }
             }
 
             std::string label = offer.key;
@@ -4661,7 +4738,7 @@ void Shell::draw_property_rows(const ClipNode& node, const Rect& area, const Rec
 
             f64 value = (written != nullptr) ? written->value : offer.fallback;
             const f64 was = value;
-            if (!ui_.number(hash_combine(salt, mine), row, about, value) || value == was) {
+            if (!ui_.number(hash_combine(salt, mine * 2), row, about, value) || value == was) {
                 continue;
             }
             if (written != nullptr) {
@@ -4697,6 +4774,7 @@ void Shell::draw_property_rows(const ClipNode& node, const Rect& area, const Rec
             }
         }
     }
+    return drawn;
 }
 
 void Shell::draw_node_parameters(const Rect& rect) {
@@ -4705,7 +4783,8 @@ void Shell::draw_node_parameters(const Rect& rect) {
     const ClipNode node = graph_.nodes[chosen_index_];   // by value: the graph is re-read under it
 
     ui_.panel(rect);
-    draw_header(rect, window_settings_, icon_of(node), node.name.empty() ? node.head : node.name);
+    draw_header(rect, window_settings_, icon_of(node),
+                node.name.empty() ? clip_head_shown(node.head) : node.name);
 
     Column column;
     column.box = Rect{rect.x0 + metrics.px(8.0f), rect.y0 + metrics.row() + metrics.px(6.0f),
@@ -4724,9 +4803,10 @@ void Shell::draw_node_parameters(const Rect& rect) {
         }
         // What it is, in the language's own word and in the colour that word has everywhere else:
         // `all` is a union and `grain` is an fbm, and this row is where that is said.
-        ui_.draw().text(row.x1, row.mid_y() - DrawList::cap_height(metrics.text()) * 0.5f, node.head,
-                        metrics.text(), tinted(kPlain, clip_carries_tint(node.carries) + 1),
-                        Align::Right, 0.9f);
+        const std::string shown_head = clip_head_shown(node.head);
+        ui_.draw().text(row.x1, row.mid_y() - DrawList::cap_height(metrics.text()) * 0.5f,
+                        shown_head, metrics.text(),
+                        tinted(kPlain, clip_carries_tint(node.carries) + 1), Align::Right, 0.9f);
     }
 
     if (node.opaque) {
@@ -4769,8 +4849,8 @@ void Shell::draw_node_parameters(const Rect& rect) {
     // three of a dozen and the rest take their usual value silently, so a panel that lists what is
     // written is a panel that says a material has three properties. Reported directly.
     const std::vector<ClipProperty>& offers = clip_properties_of(node.head);
-    usize offered_rows = 0;
-    for (const ClipProperty& offer : offers) offered_rows += offer.parts;
+    // What is FOLDED AWAY takes no room, so the scroll's content is what will actually be drawn.
+    const usize offered_rows = property_rows_of(node, true);
 
     const Rect list{column.box.x0, column.y, column.box.x1, column.box.y1};
     const f32 row_height = metrics.row() + metrics.px(4.0f);
@@ -4786,17 +4866,42 @@ void Shell::draw_node_parameters(const Rect& rect) {
     }
 
     if (!offers.empty()) {
-        draw_property_rows(node, Rect{inner.x0, y, inner.x1, inner.y1}, list, row_height,
-                           id_of("node.panel"));
-        y += static_cast<f32>(offered_rows) * row_height;
+        const usize laid = draw_property_rows(node, Rect{inner.x0, y, inner.x1, inner.y1}, list,
+                                             row_height, id_of("node.panel"), true);
+        y += static_cast<f32>(laid) * row_height;
     }
+    // The same gutter the offered rows use, down the left, so a panel of positions and a panel of
+    // properties are the same panel.
+    const f32 gutter = metrics.icon() + metrics.px(2.0f);
     for (usize i = 0; offers.empty() && i < node.numbers.size(); ++i) {
         const ClipNumber& number = node.numbers[i];
-        const Rect row{inner.x0, y, inner.x1, y + metrics.row()};
+        const Rect whole{inner.x0, y, inner.x1, y + metrics.row()};
+        const Rect row{whole.x0 + gutter, whole.y0, whole.x1, whole.y1};
         y += row_height;
-        if (row.y1 < list.y0 || row.y0 > list.y1) {
+        if (whole.y1 < list.y0 || whole.y0 > list.y1) {
             if (number.key.empty()) ++positional;
             continue;
+        }
+
+        // **Put it back**, and what *back* means for a number with no name is the number the
+        // palette makes this word WITH. Nothing in the language says what a box's third number
+        // ought to be — but the palette has to make a box somebody can see, and the value it makes
+        // it with is exactly that answer. Drawn only when the two differ (D486).
+        f64 made_with = 0.0;
+        const bool has_default =
+            clip_default_number(node.head, number.key, number.index, made_with);
+        {
+            const Rect back{whole.x0, whole.y0, whole.x0 + gutter, whole.y1};
+            const bool changed = has_default && std::abs(made_with - number.value) > 1e-9;
+            if (ui_.reset_button(id_of("node.number.back", i), back, changed,
+                                 "Put this back to what a new one is made with")) {
+                remember("value");
+                if (write_clip_number(lines_, number,
+                                      spell_clip_number(made_with, number.text))) {
+                    document_changed({});
+                }
+                return;
+            }
         }
 
         std::string label;
@@ -4844,7 +4949,7 @@ void Shell::draw_node_parameters(const Rect& rect) {
 
     for (usize w = 0; w < node.words.size(); ++w) {
         const ClipWord& word = node.words[w];
-        const Rect row{inner.x0, y, inner.x1, y + metrics.row()};
+        const Rect row{inner.x0 + gutter, y, inner.x1, y + metrics.row()};
         y += row_height;
         if (row.y1 < list.y0 || row.y0 > list.y1) continue;
         // A value that is not a number is not a slider (D444): a choice is a choice and a name is a
@@ -5118,6 +5223,27 @@ void Shell::reparse() {
     const u64 began = now_ns();
     report_ = parse_(document(), editing_);
     parse_cost_ = static_cast<f64>(now_ns() - began) * 1.0e-9;
+
+    // **A document with no shapes in it is not missing its solid.**
+    //
+    // The parser is right to say so about a WORLD: a world that never says which shape is the solid
+    // builds to nothing, and that has to be shouted about. It is nonsense about a voxel type, which
+    // is a colour and a roughness and has no shapes at all, and about a fragment that declares the
+    // materials a building shares. Reported directly: *im getting warnings that make sense for a
+    // material editor like "the file never says which shape is the solid"*.
+    //
+    // Decided from the document rather than from the file's extension, because that is the actual
+    // question: something that makes no matter cannot be asked which of its matter is the world.
+    // The game's own build path is untouched — it keeps saying it, because there it is true.
+    if (!report_.ok && report_.line == 0 && report_.where.empty() &&
+        report_.message.find("which shape is the solid") != std::string::npos) {
+        refresh_graph();
+        bool any_shape = false;
+        for (const ClipNode& node : graph_.nodes) {
+            if (node.carries == ClipCarries::Shape) any_shape = true;
+        }
+        if (!any_shape) report_ = ParseReport{};
+    }
 }
 
 // **D453 said the script is parsed on every keystroke, and this is what that had to become.**

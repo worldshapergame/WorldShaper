@@ -1717,6 +1717,11 @@ std::string clip_node_template(const std::string& head) {
     return found->second;
 }
 
+std::string clip_head_shown(const std::string& head) {
+    if (head == "material") return "voxel type";
+    return head;
+}
+
 const std::vector<ClipProperty>& clip_properties_of(const std::string& head) {
     // The material's whole surface, in the order a person thinks about one: what colour it is, how
     // it takes light, and then the two that only glass and metal care about. Every one of these was
@@ -1728,27 +1733,87 @@ const std::vector<ClipProperty>& clip_properties_of(const std::string& head) {
     // as a refractive index and stored as the offset from vacuum — so it is spelled the way the
     // physics is and converted on the way in.
     static const std::vector<ClipProperty> kMaterial = {
-        {"rgb", 3, 170.0, 0.0, 255.0, 0, "What colour it is, as red, green and blue"},
-        {"rough", 1, 200.0, 0.0, 255.0, 0, "0 is a mirror, 255 is chalk"},
-        {"metal", 1, 0.0, 0.0, 255.0, 0, "How much it reflects its own colour rather than white"},
-        {"emit", 1, 0.0, 0.0, 255.0, 0, "How much light it gives off by itself"},
-        {"opacity", 1, 255.0, 0.0, 255.0, 0, "255 is solid, below that light passes through"},
-        {"ior", 1, 1.0, 1.0, 3.0, 2, "Refractive index: 1 no bending, 1.33 water, 1.5 glass"},
-        {"translucent", 1, 0.0, 0.0, 255.0, 0, "How far light spreads inside it before coming back"},
-        {"absorb", 3, 0.0, 0.0, 255.0, 0, "What a thick piece takes out of the light, per metre"},
-        {"lacquer", 1, 0.0, 0.0, 15.0, 0, "A clear coat over the top of it"},
-        {"sheen", 1, 0.0, 0.0, 15.0, 0, "The soft edge cloth and dust have"},
-        {"brush", 1, 0.0, 0.0, 3.0, 0, "Brushed along a world axis: 0 none, 1 x, 2 y, 3 z"},
+        {"rgb", 3, 170.0, 0.0, 255.0, 0, "What colour it is, as red, green and blue", "colour"},
+        {"rough", 1, 200.0, 0.0, 255.0, 0, "0 is a mirror, 255 is chalk", "surface"},
+        {"metal", 1, 0.0, 0.0, 255.0, 0, "How much it reflects its own colour rather than white",
+         "surface"},
+        {"lacquer", 1, 0.0, 0.0, 15.0, 0, "A clear coat over the top of it", "surface"},
+        {"sheen", 1, 0.0, 0.0, 15.0, 0, "The soft edge cloth and dust have", "surface"},
+        {"brush", 1, 0.0, 0.0, 3.0, 0, "Brushed along a world axis: 0 none, 1 x, 2 y, 3 z",
+         "surface"},
+        {"emit", 1, 0.0, 0.0, 255.0, 0, "How much light it gives off by itself", "light"},
+        {"opacity", 1, 255.0, 0.0, 255.0, 0, "255 is solid, below that light passes through",
+         "light"},
+        {"ior", 1, 1.0, 1.0, 3.0, 2, "Refractive index: 1 no bending, 1.33 water, 1.5 glass",
+         "light"},
+        {"translucent", 1, 0.0, 0.0, 255.0, 0, "How far light spreads inside it before coming back",
+         "light"},
+        {"absorb", 3, 0.0, 0.0, 255.0, 0, "What a thick piece takes out of the light, per metre",
+         "light"},
     };
     static const std::vector<ClipProperty> kVariation = {
-        {"colour", 1, 0.04, 0.0, 1.0, 2, "How far each voxel's colour wanders from the material"},
-        {"rough", 1, 0.05, 0.0, 1.0, 2, "And how far its roughness does"},
-        {"seed", 1, 1.0, 0.0, 64.0, 0, "Which set of wanderings, so two clips can differ"},
+        {"colour", 1, 0.04, 0.0, 1.0, 2, "How far each voxel's colour wanders from the type",
+         "variation"},
+        {"rough", 1, 0.05, 0.0, 1.0, 2, "And how far its roughness does", "variation"},
+        {"seed", 1, 1.0, 0.0, 64.0, 0, "Which set of wanderings, so two clips can differ",
+         "variation"},
     };
     static const std::vector<ClipProperty> kNone;
     if (head == "material") return kMaterial;
     if (head == "variation") return kVariation;
     return kNone;
+}
+
+bool erase_clip_key(std::vector<std::string>& lines, const ClipNode& node,
+                    const std::string& key) {
+    if (node.line == 0 || node.line > lines.size()) return false;
+    std::string& line = lines[node.line - 1];
+    usize code = line.size();
+    bool in_string = false;
+    for (usize i = 0; i < line.size(); ++i) {
+        if (line[i] == '"') in_string = !in_string;
+        if (line[i] == '#' && !in_string) {
+            code = i;
+            break;
+        }
+    }
+    const std::string wanted = key + "=";
+    usize at = 0;
+    while (at + wanted.size() <= code) {
+        const usize found = line.find(wanted, at);
+        if (found == std::string::npos || found >= code) return false;
+        const bool own_word = found == 0 || line[found - 1] == ' ' || line[found - 1] == '\t';
+        if (own_word) {
+            usize end = found + wanted.size();
+            while (end < code && line[end] != ' ' && line[end] != '\t') ++end;
+            // The space in FRONT of it goes too, or a line loses a key and keeps its gap.
+            usize begin = found;
+            while (begin > 0 && (line[begin - 1] == ' ' || line[begin - 1] == '\t')) --begin;
+            if (begin == 0) begin = found;   // it was the first thing on the line: keep the indent
+            line = line.substr(0, begin) + line.substr(end);
+            return true;
+        }
+        at = found + 1;
+    }
+    return false;
+}
+
+bool clip_default_number(const std::string& head, const std::string& key, u32 index, f64& value) {
+    const std::string body = clip_node_template(head);
+    if (body.empty()) return false;
+    // Read as a document rather than picked apart by hand, so a template and the thing it makes are
+    // read by exactly the same code and cannot drift.
+    const std::vector<std::string> lines{"let it = " + body};
+    const ClipGraph graph = read_clip_graph(lines);
+    for (const ClipNode& node : graph.nodes) {
+        if (node.head != head) continue;
+        for (const ClipNumber& number : node.numbers) {
+            if (number.key != key || number.index != index) continue;
+            value = number.value;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool write_clip_key(std::vector<std::string>& lines, const ClipNode& node, const std::string& key,
@@ -1815,7 +1880,7 @@ const std::vector<ClipPaletteGroup>& clip_palette() {
         // Material and paint are not "the document", they are what the thing is MADE of, and a
         // player looking for a colour was looking under a word that means the file's own settings.
         // Reported directly: *many nodes are inside the document category which makes no sense.*
-        {"material", {"material", "paint"}},
+        {"voxel type", {"material", "paint"}},
         {"finish", {"weather", "variation"}},
         {"document", {"metre", "bounds", "origin", "solid", "region"}},
     };

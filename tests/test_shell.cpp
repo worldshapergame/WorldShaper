@@ -428,10 +428,13 @@ TEST_CASE("a new clip and a new material are made on their shelves and put in th
     const std::string clip = file_text(scratch.root / "clips" / "front_porch.wsclip");
     CHECK(clip.find("solid") != std::string::npos);
     const std::string material = file_text(scratch.root / "materials" / "old_brass.wsmat");
+    // The BARE MINIMUM that works -- a name and a colour. Everything else a voxel type can take is
+    // offered on the node with its usual value beside it (D786), so writing them all out was a file
+    // full of defaults pretending to be decisions. Asked for directly.
     CHECK(material.find("material old_brass") != std::string::npos);
-    CHECK(material.find("ior=") != std::string::npos);
-    CHECK(material.find("metal=") != std::string::npos);
-    CHECK(material.find("emit=") != std::string::npos);
+    CHECK(material.find("rgb=") != std::string::npos);
+    CHECK(material.find("ior=") == std::string::npos);
+    CHECK(material.find("opacity=") == std::string::npos);
     // Both carry who made them (D447).
     CHECK(clip.find("WSauthor:") != std::string::npos);
     CHECK(material.find("WSauthor:") != std::string::npos);

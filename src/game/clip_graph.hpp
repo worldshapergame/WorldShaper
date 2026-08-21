@@ -324,11 +324,39 @@ struct ClipProperty {
     f64 high = 1.0;
     u32 decimals = 0;
     std::string about;    // one line, for the tooltip
+    // Which fold it lives under. A dozen rows in one list is a list a player reads rather than
+    // uses, and the settings window has had the answer to that since D485: sections that fold.
+    std::string group;
 };
+
+// What a word of the language is CALLED on the screen, where those differ.
+//
+// They differ in exactly one place so far and it is a real distinction rather than a synonym.
+// `material` in the language sets the look of a VOXEL — its colour, its roughness, how it takes
+// light — and that is the simple thing every clip has always used. What the word "material" is
+// coming to mean in this game is the richer thing that is a graph of its own and can be painted
+// with. Two things cannot share one word on the screen while one of them is being built, so the
+// simple one is called what it is: **a voxel type**. The file keeps saying `material`, because a
+// keyword is a promise to every clip ever written.
+std::string clip_head_shown(const std::string& head);
 
 // Empty for a head that has no such table — which is most of them, and means "list what is
 // written", exactly as before.
 const std::vector<ClipProperty>& clip_properties_of(const std::string& head);
+
+// Takes a `key=...` back OUT of a statement, so it goes back to whatever the reader uses when the
+// document is silent. That is what *put this back* means for a property whose default is a silence.
+bool erase_clip_key(std::vector<std::string>& lines, const ClipNode& node, const std::string& key);
+
+// What a word of the language is made WITH: the number in its palette template, which is the value
+// a node has the moment it is added.
+//
+// This is where *put this back* gets its answer for a positional number. A `box` has six of them
+// and none of them has a name, so there is nothing in the language that says what a box's default
+// third number is — but the palette has to make a box that somebody can see, and the number it
+// makes it with is exactly that answer. `has` is false for a head with no template, or a key the
+// template does not carry.
+bool clip_default_number(const std::string& head, const std::string& key, u32 index, f64& value);
 
 // Writes `key=value` into a statement, replacing whatever that key held or adding it at the end of
 // the statement's first line. Returns true when the document changed.

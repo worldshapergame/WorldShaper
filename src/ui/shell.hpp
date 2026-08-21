@@ -389,8 +389,17 @@ private:
     u32 cells_wide(u32 index) const;
     // One property of one node as a slider, wherever it is drawn. The panel on the left and the box
     // on the canvas are the same rows in two places, so they are the same code in one place.
-    void draw_property_rows(const ClipNode& node, const Rect& area, const Rect& clip_to,
-                            f32 row_height, u64 salt);
+    // `folding` puts the rows under headings that fold, which is what the settings window has done
+    // since D485 and for the same reason: a panel that shows every control it has at once is a
+    // panel a player reads rather than uses. The BOX on the canvas draws them all — it is already
+    // exactly as tall as its rows and folding one would leave a hole in the picture.
+    //
+    // Returns how many rows it drew, so a caller laying out around it knows where it ended.
+    usize draw_property_rows(const ClipNode& node, const Rect& area, const Rect& clip_to,
+                             f32 row_height, u64 salt, bool folding);
+    // How many rows `draw_property_rows` will draw, given the same `folding`. Asked before the
+    // scroll region is opened, because a scroll needs its content height up front.
+    usize property_rows_of(const ClipNode& node, bool folding) const;
 
     // Where the box that stands for the FILE sits, and whether there is one.
     //
