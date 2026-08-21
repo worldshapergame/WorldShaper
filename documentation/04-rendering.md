@@ -169,7 +169,23 @@ Geometry is identical in every tier. Only light convergence speed and specular c
 
 ## 8. Hardware ray tracing
 
-Not required. Hierarchical brick marching beats BVH traversal for dense uniform grids. Steam Deck (RDNA2) does expose ray query, so it may later be measured for the top-level BVH over unaligned voxel volumes — an optimisation, never a requirement.
+Not required, and **now measured rather than asserted** (D849).
+
+RT cores accelerate one half of a ray: *which volume did I hit*. This marcher already answers that
+out of the octree — an empty cell is jumped rather than stepped, `skip_level` going to the far side
+of the empty block in one step at whatever size the descent found it. So the case for a BVH is
+exactly how long the walk it would replace is, and on `clips/facility.clip` (573 M solid voxels)
+that walk is **3.65 to 5.38 outer steps a ray**, over 1.8 billion rays, agreeing across two
+independent instruments. A BVH descent over a world that size is fifteen to twenty node tests.
+
+Run it yourself: `tools\marchsteps.ps1`. `--march-stats` counts every march in the frame;
+`--debug-mode 12` gives the per-pixel distribution for primary rays.
+
+The one arm where the walk is long is `--infinite-detail` (R8e, not done): **277.86 steps a ray**,
+18.3 ms against a 9.5 ms budget, and 186,878 faces lit only because their sun ray ran out of the
+512-step cap. That is a real problem and it is still not a hardware one — those steps are spent
+below voxel level where there is no geometry to build a structure over, and the fix is to traverse
+at brick granularity as the shipping arm does. See D849.
 
 ## 9. Camera and UI
 

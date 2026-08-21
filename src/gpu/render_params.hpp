@@ -464,6 +464,21 @@ inline constexpr u32 kProbeFarFallbackOff = 1u << 18;
 // see D736 for why every bit above 14 read as free when it was not. Must match
 // `kProbeInfiniteDetail` in shaders/node.glsl.
 inline constexpr u32 kProbeInfiniteDetail = 1u << 19;
+
+// **How far a ray actually walks**, counted over every `node_march` in the frame rather than over
+// the primary ones alone. `--march-stats`, off by default because it is two atomics on two words
+// per ray and that is a real cost on a pass that casts a million of them.
+//
+// This is the instrument for one question and it is a large one: whether hardware ray tracing
+// would buy this renderer anything. RT cores accelerate the *which volume did I hit* half of a
+// ray, and the marcher already answers that with the octree's own analytic skip (`skip_level` in
+// node.glsl) -- so the number that decides it is how many outer steps a ray spends before it
+// stops. Nothing measured it. `--debug-mode 12` gives it per PIXEL for a primary ray, which is
+// half the question: the rays that travel furthest are the sun and gathering rays out of the face
+// pass, and no pixel holds those.
+//
+// Must match `kProbeMarchStats` in shaders/node.glsl.
+inline constexpr u32 kProbeMarchStats = 1u << 20;
 // R4e: a translucent face with the sun behind it casts the ray `sun_possible` used to throw away,
 // through the matter behind it, and is lit by what survives the crossing. Cleared by
 // `--no-translucency`, which is the state every figure before it was taken in: marble as granite.

@@ -46,6 +46,11 @@ struct DeriveStats {
     // bounds a frame: a cap on cells is not a cap on work, because D688 measured one cell at
     // 1,073,935 nodes and 372 ms against a typical 5,195 and 1.8.
     u32 visits_k = 0;
+
+    // R12c's buffer, borrowed by the marcher's own instrument. Both nought unless
+    // `kProbeMarchStats` is on; see `--march-stats`.
+    u32 march_rays = 0;    // node_march calls that finished in this frame, of every kind
+    u32 march_steps = 0;   // and the outer steps they took between them
 };
 
 struct NodeBufferStats {

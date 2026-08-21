@@ -92,6 +92,11 @@ struct DeriveStatsSlot {
     // anywhere between forty milliseconds and two hours. Measured here: a cap of 20,000 cells and
     // no visit budget LOST THE DEVICE on a 150-second run, and 300,000 lost it inside ten seconds.
     uint visits_k;
+    // The marcher's own instrument, riding in the same buffer because it has the same shape: one
+    // slot per frame in flight, zeroed by the host, read back a frame late. See `kProbeMarchStats`
+    // in src/gpu/render_params.hpp for what it is for.
+    uint march_rays;
+    uint march_steps;
 };
 layout(std430, set = 1, binding = 8) buffer DeriveStats { DeriveStatsSlot slots[]; } derive_stats;
 
@@ -757,7 +762,11 @@ const uint kProbeSunConfidence = 1u << 13;
 // is R9h's; see D736 for why the free list above bit 14 could not be trusted. Must match
 // `kProbeInfiniteDetail` in src/gpu/render_params.hpp.
 const uint kProbeInfiniteDetail = 1u << 19;
+// How far a ray walks, over every march in the frame. `--march-stats`. Off by default: two atomics
+// on two words per ray is a real cost on a pass that casts a million of them.
+const uint kProbeMarchStats = 1u << 20;
 bool probe_infinite_detail() { return (light_probe.words[0] & kProbeInfiniteDetail) != 0u; }
+bool probe_march_stats() { return (light_probe.words[0] & kProbeMarchStats) != 0u; }
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -3357,9 +3366,9 @@ bool node_derive_take() {
     return false;
 }
 
-NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
-                   bool report_used, bool report_face, bool stand_in, bool occlude_unknown,
-                   uint through_mode, float max_t, float start_t) {
+NodeHit node_march_walk(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
+                        bool report_used, bool report_face, bool stand_in, bool occlude_unknown,
+                        uint through_mode, float max_t, float start_t) {
     NodeHit result;
     result.hit = false;
     result.unknown = false;
@@ -4089,3 +4098,31 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
 }
 
 
+
+// **The march, with a tally on the way out.**
+//
+// Everything calls this rather than `node_march_walk`, and with `kProbeMarchStats` off it is
+// exactly the walk and nothing else. With it on it adds two atomics per RAY -- not per step, which
+// would be millions of collisions on one word and would measure the instrument rather than the
+// marcher.
+//
+// It exists to answer one question with a number instead of an argument: **would hardware ray
+// tracing buy this renderer anything?** RT cores accelerate the *which volume did I hit* half of a
+// ray, and this marcher already answers that with the octree's own analytic skip -- `skip_level`
+// above jumps to the far side of an empty block in one step, at whatever size the descent found it.
+// So the whole case for a BVH rests on how many outer steps a ray really spends, and until now
+// nothing counted them.
+NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
+                   bool report_used, bool report_face, bool stand_in, bool occlude_unknown,
+                   uint through_mode, float max_t, float start_t) {
+    const NodeHit hit = node_march_walk(origin, dir, pixel_angle, dither, report, report_used,
+                                        report_face, stand_in, occlude_unknown, through_mode,
+                                        max_t, start_t);
+    if (probe_march_stats()) {
+        const uint slot = push.derive.z;
+        atomicAdd(derive_stats.slots[slot].march_rays, 1u);
+        // `steps` is the index of the last step taken, so a ray that took one step reports nought.
+        atomicAdd(derive_stats.slots[slot].march_steps, hit.steps + 1u);
+    }
+    return hit;
+}

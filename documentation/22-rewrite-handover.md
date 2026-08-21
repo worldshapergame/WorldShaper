@@ -626,7 +626,36 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### A NAME IS MOVED ABOVE THE THING THAT READS IT, 2026-08-21 — D848. Read this first
+#### WHAT A BVH WOULD BE REPLACING, 2026-08-21 — D849. Read this first
+
+Asked directly: would hardware ray tracing buy this renderer anything? `04-rendering.md` §8 had said
+*may later be measured* since it was written. It is measured now.
+
+**The marcher's walk is 3.65 to 5.38 outer steps a ray** on the 573-million-voxel facility, over 1.8
+billion rays, agreeing across two independent instruments (an image readback of the visibility word
+and an atomic inside the marcher). A BVH descent over a world that size is fifteen to twenty node
+tests. There is nothing there to win.
+
+| what is new | | how to look at it |
+|---|---|---|
+| **`--march-stats`** | two atomics a ray, off by default, counts every march in the frame | `kProbeMarchStats` |
+| **`tools\marchsteps.ps1`** | both instruments, four cameras, one command | — |
+
+**AND THE FINDING THAT IS WORTH MORE THAN THE ANSWER.** In the `--infinite-detail` arm (R8e, listed
+as not done), on the same camera and the same building:
+
+- the walk goes from **4.48 steps to 277.86**, worst frame 319.74;
+- the visibility pass goes from **3.023 ms to 18.341** against a **9.50 ms** budget;
+- and **186,878 faces are lit only because their sun ray ran out of the 512-step cap** — so the arm
+  is not merely slow, its shadows are wrong.
+
+The steps are being spent BELOW voxel level: `march_level` is floored at `kFinestLevel` rather than
+`kLeafLevel` in that arm, so the DDA steps at sub-voxel granularity through space the octree has no
+record of. **The fix is the one the shipping arm already uses** — traverse at brick granularity and
+only go finer once inside something — and it is a change to the marcher, not to the hardware. That
+is R8e's real blocker and it now has numbers on it.
+
+#### A NAME IS MOVED ABOVE THE THING THAT READS IT, 2026-08-21 — D848
 
 *I still cant even connect a waves pattern to any value of a voxel type* — with the parser's own
 line: `material colour_1 is driven by waver_1, which does not name anything`.

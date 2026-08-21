@@ -15814,3 +15814,68 @@ that branch.
 
 Gate: content `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
 **866 test cases, 21,249,060 assertions.**
+
+## D849 - what a BVH would be replacing, measured
+
+Asked directly: **would hardware ray tracing buy this renderer anything?** `04-rendering.md` §8 has
+said *not required, may later be measured* since it was written, and nothing had measured it. So
+this is the measurement, and it changed the answer twice on the way.
+
+RT cores accelerate one half of a ray — *which volume did I hit* — by descending a BVH. This
+marcher's alternative is not triangle soup: `node_march` walks an octree, and an empty cell is not
+STEPPED over but **jumped**, `skip_level` asking the descent how big the empty block is and going to
+its far side in one step at whatever size that turns out to be. That is hierarchical empty-space
+skipping out of the structure the world is already stored in, which is the same service a BVH
+provides. So the entire case rests on one number: how many outer steps does a ray really spend?
+
+**Two instruments, and they read different sources on purpose.** `--debug-mode 12` writes the
+visibility word out as four exact bytes and byte 2 is the primary ray's step count — per pixel,
+exact, primary rays only, because an image has no pixel for a sun ray. `--march-stats` (new) counts
+every `node_march` in the frame with two atomics on the way out: primary, sun, gathering and
+refraction alike — total coverage, no distribution. One is an image readback of the visibility pass
+and the other is an atomic inside the marcher, so when they agree they agree about the WORLD rather
+than about a shared mistake. `tools/marchsteps.ps1` runs both.
+
+**On `clips/facility.clip`, 573 million solid voxels, 293 chunks, 1280x800:**
+
+| camera | primary rays: mean | p50 | p90 | p99 | every ray: rays | mean |
+|---|---|---|---|---|---|---|
+| close | 3.7 | 3 | 6 | 13 | 1,783,279,549 | **4.48** |
+| outdoor | 6.8 | 6 | 11 | 25 | 1,202,017,529 | **5.38** |
+| enclosed | 2.2 | 2 | 3 | 6 | 830,837,619 | **3.65** |
+| mid | 8.5 | 7 | 17 | 29 | 504,099,004 | **4.09** |
+
+**A BVH descent over a world this size is fifteen to twenty node tests.** The walk it would be
+replacing is four. There is nothing there to win, whatever the hardware is capable of — and the
+price is a second geometry representation kept in step with the octree, a rebuild on every chisel,
+and a mesh per LOD level. The visibility pass measures **3.023 ms mean / 4.764 worst against a 9.50
+ms budget**, and 0 sun rays ran out of steps.
+
+### And then the arm that says otherwise, which is why this was worth measuring
+
+`--infinite-detail` is R8e, off by default and listed as not done. In that arm, on the same camera
+and the same building:
+
+| | outer steps a ray | visibility pass | sun rays out of steps |
+|---|---|---|---|
+| as it ships | **4.48** (worst frame 8.36) | 3.023 ms / 4.764 worst | 0 |
+| `--infinite-detail` | **277.86** (worst frame 319.74) | **18.341 ms / 44.935 worst** | **186,878** |
+
+Sixty-two times the walk, six times over a 9.50 ms budget, and the shadows are not merely slow but
+WRONG: a hundred and eighty-six thousand faces are lit only because their sun ray ran out of the
+512-step cap. That is the shape of a problem hardware traversal is for.
+
+**It still is not the answer, and the reason is worth writing down.** The steps are being spent
+below voxel level — `march_level` is floored at `kFinestLevel` rather than `kLeafLevel` in that arm,
+so the DDA steps at sub-voxel granularity through space the octree has no record of and therefore
+nothing to skip with. There is no geometry there to put in an acceleration structure; the detail is
+DERIVED from the field where the ray arrives. The fix is the one the shipping arm already uses —
+traverse at brick granularity and only go finer once inside something — which is a change to the
+marcher and not to the hardware.
+
+Kept as a number rather than as a plan: `tools\marchsteps.ps1` re-takes all of it in one command,
+and `--march-stats` is off by default because two atomics a ray is a real cost on a pass that casts
+a billion of them over a run.
+
+Gate: content `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
+**866 test cases, 21,249,060 assertions.**

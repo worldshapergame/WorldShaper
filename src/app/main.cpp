@@ -713,6 +713,17 @@ struct Options {
     // rather than a heap of blocks — and the ladder sharpens whatever the player looks at from
     // there. `--clip-coarse N` is the dial and it is the one number that decides how long a cold
     // launch takes.
+    // **How far a ray actually walks**, over every march in the frame rather than over the primary
+    // ones alone. Off by default: two atomics per ray is a real cost on a pass that casts a million.
+    //
+    // The question it exists for is whether hardware ray tracing would buy this renderer anything.
+    // RT cores accelerate *which volume did I hit*, and the marcher already answers that with the
+    // octree's own analytic skip -- so the case rests entirely on how many outer steps a ray
+    // spends, and nothing counted them. `--debug-mode 12` gives it per PIXEL for a primary ray;
+    // this gives it for the sun and gathering rays too, which are the ones that travel furthest and
+    // which no pixel holds.
+    bool march_stats = false;
+
     u32 clip_coarse = 16;
     i32 clip_metre = 0;                     // override the file's resolution, for quick previews
 
@@ -1707,6 +1718,8 @@ bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Opti
         if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
     } else if (arg == "--material") {
         options.material = static_cast<u32>(next_number(0));
+    } else if (arg == "--march-stats") {
+        options.march_stats = true;
     } else if (arg == "--debug-mode") {
         options.debug_mode = static_cast<u32>(next_number(0));
     } else if (arg == "--screenshot") {
@@ -2093,6 +2106,8 @@ void print_help() {
         "  --no-validation       force them off\n"
         "  --cam x,y,z,yaw,pitch scripted camera (metres, degrees)\n"
         "  --screenshot FILE     save frame --screenshot-frame N and exit\n"
+        "  --march-stats         count how far every ray walks -- the number that decides\n"
+        "                        whether hardware ray tracing would buy anything\n"
         "  --debug-mode N        0 shaded, 1 steps, 2 normals, 3 detail, 4 clip ghost,\n"
         "                        5 face cache, 6 why a path-traced pixel is dark,\n"
         "                        7 what the primary ray hit, 8 what the bounce found,\n"
@@ -4227,6 +4242,11 @@ private:
     u64 derive_total_evals_ = 0;
     u64 derive_total_visits_ = 0;
     u32 derive_peak_ = 0;
+    // `--march-stats`. Nought on both arms unless the flag is on, which is what makes the line a
+    // control rather than a claim.
+    u64 march_total_rays_ = 0;
+    u64 march_total_steps_ = 0;
+    u32 march_peak_steps_ = 0;   // the busiest single frame, in steps per ray times a hundred
     u32 last_node_built_ = 0;
     u32 last_node_evicted_ = 0;
     u32 last_node_evicted_nodes_ = 0;
@@ -10197,6 +10217,13 @@ void Application::record_frame(f32 time_seconds) {
         derive_total_evals_ += derived.evaluations;
         derive_total_visits_ += derived.visits_k;
         if (granted > derive_peak_) derive_peak_ = granted;
+        march_total_rays_ += derived.march_rays;
+        march_total_steps_ += derived.march_steps;
+        if (derived.march_rays > 0) {
+            const u32 per_ray = static_cast<u32>(
+                (static_cast<u64>(derived.march_steps) * 100u) / derived.march_rays);
+            if (per_ray > march_peak_steps_) march_peak_steps_ = per_ray;
+        }
     }
 
     // ---- streaming ------------------------------------------------------------------
@@ -11280,6 +11307,7 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.level_blend ? kProbeLevelBlend : 0u) |
                               (options_.sun_confidence ? kProbeSunConfidence : 0u) |
                               (options_.infinite_detail ? kProbeInfiniteDetail : 0u) |
+                              (options_.march_stats ? kProbeMarchStats : 0u) |
                               // R9h, and the sense is INVERTED on purpose -- see kProbeFarFallbackOff.
                               (options_.far_fallback ? 0u : kProbeFarFallbackOff);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
@@ -13422,6 +13450,26 @@ int Application::play(const Options& options) {
                         derive_frames_ > 0 ? derive_total_capped_ / derive_frames_ : 0,
                         options_.derive_cap, options_.derive_visits_m,
                         options_.derive_in_marcher ? "" : " -- the flag is OFF, so this is the control arm");
+            // **How far a ray walks**, and it is the whole of the hardware-ray-tracing question.
+            //
+            // RT cores accelerate *which volume did I hit*. This marcher answers that with the
+            // octree's own analytic skip: an empty cell is jumped in ONE step, at whatever size the
+            // descent found the empty block to be. So a BVH would be replacing a walk whose length
+            // is this number -- and if the number is small there is nothing there to win, whatever
+            // the hardware is capable of. Printed over EVERY march in the frame, primary rays and
+            // the face pass's sun and gathering rays alike, because the long ones are the second
+            // kind and no pixel holds them.
+            if (options_.march_stats && march_total_rays_ > 0) {
+                WS_LOG_INFO("frame",
+                            "the marcher's walk: {} rays over the run, {}.{:02} outer steps each on "
+                            "average, worst frame {}.{:02} -- this is what a BVH would be replacing",
+                            march_total_rays_,
+                            (march_total_steps_ * 100 / march_total_rays_) / 100,
+                            (march_total_steps_ * 100 / march_total_rays_) % 100,
+                            march_peak_steps_ / 100, march_peak_steps_ % 100);
+            } else if (options_.march_stats) {
+                WS_LOG_INFO("frame", "the marcher's walk: no rays counted");
+            }
             // The two ways the world can lie to the render tree, counted where they are standing
             // rather than where they were made. `world_has` asks whether a brick is ALLOCATED and
             // answers level 8 and above out of the set of chunks that EXIST, so either of these
