@@ -339,6 +339,15 @@ private:
     std::string wipe_everything();
     void draw_community_tab(const Rect& rect);
     void draw_editor_tab(const Rect& rect);
+    // The lessons, listed where the editor sits when nothing is open.
+    //
+    // *I can barely understand how things connect and work.* The rules of this language are three
+    // sentences long and every one of them was learnable only by breaking it. So the four documents
+    // that teach them ship with the game and open in the editor like anything else — each one is a
+    // real clip, buildable, with its lesson written in its own comments and something to change on
+    // every line. There is nothing to maintain beside the game: a lesson that stopped parsing would
+    // fail `ws_clipcheck` with every other clip.
+    void draw_lessons(const Rect& rect);
     // The two views of one document (D452). The script is text; the visual one is the same
     // statements drawn as nodes and the names between them drawn as wires.
     void draw_script_view(const Rect& rect);
@@ -528,6 +537,10 @@ private:
     std::filesystem::path root_;
     std::string playing_;
     std::filesystem::path painting_;
+    // Set when the file the tool is building with has just been written, so the verdict can ask for
+    // it to be read again. *Changing the properties of a material while you have it equipped should
+    // change its properties live so that you dont need to switch to another material then back.*
+    bool repaint_ = false;
 
     bool icons_ = false;
     // How tall the settings came out last frame. See draw_settings for why it is measured rather

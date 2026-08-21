@@ -1,0 +1,4 @@
+# WSauthor: worldshaper
+# Deep red velvet. Sheen at full is the halo cloth gets at a grazing angle, and it is
+# the one property that makes a surface read as fabric rather than as paint.
+material velvet rgb=104,20,30 rough=255 sheen=15 translucent=40

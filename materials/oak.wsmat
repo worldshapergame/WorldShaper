@@ -1,3 +1,4 @@
 # WSauthor: worldshaper
-# Sawn oak, along the grain.
-material oak rgb=150,116,72 rough=185 sheen=2
+# Sawn oak. Wood is not shiny and it is not chalk: a low sheen is the soft sideways
+# glance you get off a planed board, and it is most of what tells wood from stone.
+material oak rgb=138,100,58 rough=176 sheen=6 lacquer=2 brush=1

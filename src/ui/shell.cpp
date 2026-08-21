@@ -497,6 +497,11 @@ Verdict Shell::frame(const InputState& input, u32 width, u32 height, f64 seconds
         }
     }
 
+    // The file the tool is holding has just been written, so whoever answers this reads it again.
+    if (repaint_ && !painting_.empty()) {
+        verdict.paint_with = painting_;
+        repaint_ = false;
+    }
     ui_.end();
     return verdict;
 }
@@ -1679,6 +1684,58 @@ void Shell::open_entry(const Entry& entry, Verdict& verdict) {
     ui_.sound().say(Cue::Open);
 }
 
+void Shell::draw_lessons(const Rect& rect) {
+    const Metrics& metrics = ui_.metrics();
+    const std::filesystem::path where = library_.shipped_root() / "clips" / "learn";
+    std::error_code error;
+    if (!std::filesystem::exists(where, error) || error) return;
+
+    std::vector<std::filesystem::path> lessons;
+    for (const std::filesystem::directory_entry& entry :
+         std::filesystem::directory_iterator(where, error)) {
+        if (error) break;
+        if (entry.is_regular_file() && entry.path().extension() == ".clip") {
+            lessons.push_back(entry.path());
+        }
+    }
+    // By file name, which is why they are numbered: a lesson list in whatever order the file
+    // system hands back is a lesson list that teaches wires before it teaches statements.
+    std::sort(lessons.begin(), lessons.end(), [](const std::filesystem::path& a,
+                                                 const std::filesystem::path& b) {
+        return a.filename().string() < b.filename().string();
+    });
+
+    f32 y = rect.y0;
+    const f32 row_height = metrics.row() + metrics.px(4.0f);
+    for (usize i = 0; i < lessons.size(); ++i) {
+        const Rect row{rect.x0, y, rect.x1, y + metrics.row()};
+        y += row_height;
+        if (row.y1 > rect.y1) break;
+        // `2_wires_are_names` reads as *wires are names*: the number orders the list and the
+        // underscores are a file name's way of holding a sentence.
+        std::string title = lessons[i].stem().string();
+        const usize dash = title.find('_');
+        if (dash != std::string::npos && dash + 1 < title.size()) title = title.substr(dash + 1);
+        for (char& c : title) {
+            if (c == '_') c = ' ';
+        }
+        if (ui_.pressable(id_of("editor.lesson", i), row)) {
+            open_editor(lessons[i]);
+            open_editor_view("script");
+            ui_.sound().say(Cue::Open);
+            return;
+        }
+        const bool over = row.holds(ui_.pointer_x(), ui_.pointer_y());
+        if (over) ui_.draw().ink(row, 0.12f);
+        const f32 cell = metrics.icon();
+        ui_.draw().icon(Rect{row.x0, row.mid_y() - cell * 0.5f, row.x0 + cell,
+                             row.mid_y() + cell * 0.5f},
+                        Icon::Editor, over ? 1.0f : 0.6f);
+        ui_.label(Rect{row.x0 + cell + metrics.px(6.0f), row.y0, row.x1, row.y1},
+                  std::to_string(i + 1) + ".  " + title, Align::Left, kPlain, over ? 1.0f : 0.85f);
+    }
+}
+
 void Shell::make_new_file() {
     // **A new world is not the facility.**
     //
@@ -1733,10 +1790,16 @@ std::string Shell::make_world_from(const std::filesystem::path& clip) {
             "#\n"
             "# Put shapes here, or press the right mouse button in the visual view and take a clip\n"
             "# off your shelf -- a world is a document made of documents.\n"
-            "metre 32\n";
+            "metre 32\n"
+            "\n"
+            "# Every voxel wanders a little from the type it was placed with. Without this a wall\n"
+            "# of one voxel type is one flat colour, which is what makes a built world look\n"
+            "# printed rather than made.\n"
+            "variation colour=0.05 rough=0.10 seed=1\n";
     } else {
         contents = "# A world built from " + clip.stem().string() +
-                   ".\nmetre 32\ninclude \"" + clip.filename().string() + "\"\n";
+                   ".\nmetre 32\nvariation colour=0.05 rough=0.10 seed=1\ninclude \"" +
+                   clip.filename().string() + "\"\n";
     }
 
     std::string name = clip.empty() ? std::string("untitled") : clip.stem().string();
@@ -2719,14 +2782,22 @@ void Shell::draw_editor_tab(const Rect& rect) {
     // *new* sitting where the cursor already is. There is no editing without something to edit, and
     // an editor that opens on an untitled nothing has to invent a place to put it.
     if (editing_.empty()) {
-        ui_.markdown(body,
-                     "### editor\n"
-                     "\n"
-                     "Choose something on the *library* tab and come back — a clip, a world, "
-                     "anything on any shelf — and it opens here.\n"
-                     "\n"
-                     "**script** is the document as words. **visual** is the same document as boxes "
-                     "and wires. Change either and the other changes with it.\n");
+        const f32 said = ui_.markdown(
+            body,
+            "### editor\n"
+            "\n"
+            "Choose something on the *library* tab and come back -- a clip, a world, "
+            "anything on any shelf -- and it opens here.\n"
+            "\n"
+            "**script** is the document as words. **visual** is the same document as boxes "
+            "and wires. Change either and the other changes with it.\n"
+            "\n"
+            "### start here\n"
+            "\n"
+            "Four short documents that teach the whole language. Each one opens in both views "
+            "and has something to change on every line.\n");
+        draw_lessons(Rect{body.x0, body.y0 + said + metrics.px(4.0f), body.x1,
+                          body.y1 - metrics.row() - metrics.px(6.0f)});
         const Rect go{body.x0, body.y1 - metrics.row(), body.x0 + metrics.px(120.0f), body.y1};
         if (ui_.button(id_of("editor.go"), go, Icon::Library, "to the library",
                        "Choose something to edit")) {
@@ -3520,10 +3591,21 @@ void Shell::draw_visual_view(const Rect& page) {
         const auto route = [&](Run& run, i32 fx, i32 fy, i32 tx) {
             run.channel_out = fx;
             run.channel_in = tx - 1;
-            run.straight = tx > fx;
-            for (i32 c = fx + 1; run.straight && c < tx; ++c) {
-                if (filled.count(cell_key(c, fy)) != 0) run.straight = false;
-            }
+            // **Only the next column across goes straight.**
+            //
+            // It used to go straight whenever nothing was in the way, and that is how two wires of
+            // different colours came to lie on top of each other: a straight run is at its source
+            // box's own mid-height for its whole length, so two boxes in the SAME ROW and different
+            // columns both wiring rightwards draw two collinear lines over the same stretch of
+            // screen. Reported directly — *wires of different colors should never overlap unless
+            // they simply intersect on one point*.
+            //
+            // One column across cannot collide, because one box to a cell means no two sources
+            // share a row. Anything longer goes down into a lane, and every wire in a lane has a
+            // slot of its own — so the promise holds by the same construction the no-crossing one
+            // does (D781) rather than by a check.
+            run.straight = tx == fx + 1;
+            (void)fy;
         };
         // And the lane it runs along, if it needs one: the nearest to the middle of its two ends
         // that no open box runs through. Outwards a row at a time, because a lane one row further
@@ -3749,16 +3831,36 @@ void Shell::draw_visual_view(const Rect& page) {
             dropped_on = static_cast<u32>(i);
         }
 
+        // **While a wire is being drawn, every box says whether it could take it.**
+        //
+        // This is the whole of what makes a typed graph learnable rather than a thing you find out
+        // about by being refused. Reported as *i can barely understand how things connect and
+        // work*: the rules were right and invisible, so the only way to learn one was to break it.
+        // A box that could take this wire is lit and its edge is bright; one that could not is
+        // dimmed to a third. Nothing is said in words — the picture answers before the hand moves.
+        bool could_take = true;
+        if (wiring_from_ < graph_.nodes.size() && wiring_from_ != i) {
+            std::string ignored;
+            could_take =
+                clip_may_join(node, graph_.nodes[wiring_from_], ignored).empty() &&
+                std::none_of(node.links.begin(), node.links.end(),
+                             [&](const ClipLink& link) { return link.from == wiring_from_; });
+        }
+
         // The glass FIRST, so the wires running past behind it are hidden rather than showing
         // through the words. A box is a window and a window is in front of what is behind it —
         // and the first version without it drew blue names over green wires, which came out
         // magenta and read as a third colour that means nothing.
         ui_.draw().glass(box, 1.0f);
         ui_.draw().ink(box, chosen ? (primary ? 0.26f : 0.20f) : (over ? 0.15f : 0.10f));
-        ui_.draw().edge(box, chosen ? (primary ? 0.95f : 0.75f) : (caret_node == i ? 0.55f : 0.25f),
-                        chosen ? 2.0f : 1.0f);
+        const f32 edge_ink =
+            chosen ? (primary ? 0.95f : 0.75f) : (caret_node == i ? 0.55f : 0.25f);
+        ui_.draw().edge(box, could_take ? edge_ink : edge_ink * 0.35f, chosen ? 2.0f : 1.0f);
 
         ui_.draw().push_clip(box);
+        // Everything drawn inside a box that cannot take the wire being dragged is drawn faintly,
+        // which is one number rather than a second set of colours.
+        const f32 lit = could_take ? 1.0f : 0.35f;
         const f32 cell = std::min(metrics.icon() * 0.8f, node_h * 0.55f);
 
         // --- the one mark that says *there is something inside this* -------------------------
@@ -3865,7 +3967,7 @@ void Shell::draw_visual_view(const Rect& page) {
         ui_.draw().push_clip(Rect{box.x0, box.y0, mark_right, box.y1});
         ui_.draw().text(name_left,
                         box.y0 + (detail ? metrics.px(3.0f) : (node_h - title * kGlyphCap) * 0.5f),
-                        first, title, node.name.empty() ? kPlain : kBold, Align::Left);
+                        first, title, node.name.empty() ? kPlain : kBold, Align::Left, lit);
         ui_.draw().pop_clip();
 
         if (detail) {
@@ -5608,6 +5710,13 @@ void Shell::save_document() {
     file.write(text.data(), static_cast<std::streamsize>(text.size()));
     file.close();
     dirty_ = false;
+    // **Saving the voxel type you are holding puts the change in your hand.**
+    //
+    // Without this the tool went on placing the record it interned when the type was chosen, so the
+    // only way to see an edit was to pick another one and come back. Reported directly. It happens
+    // on the SAVE rather than on the keystroke because interning mints a type id per distinct
+    // record, and a slider dragged through a hundred values would mint a hundred types.
+    if (!painting_.empty() && same_file(editing_) == same_file(painting_)) repaint_ = true;
     {
         std::error_code error;
         editing_stamp_ = std::filesystem::last_write_time(editing_, error);

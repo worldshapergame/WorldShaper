@@ -1,0 +1,25 @@
+# WSauthor: worldshaper
+# --- LESSON TWO: a wire is a NAME ---------------------------------------------------------------
+#
+# There is no such thing as a connection in this language. `solid tower` is a wire, and it is
+# a wire because the word `tower` appears twice: once where it is bound, once where it is read.
+#
+# That is why the two views cannot disagree. Drag a wire in the visual view and a name gets
+# written; delete a name in the script and a wire disappears.
+#
+# TRY: in the visual view, drag from the right-hand tab of `base` onto `tower`. Then look at
+# the script -- the word `base` has appeared inside the union's braces.
+
+metre 32
+
+material stone rgb=176,170,158 rough=232
+
+let shaft = cylinder 0 0 0 r=1.2 h=6
+let cap   = sphere   0 6 0 r=1.4
+let base  = box -2 0 -2   2 0.6 2 round=0.08
+
+let tower = union { shaft cap }
+
+paint stone
+
+solid tower

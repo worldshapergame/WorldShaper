@@ -642,6 +642,9 @@ TEST_CASE("a new world is not the facility") {
     const std::string text = file_text(empty);
     CHECK(text.find("facility") == std::string::npos);
     CHECK(text.find("metre 32") != std::string::npos);
+    // And every voxel wanders a little from the type it was placed with, or a wall of one type is
+    // one flat colour -- which is what makes a built world look printed rather than made.
+    CHECK(text.find("variation") != std::string::npos);
 
     // And one made FROM a clip names that clip and nothing else.
     CHECK(shell.new_world(scratch.root / "clips" / "porch.wsclip").empty());

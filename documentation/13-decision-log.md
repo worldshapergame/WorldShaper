@@ -15641,3 +15641,39 @@ the tool held the right type and the belt said the old one's name, which is D658
 
 **854 test cases, 21,248,745 assertions.** Gate re-run after the reader changed: content
 `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
+
+## D807–D818 — the graph gets types, and the language stops asking for paperwork
+
+*One long message from playing. Two of its items are the same fault seen from two sides: the rules
+of this graph were right and invisible, so the only way to learn one was to break it.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D807 | **A wire has a KIND, and one that does not fit is refused** | correction | Reported: *if i take a voxel type node and connect it to an union it doesnt connect but creates another node that is a clip with the same name and at the top says unknown shape or pattern.* Nothing was created. The name was written into `union { }` with no check at all, the union read it as a shape it had never heard of, and the graph drew the unresolved name as a box of its own — three surprises out of one missing test. `clip_may_join` now answers *may this go there* before a byte is written, and the refusal says what WOULD work. It also decides WHERE: a voxel type wired into a coat replaces what the coat paints with, and a pattern wired into the same coat goes under `where=`. That pair IS the thing the message asked for — *a wave pattern with that voxel type* |
+| D808 | **A wire being dragged lights the boxes that could take it** | user | *I can barely understand how things connect and work.* This is the answer that costs nothing to read: while a wire is out, a box that could take it keeps its edge and its words, and one that could not drops to a third. The rules are learned by watching rather than by being refused, and nothing has to be said in words |
+| D809 | **Four lessons ship with the game and open in the editor** | user | The other half of the same report. `clips/learn/` holds four real clips — a shape, wires are names, the three kinds, and patterns — each buildable, each with its lesson in its own comments and something to change on every line. They are listed where the editor sits when nothing is open. **Nothing to maintain beside the game**: a lesson that stopped parsing would fail `ws_clipcheck` with every other clip |
+| D810 | **A clip that does not say where it ends is MEASURED** | user | *Remove the bounds node, there shouldnt be bounds and its annoying because you have to adjust it all the time; it shouldnt be cut if it goes out of bounds because theres no bounds.* `SampleSettings` starts at a one-metre box at the origin, so a clip without a `bounds` line was cut to a corner — which is why every clip in this repository has one. `build_bounds` has already worked out how far every node reaches, because the sampler's own descent needs it, so the extent comes from the solid with a voxel of margin. A clip with no bounds went from a corner to 4.7 million voxels. **The word still parses** — every clip here has one and a keyword is a promise — and an author who writes one gets exactly what they wrote. It is off the palette |
+| D811 | **Going into a box NARROWS the picture, and the box you are in has no way in** | correction | Two halves of one report. It showed the box, its parts, and everything outside it, so going in changed nothing on a small document — *the nodes inside solid of the weather demo clip are already shown without having to go inside*. And the box you were standing in still drew its way-in mark, which did nothing but lengthen the trail behind you: *once inside a solid you can keep clicking on the button to go inside of it.* Inside is now that box and two levels under it and nothing else, which is the same depth the outside shows, so pressing the way in always means the same thing: keep the depth, drop everything not under this |
+| D812 | **A long wire always takes a lane** | correction | *Wires of different colors should never overlap unless they simply intersect on one point.* A straight run is at its source box's own mid-height for its whole length, so two boxes in the same ROW and different columns both wiring rightwards drew two collinear lines over the same stretch. Only the next column across goes straight now — one box to a cell means no two sources share a row, so that case cannot collide — and everything longer goes into a lane, where every wire has a slot of its own. The promise holds by the same construction the no-crossing one does (D781) rather than by a check |
+| D813 | **A press that moved nothing is not an edit** | correction | *Some actions dont change anything yet still require you to save.* Choosing a box is a drag of zero distance as far as the code is concerned, and it wrote a `#@` marker every time — so looking at a document marked it as needing saving |
+| D814 | **A band's anchor is carried by whatever the canvas panned** | correction | *Dragging a selection past the window edges should not move the first position of the selection box.* The anchor is a screen point and the thing it was put on is not, so edge-panning slid the corner across the picture. `Ui::nudge_band` moves it by exactly what the caller panned |
+| D815 | **Swapping a node's type renames what was named after it** | correction | The palette names what it makes after the word it made, so a new cone is called `cone` — and swapping the word left a wedge visibly called cone. Only when the name IS the old word or that word and a number: a name somebody chose is theirs |
+| D816 | **A shape takes rotation, in turns** | user | By the same route hollow and stretch take theirs (D805): the row wraps the statement in `rotate { } x= y= z=`, which is the word the language already has. Turns rather than degrees, because that is what the language counts angles in everywhere else and two units in one game is one unit too many |
+| D817 | **Saving the voxel type you are holding puts the change in your hand** | user | *Changing the properties of a material while you have it equipped should change its properties live.* On the SAVE rather than on the keystroke, and that is a decision rather than a shortcut: interning mints a type id per distinct record, and a slider dragged through a hundred values would mint a hundred types |
+| D818 | **Markdown wraps** | correction | Found while adding the lesson list, and it had been wrong since markdown was added: `Ui::markdown` drew each SOURCE line as one screen line, so every block of prose in this interface ran off the right of its panel and was cut. The editor's own *choose something first* note lost half of every sentence. Nobody had noticed because the two places it is used were both read once and never measured. Code lines are still left alone — a line of code broken in the middle says something else |
+
+### And what the palette is made of now
+
+Nine voxel types ship rather than six, and each is a different thing about how a surface takes
+light: chalk, planed wood, unlacquered metal, glass with absorption, a filament, moss that light
+spreads inside, verdigris that is half metal, velvet at full sheen, and lake ice. **A new world is
+written with a `variation` line**, because a wall of one voxel type is one flat colour and that is
+what makes a built world look printed rather than made.
+
+**The thing that would actually fix *the materials are way too simple* is still the deferred one**:
+a voxel type whose properties are driven by POSITION — `rgb` reading an `fbm`, `rough` reading a
+`distance`. See `22-rewrite-handover.md` §5. Everything a `VisualRecord` can hold is now on the
+screen with a slider on it; what it cannot hold is a field.
+
+Gate: content `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
+**856 test cases, 21,248,766 assertions.**

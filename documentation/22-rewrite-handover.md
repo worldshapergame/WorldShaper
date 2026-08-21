@@ -626,7 +626,30 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### THE EDITOR AND THE PALETTE, 2026-08-21 — D790–D806. Read this first
+#### TYPES, LESSONS AND NO BOUNDS, 2026-08-21 — D807–D818. Read this first
+
+**The two reports that matter most in this wave are the same fault seen twice**: the rules of the
+graph were right and invisible. *I can barely understand how things connect and work*, and *if i
+take a voxel type node and connect it to an union it doesnt connect but creates another node.* A
+wire had no type at all — a name was written into `union { }` and the union read it as a shape it
+had never heard of.
+
+| what changed | | how to look at it |
+|---|---|---|
+| **a wire is refused unless the kind fits**, and the refusal says what would work (D807) | `clip_may_join` | — |
+| **the boxes that could take the wire you are dragging stay lit; the rest dim** (D808) | the rules are learned by watching | — |
+| **four lessons ship and open in the editor** (D809) | `clips/learn/`, listed when nothing is open | `--open-editor` on a missing file reaches that screen |
+| **`bounds` is gone from the palette and a clip is measured instead of cut** (D810) | it was compulsory paperwork | a clip with no bounds went from a corner to 4.7 M voxels |
+| **going into a box narrows the picture; the box you are in has no way in** (D811) | | — |
+| **a long wire always takes a lane** (D812) | two boxes in one row wired two collinear lines | — |
+| **a press that moved nothing is not an edit** (D813) | choosing a box wrote a layout marker | — |
+| **a band's anchor is carried by whatever the canvas panned** (D814) | | — |
+| **swapping a type renames what was named after it** (D815) | | — |
+| **shapes take rotation, in turns** (D816) | wraps in `rotate { }` | — |
+| **saving the type you are holding puts the change in your hand** (D817) | on the save, not the keystroke | — |
+| **markdown wraps** (D818) | it never had; every block of prose was cut by its panel | — |
+
+#### THE EDITOR AND THE PALETTE, 2026-08-21 — D790–D806
 
 **One long message from playing plus three more while it was being written up.** The worst of them
 first: **the script editor could take one letter at a time and no more** (D790). D777's selection

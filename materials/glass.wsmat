@@ -1,3 +1,4 @@
 # WSauthor: worldshaper
-# Window glass. Opacity is what light gets through; ior is how far it bends on the way.
-material glass rgb=226,238,242 rough=6 opacity=36 ior=1.5
+# Window glass. Opacity is what light gets through, ior is how far it bends on the way,
+# and absorb is what a THICK piece takes out of it -- which is why glass goes green edge-on.
+material glass rgb=232,242,244 rough=3 opacity=28 ior=1.52 absorb=6,2,4

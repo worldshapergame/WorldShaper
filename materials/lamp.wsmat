@@ -1,3 +1,4 @@
 # WSauthor: worldshaper
-# A warm filament. Anything with emit above nought is a light source in its own right.
-material lamp rgb=255,226,178 rough=140 emit=220
+# A warm filament. Anything with emit above nought is a light source in its own right,
+# so this one lights the room rather than being lit by it.
+material lamp rgb=255,224,172 rough=150 emit=235

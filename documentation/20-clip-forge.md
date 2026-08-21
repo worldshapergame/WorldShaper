@@ -289,6 +289,38 @@ simple thing every clip has always used, and "material" is coming to mean the ri
 graph of its own. The keyword does not change, because a keyword is a promise to every clip ever
 written.
 
+## Where a clip ends
+
+A clip that does not write a `bounds` line is **measured** rather than cut: the extent comes from
+the solid's own reach, with a voxel of margin (D810). `SampleSettings` starts at a one-metre box, so
+without this a clip with no `bounds` was clipped to a corner — which is why every clip in this
+repository has one and why editing anything meant adjusting it.
+
+The word still parses and an author who writes one gets exactly what they wrote. It is no longer
+offered in the editor's palette, because it is not a thing anybody needs to say.
+
+A shape that reaches everywhere — a bare `plane`, a half-space — has no extent to measure, and there
+the line still has to be written.
+
+## What may be wired into what
+
+A wire in the visual view is a NAME in the document, and a name of the wrong kind is a document that
+does not build. `clip_may_join` (`game/clip_graph.hpp`) decides, before a byte is written:
+
+| into | takes | written as |
+|---|---|---|
+| `union`, `difference`, `intersection`, and every move or change | a shape | a name inside its `{ }` |
+| `displace` | a shape, and a number | the shape in its braces, the number as `by=` |
+| `solid`, `region` | a shape | the name after the word |
+| `paint` | a voxel type, and a pattern | the type in place of its own, the pattern as `where=` |
+| `weather` | a pattern | `on=` |
+| `variation` | a pattern | `by=` |
+| the arithmetic and the patterns | a number | a name inside its `{ }` |
+
+Anything else is refused with one line saying what would work instead. While a wire is being
+dragged the editor lights every box that could take it and dims the rest, so the table above is
+something a player sees rather than something they read.
+
 ## A note on what a clip file may begin with
 
 A **UTF-8 byte-order mark** at the head of the file is skipped. Every Windows text editor writes one

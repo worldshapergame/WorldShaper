@@ -1,0 +1,20 @@
+# WSauthor: worldshaper
+# --- LESSON ONE: a document is a list of statements -------------------------------------------
+#
+# Every line below is one statement, and every statement is one box in the visual view.
+# Look at the two views side by side: `metre` is a box, `stone` is a box, `block` is a box.
+#
+# The only line that MAKES anything is the last one. `solid` names the shape the world is,
+# and everything else is either something that shape is made of, or a setting.
+#
+# TRY: change the six numbers on `block` and watch the box change in the other view.
+
+metre 32
+
+material stone rgb=176,170,158 rough=232
+
+let block = box -2 0 -2   2 3 2 round=0.1
+
+paint stone
+
+solid block

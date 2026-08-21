@@ -477,7 +477,7 @@ std::string Library::make_folder(const std::string& name) {
 }
 
 std::string Library::rename(const Entry& entry, const std::string& to) {
-    if (entry.shipped) return entry.shown + " came with the game — duplicate it to make it yours";
+    if (entry.shipped) return entry.shown + " came with the game -- duplicate it to make it yours";
     if (!nameable(to)) return "that is not a name a file can have";
     const std::string extension = entry.folder ? std::string() : kind_.extension;
     const std::filesystem::path target = entry.path.parent_path() / (to + extension);

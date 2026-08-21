@@ -1,3 +1,4 @@
 # WSauthor: worldshaper
-# Unlacquered brass. Metal reflects its own colour, which is what makes it look like metal.
-material brass rgb=196,152,66 rough=70 metal=225 brush=2
+# Unlacquered brass. Metal reflects its OWN colour rather than white, which is the
+# whole difference between a yellow metal and yellow paint.
+material brass rgb=206,158,64 rough=58 metal=245 brush=2 lacquer=3

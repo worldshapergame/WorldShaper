@@ -1227,3 +1227,99 @@ TEST_CASE("what a new one is made with is what put-it-back puts back") {
     CHECK_FALSE(clip_default_number("box", "nonsense", 0, value));
     CHECK_FALSE(clip_default_number("not a word", "", 0, value));
 }
+
+// --- what may be wired into what ------------------------------------------------------------------
+
+TEST_CASE("a wire is refused when the thing on the end of it is the wrong kind") {
+    // Reported: *if i take a voxel type node and connect it to an union it doesnt connect but
+    // creates another node that is a clip with the same name and at the top says unknown shape or
+    // pattern.* Nothing was created -- the name went into `union { }`, the union read it as a shape
+    // it had never heard of, and the graph drew the unresolved name as a box of its own. Three
+    // surprises, one missing check.
+    std::vector<std::string> lines = lines_of(
+        "metre 32\n"
+        "material stone rgb=170,166,158 rough=205\n"
+        "let grain = fbm size=0.2 octaves=3 seed=1\n"
+        "let a = box 0 0 0  1 1 1\n"
+        "let b = box 2 0 0  3 1 1\n"
+        "let all = union { a }\n"
+        "paint stone\n"
+        "solid all\n");
+    ClipGraph graph = read_clip_graph(lines);
+    const u32 stone = graph.find(ClipGraph::key_of(*named(graph, "stone")));
+    const u32 grain = graph.find(ClipGraph::key_of(*named(graph, "grain")));
+    const u32 b = graph.find(ClipGraph::key_of(*named(graph, "b")));
+    const u32 all = graph.find(ClipGraph::key_of(*named(graph, "all")));
+    // `solid` and `paint` bind no name of their own, so they are found by their word.
+    u32 solid = ClipGraph::kNone;
+    u32 coat = ClipGraph::kNone;
+    for (usize i = 0; i < graph.nodes.size(); ++i) {
+        if (graph.nodes[i].head == "solid") solid = static_cast<u32>(i);
+        if (graph.nodes[i].head == "paint") coat = static_cast<u32>(i);
+    }
+    REQUIRE(solid != ClipGraph::kNone);
+    REQUIRE(coat != ClipGraph::kNone);
+
+    // A voxel type is not a shape, and the refusal says what WOULD work.
+    const std::string why = connect_clip_nodes(lines, graph, stone, all);
+    CHECK_FALSE(why.empty());
+    CHECK(why.find("coat") != std::string::npos);
+    CHECK(text_of(lines).find("union { a }") != std::string::npos);   // nothing was written
+
+    // Nor is a pattern.
+    CHECK_FALSE(connect_clip_nodes(lines, graph, grain, all).empty());
+    CHECK_FALSE(connect_clip_nodes(lines, graph, stone, solid).empty());
+
+    // A shape is.
+    CHECK(connect_clip_nodes(lines, graph, b, all).empty());
+    CHECK(text_of(lines).find("union { a b }") != std::string::npos);
+
+    // And a coat takes BOTH kinds, each in its own place: the voxel type where the coat's own
+    // material name is written, and the pattern under `where=`.
+    graph = read_clip_graph(lines);
+    CHECK(connect_clip_nodes(lines, graph, grain, coat).empty());
+    CHECK(text_of(lines).find("paint stone where=grain") != std::string::npos);
+}
+
+TEST_CASE("what may be wired is asked before it is written, so the picture can say so too") {
+    // The editor lights the boxes that could take the wire being dragged, which is the whole of
+    // what makes a typed graph learnable rather than a thing you find out about by being refused.
+    // It asks this, so this has to answer without touching the document.
+    std::vector<std::string> lines = lines_of(
+        "material stone rgb=1,2,3\n"
+        "let grain = fbm size=0.2\n"
+        "let a = box 0 0 0  1 1 1\n"
+        "let all = union { a }\n"
+        "paint stone\n"
+        "weather cracks 0.5\n"
+        "solid all\n");
+    const ClipGraph graph = read_clip_graph(lines);
+    const auto find = [&](const char* head) {
+        for (const ClipNode& node : graph.nodes) {
+            if (node.head == head) return node;
+        }
+        return ClipNode{};
+    };
+    const ClipNode shape = *named(graph, "a");
+    const ClipNode type = *named(graph, "stone");
+    const ClipNode pattern = *named(graph, "grain");
+    std::string key;
+
+    CHECK(clip_may_join(find("union"), shape, key).empty());
+    CHECK(key.empty());
+    CHECK_FALSE(clip_may_join(find("union"), type, key).empty());
+    CHECK_FALSE(clip_may_join(find("union"), pattern, key).empty());
+
+    CHECK(clip_may_join(find("paint"), type, key).empty());
+    CHECK(key == "*");
+    CHECK(clip_may_join(find("paint"), pattern, key).empty());
+    CHECK(key == "where");
+    CHECK_FALSE(clip_may_join(find("paint"), shape, key).empty());
+
+    CHECK(clip_may_join(find("weather"), pattern, key).empty());
+    CHECK(key == "on");
+    CHECK_FALSE(clip_may_join(find("weather"), type, key).empty());
+
+    CHECK(clip_may_join(find("solid"), shape, key).empty());
+    CHECK_FALSE(clip_may_join(find("solid"), type, key).empty());
+}

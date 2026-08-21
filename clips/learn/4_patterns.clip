@@ -1,0 +1,29 @@
+# WSauthor: worldshaper
+# --- LESSON FOUR: a pattern is a number, and numbers drive everything ----------------------------
+#
+# `bricks`, `fbm`, `sine`, `distance` -- none of them makes matter. Each is a value at every
+# point in space. What you DO with that value is the interesting half:
+#
+#   paint X where=P above=0.5   paints X wherever P is above a half
+#   displace { S } by=P         pushes the surface of S in and out by P
+#   weather cracks 0.7 on=P     aims a weathering with it
+#
+# TRY: change `size` on `courses` and watch the brick rows change height.
+# TRY: wire `courses` into the `weather` box and see the cracking follow the mortar.
+
+metre 32
+
+material brick  rgb=150,84,64  rough=224
+material mortar rgb=196,192,182 rough=246
+
+let courses = bricks size=0.24 depth=0.11 joint=0.03
+let rough   = fbm size=0.2 octaves=3 seed=9
+
+let wall = box -3 0 -0.5   3 3 0.5
+
+paint mortar
+paint brick where=courses above=0.5
+
+weather cracks 0.35 scale=0.6 seed=4
+
+solid wall

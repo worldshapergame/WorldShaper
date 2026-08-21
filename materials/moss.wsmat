@@ -1,3 +1,4 @@
 # WSauthor: worldshaper
-# Damp moss. Nothing shiny survives on it.
-material moss rgb=86,112,58 rough=248
+# Damp moss. Nothing shiny survives on it, and light spreads a little way inside before
+# it comes back out, which is what makes living things look soft.
+material moss rgb=78,106,52 rough=252 translucent=64

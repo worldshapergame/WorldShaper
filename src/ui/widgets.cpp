@@ -1245,13 +1245,63 @@ f32 Ui::markdown(const Rect& box, std::string_view text, bool measure_only) {
             x += DrawList::measure(marker, size) + metrics_.px(4.0f);
         }
 
+        // --- and it WRAPS ---------------------------------------------------------------------
+        //
+        // It did not, and every block of prose in this interface ran off the right of its panel and
+        // was cut by the clip: the editor's own *choose something first* note lost half of every
+        // sentence, and so did the community tab. Nobody had noticed because the two places it is
+        // used were both read once and never measured.
+        //
+        // Word by word, keeping the runs' styles: a run is a stretch of one style rather than a
+        // word, so the break has to be found INSIDE a run and the rest of that run carried to the
+        // next line. Code lines are left alone — a line of code broken in the middle is a line of
+        // code that says something else — and they scroll sideways like the script view does.
+        const f32 wrap_at = box.x1;
+        const f32 left = box.x0 + indent;
+        const bool may_wrap = line.kind != MarkupBlock::code;
         for (const Run& run : line.runs) {
             const u32 style = static_cast<u32>(run.style) | extra |
                               ((line.kind == MarkupBlock::code) ? kMono : 0u);
-            // Runs are contiguous — the spaces between words are already in the text — so nothing
-            // is added between them. A gap per run would put a hole either side of every `bold`.
-            if (!measure_only) x += draw_.text(x, y, run.text, size, style);
-            else x += DrawList::measure(run.text, size, style);
+            std::string_view rest = run.text;
+            while (!rest.empty()) {
+                const f32 room = wrap_at - x;
+                const f32 whole = DrawList::measure(rest, size, style);
+                if (!may_wrap || whole <= room) {
+                    // Runs are contiguous — the spaces between words are already in the text — so
+                    // nothing is added between them. A gap per run would put a hole either side of
+                    // every `bold`.
+                    if (!measure_only) x += draw_.text(x, y, rest, size, style);
+                    else x += whole;
+                    break;
+                }
+                // The last space that still fits. Searched from the end so a long word is measured
+                // once rather than once per character.
+                usize cut = std::string_view::npos;
+                for (usize at = rest.size(); at-- > 0;) {
+                    if (rest[at] != ' ') continue;
+                    if (DrawList::measure(rest.substr(0, at), size, style) <= room) {
+                        cut = at;
+                        break;
+                    }
+                }
+                if (cut == std::string_view::npos) {
+                    // One word longer than the whole line, or nothing fits on what is left of this
+                    // one. If the line has something on it already, start a new one and try again;
+                    // if it is empty, the word goes over the edge rather than into a loop.
+                    if (x > left + 0.5f) {
+                        x = left;
+                        y += DrawList::line_height(size) + leading;
+                        continue;
+                    }
+                    if (!measure_only) x += draw_.text(x, y, rest, size, style);
+                    else x += whole;
+                    break;
+                }
+                if (!measure_only) draw_.text(x, y, rest.substr(0, cut), size, style);
+                y += DrawList::line_height(size) + leading;
+                x = left;
+                rest = rest.substr(cut + 1);
+            }
         }
         y += DrawList::line_height(size) + leading;
     }

@@ -1,0 +1,4 @@
+# WSauthor: worldshaper
+# Verdigris on copper. Half metal, half the powder that grew on it -- so it keeps a
+# little of copper's own reflection under a coat that has none.
+material copper_roof rgb=104,158,140 rough=214 metal=96 sheen=4
