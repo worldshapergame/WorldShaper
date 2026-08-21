@@ -1401,8 +1401,13 @@ void Shell::draw_library_tab(const Rect& rect, Verdict& verdict) {
 
         if (banding && box.y1 > row.y0 && box.y0 < row.y1) chosen_.push_back(entry.name);
 
+        // The one the tool is building with is lit, so *which material am I placing* is answered
+        // by looking rather than by remembering.
+        const bool painting_this =
+            !painting_.empty() && !entry.folder && same_file(entry.path) == same_file(painting_);
         const bool is_selected = selected(entry);
         if (is_selected) ui_.draw().ink(row, 0.22f);
+        if (painting_this && !is_selected) ui_.draw().ink(row, 0.14f);
 
         if (renaming_ == entry.name) {
             if (ui_.field(id_of("library.rename.field"), row, rename_buffer_, entry.shown,
@@ -1485,7 +1490,8 @@ void Shell::draw_library_tab(const Rect& rect, Verdict& verdict) {
         ui_.draw().push_clip(words);
         ui_.label(Rect{text_x + ui_.scroll_overflow(id_of("library.row", i), words, entry.shown),
                        row.y0, right, row.y1},
-                  entry.shown, Align::Left, (playing_this || entry.shipped) ? kBold : kPlain);
+                  entry.shown, Align::Left,
+                  (playing_this || painting_this || entry.shipped) ? kBold : kPlain);
         ui_.draw().pop_clip();
 
         if (!aside.empty()) {
@@ -1536,8 +1542,9 @@ void Shell::draw_library_menu(Verdict& verdict) {
     // Counted into the label rather than into a second line, because a menu with a count in it is
     // a menu you can act on without going back to look at the list.
     const std::string many = any ? (" " + std::to_string(chosen.size())) : std::string();
+    const bool materials = shipped_kinds()[kind_].folder == "materials";
     const std::string open_label =
-        folder ? "open" : (worlds ? "enter this world" : "edit");
+        folder ? "open" : (worlds ? "enter this world" : (materials ? "build with this" : "edit"));
     const std::string duplicate_label = one ? "duplicate" : ("duplicate" + many);
     const std::string delete_label = one ? "delete" : ("delete" + many);
     // A world has TWO things you can do to it and *open* can only be one of them. Entering it is
@@ -1561,10 +1568,14 @@ void Shell::draw_library_menu(Verdict& verdict) {
     std::vector<Act> acts;
     std::vector<Ui::MenuItem> items;
     if (any) {
-        items.push_back({folder ? Icon::Folder : (worlds ? Icon::Play : Icon::Editor), open_label,
-                         one});
+        items.push_back({folder ? Icon::Folder
+                                : (worlds ? Icon::Play
+                                          : (materials ? Icon::Material : Icon::Editor)),
+                         open_label, one});
         acts.push_back(Act::Open);
-        if (world_file) {
+        // A world and a voxel type are the two kinds whose *open* is not *edit*, so both carry
+        // both actions rather than making a player guess which one a double-click means.
+        if (world_file || (materials && !folder)) {
             items.push_back({Icon::Editor, "edit", true});
             acts.push_back(Act::Edit);
         }
@@ -1643,6 +1654,15 @@ void Shell::open_entry(const Entry& entry, Verdict& verdict) {
         clear_selection();
         library_.enter(entry);
         ui_.sound().say(Cue::Open);
+        return;
+    }
+    // **A voxel type off the shelf is what the tool builds with.** Opening one is choosing it,
+    // exactly as opening a world is entering it — that is what *open* means on every other shelf,
+    // and a shelf where the obvious gesture edits the file instead is a shelf a player has to be
+    // told about. Editing is still there, on the row's own menu, where editing a world is.
+    if (shipped_kinds()[kind_].folder == "materials") {
+        verdict.paint_with = entry.path;
+        ui_.sound().say(Cue::Commit);
         return;
     }
     if (shipped_kinds()[kind_].folder == "worlds") {

@@ -1303,6 +1303,10 @@ struct Options {
     // build one without a hand on the mouse.
     // `--editor-open NAME`: open that box where it stands, with its properties inside it.
     std::string editor_open;
+    // `--paint-with FILE`: choose a voxel type off the shelf to build with, exactly as pressing its
+    // row does. It replaced Q and E, and a palette nothing automated can choose from is a palette
+    // nothing automated ever checks (D460).
+    std::string paint_with;
     std::string editor_part;
     std::string editor_new_part;
     // `--editor-enter NAME`: go into the `include` of that name, exactly as pressing its door mark
@@ -1428,6 +1432,8 @@ bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Opti
         if (i + 1 < argc) options.editor_add = argv[++i];
     } else if (arg == "--editor-open") {
         if (i + 1 < argc) options.editor_open = argv[++i];
+    } else if (arg == "--paint-with") {
+        if (i + 1 < argc) options.paint_with = argv[++i];
     } else if (arg == "--editor-part") {
         if (i + 1 < argc) options.editor_part = argv[++i];
     } else if (arg == "--editor-new-part") {
@@ -2236,6 +2242,7 @@ void print_help() {
         "  --quality N           pin the quality level 0-7 instead of deciding it\n"
         "  --no-auto-quality     leave quality where it is and never adjust it\n"
         "  --editor-open NAME    open that box where it stands, properties inside it\n"
+        "  --paint-with FILE     build with this voxel type, as choosing it on the shelf does\n"
         "  --editor-part FILE    put that document inside the open one, copied beside it\n"
         "  --editor-new-part K:N make a new clip or material called N and put it in\n"
         "  --benchmark           measure this machine again and save the result\n"
@@ -2878,6 +2885,10 @@ private:
     // and before the present, into a surface at the WINDOW's resolution rather than the render
     // scale's — a three-pixel-tall letter does not survive being stretched.
     void run_shell(f64 seconds);
+    // A voxel type off the player's shelf, read into this world's type table and given to the tool.
+    // What replaced Q and E.
+    void build_with(const std::filesystem::path& file);
+    void apply_chosen_material();
     void seed_knobs();
     void apply_knobs();
 
@@ -6379,6 +6390,17 @@ void Application::log_starting_material() const {
                 materials_.size());
 }
 
+// And what the player CHOSE beats what the world happens to declare.
+//
+// Called from here rather than from either of the two places that set the palette up, because there
+// are two of them — a world off the cache and a world off the ladder — and a choice applied in one
+// of them is a choice the other quietly undoes. That is exactly what happened on the first run of
+// this: the log said *building with brass* and then *starting material: stone*, in that order.
+void Application::apply_chosen_material() {
+    if (options_.paint_with.empty()) return;
+    build_with(std::filesystem::path(options_.paint_with));
+}
+
 void Application::save_refined_world() {
     // `refine_bake_path_` counts as somewhere to write: `--bake-world --no-clip-cache` is how a
     // release is baked without the baking machine's own cache getting in the way.
@@ -8167,6 +8189,7 @@ void Application::build_world() {
                 }
                 // Logged because a palette of one is indistinguishable from a key that does not
                 // work, and the two have different fixes. That is how this was found.
+                apply_chosen_material();
                 WS_LOG_INFO("tool", "palette: {} materials from {}", materials_.size(),
                             palette_from);
                 log_starting_material();
@@ -8456,6 +8479,7 @@ void Application::build_world() {
             // moved the other one.
             name_the_palette(palette_script);
             WS_LOG_INFO("tool", "palette: {} materials from the clip", materials_.size());
+            apply_chosen_material();
             log_starting_material();
             const WorldStats clip_stats = world_.stats();
             // WITH WHAT IT COSTS IN MEMORY, because a coarse whole-world paste is measured in
@@ -8710,18 +8734,10 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
                     clipboard_.baking_truncated() ? ", TRUNCATED" : "");
     }
 
-    if ((input.was_pressed(Key::Q) || input.was_pressed(Key::E)) && !materials_.empty()) {
-        const usize step = input.was_pressed(Key::E) ? usize{1} : materials_.size() - 1;
-        material_index_ = (material_index_ + step) % materials_.size();
-        chisel_.set_material(materials_[material_index_]);
-        // Said out loud, because "nothing happened" and "it happened and nothing shows it" are the
-        // same report from the other side of the screen, and the palette is not on screen unless
-        // the developer panel is open. One line per keypress costs nothing.
-        char label[40];
-        material_label(label, sizeof(label));
-        WS_LOG_INFO("tool", "material {} of {}: {} (type {})", material_index_ + 1,
-                    materials_.size(), label, chisel_.material());
-    }
+    // **Q and E are gone.** They stepped through whatever the open world happened to declare, in
+    // the order it declared them — a palette a player cannot see, cannot name and cannot add to.
+    // What the tool builds with is chosen on the materials shelf now (`Application::build_with`),
+    // where the types a player has made are listed, named and editable. Asked for directly.
 
     // Undo on Z or Ctrl+Z, redo on Y or Ctrl+Y, and both repeat while held.
     //
@@ -9544,8 +9560,53 @@ void Application::run_shell(f64 seconds) {
         wants_world_ = verdict.world.string();
         wants_title_ = true;
     }
+    if (!verdict.paint_with.empty()) build_with(verdict.paint_with);
     apply_knobs();
     shell_drawn_ = !shell_.ui().draw().empty();
+}
+
+// A voxel type off the player's shelf, made real in THIS world's type table.
+//
+// **This is what replaced Q and E.** Those stepped through whatever the open world happened to
+// declare, in the order it declared them: a palette a player cannot see, cannot name, cannot add to
+// and cannot take anything out of. A library is all four of those already, so the palette is the
+// library and there is one fewer thing in the game.
+//
+// The file is a clip document holding a `material` statement, so it is READ by the same parser
+// everything else is, into this world's own `VoxelTypeTable` — which is what mints the id the tool
+// then builds with. Interning is idempotent: choosing the same type twice gives the same id back,
+// so a player switching between two of them does not grow the table.
+void Application::build_with(const std::filesystem::path& file) {
+    std::vector<forge::SourceLine> origin;
+    std::vector<forge::ScriptError> trouble;
+    const std::string text =
+        forge::expand_includes(file.string(), origin, trouble,
+                               ws::ui::where_includes_live(shell_.library().root()));
+    if (!trouble.empty()) {
+        shell_.say(std::string("that one does not read: ") + trouble.front().message, 4.0);
+        return;
+    }
+    TagRegistry tags;
+    const forge::Script script = forge::parse_clip_script(text, types_, tags);
+    if (script.material_types.empty()) {
+        shell_.say("that file declares no voxel type", 3.5);
+        return;
+    }
+    // The first one it declares, because a `.wsmat` is one type and the interface has no way to ask
+    // *which of the four* until it needs one.
+    materials_ = script.material_types;
+    material_index_ = 0;
+    chisel_.set_material(materials_.front());
+    // And the NAME with it, out of the same script. Without this the tool held the right type and
+    // the belt said the old one's name — which is the failure D658 named: a palette that is nowhere
+    // on screen, wearing a label that belongs to something else.
+    name_the_palette(script);
+    shell_.set_painting(file);
+    char label[40];
+    material_label(label, sizeof(label));
+    WS_LOG_INFO("tool", "building with '{}' ({}, type {})", file.filename().string(), label,
+                chisel_.material());
+    shell_.say("building with " + file.stem().string(), 2.5);
 }
 
 // What the settings window SHOWS, taken from what the game is actually doing.

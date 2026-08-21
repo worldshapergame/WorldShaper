@@ -56,6 +56,14 @@ struct Verdict {
     bool open_world = false;            // and this is the file
     std::filesystem::path world;
     bool leave_world = false;           // back to the title, tearing this world down
+    // A voxel type off the materials shelf, chosen to build with.
+    //
+    // *Make it so that the player will place the material he has selected on his library instead of
+    // the Q and E system which is now obsolete.* Asked for directly, and it is the right shape: Q
+    // and E stepped through whatever the OPEN WORLD happened to declare, in the order it declared
+    // them, which is a palette a player cannot see, cannot name and cannot add to. A library is all
+    // three of those things already.
+    std::filesystem::path paint_with;
 };
 
 // What the shell itself remembers, per player, beside the game's own settings.txt.
@@ -275,6 +283,10 @@ public:
 
     // What is being played, so the worlds library can say so and offer the way out.
     void set_playing(std::string name) { playing_ = std::move(name); }
+    // Which file the tool is building with, so the shelf can put a mark on that row. Set by
+    // whoever answered the verdict, because only they know whether it worked.
+    void set_painting(std::filesystem::path with) { painting_ = std::move(with); }
+    const std::filesystem::path& painting() const { return painting_; }
 
     // One line, at the bottom of the screen, for a few seconds. The application uses it to say why
     // a world came up empty — which used to be a line in a log file and is therefore a thing no
@@ -515,6 +527,7 @@ private:
     Stage stage_ = Stage::Title;
     std::filesystem::path root_;
     std::string playing_;
+    std::filesystem::path painting_;
 
     bool icons_ = false;
     // How tall the settings came out last frame. See draw_settings for why it is measured rather
