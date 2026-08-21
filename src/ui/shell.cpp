@@ -442,6 +442,23 @@ Verdict Shell::frame(const InputState& input, u32 width, u32 height, f64 seconds
     // refuses, correctly, and the slider stops moving after the first frame of the drag. One line
     // here rather than a call in each reader, because a reader that forgets it is a slider that
     // half works.
+    // A file that is not there any more is not a file this tab can edit.
+    //
+    // Reported directly: *if i delete something you can still go into its editing tab even if you
+    // deleted it and therefore have nothing selected.* D772 taught the tab to notice that the file
+    // under a path had been REPLACED; this is the simpler half it did not cover — the path leading
+    // nowhere at all. Checked here rather than in the tab that draws it, because the tab is not
+    // drawn when the window is shut and the document is still open behind it.
+    if (!editing_.empty()) {
+        std::error_code gone;
+        if (!std::filesystem::exists(editing_, gone) || gone) {
+            close_document("that file is not there any more");
+        }
+    }
+    if (!waiting_.empty()) {
+        std::error_code gone;
+        if (!std::filesystem::exists(waiting_, gone) || gone) waiting_.clear();
+    }
     refresh_graph();
     // And the verdict, when the text has been still long enough to be worth asking about.
     if (parse_wanted_ && seconds_ >= parse_at_) reparse();
@@ -1492,6 +1509,7 @@ void Shell::draw_library_tab(const Rect& rect, Verdict& verdict) {
     }
 
     draw_library_menu(verdict);
+    draw_new_world_menu();
 }
 
 // Everything a selection can do, at the pointer.
@@ -1642,19 +1660,25 @@ void Shell::open_entry(const Entry& entry, Verdict& verdict) {
 }
 
 void Shell::make_new_file() {
-    // A new world is not an empty file.
+    // **A new world is not the facility.**
     //
-    // It was, and an empty clip script builds to nothing — so *new* on the worlds shelf made a
-    // world that opened as an empty sky, which is indistinguishable from the failure this project
-    // has now chased three times. Until there is something to generate a world FROM, a new one is
-    // the facility: one line, resolved through the shipped clips (D494), and a line a player can
-    // read and delete once they have something of their own to put there.
+    // It was: one line, `include "facility.clip"`, on the reasoning that an empty clip script builds
+    // to nothing and a world that opens as an empty sky is indistinguishable from a world that
+    // failed. That was a stopgap and it did the damage a stopgap does — every new world was the
+    // same building, so a player who edited one and made another could not tell their edit from the
+    // default and reported it as the edit having been lost. Asked for directly: *make it so that the
+    // facility complex is no longer a fallback for an empty world, it's just a world we can use for
+    // testing and benchmarking.*
+    //
+    // So a new world asks what it is made from, and nothing is written until it has been answered.
     const bool worlds = shipped_kinds()[kind_].folder == "worlds";
-    const std::string contents =
-        worlds ? "# A new world. It starts as the building the game ships with; delete this line\n"
-                 "# and put your own shapes here, or edit it into something else entirely.\n"
-                 "include \"facility.clip\"\n"
-               : std::string();
+    if (worlds) {
+        making_world_ = 1;
+        gather_parts(1);
+        ui_.open_menu(id_of("library.newworld"), ui_.pointer_x(), ui_.pointer_y());
+        return;
+    }
+    const std::string contents;
 
     std::string name = "untitled";
     u32 nth = 2;
@@ -1675,6 +1699,117 @@ void Shell::make_new_file() {
     // that has to be clicked before it takes a letter is a field that waits to be noticed.
     ui_.type_into(id_of("library.rename.field"), name);
     ui_.sound().say(Cue::Commit);
+}
+
+// A world made out of a clip on the shelf, or out of nothing at all.
+std::string Shell::make_world_from(const std::filesystem::path& clip) {
+    std::string contents;
+    if (clip.empty()) {
+        // Empty, and it says so IN the file rather than leaving a player looking at an empty sky
+        // wondering whether it failed. A comment is what the script view shows and what the graph
+        // carries as one box, so there is something on the screen either way.
+        contents =
+            "# A world of your own. Nothing in it yet.\n"
+            "#\n"
+            "# Put shapes here, or press the right mouse button in the visual view and take a clip\n"
+            "# off your shelf -- a world is a document made of documents.\n"
+            "metre 32\n";
+    } else {
+        contents = "# A world built from " + clip.stem().string() +
+                   ".\nmetre 32\ninclude \"" + clip.filename().string() + "\"\n";
+    }
+
+    std::string name = clip.empty() ? std::string("untitled") : clip.stem().string();
+    std::string why = library_.create(name, preferences_.username, contents);
+    for (u32 nth = 2; !why.empty() && nth < 100; ++nth) {
+        name = (clip.empty() ? std::string("untitled") : clip.stem().string()) + " " +
+               std::to_string(nth);
+        why = library_.create(name, preferences_.username, contents);
+    }
+    if (!why.empty()) return why;
+    library_.refresh(true);
+    renaming_ = name + shipped_kinds()[kind_].extension;
+    rename_buffer_ = name;
+    ui_.type_into(id_of("library.rename.field"), name);
+    ui_.sound().say(Cue::Commit);
+    return {};
+}
+
+// What a new world is made from, asked before anything is written.
+void Shell::draw_new_world_menu() {
+    const u64 id = id_of("library.newworld");
+    if (making_world_ == 0) return;
+    if (!ui_.menu_open(id)) {
+        // Escaped out of, or clicked away from. Nothing was made, which is the point of asking
+        // first: a world called `untitled` that a player did not choose is the thing this replaced.
+        making_world_ = 0;
+        return;
+    }
+
+    enum class Act : u32 { Terrain, Clips, Empty, FromClip };
+    std::vector<Act> acts;
+    std::vector<i32> args;
+    std::vector<Ui::MenuItem> items;
+    std::vector<std::string> labels;
+
+    if (making_world_ == 1) {
+        labels.push_back("from terrain");
+        items.push_back({Icon::World, labels.back(), false});
+        acts.push_back(Act::Terrain);
+        args.push_back(0);
+        labels.push_back("from a clip");
+        items.push_back({Icon::Clip, labels.back(), !part_choices_.empty()});
+        acts.push_back(Act::Clips);
+        args.push_back(0);
+        labels.push_back("empty");
+        items.push_back({Icon::New, labels.back(), true});
+        acts.push_back(Act::Empty);
+        args.push_back(0);
+    } else {
+        for (const std::filesystem::path& one : part_choices_) {
+            labels.push_back(shown_name(one));
+            items.push_back({Icon::Clip, labels.back(), true});
+            acts.push_back(Act::FromClip);
+            args.push_back(static_cast<i32>(&one - part_choices_.data()));
+        }
+    }
+    for (usize i = 0; i < items.size(); ++i) items[i].label = labels[i];
+
+    const i32 picked = ui_.menu(id, items.data(), static_cast<u32>(items.size()));
+    if (picked < 0 || static_cast<usize>(picked) >= acts.size()) return;
+    const usize at = static_cast<usize>(picked);
+
+    switch (acts[at]) {
+        case Act::Terrain:
+            // Greyed out above, so this cannot be reached. Left here so that the day terrain
+            // arrives there is one place to put it.
+            making_world_ = 0;
+            return;
+        case Act::Clips:
+            making_world_ = 2;
+            ui_.open_menu(id, ui_.pointer_x(), ui_.pointer_y());
+            return;
+        case Act::Empty: {
+            making_world_ = 0;
+            const std::string why = make_world_from({});
+            if (!why.empty()) {
+                say(why, 3.0);
+                ui_.sound().say(Cue::Refuse);
+            }
+            return;
+        }
+        case Act::FromClip: {
+            making_world_ = 0;
+            const usize which = static_cast<usize>(args[at]);
+            if (which >= part_choices_.size()) return;
+            const std::string why = make_world_from(part_choices_[which]);
+            if (!why.empty()) {
+                say(why, 3.0);
+                ui_.sound().say(Cue::Refuse);
+            }
+            return;
+        }
+    }
 }
 
 void Shell::say(std::string line, f64 seconds) {
@@ -2498,6 +2633,11 @@ bool Shell::open_node_named(std::string_view name) {
         return true;
     }
     return false;
+}
+
+std::string Shell::new_world(const std::filesystem::path& from) {
+    if (shipped_kinds()[kind_].folder != "worlds") return "that shelf does not hold worlds";
+    return make_world_from(from);
 }
 
 u32 Shell::boxes_overlapping() const {
@@ -4034,10 +4174,12 @@ void Shell::draw_visual_view(const Rect& page) {
 // the time it is pressed (D488).
 void Shell::gather_parts(u32 kind) {
     part_choices_.clear();
-    if (editing_.empty()) return;
     const bool clips = kind == 1;
     std::vector<std::filesystem::path> where;
-    where.push_back(editing_.parent_path());
+    // Beside the document first when there IS one — a part beside a world is still a part — and
+    // then the shelves. With nothing open this is the new-world menu asking, and the shelves are
+    // the whole of the answer.
+    if (!editing_.empty()) where.push_back(editing_.parent_path());
     where.push_back(library_.root() / (clips ? "clips" : "materials"));
     if (clips) where.push_back(library_.shipped_root() / "clips");
 
@@ -4054,7 +4196,8 @@ void Shell::gather_parts(u32 kind) {
             const bool wanted = clips ? (extension == ".clip" || extension == ".wsclip")
                                       : (extension == ".wsmat" || extension == ".mat");
             if (!wanted) continue;
-            if (same_file(entry.path()) == editing_) continue;   // a file cannot include itself
+            // A file cannot include itself.
+            if (!editing_.empty() && same_file(entry.path()) == editing_) continue;
             here.push_back(entry.path());
         }
         // By name, so the listing is the same on every machine rather than whatever order the
@@ -4248,7 +4391,11 @@ void Shell::draw_graph_menu(const Rect& canvas) {
         args.push_back(clips ? 1 : 2);
         for (const std::filesystem::path& one : part_choices_) {
             labels.push_back(shown_name(one));
-            items.push_back({clips ? Icon::Clip : Icon::Material, labels.back(), true});
+            // Everything but a built-in can be taken off the shelf from here. What came with the
+            // game is not the player's to lose, and a delete that came back on the next install
+            // would look like the delete had failed (D494).
+            items.push_back({clips ? Icon::Clip : Icon::Material, labels.back(), true,
+                             !library_.is_shipped(one)});
             acts.push_back(Act::TakePart);
             args.push_back(static_cast<i32>(&one - part_choices_.data()));
         }
@@ -4286,7 +4433,38 @@ void Shell::draw_graph_menu(const Rect& canvas) {
     }
     for (usize i = 0; i < items.size(); ++i) items[i].label = labels[i];
 
-    const i32 picked = ui_.menu(id, items.data(), static_cast<u32>(items.size()));
+    i32 removed = -1;
+    const i32 picked = ui_.menu(id, items.data(), static_cast<u32>(items.size()), removed);
+    if (removed >= 0 && static_cast<usize>(removed) < args.size() &&
+        acts[static_cast<usize>(removed)] == Act::TakePart) {
+        const usize which = static_cast<usize>(args[static_cast<usize>(removed)]);
+        palette_group_ = -1;
+        if (which >= part_choices_.size()) return;
+        const std::filesystem::path going = part_choices_[which];
+        std::error_code error;
+        if (library_.is_shipped(going)) {
+            say("that one came with the game -- it is not yours to lose", 3.0);
+            ui_.sound().say(Cue::Refuse);
+            return;
+        }
+        // The one already open is not deleted out from under itself; everything about a document
+        // that is gone comes down in one place (`close_document`), and doing it in the wrong order
+        // leaves a tab editing a file nobody can open.
+        if (!editing_.empty() && same_file(going) == editing_) {
+            say("that one is open here -- close it first", 3.0);
+            ui_.sound().say(Cue::Refuse);
+            return;
+        }
+        if (!std::filesystem::remove(going, error) || error) {
+            say("could not delete " + going.filename().string(), 3.0);
+            ui_.sound().say(Cue::Refuse);
+            return;
+        }
+        library_.refresh(true);
+        say("deleted " + shown_name(going), 2.5);
+        ui_.sound().say(Cue::Close);
+        return;
+    }
     if (picked < 0 || static_cast<usize>(picked) >= acts.size()) return;
     const usize at = static_cast<usize>(picked);
 
@@ -4764,6 +4942,52 @@ bool Shell::document_is_current() const {
     const u64 bytes = static_cast<u64>(std::filesystem::file_size(editing_, error));
     if (error) return false;
     return when == editing_stamp_ && bytes == editing_bytes_;
+}
+
+// Everything about the open document, put down at once.
+//
+// Not a patch on the tab that draws it: the state a document consists of is `editing_` and about a
+// dozen things that are ABOUT `editing_` — the lines, the graph, the caret, what is chosen in it,
+// where you came from, what is open, the undo stack — and any one of them left behind is a bug
+// waiting for the next document to walk into. So there is one place that puts all of it down and
+// every route out of a document goes through it.
+void Shell::close_document(const char* why) {
+    if (editing_.empty()) return;
+    editing_.clear();
+    editing_shipped_ = false;
+    editing_stamp_ = std::filesystem::file_time_type{};
+    editing_bytes_ = 0;
+    lines_.clear();
+    graph_ = ClipGraph{};
+    graph_stale_ = true;
+    node_shown_.clear();
+    node_tall_.clear();
+    node_wide_.clear();
+    implied_.clear();
+    used_by_.clear();
+    graph_x_.clear();
+    graph_y_.clear();
+    doc_shown_ = false;
+    dragging_doc_ = false;
+    dragging_node_ = ClipGraph::kNone;
+    wiring_from_ = ClipGraph::kNone;
+    drag_with_.clear();
+    chosen_node_.clear();
+    chosen_nodes_.clear();
+    chosen_set_.clear();
+    chosen_index_ = ClipGraph::kNone;
+    inside_.clear();
+    came_from_.clear();
+    opened_.clear();
+    undo_.clear();
+    redo_.clear();
+    undo_reason_.clear();
+    making_ = 0;
+    making_buffer_.clear();
+    part_choices_.clear();
+    dirty_ = false;
+    report_ = ParseReport{};
+    if (why != nullptr && *why != '\0') say(why, 3.0);
 }
 
 void Shell::open_document(const std::filesystem::path& raw) {

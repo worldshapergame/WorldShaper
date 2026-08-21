@@ -590,3 +590,61 @@ TEST_CASE("undo does not reach into the document that was open before this one")
     shell.frame(with_ctrl(Key::S), 1280, 800, 0.4);
     CHECK(file_text(two) == std::string(kClip));
 }
+
+// --- a file that has gone -----------------------------------------------------------------------
+
+TEST_CASE("deleting the open file closes the tab that was editing it") {
+    // Reported directly: *if i delete something you can still go into its editing tab even if you
+    // deleted it and therefore have nothing selected.* D772 taught the tab to notice that the file
+    // under a path had been REPLACED; this is the simpler half it did not cover -- the path leading
+    // nowhere at all. A tab editing a file nobody can open is a tab that saves over whatever takes
+    // its name next.
+    Scratch scratch("shell-deleted");
+    const std::filesystem::path clip = write_file(scratch.root / "clips" / "doomed.wsclip", kClip);
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    REQUIRE(shell.open_editor_view("visual"));
+    quiet_frame(shell, 0.0);
+    CHECK(shell.editing() == clip);
+    CHECK(shell.choose_node("plinth"));
+
+    std::filesystem::remove(clip);
+    quiet_frame(shell, 0.1);
+    CHECK(shell.editing().empty());
+    // And everything ABOUT it went with it: a node from the file that is gone is not still chosen.
+    CHECK_FALSE(shell.choose_node("plinth"));
+    // A second frame over the emptied state draws the *choose something first* tab rather than
+    // walking off the end of an empty document.
+    CHECK_FALSE(quiet_frame(shell, 0.2).quit);
+}
+
+TEST_CASE("a new world is not the facility") {
+    // *Make it so that the facility complex is no longer a fallback for an empty world, it's just a
+    // world we can use for testing and benchmarking.* Every new world used to be one line --
+    // `include "facility.clip"` -- so every new world was the same building, which is why editing
+    // one and making another read as the edit having been lost.
+    Scratch scratch("shell-new-world");
+    write_file(scratch.root / "clips" / "porch.wsclip",
+               "let porch = box -1 0 -1  1 1 1\nsolid porch\n");
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    REQUIRE(shell.open_shelf("worlds"));
+
+    CHECK(shell.new_world({}).empty());
+    const std::filesystem::path empty = scratch.root / "worlds" / "untitled.wsworld";
+    REQUIRE(std::filesystem::exists(empty));
+    const std::string text = file_text(empty);
+    CHECK(text.find("facility") == std::string::npos);
+    CHECK(text.find("metre 32") != std::string::npos);
+
+    // And one made FROM a clip names that clip and nothing else.
+    CHECK(shell.new_world(scratch.root / "clips" / "porch.wsclip").empty());
+    const std::filesystem::path from = scratch.root / "worlds" / "porch.wsworld";
+    REQUIRE(std::filesystem::exists(from));
+    const std::string built = file_text(from);
+    CHECK(built.find("include \"porch.wsclip\"") != std::string::npos);
+    CHECK(built.find("facility") == std::string::npos);
+}

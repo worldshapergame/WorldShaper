@@ -246,6 +246,11 @@ public:
     // a state nothing automated can reach is a state nothing automated ever checks (D460).
     bool open_node_named(std::string_view name);
 
+    // `--new-world FILE`, and empty for a world of nothing: what the new-world menu does, by the
+    // one path a press takes. A world made of a clip is what *new* on the worlds shelf offers, and
+    // a flow nothing automated can walk is a flow nothing automated ever checks (D460).
+    std::string new_world(const std::filesystem::path& from);
+
     // How many boxes on the graph stand where another one already is. **Always nought**, and it is
     // a promise rather than a tidy-up: every box is on a whole cell, and a cell holds one. Asked
     // directly rather than by looking at a picture, because a picture is what a person has to check
@@ -302,6 +307,22 @@ private:
     // What *use this* means for one entry, wherever it was asked for.
     void open_entry(const Entry& entry, Verdict& verdict);
     void make_new_file();
+    // --- what a new world is made FROM ------------------------------------------------------------
+    //
+    // *When you create a world on your library you first get an option between terrain (we will make
+    // it work later) or clip, and from clip you can select any of your library clips.* Asked for
+    // directly, and it replaces the fallback the facility used to be: **a new world is not the
+    // building the game ships with.** That was a stopgap for having nothing to generate a world
+    // from, and it made every new world identical — which is why editing one and making another
+    // read as the edit having been lost.
+    //
+    // 0 nothing, 1 choosing what it is made from, 2 choosing which clip.
+    u32 making_world_ = 0;
+    void draw_new_world_menu();
+    std::string make_world_from(const std::filesystem::path& clip);
+    // The file that is open is GONE. Everything about it goes with it, because a tab that edits a
+    // file nobody can open is a tab that saves over whatever takes its name next.
+    void close_document(const char* why);
     // Every setting back to how it shipped and every file the player made to the recycle bin.
     std::string wipe_everything();
     void draw_community_tab(const Rect& rect);

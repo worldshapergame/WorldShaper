@@ -614,6 +614,12 @@ void Ui::open_menu(u64 id, f32 x, f32 y) {
 }
 
 i32 Ui::menu(u64 id, const MenuItem* items, u32 count) {
+    i32 ignored = -1;
+    return menu(id, items, count, ignored);
+}
+
+i32 Ui::menu(u64 id, const MenuItem* items, u32 count, i32& removed) {
+    removed = -1;
     if (menu_ != id || count == 0) return -1;
 
     const f32 row = metrics_.row();
@@ -622,7 +628,14 @@ i32 Ui::menu(u64 id, const MenuItem* items, u32 count) {
     for (u32 i = 0; i < count; ++i) {
         widest = std::max(widest, DrawList::measure(items[i].label, metrics_.text()));
     }
-    const f32 width = widest + metrics_.icon() + metrics_.px(24.0f);
+    bool any_removable = false;
+    for (u32 i = 0; i < count; ++i) {
+        if (items[i].removable) any_removable = true;
+    }
+    // The gutter is reserved for the whole menu when any row has one, so a word does not shift
+    // sideways depending on whether the row above it can be taken out.
+    const f32 gutter = any_removable ? metrics_.icon() + metrics_.px(6.0f) : 0.0f;
+    const f32 width = widest + metrics_.icon() + metrics_.px(24.0f) + gutter;
     const f32 height = row * static_cast<f32>(count) + pad * 2.0f;
     // Flipped rather than clamped when it would run off: a menu whose last item is under the edge
     // of the screen is a menu missing the item somebody was reaching for.
@@ -643,12 +656,30 @@ i32 Ui::menu(u64 id, const MenuItem* items, u32 count) {
         const Rect cell{box.x0 + pad, box.y0 + pad + row * static_cast<f32>(i), box.x1 - pad,
                         box.y0 + pad + row * static_cast<f32>(i + 1)};
         const u64 own = hash_combine(id, i + 1);
-        const bool over = hovering(own, cell) && items[i].enabled;
-        if (over) draw_.ink(cell, 0.14f);
+        // The remove mark takes the right of the row, and the row itself stops at it — otherwise
+        // pressing *delete this* would also be pressing *choose this*, which is the worst possible
+        // pair of meanings for one pixel.
+        Rect take_out{};
+        bool over_take_out = false;
+        if (items[i].removable) {
+            const f32 size = std::min(metrics_.icon(), cell.height() * 0.8f);
+            take_out = Rect{cell.x1 - size, cell.mid_y() - size * 0.5f, cell.x1,
+                            cell.mid_y() + size * 0.5f};
+            over_take_out = hovering(hash_combine(own, 0x7A6Bull), take_out);
+        }
+        const Rect body = items[i].removable ? Rect{cell.x0, cell.y0, take_out.x0 - pad, cell.y1}
+                                             : cell;
+        const bool over = hovering(own, body) && items[i].enabled && !over_take_out;
+        if (over) draw_.ink(body, 0.14f);
         if (over && input_.mouse_left_released) chosen = static_cast<i32>(i);
+        if (items[i].removable) {
+            if (over_take_out) draw_.ink(take_out, 0.18f);
+            draw_.icon(take_out, Icon::Delete, over_take_out ? 1.0f : 0.4f);
+            if (over_take_out && input_.mouse_left_released) removed = static_cast<i32>(i);
+        }
         // An item that cannot act is drawn at less ink rather than left out: a menu whose length
         // changes with the selection is a menu whose items are never in the same place twice.
-        icon_and_label(cell, items[i].icon, items[i].label, 1.0f, items[i].enabled ? 1.0f : 0.35f,
+        icon_and_label(body, items[i].icon, items[i].label, 1.0f, items[i].enabled ? 1.0f : 0.35f,
                        false);
     }
     draw_.pop_clip();
@@ -657,7 +688,7 @@ i32 Ui::menu(u64 id, const MenuItem* items, u32 count) {
     // would also be the press that dismissed it.
     const bool elsewhere = (input_.mouse_left_pressed || input_.mouse_right_pressed) &&
                            !box.holds(input_.mouse_x, input_.mouse_y);
-    if (chosen >= 0 || input_.was_pressed(Key::Escape) ||
+    if (chosen >= 0 || removed >= 0 || input_.was_pressed(Key::Escape) ||
         (elsewhere && frame_ != menu_opened_frame_)) {
         menu_ = 0;
     }

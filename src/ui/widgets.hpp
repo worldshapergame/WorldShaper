@@ -234,6 +234,14 @@ public:
         Icon icon = Icon::None;
         std::string_view label;
         bool enabled = true;
+        // A row that can be taken OUT of the list it is in, from the list itself.
+        //
+        // *Whenever you make a clip or a material inside the node editor and it lists the ones you
+        // have, you can press on a button on it to delete it except the built ins.* Asked for
+        // directly, and it belongs on the row rather than as a second menu: a list of forty files
+        // where deleting one means going to another tab, finding it again and deleting it there is
+        // a list nobody prunes.
+        bool removable = false;
     };
     // Opens at a point; only one menu is open at a time.
     void open_menu(u64 id, f32 x, f32 y);
@@ -258,6 +266,7 @@ public:
     // a menu is drawn over what it is about, and the order marks are added is the order they
     // composite in. Choosing an item closes it; so does a press anywhere else, and so does Escape.
     i32 menu(u64 id, const MenuItem* items, u32 count);
+    i32 menu(u64 id, const MenuItem* items, u32 count, i32& removed);
 
     // A press with nothing drawn for it: the hit box, the tooltip and the sound, and not one mark.
     // The logo is what this is for — it is a picture that answers a press, and a hover wash over it
