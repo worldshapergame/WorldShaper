@@ -28,9 +28,16 @@
 //   with no colour in it grows a red-and-yellow seam down the middle.
 //
 // Over a mid-grey backdrop an inversion has nothing to say, and a hard floor everywhere is
-// provably impossible. So in that one band the contrast is spent on HUE instead: the ink
-// crossfades to the player's accent. Crossfade the hue, never the contrast - blending the
-// finished colours lands, halfway across, on the average of "too little" and "enough".
+// provably impossible. The first answer was to spend that band's contrast on HUE: the ink
+// crossfaded to the player's accent. **Reported and removed**: *make it so that text doesnt get the
+// accent color.* It is right that a mid-grey backdrop leaves an inversion nothing to say, and wrong
+// to answer it in the letters — a word that changes colour as the world drifts behind it is a word
+// that looks like a different KIND of word.
+//
+// So the answer moved to the glass. `ui_glass` below pushes a backdrop out of the blind band before
+// anything is drawn on it, which is a change to the panel rather than to the writing, and it is
+// still a continuous function of one quantity with no direction decision in it. The ink is then
+// only ever the inverse, and it has no colour of its own anywhere.
 
 const float kInkFloor = 0.30;
 
@@ -42,7 +49,23 @@ float ui_luma(vec3 encoded) {
     return sqrt(dot(linear, vec3(0.2126, 0.7152, 0.0722)));
 }
 
+// A backdrop, pushed out of the band where an inversion has nothing to say.
+//
+// One direction only - DOWN - so there is no "which way has more room" to decide and no frame where
+// a panel flips as the world drifts behind it. Continuous in the backdrop's own brightness, so
+// there is no cliff either. A panel over mid-grey comes out a little darker than the world behind
+// it, which is what glass over a grey wall looks like anyway.
+vec3 ui_glass(vec3 backdrop) {
+    float here = ui_luma(backdrop);
+    float blind = 1.0 - smoothstep(0.0, 0.12, abs(here - 0.5));
+    return backdrop * mix(1.0, 0.52, blind);
+}
+
 // The colour a mark has to be to read against what is behind it.
+//
+// `accent` is taken and ignored, and the parameter is kept so that every call site does not have to
+// change on the day it comes back. It will not: the accent belongs to what the interface DOES -
+// what is chosen, what a wire carries - and never to letters.
 vec3 ui_ink(vec3 backdrop, vec3 accent) {
     float here = ui_luma(backdrop);
     vec3 opposite = vec3(1.0) - backdrop;
@@ -52,14 +75,7 @@ vec3 ui_ink(vec3 backdrop, vec3 accent) {
     float push = shortfall * clamp(swing / kInkFloor, -1.0, 1.0);
     float want = clamp(here + swing + push, 0.0, 1.0);
 
-    // Both candidates taken to the same brightness FIRST, then mixed.
-    vec3 inverted = opposite * (want / max(ui_luma(opposite), 1e-4));
-    vec3 tinted = accent * (want / max(ui_luma(accent), 1e-4));
-
-    // Brightness carries the ink everywhere outside roughly 0.42 to 0.58 - a sixth of the range,
-    // centred exactly where inversion is blind.
-    float blind = 1.0 - smoothstep(0.0, 0.08, abs(here - 0.5));
-    return clamp(mix(inverted, tinted, blind), 0.0, 1.0);
+    return clamp(opposite * (want / max(ui_luma(opposite), 1e-4)), 0.0, 1.0);
 }
 
 // The same rule with the swing CAPPED and the rest spent on hue.

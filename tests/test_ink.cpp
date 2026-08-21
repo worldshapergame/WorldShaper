@@ -62,19 +62,31 @@ TEST_CASE("closer in, the push tops the inversion up and never cuts it down") {
     CHECK(std::abs(ink_target(0.45f) - 0.45f) == doctest::Approx(0.1667f).epsilon(0.01));
 }
 
-TEST_CASE("a hard floor everywhere is impossible, which is why the blind band exists") {
+TEST_CASE("a hard floor everywhere is impossible, and the GLASS is what gives") {
     // The proof in the style document, checked rather than asserted: if ink brightness were
     // continuous and always 0.3 from the backdrop, it could not cross zero, which demands 1.3 at a
-    // white backdrop and -0.3 at a black one. So SOMETHING has to give in the middle, and what
-    // gives is the brightness — the contrast is spent on hue instead.
+    // white backdrop and -0.3 at a black one. So SOMETHING has to give in the middle.
     const f32 middle = luma(ink(grey(0.5f), kGreenAccent));
     CHECK(std::abs(middle - 0.5f) < kInkFloor);
 
-    // And in that band the ink is the accent, not a grey. Over mid grey an inversion has nothing
-    // to say, so what it says instead is the player's colour.
+    // What gives is the BACKDROP, not the letters. It used to be the letters — the ink crossfaded
+    // to the player's accent in that band — and it was reported from playing: *make it so that text
+    // doesnt get the accent color*. A word that changes colour as the world drifts behind it reads
+    // as a different kind of word. So the ink is now the inverse and nothing else, at every
+    // backdrop, and it carries no colour of its own anywhere.
     const Colour mark = ink(grey(0.5f), kGreenAccent);
-    CHECK(mark.g > mark.r);
-    CHECK(mark.g > mark.b);
+    CHECK(mark.r == doctest::Approx(mark.g));
+    CHECK(mark.g == doctest::Approx(mark.b));
+
+    // And a panel over mid grey is pushed out of the band before anything is written on it, which
+    // is what buys the contrast back. Down only, so there is no direction to get wrong.
+    const Colour behind = glass(grey(0.5f));
+    CHECK(luma(behind) < 0.5f - 0.1f);
+    CHECK(std::abs(luma(ink(behind, kGreenAccent)) - luma(behind)) > kInkFloor - 0.02f);
+
+    // Away from the band it does nothing at all: a bright sky behind a panel is still a bright sky.
+    CHECK(luma(glass(grey(0.05f))) == doctest::Approx(0.05f).epsilon(0.001));
+    CHECK(luma(glass(grey(0.95f))) == doctest::Approx(0.95f).epsilon(0.001));
 }
 
 TEST_CASE("no `if`: the ink is continuous as the backdrop drifts") {

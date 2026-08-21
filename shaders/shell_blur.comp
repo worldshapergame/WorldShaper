@@ -31,10 +31,17 @@ layout(push_constant) uniform Push {
     int pad2;
 } push;
 
-// Nine taps, spaced two quarter-pixels apart, which reaches sixteen full-resolution pixels either
+// Nine taps, spaced SIX quarter-pixels apart, which reaches ninety-six full-resolution pixels either
 // side. Weights are a binomial, because a box blur of a box blur has a visible cross in it wherever
 // there is a hard edge — which a panel's own edge is.
+//
+// **Three times what it was, and it costs exactly the same**: asked for directly, and the way to
+// widen a Gaussian without paying for it is to move the taps rather than to add any. Nine taps of a
+// two-tap Gaussian is a well-sampled kernel at any spacing; what has to keep up is the SOURCE, so
+// the box below reads over eight full-resolution pixels rather than four (at the same sixteen reads,
+// spread rather than packed) and the taps have something band-limited to land on.
 const float kWeights[5] = float[5](0.2270270, 0.1945946, 0.1216216, 0.0540541, 0.0162162);
+const int kTapStride = 6;
 
 void main() {
     ivec2 at = ivec2(gl_GlobalInvocationID.xy);
@@ -42,14 +49,17 @@ void main() {
 
     vec3 sum = vec3(0.0);
     if (push.mode == 0) {
+        // Sixteen reads over an eight-by-eight patch rather than a four-by-four one: the same cost,
+        // and twice the band limit, which is what the wider taps below need under them.
         for (int y = 0; y < 4; ++y) {
             for (int x = 0; x < 4; ++x) {
-                ivec2 read = clamp(at * 4 + ivec2(x, y), ivec2(0), push.source_size - ivec2(1));
+                ivec2 read = clamp(at * 4 + ivec2(x, y) * 2 - ivec2(2), ivec2(0),
+                                   push.source_size - ivec2(1));
                 sum += imageLoad(source, read).rgb * 0.0625;
             }
         }
     } else {
-        const ivec2 along = (push.mode == 1) ? ivec2(2, 0) : ivec2(0, 2);
+        const ivec2 along = (push.mode == 1) ? ivec2(kTapStride, 0) : ivec2(0, kTapStride);
         for (int i = -4; i <= 4; ++i) {
             ivec2 read = clamp(at + along * i, ivec2(0), push.source_size - ivec2(1));
             sum += imageLoad(source, read).rgb * kWeights[abs(i)];

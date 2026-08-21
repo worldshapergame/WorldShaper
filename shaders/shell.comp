@@ -762,8 +762,9 @@ void main() {
         if (command.kind == kGlass) {
             if (!inside) continue;
             // A panel's background is the world behind it, blurred. Nothing else: it has no
-            // colour of its own to be made out of.
-            colour = mix(colour, blur_at(centre), clamp(command.f0, 0.0, 1.0));
+            // colour of its own to be made out of — and pushed out of the band where an inversion
+            // has nothing to say, so the writing on it never has to reach for a hue (`ui_glass`).
+            colour = mix(colour, ui_glass(blur_at(centre)), clamp(command.f0, 0.0, 1.0));
         } else if (command.kind == kInk) {
             if (!inside) continue;
             colour = mix(colour, ui_ink(colour, push.accent), clamp(command.f0, 0.0, 1.0));

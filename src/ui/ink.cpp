@@ -50,16 +50,20 @@ Colour ink(const Colour& backdrop, const Colour& accent) {
     const f32 push = shortfall * std::clamp(swing / kInkFloor, -1.0f, 1.0f);
     const f32 want = std::clamp(here + swing + push, 0.0f, 1.0f);
 
-    // Both candidates taken to the same brightness FIRST, then mixed. Blending the finished
-    // colours instead lands, halfway across, on the average of "too little contrast" and "enough",
-    // which measures a fifth short of legible.
+    // The inverse, taken to that brightness, and nothing else. There is no accent in it any more:
+    // over a mid-grey backdrop an inversion has nothing to say, and the answer to that moved to
+    // `glass` below — which changes the PANEL rather than the writing on it.
+    (void)accent;
     const Colour inverted = to_brightness(opposite, want);
-    const Colour tinted = to_brightness(accent, want);
+    return Colour{std::clamp(inverted.r, 0.0f, 1.0f), std::clamp(inverted.g, 0.0f, 1.0f),
+                  std::clamp(inverted.b, 0.0f, 1.0f)};
+}
 
+Colour glass(const Colour& backdrop) {
+    const f32 here = luma(backdrop);
     const f32 blind = 1.0f - smoothstep(0.0f, kBlindBand, std::abs(here - 0.5f));
-    return Colour{std::clamp(inverted.r + (tinted.r - inverted.r) * blind, 0.0f, 1.0f),
-                  std::clamp(inverted.g + (tinted.g - inverted.g) * blind, 0.0f, 1.0f),
-                  std::clamp(inverted.b + (tinted.b - inverted.b) * blind, 0.0f, 1.0f)};
+    const f32 by = 1.0f + (0.52f - 1.0f) * blind;
+    return Colour{backdrop.r * by, backdrop.g * by, backdrop.b * by};
 }
 
 Colour tint_of(const Colour& accent, u32 which) {

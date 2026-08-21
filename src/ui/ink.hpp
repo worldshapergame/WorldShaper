@@ -40,7 +40,12 @@ inline constexpr f32 kInkFloor = 0.30f;
 // The half-width of the band where inversion has nothing to say, either side of mid grey. Outside
 // roughly 0.42 to 0.58 luma the brightness carries the ink on its own; inside it the contrast is
 // spent on hue instead. A sixth of the range, centred exactly where inversion is blind.
-inline constexpr f32 kBlindBand = 0.08f;
+// Half the width of the band where an inversion has nothing to say — and now the width of the band
+// where the GLASS is pushed out of the way instead. It used to be where the ink crossfaded to the
+// player's accent; reported and removed (*make it so that text doesnt get the accent color*),
+// because a word that changes colour as the world drifts behind it reads as a different kind of
+// word. See `ui_glass` in shaders/ui.glsl.
+inline constexpr f32 kBlindBand = 0.12f;
 
 // The weighted quadratic mean of the encoded channels, which is the linear luma expressed in
 // encoded units. A plain weighted average of encoded channels agrees for greys and is wrong by a
@@ -52,6 +57,11 @@ f32 luma(const Colour& encoded);
 // `accent` is the player's own colour, and it is used ONLY inside the blind band. Everywhere else
 // this returns the inverse of the backdrop pushed to the floor, which has no palette in it at all.
 Colour ink(const Colour& backdrop, const Colour& accent);
+
+// A backdrop pushed out of the blind band, so the ink above never has to reach for a hue. One
+// direction only — down — so there is no "which way has more room" to decide and no frame where a
+// panel flips as the world drifts behind it.
+Colour glass(const Colour& backdrop);
 
 // The brightness the ink is aiming at, on its own, so a test can sweep the thing the formula is
 // actually about without a colour getting in the way.
