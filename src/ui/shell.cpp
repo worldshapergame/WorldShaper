@@ -1844,6 +1844,7 @@ std::string Shell::enter_node(std::string_view name) {
 std::string Shell::add_node(std::string_view head) {
     if (editing_.empty()) return "nothing is open";
     refresh_graph();
+    remember("add");
     std::string made;
     const std::string why =
         add_clip_node(lines_, graph_, std::string(head), menu_x_, menu_y_, made);
@@ -2525,8 +2526,21 @@ void Shell::draw_editor_tab(const Rect& rect) {
     }
 
     // Ctrl-S, from either view, because it is the key everybody presses and neither view should be
-    // the one that does not take it.
-    if (ui_.input().is_down(Key::Ctrl) && ui_.input().was_pressed(Key::S)) save_document();
+    // the one that does not take it. Ctrl-Z and ctrl-Y are here for exactly the same reason — and
+    // ctrl-shift-Z as well, because half the world's editors spell redo that way and a player who
+    // presses the one their hands know should not have to find out which half this is.
+    if (ui_.input().is_down(Key::Ctrl) && !ui_.wants_keys()) {
+        if (ui_.input().was_pressed(Key::S)) save_document();
+        if (ui_.input().was_pressed(Key::Y) ||
+            (ui_.input().was_pressed(Key::Z) && ui_.input().is_down(Key::Shift))) {
+            step_forward();
+            return;
+        }
+        if (ui_.input().was_pressed(Key::Z)) {
+            step_back();
+            return;
+        }
+    }
 
     const Rect page{column.box.x0, column.y, column.box.x1, column.box.y1};
     if (view_ == 0) {
@@ -2798,6 +2812,70 @@ u32 Shell::node_at_line(u32 line) const {
 // After anything that changes the document from the visual view. The graph has to be re-read before
 // anything reads it again, and the text has to be told it is dirty — three lines, in one place,
 // because an edit that forgets one of them is an edit that draws correctly and saves nothing.
+// --- undo -------------------------------------------------------------------------------------
+//
+// Asked for directly. Every other editor a player has used has ctrl-Z, and an editor that changes a
+// file and cannot put it back is one people are afraid to press anything in.
+
+void Shell::remember(const char* reason) {
+    if (editing_.empty()) return;
+    // The same kind of change, close together, is ONE undo. Typing `portico` is a word to whoever
+    // typed it and seven keystrokes only to the machine.
+    const bool same = undo_reason_ == reason && seconds_ - undo_stamped_ < 0.8;
+    undo_reason_ = reason;
+    undo_stamped_ = seconds_;
+    if (same && !undo_.empty()) return;
+    undo_.push_back(DocumentState{lines_, caret_line_, caret_column_});
+    // Anything undone and then typed over is gone, which is what every editor does: a redo stack
+    // that survives a new edit is a branch, and a branch nobody asked for is a branch nobody finds.
+    redo_.clear();
+    if (undo_.size() > 64) undo_.erase(undo_.begin());
+}
+
+void Shell::step_back() {
+    if (undo_.empty()) {
+        say("nothing to undo", 1.5);
+        ui_.sound().say(Cue::Refuse);
+        return;
+    }
+    redo_.push_back(DocumentState{lines_, caret_line_, caret_column_});
+    lines_ = std::move(undo_.back().lines);
+    caret_line_ = undo_.back().caret_line;
+    caret_column_ = undo_.back().caret_column;
+    undo_.pop_back();
+    undo_reason_.clear();
+    drop_mark();
+    dirty_ = true;
+    graph_stale_ = true;
+    reparse_soon();
+    refresh_graph();
+    caret_moved_ = true;
+    caret_since_ = seconds_;
+    ui_.sound().say(Cue::Close);
+}
+
+void Shell::step_forward() {
+    if (redo_.empty()) {
+        say("nothing to redo", 1.5);
+        ui_.sound().say(Cue::Refuse);
+        return;
+    }
+    undo_.push_back(DocumentState{lines_, caret_line_, caret_column_});
+    lines_ = std::move(redo_.back().lines);
+    caret_line_ = redo_.back().caret_line;
+    caret_column_ = redo_.back().caret_column;
+    redo_.pop_back();
+    undo_reason_.clear();
+    drop_mark();
+    dirty_ = true;
+    graph_stale_ = true;
+    reparse_soon();
+    refresh_graph();
+    caret_moved_ = true;
+    caret_since_ = seconds_;
+    ui_.sound().say(Cue::Open);
+}
+
 void Shell::document_changed(const std::string& why) {
     if (!why.empty()) {
         say(why, 3.0);
@@ -3425,6 +3503,7 @@ void Shell::draw_visual_view(const Rect& page) {
                     ui_.draw().edge(in.inset(-metrics.px(1.0f)), 0.8f);
                     if (ui_.pressed_in(in)) {
                         hit_a_node = true;
+                        remember("wire");
                         document_changed(disconnect_clip_node(lines_, graph_,
                                                               static_cast<u32>(i),
                                                               static_cast<u32>(k)));
@@ -3579,6 +3658,7 @@ void Shell::draw_visual_view(const Rect& page) {
             // Written ONCE, on the release. Writing it every frame of a drag would rewrite the line
             // sixty times a second and re-read the document with it, which is a millisecond a frame
             // spent on a number nobody has finished choosing.
+            remember("move");
             bool wrote = place_clip_node(lines_, graph_.nodes[moved], drag_at_x_, drag_at_y_);
             for (const auto& along : drag_with_) {
                 if (along.first >= graph_.nodes.size()) continue;
@@ -3598,6 +3678,7 @@ void Shell::draw_visual_view(const Rect& page) {
         const u32 from = wiring_from_;
         wiring_from_ = ClipGraph::kNone;
         if (dropped_on < graph_.nodes.size()) {
+            remember("wire");
             document_changed(connect_clip_nodes(lines_, graph_, from, dropped_on));
             return;
         }
@@ -3718,6 +3799,7 @@ std::string Shell::take_part(const std::filesystem::path& from) {
             if (error) return "could not copy " + name + " beside this document";
         }
     }
+    remember("part");
     const std::string why = add_clip_include(lines_, graph_, name, menu_x_, menu_y_);
     document_changed(why);
     return why;
@@ -3769,6 +3851,7 @@ std::string Shell::make_part(u32 kind, const std::string& name) {
             break;
         }
     }
+    remember("part");
     const std::string why = add_clip_include(lines_, graph_, file, menu_x_, menu_y_);
     document_changed(why);
     return why;
@@ -3926,6 +4009,7 @@ void Shell::draw_graph_menu(const Rect& canvas) {
         case Act::Duplicate: {
             menu_about_ = ClipGraph::kNone;
             std::vector<std::string> made;
+            remember("duplicate");
             const std::string why = duplicate_clip_nodes(lines_, graph_, about, made);
             document_changed(why);
             if (!why.empty()) return;
@@ -3950,6 +4034,7 @@ void Shell::draw_graph_menu(const Rect& canvas) {
             // thing that reads it and no two of them share a line.
             std::string why;
             bool cut = false;
+            remember("wire");
             for (u32 node : about) {
                 if (node >= graph_.nodes.size()) continue;
                 for (usize k = graph_.nodes[node].links.size(); k-- > 0;) {
@@ -3974,6 +4059,7 @@ void Shell::draw_graph_menu(const Rect& canvas) {
         }
         case Act::TakeOut:
             menu_about_ = ClipGraph::kNone;
+            remember("take out");
             document_changed(delete_clip_nodes(lines_, graph_, about));
             return;
         case Act::Group:
@@ -4106,6 +4192,7 @@ void Shell::draw_property_rows(const ClipNode& node, const Rect& area, const Rec
             }
             if (written != nullptr) {
                 // The bytes of one number, exactly as every other slider in this panel does.
+                remember("value");
                 if (write_clip_number(lines_, *written, spell_clip_number(value, written->text))) {
                     dirty_ = true;
                     graph_stale_ = true;
@@ -4128,6 +4215,7 @@ void Shell::draw_property_rows(const ClipNode& node, const Rect& area, const Rec
                 if (other > 0) text += ",";
                 text += spell_clip_number(each, had != nullptr ? had->text : spelling);
             }
+            remember("value");
             if (write_clip_key(lines_, node, offer.key, text)) {
                 dirty_ = true;
                 graph_stale_ = true;
@@ -4268,6 +4356,7 @@ void Shell::draw_node_parameters(const Rect& rect) {
 
         f64 value = number.value;
         if (ui_.number(id_of("node.number", i), row, about, value) && value != number.value) {
+            remember("value");
             // The one way a slider changes a document: the bytes of this number, and no others.
             // Everything else in the file — the comments, the blank lines, the author's own spacing
             // — is untouched, which is what makes the text view worth trusting after a visual edit.
@@ -4397,6 +4486,11 @@ void Shell::open_document(const std::filesystem::path& raw) {
     std::ifstream file(path, std::ios::binary);
     std::string line;
     began_with_mark_ = false;
+    // A different document is a different history. Undoing into the last file you had open is the
+    // one thing an undo stack must never do.
+    undo_.clear();
+    redo_.clear();
+    undo_reason_.clear();
     while (std::getline(file, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (lines_.empty() && line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF &&
@@ -4638,6 +4732,7 @@ void Shell::edit_keys(const InputState& input) {
         if ((input.was_pressed(Key::C) || input.was_pressed(Key::X)) && has_selection()) {
             set_clipboard_text(selected_text());
             if (input.was_pressed(Key::X)) {
+                remember("cut");
                 erase_selection();
                 dirty_ = true;
                 graph_stale_ = true;
@@ -4650,6 +4745,7 @@ void Shell::edit_keys(const InputState& input) {
         if (input.was_pressed(Key::V)) {
             const std::string pasted = clipboard_text();
             if (!pasted.empty()) {
+                remember("paste");
                 erase_selection();
                 // Split on newlines, and drop a carriage return that came with them: text copied
                 // out of a Windows editor carries CRLF, and a stray \r in a clip is a character the
@@ -4692,6 +4788,7 @@ void Shell::edit_keys(const InputState& input) {
     // Anything that writes replaces what is chosen, which is what every text field everywhere does.
     if (has_selection() && (!input.typed.empty() || input.fired(Key::Enter) ||
                             input.fired(Key::Backspace) || input.fired(Key::Delete))) {
+        remember("type");
         erase_selection();
         dirty_ = true;
         graph_stale_ = true;
@@ -4702,6 +4799,10 @@ void Shell::edit_keys(const InputState& input) {
         if (input.typed.empty() && !input.fired(Key::Enter)) return;
     }
 
+    if (!input.typed.empty() || input.fired(Key::Enter) || input.fired(Key::Backspace) ||
+        input.fired(Key::Delete)) {
+        remember("type");
+    }
     std::string& line = lines_[std::min<usize>(caret_line_, lines_.size() - 1)];
     caret_column_ = static_cast<u32>(std::min<usize>(caret_column_, line.size()));
 
@@ -4743,6 +4844,13 @@ void Shell::edit_keys(const InputState& input) {
             touched = true;
         }
     }
+
+    // **The anchor comes with the caret.** Without this the mark stays where the caret was before
+    // the first letter, so after typing one character there is a one-character SELECTION — and the
+    // next character replaces it. Reported exactly that way: *i can just type one letter before
+    // replacing that letter with the next.* A selection is something a hand asked for; an edit is
+    // never one.
+    if (touched) drop_mark();
 
     move_caret(input);
 

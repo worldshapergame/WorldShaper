@@ -504,3 +504,84 @@ TEST_CASE("a material box opens where it stands and nothing lands on top of it")
     // A box with no list of properties has nothing to open.
     CHECK_FALSE(shell.open_node_named("nothing of that name"));
 }
+
+// --- typing, and putting it back ----------------------------------------------------------------
+
+TEST_CASE("typing a word types the whole word") {
+    // Reported exactly: *i cant type properly on the script editor because it just selects what im
+    // gonna type and i can just type one letter before replacing that letter with the next.* The
+    // selection's anchor was left where the caret had been, so after ONE character there was a
+    // one-character selection and the next character replaced it. An edit is never a selection.
+    Scratch scratch("shell-typing");
+    const std::filesystem::path clip = write_file(scratch.root / "clips" / "typed.wsclip", kClip);
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    REQUIRE(shell.open_editor_view("script"));
+    quiet_frame(shell, 0.0);
+
+    f64 at = 0.1;
+    for (char c : std::string("portico")) {
+        InputState typed = quiet_input();
+        typed.typed = std::string(1, c);
+        shell.frame(typed, 1280, 800, at);
+        at += 0.05;
+    }
+    shell.frame(with_ctrl(Key::S), 1280, 800, at);
+    CHECK(file_text(clip) == "portico" + std::string(kClip));
+}
+
+TEST_CASE("ctrl-Z puts the document back, and ctrl-Y puts it forward again") {
+    Scratch scratch("shell-undo");
+    const std::filesystem::path clip = write_file(scratch.root / "clips" / "undone.wsclip", kClip);
+    const std::string was(kClip);
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(clip);
+    REQUIRE(shell.open_editor_view("script"));
+    quiet_frame(shell, 0.0);
+
+    // A word, typed close together, is ONE undo -- not seven. That grouping is the whole reason
+    // `remember` takes a reason.
+    f64 at = 0.1;
+    for (char c : std::string("porch")) {
+        InputState typed = quiet_input();
+        typed.typed = std::string(1, c);
+        shell.frame(typed, 1280, 800, at);
+        at += 0.05;
+    }
+    shell.frame(with_ctrl(Key::Z), 1280, 800, at);
+    at += 0.1;
+    shell.frame(with_ctrl(Key::S), 1280, 800, at);
+    at += 0.1;
+    CHECK(file_text(clip) == was);
+
+    shell.frame(with_ctrl(Key::Y), 1280, 800, at);
+    at += 0.1;
+    shell.frame(with_ctrl(Key::S), 1280, 800, at);
+    CHECK(file_text(clip) == "porch" + was);
+}
+
+TEST_CASE("undo does not reach into the document that was open before this one") {
+    Scratch scratch("shell-undo-across");
+    const std::filesystem::path one = write_file(scratch.root / "clips" / "one.wsclip", kClip);
+    const std::filesystem::path two = write_file(scratch.root / "clips" / "two.wsclip", kClip);
+
+    Shell shell;
+    shell.load(scratch.root, scratch.root / "game");
+    shell.open_editor(one);
+    REQUIRE(shell.open_editor_view("script"));
+    quiet_frame(shell, 0.0);
+    InputState typed = quiet_input();
+    typed.typed = "x";
+    shell.frame(typed, 1280, 800, 0.1);
+
+    shell.open_editor(two);
+    quiet_frame(shell, 0.2);
+    // Nothing to undo here: a different document is a different history.
+    shell.frame(with_ctrl(Key::Z), 1280, 800, 0.3);
+    shell.frame(with_ctrl(Key::S), 1280, 800, 0.4);
+    CHECK(file_text(two) == std::string(kClip));
+}

@@ -505,6 +505,30 @@ private:
     std::vector<std::string> lines_;
     u32 caret_line_ = 0;
     u32 caret_column_ = 0;
+    // --- undo, and the one thing it is not ------------------------------------------------------
+    //
+    // The whole document, kept before each change. Not a list of edits: an edit here is a slider
+    // moving three bytes, a node being taken out of the middle of a file, a paste of twenty lines
+    // and a keystroke, and a scheme that could undo all four would be four schemes. A clip is a few
+    // tens of kilobytes and this keeps sixty-four of them, which is a megabyte in the worst case in
+    // the repository and nothing in the usual one.
+    //
+    // Changes GROUP: typing a word is one undo rather than five, because the state is only filed
+    // when the reason changes or when a moment has passed since the last one. That is the whole of
+    // why `remember` takes a reason.
+    struct DocumentState {
+        std::vector<std::string> lines;
+        u32 caret_line = 0;
+        u32 caret_column = 0;
+    };
+    std::vector<DocumentState> undo_;
+    std::vector<DocumentState> redo_;
+    std::string undo_reason_;
+    f64 undo_stamped_ = -1.0e9;
+    void remember(const char* reason);
+    void step_back();      // ctrl-Z
+    void step_forward();   // ctrl-Y, and ctrl-shift-Z, which is the other half of the world
+
     // Whether the file on disk began with a UTF-8 byte-order mark, so that saving it puts one
     // back. Three invisible bytes that every Windows text editor writes by default; the parser
     // now skips them and the editor must not silently drop them, which is the same promise the
