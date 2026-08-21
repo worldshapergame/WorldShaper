@@ -1424,3 +1424,144 @@ TEST_CASE("a word of the language can be found by what it does") {
         }
     }
 }
+
+// --- sockets: every place a wire can land, by name ------------------------------------------------
+//
+// The rewrite. A node is a list of named, typed sockets down its left side and one output on its
+// right, exactly as the version this was asked to match — and every socket is a place in the TEXT
+// as much as a place on the screen, so connecting one writes what a person would have typed.
+
+TEST_CASE("a node's sockets are its numbers, its keys, its children and its name") {
+    std::vector<std::string> lines = lines_of(
+        "metre 32\n"
+        "material stone rgb=124,120,112 rough=210\n"
+        "let grain = fbm size=0.2 octaves=3 seed=1\n"
+        "let a = box -1 0 -1  1 2 1 round=0.04\n"
+        "let b = sphere 0 1 0 r=0.5\n"
+        "let all = union { a b }\n"
+        "paint stone where=grain above=0.5\n"
+        "solid all\n");
+    const ClipGraph graph = read_clip_graph(lines);
+    const auto find = [&](const char* head) {
+        for (usize i = 0; i < graph.nodes.size(); ++i) {
+            if (graph.nodes[i].head == head) return static_cast<u32>(i);
+        }
+        return ClipGraph::kNone;
+    };
+    const auto named_at = [&](const char* name) {
+        return graph.find(ClipGraph::key_of(*named(graph, name)));
+    };
+    const auto socket_named = [](const std::vector<ClipSocket>& in, const char* name) {
+        for (const ClipSocket& one : in) {
+            if (one.name == name) return one;
+        }
+        return ClipSocket{};
+    };
+
+    // A box: six numbers, each named for the corner it belongs to, and its `round=`.
+    const std::vector<ClipSocket> box = clip_sockets_of(graph, named_at("a"));
+    REQUIRE(box.size() >= 7);
+    CHECK(box[0].name == "x0");
+    CHECK(box[2].name == "z0");
+    CHECK(box[3].name == "x1");
+    CHECK(box[5].name == "z1");
+    CHECK(socket_named(box, "round").has_number);
+    for (const ClipSocket& one : box) {
+        CHECK(one.takes == ClipCarries::Value);
+    }
+
+    // `solid` takes ONE thing and it is a shape, and the document has already put one there.
+    const std::vector<ClipSocket> solid = clip_sockets_of(graph, find("solid"));
+    REQUIRE(solid.size() == 1);
+    CHECK(solid[0].name == "shape");
+    CHECK(solid[0].takes == ClipCarries::Shape);
+    CHECK(solid[0].linked);
+    CHECK(graph.nodes[solid[0].from].name == "all");
+
+    // A coat takes a voxel type by name and a pattern under `where`.
+    const std::vector<ClipSocket> coat = clip_sockets_of(graph, find("paint"));
+    const ClipSocket type = socket_named(coat, "voxel type");
+    CHECK(type.takes == ClipCarries::Material);
+    CHECK(type.linked);
+    CHECK(graph.nodes[type.from].name == "stone");
+    const ClipSocket where = socket_named(coat, "where");
+    CHECK(where.linked);
+    CHECK(graph.nodes[where.from].name == "grain");
+
+    // A union's children are sockets, and there is an EMPTY one at the end to drop into -- which is
+    // what a union is for, and without it there is nowhere to put a third shape.
+    const std::vector<ClipSocket> all = clip_sockets_of(graph, named_at("all"));
+    REQUIRE(all.size() == 3);
+    CHECK(all[0].linked);
+    CHECK(all[1].linked);
+    CHECK_FALSE(all[2].linked);
+    CHECK(all[2].takes == ClipCarries::Shape);
+
+    // A voxel type offers every property it can take, whether or not the document writes it (D786).
+    const std::vector<ClipSocket> type_node = clip_sockets_of(graph, named_at("stone"));
+    CHECK(socket_named(type_node, "rough").has_number);
+    CHECK(socket_named(type_node, "ior").name == "ior");
+    CHECK_FALSE(socket_named(type_node, "ior").has_number);
+}
+
+TEST_CASE("joining a socket writes what a person would have typed") {
+    std::vector<std::string> lines = lines_of(
+        "material stone rgb=1,2,3\n"
+        "let grain = fbm size=0.2\n"
+        "let a = box 0 0 0  1 1 1\n"
+        "let b = box 2 0 0  3 1 1\n"
+        "let all = union { a }\n"
+        "paint stone\n"
+        "solid all\n");
+    ClipGraph graph = read_clip_graph(lines);
+    const auto named_at = [&](const char* name) {
+        return graph.find(ClipGraph::key_of(*named(graph, name)));
+    };
+    const auto find = [&](const char* head) {
+        for (usize i = 0; i < graph.nodes.size(); ++i) {
+            if (graph.nodes[i].head == head) return static_cast<u32>(i);
+        }
+        return ClipGraph::kNone;
+    };
+    const auto socket_of = [&](u32 node, const char* name) {
+        const std::vector<ClipSocket> in = clip_sockets_of(graph, node);
+        for (usize i = 0; i < in.size(); ++i) {
+            if (in[i].name == name) return static_cast<u32>(i);
+        }
+        return ClipGraph::kNone;
+    };
+
+    // A shape into a union's empty socket.
+    CHECK(connect_clip_socket(lines, graph, named_at("all"), socket_of(named_at("all"), "and"),
+                              named_at("b"))
+              .empty());
+    CHECK(text_of(lines).find("union { a b }") != std::string::npos);
+
+    // A pattern into a coat's `where`, which the document does not have yet.
+    graph = read_clip_graph(lines);
+    CHECK(connect_clip_socket(lines, graph, find("paint"), socket_of(find("paint"), "where"),
+                              named_at("grain"))
+              .empty());
+    CHECK(text_of(lines).find("paint stone where=grain") != std::string::npos);
+
+    // The wrong kind is refused, and the refusal names both.
+    graph = read_clip_graph(lines);
+    const std::string why = connect_clip_socket(lines, graph, named_at("all"),
+                                                socket_of(named_at("all"), "and"),
+                                                named_at("stone"));
+    CHECK_FALSE(why.empty());
+    CHECK(why.find("voxel type") != std::string::npos);
+
+    // And a ring is refused, because a ring cannot be built.
+    graph = read_clip_graph(lines);
+    CHECK_FALSE(connect_clip_socket(lines, graph, named_at("a"), 0, named_at("all")).empty());
+
+    // Taking one out again leaves the document as it was.
+    graph = read_clip_graph(lines);
+    const std::string before = text_of(lines);
+    const u32 which = socket_of(named_at("all"), "part 2");
+    REQUIRE(which != ClipGraph::kNone);
+    CHECK(disconnect_clip_socket(lines, graph, named_at("all"), which).empty());
+    CHECK(text_of(lines).find("union { a }") != std::string::npos);
+    CHECK(text_of(lines) != before);
+}

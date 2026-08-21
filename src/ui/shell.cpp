@@ -1974,7 +1974,12 @@ constexpr f32 kZoomForPorts = 0.55f;
 //
 // So a document opens whole wherever whole is legible at all, and the wheel is for looking closer
 // rather than for finding out what is there.
-constexpr f32 kZoomOpen = 0.32f;
+// **A document opens at a size its sockets can be READ at.** It was 0.32, which fitted a fifty-box
+// clip in a docked panel — and a box is a title and one row per socket now, so at a third of full
+// size those rows are grey bands. A picture of the shape of a document is worth nothing if the one
+// thing a player came for is which socket is which. It opens readable and the wheel is what a
+// document too big for the window is for (D771's own argument, at the size the rewrite needs).
+constexpr f32 kZoomOpen = 0.68f;
 
 // A node's drawing. The icon is the control and the label is the fallback (14-ui-style.md), which
 // here means: what kind of thing this is has to be legible before the name is read.
@@ -2318,59 +2323,36 @@ void take_free_cell(std::unordered_set<u64>& taken, f32& x, f32& y, u32 tall = 1
 // This sorts each column by where its neighbours sit and repeats, which is the ordinary barycentre
 // heuristic — six passes, alternating direction, because that is where it stops improving on the
 // documents in this repository.
-bool Shell::node_is_open(u32 index) const {
-    if (index >= graph_.nodes.size()) return false;
-    const std::string key = ClipGraph::key_of(graph_.nodes[index]);
-    return std::find(opened_.begin(), opened_.end(), key) != opened_.end();
-}
-
-void Shell::open_node(u32 index, bool open) {
-    if (index >= graph_.nodes.size()) return;
-    const std::string key = ClipGraph::key_of(graph_.nodes[index]);
-    const auto at = std::find(opened_.begin(), opened_.end(), key);
-    if (open && at == opened_.end()) {
-        opened_.push_back(key);
-    } else if (!open && at != opened_.end()) {
-        opened_.erase(at);
-    }
-    lay_out_graph();
-}
-
 // How many cells a box covers. Two rows to a cell when it is open, which at full size is about a
 // row's worth of pixels each — the same height they have in the panel on the left, because they
 // are the same rows.
+// **A box is a title and one row per socket**, which is what a node looked like in the version this
+// was rewritten to match. The height follows from the sockets rather than from a fold: there is
+// nothing to open, because everything a node takes is already on it.
+//
+// Two rows to a cell, so a row is about the height of a row in the settings panel — the same
+// arithmetic the open material node used, now that every node is open.
 u32 Shell::cells_tall(u32 index) const {
-    if (index >= graph_.nodes.size()) return 1;
-    u32 tall = 1;
-    if (node_is_open(index)) {
-        usize rows = 0;
-        for (const ClipProperty& offer : clip_properties_of(graph_.nodes[index].head)) {
-            rows += offer.parts;
-        }
-        if (rows > 0) tall = 1 + static_cast<u32>((rows + 1) / 2);
-    }
-    // And tall enough for its wires to land apart from one another. A box takes as many inputs as
-    // the author wrote and its edge is one cell high, so a union of twenty gets twenty wires into
-    // twenty-three pixels — which is the crowding that was reported, and it is not a routing fault
-    // but a box that is the wrong size for what arrives at it.
-    usize wires = 0;
-    for (u32 input : graph_.nodes[index].inputs) {
-        if (input < node_shown_.size() && node_shown_[input]) ++wires;
-    }
+    if (index >= sockets_.size()) return 1;
+    usize rows = sockets_[index].size();
+    // And the ones the language MEANS rather than says, which arrive at the bottom of the box under
+    // their own names (D796): a solid is coated, weathered and varied by things that never name it.
     if (index < implied_.size()) {
         for (u32 input : implied_[index]) {
-            if (input < node_shown_.size() && node_shown_[input]) ++wires;
+            if (input < node_shown_.size() && node_shown_[input]) ++rows;
         }
     }
-    if (wires > 1) {
-        const f32 want = static_cast<f32>(wires) * kPortPitch;
-        tall = std::max(tall, static_cast<u32>(std::ceil(want / (kCellTall * kNodeTall))));
-    }
-    return std::min(tall, 24u);
+    if (rows == 0) return 1;
+    return std::min<u32>(1 + static_cast<u32>((rows + 1) / 2), 40u);
 }
 
+// **Two cells wide, always.** A socket row is a name, a value and a dot, and one cell is not enough
+// for any two of those: `translucent` and its number came out on top of one another. It was two
+// only for an opened material and one for everything else, and a picture whose boxes are two widths
+// is a picture a reader measures before reading.
 u32 Shell::cells_wide(u32 index) const {
-    return (index < graph_.nodes.size() && node_is_open(index)) ? 2u : 1u;
+    (void)index;
+    return 2u;
 }
 
 void Shell::go_inside(u32 index) {
@@ -2642,6 +2624,11 @@ void Shell::lay_out_graph() {
     // keeps its cell and the layout's own guess is what gives way. Two authored boxes on one cell
     // — a hand-written `#@`, or a file merged from two — is settled by which line comes first,
     // which is at least an answer a reader can predict.
+    // The sockets first, because the height of a box is how many it has.
+    sockets_.assign(count, {});
+    for (usize i = 0; i < count; ++i) {
+        if (node_shown_[i]) sockets_[i] = clip_sockets_of(graph_, static_cast<u32>(i));
+    }
     node_tall_.assign(count, 1);
     node_wide_.assign(count, 1);
     for (usize i = 0; i < count; ++i) {
@@ -2696,14 +2683,50 @@ void Shell::lay_out_graph() {
         if (doc_shown_) take_free_cell(taken, doc_x_, doc_y_, doc_tall_);
     }
 
+    // **The picture starts at nothing.** `take_free_cell` searches outwards in rings, so a box
+    // pushed off its place can land at a negative cell — and the extent below only ever counted
+    // forwards, so everything left of nought was drawn off the edge of the panel with its names
+    // clipped away. Shifted rather than clamped: a layout is a set of RELATIVE places, and moving
+    // all of it moves none of it.
+    f32 least_x = 0.0f;
+    f32 least_y = 0.0f;
+    bool any_shown = false;
     for (usize i = 0; i < count; ++i) {
         if (!node_shown_[i]) continue;
-        graph_wide_ = std::max(graph_wide_, graph_x_[i] + static_cast<f32>(node_wide_[i]));
-        graph_tall_ = std::max(graph_tall_, graph_y_[i] + static_cast<f32>(node_tall_[i]));
+        least_x = any_shown ? std::min(least_x, graph_x_[i]) : graph_x_[i];
+        least_y = any_shown ? std::min(least_y, graph_y_[i]) : graph_y_[i];
+        any_shown = true;
     }
     if (doc_shown_) {
-        graph_wide_ = std::max(graph_wide_, doc_x_ + 1.0f);
-        graph_tall_ = std::max(graph_tall_, doc_y_ + static_cast<f32>(doc_tall_));
+        least_x = any_shown ? std::min(least_x, doc_x_) : doc_x_;
+        least_y = any_shown ? std::min(least_y, doc_y_) : doc_y_;
+    }
+    if (least_x != 0.0f || least_y != 0.0f) {
+        for (usize i = 0; i < count; ++i) {
+            if (!node_shown_[i]) continue;
+            graph_x_[i] -= least_x;
+            graph_y_[i] -= least_y;
+        }
+        doc_x_ -= least_x;
+        doc_y_ -= least_y;
+    }
+
+    for (usize i = 0; i < count; ++i) {
+        if (!node_shown_[i]) continue;
+        // What a box COVERS, not how many cells it reserves: a box fills the top-left of its
+        // cells and leaves the channel down the right and the lane along the bottom free (D780), so
+        // counting whole cells here made the picture a quarter of a cell wider than it is — enough
+        // to push a document that fits into the *does not fit* arm and open it scrolled.
+        graph_wide_ = std::max(graph_wide_,
+                               graph_x_[i] + static_cast<f32>(node_wide_[i] - 1) + kNodeWide);
+        graph_tall_ = std::max(graph_tall_,
+                               graph_y_[i] + static_cast<f32>(node_tall_[i] - 1) + kNodeTall);
+    }
+    if (doc_shown_) {
+        // Two cells wide like everything else, so the extent is not a cell short of the picture.
+        graph_wide_ = std::max(graph_wide_, doc_x_ + 1.0f + kNodeWide);
+        graph_tall_ = std::max(graph_tall_,
+                               doc_y_ + static_cast<f32>(doc_tall_ - 1) + kNodeTall);
     }
 }
 
@@ -2729,16 +2752,13 @@ std::string Shell::new_part(std::string_view kind, std::string_view name) {
     return make_part(which, std::string(name));
 }
 
-bool Shell::open_node_named(std::string_view name) {
-    if (editing_.empty()) return false;
-    refresh_graph();
+u32 Shell::sockets_on(std::string_view name) const {
     for (usize i = 0; i < graph_.nodes.size(); ++i) {
         if (graph_.nodes[i].name != name) continue;
-        if (clip_properties_of(graph_.nodes[i].head).empty()) return false;
-        open_node(static_cast<u32>(i), true);
-        return true;
+        if (i >= sockets_.size()) return 0;
+        return static_cast<u32>(sockets_[i].size());
     }
-    return false;
+    return 0;
 }
 
 std::string Shell::new_world(const std::filesystem::path& from) {
@@ -3506,18 +3526,36 @@ void Shell::draw_visual_view(const Rect& page) {
         return Rect{x, y, x + static_cast<f32>(across - 1) * cell_w + node_w,
                     y + static_cast<f32>(deep - 1) * cell_h + node_h};
     };
-    // Where a wire leaves a node, and where its n-th wire arrives.
-    const auto out_port = [&](const Rect& box) {
-        return Rect{box.x1 - metrics.px(2.0f), box.mid_y() - metrics.px(4.0f),
-                    box.x1 + metrics.px(4.0f), box.mid_y() + metrics.px(4.0f)};
+    // --- where a socket sits on a box ----------------------------------------------------------
+    //
+    // A box is a title row and then one row per socket, and a socket's dot is on the left edge of
+    // its own row. That is the whole difference from what was here before, where a wire arrived
+    // somewhere along a box's edge and which of its inputs it meant was a guess.
+    // The title takes a whole cell's worth, so it has room for the name at its own size and the
+    // head word under it — and the rows share what is left, which is why a box is one cell plus
+    // half a cell per socket.
+    const f32 title_row = node_h;
+    const auto row_height_of = [&](const Rect& box, usize rows) {
+        if (rows == 0) return box.height();
+        return std::max(metrics.px(2.0f), (box.height() - title_row) / static_cast<f32>(rows));
     };
+    const auto socket_row = [&](const Rect& box, usize which, usize of) {
+        const f32 tall = row_height_of(box, of);
+        const f32 top = box.y0 + title_row + tall * static_cast<f32>(which);
+        return Rect{box.x0, top, box.x1, top + tall};
+    };
+    // The dot itself, on the edge, big enough to hit. A small target is a target nobody hits, and
+    // this is the one control the whole editor is made of.
+    const f32 dot = metrics.px(4.0f);
     const auto in_port = [&](const Rect& box, usize which, usize of) {
-        const f32 span = box.height() - metrics.px(6.0f);
-        const f32 at = box.y0 + metrics.px(3.0f) +
-                       span * (of <= 1 ? 0.5f
-                                       : static_cast<f32>(which) / static_cast<f32>(of - 1));
-        return Rect{box.x0 - metrics.px(4.0f), at - metrics.px(4.0f), box.x0 + metrics.px(2.0f),
-                    at + metrics.px(4.0f)};
+        const Rect row = socket_row(box, which, of);
+        return Rect{box.x0 - dot, row.mid_y() - dot, box.x0 + dot, row.mid_y() + dot};
+    };
+    // A node has ONE output, and it is beside its title — which is what says *this whole box is
+    // the thing you are dragging*, where a dot beside a row would say only that row.
+    const auto out_port = [&](const Rect& box) {
+        return Rect{box.x1 - dot, box.y0 + title_row * 0.5f - dot, box.x1 + dot,
+                    box.y0 + title_row * 0.5f + dot};
     };
 
     // The document's box, worked out before the wires because they arrive at it.
@@ -3552,20 +3590,9 @@ void Shell::draw_visual_view(const Rect& page) {
     // in it, ordered by where it starts, so parallel wires read as a bundle rather than as one
     // thick line.
     const f32 thin = std::max(1.0f, metrics.scale * graph_zoom_);
-    // Whether there is room to letter a wire. The same threshold the boxes use for their own
-    // detail, worked out here because the wires are drawn first.
-    const bool detail_words = graph_zoom_ >= kZoomForDetail;
-    // **The words are collected here and drawn after the BOXES.** A box is a window and is in front
-    // of what is behind it (D753), so a word drawn with its wire is a word the next box covers —
-    // which is what happened: `coats` came out as `oats` under the box beside it.
-    struct WireWord {
-        std::string text;
-        f32 x = 0.0f;
-        f32 y = 0.0f;
-        bool written = true;
-    };
-    std::vector<WireWord> wire_words;
-    const f32 word_size = metrics.small_text();
+    // **A wire no longer carries a word.** It used to, because a line between two boxes said THAT
+    // they were joined and nothing about HOW — and now it lands on a named socket, which says it
+    // where a reader is already looking. One answer, in one place.
     {
         // Which cells have a box on them, so a straight run can be checked against them.
         std::unordered_set<u64> filled;
@@ -3603,7 +3630,6 @@ void Shell::draw_visual_view(const Rect& page) {
             // The word this wire is, which is the whole of why a reader could not tell what was
             // joined to what: a line between two boxes says THAT they are joined and nothing about
             // HOW. `where`, `by`, `on`, `coats`, `made of` — that is the missing half.
-            std::string word;
             u32 from_node = 0;
             u32 into_node = 0;
         };
@@ -3653,13 +3679,20 @@ void Shell::draw_visual_view(const Rect& page) {
             const ClipNode& node = graph_.nodes[i];
             const Rect into = box_of(i);
             const std::pair<f32, f32> into_at = place_of(i);
-            // What the document says first, then what the language means. Both arrive at the same
-            // edge, so they are counted together.
-            std::vector<std::pair<u32, bool>> arriving;
-            for (u32 other : node.inputs) {
-                if (other < graph_.nodes.size() && node_shown_[other]) {
-                    arriving.emplace_back(other, true);
-                }
+            // **Every wire arrives at the socket it is written in.** A socket is a row on the box,
+            // so a wire lands where the reader can see its name — which is the whole of the change:
+            // a line ending on a box's edge says *something goes in here* and a line ending on a
+            // row called `where` says what.
+            //
+            // The implied ones (D796) come after, in rows of their own at the bottom.
+            std::vector<std::pair<u32, bool>> arriving;   // node, and whether the document says it
+            const std::vector<ClipSocket>& mine_sockets = sockets_[i];
+            for (const ClipSocket& socket : mine_sockets) {
+                arriving.emplace_back(socket.linked && socket.from < graph_.nodes.size() &&
+                                              node_shown_[socket.from]
+                                          ? socket.from
+                                          : ClipGraph::kNone,
+                                      true);
             }
             for (u32 other : implied_[i]) {
                 if (other < graph_.nodes.size() && node_shown_[other]) {
@@ -3667,10 +3700,10 @@ void Shell::draw_visual_view(const Rect& page) {
                 }
             }
             const usize shown_all = arriving.size();
-            usize shown_before = 0;
             for (usize k = 0; k < arriving.size(); ++k) {
                 const u32 input = arriving[k].first;
-                const usize mine = shown_before++;
+                if (input >= graph_.nodes.size()) continue;   // an empty socket has no wire
+                const usize mine = k;
                 const Rect from = box_of(input);
                 if (std::max(from.x1, into.x1) < canvas.x0) continue;
                 if (std::min(from.x0, into.x0) > canvas.x1) continue;
@@ -3685,19 +3718,9 @@ void Shell::draw_visual_view(const Rect& page) {
                 run.written = arriving[k].second;
                 run.from_node = input;
                 run.into_node = static_cast<u32>(i);
-                // What the document calls this wire. A key when it has one — `where=grain` is a
-                // wire whose word is `where` — and the relationship's own word when the language
-                // means it rather than saying it.
-                if (arriving[k].second) {
-                    for (const ClipLink& link : node.links) {
-                        if (link.from == input && !link.key.empty()) run.word = link.key;
-                    }
-                } else {
-                    run.word = (graph_.nodes[input].head == "paint")       ? "coats"
-                               : (graph_.nodes[input].head == "weather")   ? "weathers"
-                               : (graph_.nodes[input].head == "variation") ? "varies"
-                                                                           : "";
-                }
+                // The socket's own name is written ON the box, at the end of the wire, so the wire
+                // itself no longer has to carry a word.
+                (void)node;
                 const i32 fx = static_cast<i32>(std::lround(from_at.first));
                 const i32 fy = static_cast<i32>(std::lround(from_at.second));
                 const i32 tx = static_cast<i32>(std::lround(into_at.first));
@@ -3811,17 +3834,7 @@ void Shell::draw_visual_view(const Rect& page) {
                                 std::max(y0, y1)},
                            rgb, written ? 1.0f : 0.62f);
         };
-        // **The word a wire is.** A line between two boxes says THAT they are joined and nothing
-        // about HOW, which is the whole of *i really cant tell how things connect*. `where`, `by`,
-        // `on`, `coats` — one word, on the wire, in the wire's own colour.
-        //
-        // Only at the detail size: a word on every wire at a third of full size is a smear, and a
-        // graph zoomed out is a picture of the SHAPE of a document rather than of its grammar.
-        const auto label_wire = [&](const std::string& word, f32 x, f32 y, bool written) {
-            if (word.empty() || !detail_words) return;
-            if (x < canvas.x0 || x > canvas.x1) return;
-            wire_words.push_back(WireWord{word, x, y, written});
-        };
+
 
         for (usize r = 0; r < runs.size(); ++r) {
             const Run& run = runs[r];
@@ -3832,13 +3845,6 @@ void Shell::draw_visual_view(const Rect& page) {
                 flat(from.x1, turn_in, run.y0, run.rgb, run.written);
                 upright(turn_in, run.y0, run.y1, run.rgb, run.written);
                 flat(turn_in, into.x0, run.y1, run.rgb, run.written);
-                // On the longer of the two flat stretches, because a word on a stretch shorter
-                // than itself is a word over a box.
-                if (turn_in - from.x1 >= into.x0 - turn_in) {
-                    label_wire(run.word, (from.x1 + turn_in) * 0.5f, run.y0, run.written);
-                } else {
-                    label_wire(run.word, (turn_in + into.x0) * 0.5f, run.y1, run.written);
-                }
                 continue;
             }
             const f32 turn_out = channel_x(run.channel_out, slot_out[r]);
@@ -3848,8 +3854,7 @@ void Shell::draw_visual_view(const Rect& page) {
             flat(turn_out, turn_in, along, run.rgb, run.written);
             upright(turn_in, along, run.y1, run.rgb, run.written);
             flat(turn_in, into.x0, run.y1, run.rgb, run.written);
-            // The lane run is the long one on a wire that takes a lane, so the word goes there.
-            label_wire(run.word, (turn_out + turn_in) * 0.5f, along, run.written);
+
         }
     }
 
@@ -3871,6 +3876,8 @@ void Shell::draw_visual_view(const Rect& page) {
     const bool ports = graph_zoom_ >= kZoomForPorts;
     bool hit_a_node = false;
     u32 dropped_on = ClipGraph::kNone;
+    // And WHICH SOCKET of it, because a drop now means a named row rather than a box.
+    u32 dropped_on_socket_ = ClipGraph::kNone;
 
     for (usize i = 0; i < graph_.nodes.size(); ++i) {
         if (!node_shown_[i]) continue;
@@ -3942,9 +3949,12 @@ void Shell::draw_visual_view(const Rect& page) {
         // the way in had wasted.
         if (!inside_.empty() && inside_.back() == ClipGraph::key_of(node)) has_parts = false;
         if (has_parts) {
+            // On the title row, not in the middle of the box: a box is its SOCKETS below the
+            // title now, so the middle of one is a socket row and the way in was drawn across it.
             const f32 in_wide = std::min(cell, node_h * 0.8f);
-            const Rect in_mark{name_left, box.mid_y() - in_wide * 0.5f, name_left + in_wide,
-                               box.mid_y() + in_wide * 0.5f};
+            const f32 in_mid = box.y0 + title_row * 0.5f;
+            const Rect in_mark{name_left, in_mid - in_wide * 0.5f, name_left + in_wide,
+                               in_mid + in_wide * 0.5f};
             const bool over_mark = in_mark.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
             ui_.draw().icon(in_mark, Icon::Inside, over_mark ? 1.0f : 0.7f);
             if (over_mark && ui_.pressed_in(in_mark)) {
@@ -3973,8 +3983,8 @@ void Shell::draw_visual_view(const Rect& page) {
         // a whole document's worth of boxes the name is the only thing that tells one from another
         // — `port` and `porti` are the same word to a reader and `portico` is not.
         if (detail) {
-            ui_.draw().icon(Rect{name_left, box.y0 + metrics.px(2.0f), name_left + cell,
-                                 box.y0 + metrics.px(2.0f) + cell},
+            const f32 icon_top = box.y0 + (title_row - cell) * 0.5f;
+            ui_.draw().icon(Rect{name_left, icon_top, name_left + cell, icon_top + cell},
                             icon_of(node));
             name_left += cell + metrics.px(3.0f);
         }
@@ -3997,132 +4007,168 @@ void Shell::draw_visual_view(const Rect& page) {
         // the mark is a control: it opens the box where it stands and the sliders are inside it.
         // Asked for directly: *these material nodes should show their settings inside their actual
         // node instead of in another settings window so you can directly tweak them from there.*
-        const bool offers_properties = !clip_properties_of(node.head).empty();
+        // **There is no *open this* mark any more.** Every box shows everything it takes, because
+        // a box IS its sockets now — so the mark that used to unfold a voxel type would unfold
+        // something already unfolded. The three sliders stay as a sign that this one has numbers a
+        // hand can reach, at the detail size only.
         const bool has_numbers = !node.numbers.empty();
         f32 mark_right = box.x1 - metrics.px(3.0f);
-        if (offers_properties || (detail && has_numbers)) {
+        if (detail && has_numbers) {
             const Rect at{mark_right - cell * 0.85f, box.y0 + metrics.px(2.0f), mark_right,
                           box.y0 + metrics.px(2.0f) + cell * 0.85f};
-            const bool over_mark =
-                offers_properties && at.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
-            ui_.draw().icon(at, Icon::Settings,
-                            over_mark ? 1.0f : (chosen || node_is_open(static_cast<u32>(i))
-                                                    ? 0.85f
-                                                    : 0.45f));
-            if (over_mark && ui_.pressed_in(at)) {
-                hit_a_node = true;
-                const bool was = node_is_open(static_cast<u32>(i));
-                ui_.draw().pop_clip();
-                ui_.draw().pop_clip();
-                open_node(static_cast<u32>(i), !was);
-                ui_.sound().say(was ? Cue::Close : Cue::Open);
-                return;
-            }
+            ui_.draw().icon(at, Icon::Settings, (chosen ? 0.85f : 0.45f) * lit);
             mark_right -= cell * 0.85f + metrics.px(2.0f);
         }
 
-        const f32 title = std::max(metrics.small_text(), metrics.text() * graph_zoom_);
+        // **The name, and under it what KIND of thing it is** — `all` is a union, `grain` is an
+        // fbm — in that kind's own colour. Two lines inside the title row, and the size of the
+        // first is cut until the second fits under it rather than through it.
         const std::string first = node.name.empty() ? clip_head_shown(node.head) : node.name;
+        const std::string head_word = clip_head_shown(node.head);
+        const f32 head_size = metrics.small_text();
+        const f32 head_cap = DrawList::cap_height(head_size);
+        const bool second_line = detail && head_word != first;
+        f32 title = std::max(metrics.small_text(), metrics.text() * graph_zoom_);
+        // Room for both, with a gap between them that a DESCENDER fits in: `grain` over `param`
+        // put the tail of the g through the p until this counted it.
+        const f32 gap = metrics.px(3.0f);
+        if (second_line) {
+            const f32 room = title_row - head_cap - metrics.px(6.0f) - gap;
+            if (room > 0.0f) title = std::min(title, room / kGlyphCap);
+        }
+        const f32 title_top =
+            box.y0 + (second_line ? metrics.px(2.0f) : (title_row - title * kGlyphCap) * 0.5f);
         ui_.draw().push_clip(Rect{box.x0, box.y0, mark_right, box.y1});
-        ui_.draw().text(name_left,
-                        box.y0 + (detail ? metrics.px(3.0f) : (node_h - title * kGlyphCap) * 0.5f),
-                        first, title, node.name.empty() ? kPlain : kBold, Align::Left, lit);
-        ui_.draw().pop_clip();
-
-        if (detail) {
-            // What it IS on the left and what its numbers are on the right, with room reserved for
-            // each: at a hundred interface pixels a material's name and its `rgb=` ran into one
-            // another and came out as `mgterisl24,120,112`, which is neither of them.
-            const f32 small = metrics.small_text();
-            const f32 under_y = box.y0 + node_h * 0.56f;
-            const f32 left = box.x0 + metrics.px(4.0f);
-            const f32 right = box.x1 - metrics.px(4.0f);
-            f32 spent = 0.0f;
-            if (!node.name.empty()) {
-                const u32 which = clip_carries_tint(node.carries);
-                const std::string head_word = clip_head_shown(node.head);
-                ui_.draw().text(left, under_y, head_word, small, tinted(kPlain, which + 1),
-                                Align::Left, 0.85f);
-                spent = DrawList::measure(head_word, small) + metrics.px(5.0f);
-            }
-            const std::string values = summary_of(node);
-            if (!values.empty() && left + spent < right) {
-                ui_.draw().push_clip(Rect{left + spent, box.y0, right, box.y1});
-                ui_.draw().text(right, under_y, values, small, kPlain, Align::Right, 0.42f);
-                ui_.draw().pop_clip();
-            }
+        ui_.draw().text(name_left, title_top, first, title,
+                        node.name.empty() ? kPlain : kBold, Align::Left, lit);
+        if (second_line) {
+            ui_.draw().text(name_left, title_top + title * kGlyphCap + gap, head_word, head_size,
+                            tinted(kPlain, clip_carries_tint(node.carries) + 1), Align::Left,
+                            0.8f * lit);
         }
         ui_.draw().pop_clip();
+        ui_.draw().pop_clip();
 
-        // --- what it is made of, inside itself ------------------------------------------------
+        // --- the sockets, which is what a node IS -----------------------------------------------
         //
-        // A line under the name and then one slider a row, in the box rather than in a panel
-        // somewhere else. It is the same code the panel on the left runs (`draw_property_rows`),
-        // given a different rectangle — so a property changed here and a property changed there
-        // write the same bytes into the same line.
-        if (node_is_open(static_cast<u32>(i)) && box.height() > node_h + metrics.px(2.0f)) {
-            usize rows = 0;
-            for (const ClipProperty& offer : clip_properties_of(node.head)) rows += offer.parts;
-            const Rect body{box.x0 + metrics.px(3.0f), box.y0 + node_h,
-                            box.x1 - metrics.px(3.0f), box.y1 - metrics.px(2.0f)};
-            ui_.draw().ink(Rect{box.x0, box.y0 + node_h - metrics.px(1.0f), box.x1,
-                                box.y0 + node_h},
-                           0.25f);
-            if (rows > 0 && body.height() > metrics.px(6.0f)) {
-                const f32 each = body.height() / static_cast<f32>(rows);
-                ui_.draw().push_clip(body);
-                draw_property_rows(node, body, body, each,
-                                   hash_combine(id_of("node.inside"), i), false);
-                ui_.draw().pop_clip();
-            }
-            // The body holds the pointer: a press on a slider is not a press on the box, or every
-            // drag of a value would pick the whole node up and carry it away.
-            if (body.holds(ui_.pointer_x(), ui_.pointer_y())) hit_a_node = true;
+        // One row each: a dot on the left edge, the socket's name, and either the name of what is
+        // wired into it or the value it holds. **This is the rewrite** — a wire lands on a NAMED
+        // row rather than somewhere along an edge, so what is joined to what is something a reader
+        // can see rather than something they have to open the script to find out.
+        //
+        // Modelled on the version this was asked to match: named, typed sockets down the left, one
+        // output on the right, a constant shown inline where nothing is wired.
+        const std::vector<ClipSocket>& mine = sockets_[i];
+        std::vector<std::string> extra_names;   // the rows the language means rather than says
+        for (u32 input : implied_[i]) {
+            if (input >= graph_.nodes.size() || !node_shown_[input]) continue;
+            extra_names.push_back(graph_.nodes[input].head == "paint"       ? "coated by"
+                                  : graph_.nodes[input].head == "weather"   ? "weathered by"
+                                  : graph_.nodes[input].head == "variation" ? "varied by"
+                                                                            : "and");
         }
+        const usize rows = mine.size() + extra_names.size();
+        const bool row_detail = detail && rows > 0 &&
+                                row_height_of(box, rows) >= metrics.px(7.0f);
+        if (rows > 0) {
+            ui_.draw().ink(Rect{box.x0, box.y0 + title_row - std::max(1.0f, metrics.scale * 0.5f),
+                                box.x1, box.y0 + title_row},
+                           0.22f * lit);
+        }
+        for (usize k = 0; k < rows; ++k) {
+            const bool is_mine = k < mine.size();
+            const ClipSocket* socket = is_mine ? &mine[k] : nullptr;
+            const Rect row = socket_row(box, k, rows);
+            const u32 wired_from =
+                is_mine ? (socket->linked ? socket->from : ClipGraph::kNone)
+                        : implied_[i][k - mine.size()];
+            const bool has_wire = wired_from < graph_.nodes.size() && node_shown_[wired_from];
 
-        // --- the tabs a wire is made from -----------------------------------------------------
-        if (ports) {
-            const u32 rgb = tint_rgb(ui_.accent(), clip_carries_tint(node.carries));
-            const Rect out = out_port(box);
-            ui_.draw().hue(out, rgb, 0.9f);
-            if (over_canvas && ui_.pressed_in(out)) {
-                wiring_from_ = static_cast<u32>(i);
-                hit_a_node = true;
-                ui_.sound().say(Cue::Step);
-            }
-            // The tabs are on the wires the DOCUMENT says, and the count includes the ones the
-            // language means — otherwise a tab would sit where no wire arrives.
-            usize shown_inputs = 0;
-            for (u32 input : node.inputs) {
-                if (input < graph_.nodes.size() && node_shown_[input]) ++shown_inputs;
-            }
-            for (u32 input : implied_[i]) {
-                if (input < graph_.nodes.size() && node_shown_[input]) ++shown_inputs;
-            }
-            usize drawn = 0;
-            for (usize k = 0; k < node.inputs.size(); ++k) {
-                if (node.inputs[k] >= graph_.nodes.size() || !node_shown_[node.inputs[k]]) continue;
-                const Rect in = in_port(box, drawn, shown_inputs);
-                ++drawn;
-                const u32 from_rgb =
-                    (node.inputs[k] < graph_.nodes.size())
-                        ? tint_rgb(ui_.accent(),
-                                   clip_carries_tint(graph_.nodes[node.inputs[k]].carries))
-                        : rgb;
+            // The dot. Coloured by what the socket TAKES when it is empty and by what is in it when
+            // it is full, so a row says what would fit before anything is dragged at it.
+            if (ports) {
+                const ClipCarries kind = wired_from < graph_.nodes.size()
+                                             ? graph_.nodes[wired_from].carries
+                                             : (is_mine ? socket->takes : ClipCarries::Value);
+                const Rect in = in_port(box, k, rows);
                 const bool over_port = in.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
-                ui_.draw().hue(in, from_rgb, over_port ? 1.0f : 0.75f);
+                // While a wire is out, a socket that could take it is lit and the rest are not.
+                f32 strength = has_wire ? 0.85f : 0.42f;
+                if (wiring_from_ < graph_.nodes.size()) {
+                    const bool fits = is_mine && wiring_from_ != i &&
+                                      graph_.nodes[wiring_from_].carries == socket->takes;
+                    strength = fits ? 1.0f : 0.18f;
+                    if (fits && over_port) dropped_on_socket_ = static_cast<u32>(k);
+                }
+                ui_.draw().hue(in, tint_rgb(ui_.accent(), clip_carries_tint(kind)),
+                               over_port ? 1.0f : strength);
                 if (over_port) {
                     ui_.draw().edge(in.inset(-metrics.px(1.0f)), 0.8f);
-                    if (ui_.pressed_in(in)) {
+                    if (over_port && ui_.pressed_in(in) && wiring_from_ >= graph_.nodes.size() &&
+                        is_mine && (socket->linked || socket->has_word ||
+                                    !socket->key.empty())) {
+                        // A press on a full socket takes what is in it out, which is what a press
+                        // on a socket meant in the version this matches.
                         hit_a_node = true;
                         remember("wire");
-                        document_changed(disconnect_clip_node(lines_, graph_,
-                                                              static_cast<u32>(i),
-                                                              static_cast<u32>(k)));
+                        document_changed(disconnect_clip_socket(lines_, graph_,
+                                                                static_cast<u32>(i),
+                                                                static_cast<u32>(k)));
                         ui_.draw().pop_clip();
                         return;   // the graph under this loop has just been re-read
                     }
                 }
+            }
+            if (!row_detail) continue;
+
+            // The name, and then what is in it.
+            const f32 small = metrics.small_text();
+            const f32 baseline = row.mid_y() - DrawList::cap_height(small) * 0.5f;
+            // The name starts past the dot, which sits ON the edge and is as wide as it is: a
+            // word beginning at the edge begins underneath it.
+            const f32 word_left = row.x0 + dot + metrics.px(3.0f);
+            ui_.draw().push_clip(Rect{word_left, row.y0, row.x1 - metrics.px(3.0f), row.y1});
+            const std::string& name = is_mine ? socket->name : extra_names[k - mine.size()];
+            ui_.draw().text(word_left, baseline, name, small, kPlain, Align::Left, 0.72f * lit);
+            std::string value;
+            u32 style = kPlain;
+            f32 ink = 0.9f;
+            // **What is in it, whether or not that thing has a box on the screen.** The picture
+            // shows an answer and one level under it, so a union's parts are named by statements
+            // that are usually a level too deep to draw — and a socket that said `--` because the
+            // box it points at is off the picture is a socket claiming to be empty when it is
+            // full. Dimmer, because there is nothing to follow the wire to.
+            if (wired_from < graph_.nodes.size()) {
+                value = graph_.nodes[wired_from].name.empty()
+                            ? clip_head_shown(graph_.nodes[wired_from].head)
+                            : graph_.nodes[wired_from].name;
+                style = kBold;
+                if (!has_wire) ink = 0.6f;
+            } else if (is_mine && socket->has_number &&
+                       socket->number_at < node.numbers.size()) {
+                value = node.numbers[socket->number_at].text;
+            } else if (is_mine && socket->has_word && socket->word_at < node.words.size()) {
+                value = node.words[socket->word_at].text;
+            } else {
+                value = "--";   // nothing in it, and nothing written: it takes its usual value
+                ink = 0.3f;
+            }
+            ui_.draw().text(row.x1 - metrics.px(4.0f), baseline, value, small, style, Align::Right,
+                            ink * lit);
+            ui_.draw().pop_clip();
+        }
+
+        // --- the one output, beside the title ---------------------------------------------------
+        if (ports) {
+            const u32 rgb = tint_rgb(ui_.accent(), clip_carries_tint(node.carries));
+            const Rect out = out_port(box);
+            const bool over_out = out.holds(ui_.pointer_x(), ui_.pointer_y()) && over_canvas;
+            ui_.draw().hue(out, rgb, over_out ? 1.0f : 0.9f);
+            if (over_out) ui_.draw().edge(out.inset(-metrics.px(1.0f)), 0.8f);
+            if (over_canvas && ui_.pressed_in(out)) {
+                wiring_from_ = static_cast<u32>(i);
+                hit_a_node = true;
+                ui_.sound().say(Cue::Step);
             }
         }
 
@@ -4207,19 +4253,6 @@ void Shell::draw_visual_view(const Rect& page) {
                 }
             }
         }
-    }
-
-    // --- and the words the wires are, over everything they run past --------------------------
-    for (const WireWord& word : wire_words) {
-        const f32 wide = DrawList::measure(word.text, word_size);
-        const f32 tall = DrawList::line_height(word_size);
-        const Rect over{word.x - wide * 0.5f - metrics.px(3.0f), word.y - tall * 0.5f,
-                        word.x + wide * 0.5f + metrics.px(3.0f), word.y + tall * 0.5f};
-        // The glass first, so the wire does not run through the middle of its own name.
-        ui_.draw().glass(over, 1.0f);
-        ui_.draw().ink(over, 0.10f);
-        ui_.draw().text(over.x0 + metrics.px(3.0f), over.y0, word.text, word_size, kPlain,
-                        Align::Left, word.written ? 0.95f : 0.72f);
     }
 
     // --- the document itself ----------------------------------------------------------------
@@ -4348,6 +4381,14 @@ void Shell::draw_visual_view(const Rect& page) {
     if (wiring_from_ < graph_.nodes.size() && ui_.input().mouse_left_released) {
         const u32 from = wiring_from_;
         wiring_from_ = ClipGraph::kNone;
+        if (dropped_on < graph_.nodes.size() && dropped_on_socket_ != ClipGraph::kNone) {
+            // **A wire lands in the socket it was dropped on.** Nothing is guessed any more.
+            remember("wire");
+            const std::string why =
+                connect_clip_socket(lines_, graph_, dropped_on, dropped_on_socket_, from);
+            document_changed(why);
+            return;
+        }
         if (dropped_on < graph_.nodes.size()) {
             remember("wire");
             // **A wire first, and what the two MEAN together when a wire will not do.**
@@ -5646,7 +5687,6 @@ void Shell::close_document(const char* why) {
     chosen_index_ = ClipGraph::kNone;
     inside_.clear();
     came_from_.clear();
-    opened_.clear();
     undo_.clear();
     redo_.clear();
     undo_reason_.clear();

@@ -412,7 +412,7 @@ does not grow the table. The row is lit and bold while it is the one in use.
 The game ships six of them — stone, oak, brass, glass, lamp, moss — because the shelf is the palette
 and a shelf with nothing on it is a game a player cannot build in.
 
-#### A material is a list of properties, and it opens where it stands (D786, D787, D788)
+#### A material is a list of properties (D786, D787, D788)
 
 A node's panel listed the numbers that are **written**. For a shape that is complete — a `box` has
 six and there are no others. For a material it is a lie by omission: the document writes three of a
@@ -424,13 +424,47 @@ already read by the clip parser and none of them were on a screen. A property th
 the number the document wrote, edited byte for byte; one it does not is its usual value, and moving
 its slider writes the key in.
 
-**And a box that offers properties opens where it stands.** The mark on its right is a control: the
-sliders appear inside the box rather than in a panel somewhere else. An open box is several cells
-tall and two across, and the layout reserves the whole rectangle — so the no-overlap promise holds
-for a rectangle as it did for a cell, and a lane an open box runs through is not a lane. It is the
-same code the left-hand panel runs, given a different rectangle.
+Those properties are **sockets** now, and so is everything else a statement takes — see below.
+There is no fold and nothing to open: a box wears its whole list at every size.
 
-Open is view state: it does not go in the file.
+#### A node is its sockets, and a wire lands on one by name (D826-D831)
+
+**This is the model, and it is the one the previous version of the game used.** *This entire thing
+is uncomprehensible, rewrite the whole way in which nodes connect.* A box is:
+
+- a **title**: the name it binds, with what KIND of statement it is written under it in that kind's
+  own colour — `all` over `union`, `grain` over `param`;
+- then **one row per socket**, down the left, each with a dot on the edge, its name, and either the
+  name of what is wired into it or the value it holds. `--` means nothing is in it and the statement
+  writes nothing, so it takes its usual value;
+- and **one output**, a single dot beside the title on the right. A node makes one thing.
+
+A socket is a place in the TEXT as much as a place on the screen, which is what keeps the two views
+one document (D745). There are four kinds of place:
+
+| where | reads | writing a wire into it |
+|---|---|---|
+| the statement's **bare name** | `solid all`, `paint stone` | replaces the name — a solid names one shape |
+| a **positional number** | `box -1 0 -1  1 2 1` | becomes a `key=` |
+| a **`key=`** | `where=grain`, `round=0.06` | written, or overwritten |
+| a **`{ }` child** | `union { a b }` | added inside the braces |
+
+The rows come in that order — bare name, positions, keys the document writes, keys the KIND takes
+and this one does not. A `box` reads `x0 y0 z0 x1 y1 z1 round`; a coat reads `voxel type`, `where`,
+`above`; a voxel type reads every one of its eleven properties whether the file writes them or not.
+**The unwritten ones are the point**: an empty socket is where the next wire goes, and a socket that
+only appears once something is in it is a socket nobody can use.
+
+A drop is refused unless the kinds match, and the refusal names both sides — except where the two
+mean something together, which is D821's five joins. **Pressing a full socket empties it**, which is
+what a press on a socket meant in the version this matches.
+
+A socket names what it holds **even when that thing has no box on the screen**: the picture is an
+answer and one level under it (D796), so a union's parts are usually a level too deep to draw, and a
+row reading `--` about a part that exists is a lie. It is dimmer when there is nothing to follow.
+
+A box is therefore one cell for the title and half a cell per socket, two cells wide, always — a row
+is a name, a value and a dot, and one cell is not enough for any two of those.
 
 #### A document is made of documents (D783, D784)
 

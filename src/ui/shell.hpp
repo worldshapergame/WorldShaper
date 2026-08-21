@@ -249,10 +249,10 @@ public:
     std::string add_part(const std::filesystem::path& from);
     std::string new_part(std::string_view kind, std::string_view name);
 
-    // `--editor-open NAME`: open that box where it stands, showing its properties inside itself.
-    // A box that is open is a different picture, a different layout and several more controls, and
-    // a state nothing automated can reach is a state nothing automated ever checks (D460).
-    bool open_node_named(std::string_view name);
+    // How many sockets the box named NAME has. **A box IS its sockets**, so this is how a test
+    // asks what a reader would see on it — there is nothing to open any more, because everything a
+    // node takes is already written down its left side.
+    u32 sockets_on(std::string_view name) const;
 
     // `--new-world FILE`, and empty for a world of nothing: what the new-world menu does, by the
     // one path a press takes. A world made of a clip is what *new* on the worlds shelf offers, and
@@ -380,13 +380,15 @@ private:
     // is right for exactly the nodes it was asked for: a shape's numbers are six positions that
     // mean nothing without their labels, and a material's are a list of named properties, which is
     // a thing you read down rather than a thing you look up.
-    //
-    // Open is VIEW state and does not go in the file — D769's rule, unchanged: a `#@` position is
-    // authored and travels with the document, and whether a panel happens to be open is the class
-    // of thing a scroll offset is.
-    std::vector<std::string> opened_;
-    // How many cells tall each shown box is. One, unless it is open — and the layout reserves every
-    // cell it covers, so a tall box cannot land on anything and nothing can land on it.
+    // Every node's sockets, worked out with the layout rather than per frame: the height of a box
+    // is the number of them, so the layout needs them and every draw wants the same answer.
+    std::vector<std::vector<ClipSocket>> sockets_;
+    // The socket a wire is being dragged toward, and which one it left. A wire leaves an OUTPUT and
+    // lands on a named INPUT — that is the whole of the rewrite, and it is why `wiring_from_` alone
+    // was never enough to say what a drop meant.
+    u32 wiring_socket_ = 0;
+    // How many cells tall each shown box is: a title and one row per socket. The layout reserves
+    // every cell it covers, so a tall box cannot land on anything and nothing can land on it.
     std::vector<u32> node_tall_;
     // --- the wires the LANGUAGE has and the document does not spell out ---------------------------
     //
@@ -401,11 +403,9 @@ private:
     // dimmer and have no tab to cut, because there is nothing in the file to cut: they are what the
     // words MEAN rather than what the document says.
     std::vector<std::vector<u32>> implied_;
-    // And how many across. An open box is two cells wide: a property row is a name and a number
-    // side by side, and at one cell `translucent` and its value came out on top of one another.
+    // And how many across. Two, always: a socket row is a name, a value and a dot, and at one
+    // cell `translucent` and its value came out on top of one another.
     std::vector<u32> node_wide_;
-    bool node_is_open(u32 index) const;
-    void open_node(u32 index, bool open);
     u32 cells_tall(u32 index) const;
     u32 cells_wide(u32 index) const;
     // One property of one node as a slider, wherever it is drawn. The panel on the left and the box

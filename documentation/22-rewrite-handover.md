@@ -626,7 +626,38 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### A SEARCHABLE PALETTE AND WIRES THAT SPEAK, 2026-08-21 — D819–D825. Read this first
+#### A NODE IS ITS SOCKETS, 2026-08-21 — D826–D831. Read this first
+
+*This entire thing is uncomprehensible, rewrite the whole way in which nodes connect, rewrite all
+the nodes logic and make it work exactly like on the old version of the game.* The old version is
+`Desktop/vibe coding`; `src/gameplay/MatGraph.h` is the model, and it is now this one.
+
+**A box is a title and one named, typed row per socket, with one output beside the title.** A wire
+leaves the output and lands on a ROW, so what is joined to what is something a reader sees rather
+than something they open the script to find out. Every socket is a place in the text — a bare name,
+a positional number, a `key=`, a `{ }` child — so connecting one writes the bytes a person would
+have typed.
+
+| what changed | | how to look at it |
+|---|---|---|
+| **`ClipSocket` and `clip_sockets_of`** (D826) | every place in a statement a wire can land, named and typed | `src/game/clip_graph.cpp` |
+| **`connect_clip_socket` / `disconnect_clip_socket`** (D827) | the four places, and the same four in reverse | — |
+| **a socket names what it holds even with no box to point at** (D828) | a union's parts are a level too deep to draw, and read `--` | `union { wall plinth }` |
+| **there is nothing to open any more** (D829) | `opened_`, `open_node_named`, `--editor-open` are gone with D786's fold | — |
+| **the name and the kind are two lines** (D830) | `all` over `union`, and the g of `grain` no longer runs through the p of `param` | — |
+| **the extent is what boxes COVER**, and the layout starts at nought (D831) | a box could land on a negative cell and be drawn off the panel | — |
+
+**D823's wire words are gone**, and so is D796's dimmer-line-with-no-tab drawing of an implied wire
+as the only sign of one — the implied wires are still drawn and still have no tab, but they now
+arrive on a row called `coated by` / `weathered by` / `varied by`, which is where the word belongs.
+One answer, in one place.
+
+**What is deliberately NOT the old model**: `MatGraph` keeps an unwired input's constant in the
+graph (`NodeIn{node = -1, cf, cc}`). Here it is in the document. A socket with no wire shows the
+number the statement writes and typing into it edits the bytes, because the script view and the
+graph view are one file (D745).
+
+#### A SEARCHABLE PALETTE AND WIRES THAT SPEAK, 2026-08-21 — D819–D825
 
 | what changed | | how to look at it |
 |---|---|---|
@@ -634,7 +665,7 @@ a step-bounded ray is not a bound. Not carried. D361.
 | **the palette is searchable** (D820), and a word answers to *coat*, *noise*, *subtract*, *voronoi* | `clip_head_help` / `clip_head_matches` | right-click the canvas and type |
 | **two things that cannot be wired but mean something together make it** (D821) | a voxel type and a pattern make a coat | `clip_join_makes` |
 | **a press does not reach through what is drawn over it** (D822) | `pressed_in` was a raw hit test | — |
-| **a wire carries the word it is** (D823) | `where`, `by`, `on`, `coats` | — |
+| ~~**a wire carries the word it is** (D823)~~ | replaced by the socket rows above (D826) | — |
 
 #### TYPES, LESSONS AND NO BOUNDS, 2026-08-21 — D807–D818
 
@@ -707,7 +738,7 @@ in the build.
 | **a wire turns only in the channels and lanes** (D781), so it cannot cross a box | it was three straight segments; a wire from column one to column six ran flat through everything between | — |
 | **the document has a box and every answer wires into it** (D782) | reported with a photograph: seven statements in a column with not one wire between them | — |
 | **a clip and a material are the first two entries in the graph's menu** (D783), and a part off a shelf is COPIED beside the document | an include resolves beside the file and then in the game's clips and nowhere else | `--editor-part FILE`, `--editor-new-part clip:porch` |
-| **a material offers all eleven of its properties** (D786) and **opens where it stands** (D787) | every one was read by the parser and none were on a screen | `--editor-open NAME` |
+| **a material offers all eleven of its properties** (D786) | every one was read by the parser and none were on a screen | they are sockets now (D826); the fold and its flag are gone (D829) |
 
 **If the visual view needs work again, start at `Shell::lay_out_graph`.** It decides what is shown
 (the answers, or a box and its parts), how many cells each box covers, and where; `opened_` is which

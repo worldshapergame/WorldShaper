@@ -15698,3 +15698,36 @@ nothing on a screen would ever have said so.
 
 Gate: content `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
 **858 test cases, 21,248,893 assertions.**
+
+## D826-D831 - a node is its sockets, and a wire lands on one by name
+
+*This entire thing is uncomprehensible, rewrite the whole way in which nodes connect, rewrite all
+the nodes logic and make it work exactly like on the old version of the game.* The old version is
+`Desktop/vibe coding`, and `src/gameplay/MatGraph.h` is four hundred lines of it: `nodeInputCount`,
+`nodeInputSpec`, `nodeOutType`, `NodeIn{node, cf, cc}`. Every node has a fixed list of NAMED, TYPED
+inputs down its left side and exactly one output on its right. A drop is refused unless the kinds
+match. An input with no wire shows its constant inline. Clicking a full input empties it.
+
+Everything D823 and D796 were trying to do with wire labels and dimmer lines was answering the same
+question from the wrong end: a line between two boxes cannot say which of six things it is, so the
+answer has to be on the BOX, at the place the line arrives.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D826 | **A node is a title and one row per socket, always** | user | `ClipSocket` is where a wire can land: a name, a kind, and a place in the TEXT -- a positional number, a `key=`, a `{ }` child, or the statement's bare name. `clip_sockets_of` builds the list for any statement in the language, in the one order a reader expects: the bare name first (`solid` takes a *shape*, a coat takes a *voxel type*), then the positional numbers under the names of what they are (`x0 y0 z0 x1 y1 z1` for anything box-shaped, `x y z` for anything with a position), then the keys the document writes, then the keys the KIND takes and this one has not written. That last group is the point: an empty socket is where the next wire goes, and a socket that appears only once something is already in it is a socket nobody can use |
+| D827 | **A wire leaves the output and lands on a named input** | user | `connect_clip_socket(lines, graph, target, socket, source)` writes what a person would have typed, and which of the four places it writes depends only on what the socket IS: a bare name is REPLACED (a solid names one shape, so there was never room for two), a `key=` is written or overwritten, a child is added inside the braces, a positional number becomes a key. `disconnect_clip_socket` is the same four in reverse. The refusal is by kind and it names both sides, which is what makes it teach rather than block |
+| D828 | **A socket says what is in it even when that thing has no box** | correction | The picture is an answer and one level under it (D796), so a union's parts are named by statements a level too deep to draw -- and every one of those rows read `--`, which is a socket claiming to be empty when it is full. It now names what it holds whether or not there is a box to follow the wire to, dimmer when there is not. `union { wall plinth }` reads *part 1 wall / part 2 plinth / and --* instead of three dashes |
+| D829 | **There is nothing to open any more** | build | `opened_`, `node_is_open`, `open_node`, `open_node_named` and `--editor-open` are gone, and D786's material fold with them. A box shows everything it takes at every size, so a mark that unfolds one would unfold something already unfolded. The test that drove the flag now asserts the thing that replaced it: two voxel types have the same number of sockets, a voxel type has at least eight, and nothing overlaps |
+| D830 | **The name and the kind are two lines, and the second one fits** | correction | `all` over `union`, `grain` over `param`, in the kind's own colour -- so what a box IS is on the box rather than inferred from its wire colour. The size of the first line is cut until the second fits UNDER it including its descenders: the tail of the g in `grain` went through the p of `param` until the arithmetic counted one. Not drawn at all when the title already IS the head word, because `metre` written twice under itself says nothing the first one did not |
+| D831 | **The extent is what the boxes cover, not what they reserve** | correction | A box fills the top-left of its cells and leaves the channel down the right and the lane along the bottom free (D780), so counting whole cells made the picture a quarter of a cell wider and taller than it is -- enough to push a document that fits into the *does not fit* arm and open it scrolled to the corner. And the layout now SHIFTS everything so the least cell is nought: `take_free_cell` searches outward in rings, so a box pushed off its place could land at a negative cell and be drawn off the edge of the panel with its names clipped away |
+
+### What the old version had that this one does not, deliberately
+
+`MatGraph` gives every input a constant that lives in the graph -- `NodeIn{node = -1, cf, cc}` --
+so an unwired socket holds a float or a colour of its own. Here the constant is in the DOCUMENT:
+a socket with no wire shows the number the statement writes, and typing into it edits the bytes.
+That is D745's rule and it is not negotiable, because it is the whole reason the script view and
+the graph view are the same file rather than two models that drift.
+
+Gate: content `efeb39a93c369a2d`, shape `d41424c8236d15ac`, box-cell audit 0 and 0.
+**860 test cases, 21,248,933 assertions.**

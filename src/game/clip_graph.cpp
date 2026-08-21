@@ -1165,10 +1165,14 @@ std::string disconnect_clip_node(std::vector<std::string>& lines, const ClipGrap
     }
     usize from = link.column;
     usize length = link.length;
-    // And the space that was holding it apart from its neighbour, so a block does not fill up with
-    // gaps as things are taken out of it.
-    while (from + length < line.size() && line[from + length] == ' ') ++length;
-    if (from + length >= line.size() || line[from + length] == '}') {
+    // And ONE of the spaces that were holding it apart from its neighbours, so a block does not
+    // fill up with gaps as things are taken out of it — and does not lose its own spacing either.
+    //
+    // It used to take BOTH when the next thing along was the closing brace, so cutting `b` out of
+    // `union { a b }` left `union { a}`. One name out, one space out.
+    if (from + length < line.size() && line[from + length] == ' ') {
+        ++length;
+    } else {
         while (from > 0 && line[from - 1] == ' ') {
             --from;
             ++length;
@@ -1785,6 +1789,371 @@ const std::vector<ClipProperty>& clip_properties_of(const std::string& head) {
     if (head == "material") return kMaterial;
     if (head == "variation") return kVariation;
     return kNone;
+}
+
+std::string clip_number_name(const ClipNode& node, u32 index, u32 count) {
+    static constexpr const char* kAxes[3]{"x", "y", "z"};
+    // A lone number is called after the statement -- `metre 32`, `weather desert 0.6` -- except
+    // where that would say the same word twice on the same box: a `param` is already titled by its
+    // name with `param` written under it, and a third `param` down its side says nothing.
+    if (count == 1) return (node.head == "param" || node.head == "let") ? "value" : node.head;
+    if (count == 3) return kAxes[index % 3];
+    // Six is two corners, which is what every box-shaped thing in the language takes.
+    if (count == 6) return std::string(kAxes[index % 3]) + ((index < 3) ? "0" : "1");
+    return std::to_string(index + 1);
+}
+
+// The keys a statement is known to take that hold a NAME rather than a number — which is to say
+// the keys a WIRE can go into.
+//
+// `clip_properties_of` covers the numbers a head offers (D786) and knew nothing about these, so a
+// coat with no `where=` written had no socket to drop a pattern on and the only way to make one was
+// to type it. A socket that appears once something is already in it is a socket nobody can use.
+static const std::vector<std::pair<const char*, ClipCarries>>& wire_keys_of(
+    const std::string& head) {
+    static const std::vector<std::pair<const char*, ClipCarries>> kPaint = {
+        {"where", ClipCarries::Value}};
+    static const std::vector<std::pair<const char*, ClipCarries>> kWeather = {
+        {"on", ClipCarries::Value}};
+    static const std::vector<std::pair<const char*, ClipCarries>> kVariation = {
+        {"by", ClipCarries::Value}};
+    static const std::vector<std::pair<const char*, ClipCarries>> kDisplace = {
+        {"by", ClipCarries::Value}};
+    static const std::vector<std::pair<const char*, ClipCarries>> kNone;
+    if (head == "paint") return kPaint;
+    if (head == "weather") return kWeather;
+    if (head == "variation") return kVariation;
+    if (head == "displace") return kDisplace;
+    return kNone;
+}
+
+// What a statement's bare name means, and what kind of thing may stand there. Empty when the
+// statement takes no bare name at all.
+static const char* bare_name_socket(const std::string& head, ClipCarries& takes) {
+    if (head == "solid") {
+        takes = ClipCarries::Shape;
+        return "shape";
+    }
+    if (head == "region") {
+        takes = ClipCarries::Shape;
+        return "shape";
+    }
+    if (head == "paint") {
+        takes = ClipCarries::Material;
+        return "voxel type";
+    }
+    return nullptr;
+}
+
+std::vector<ClipSocket> clip_sockets_of(const ClipGraph& graph, u32 node) {
+    std::vector<ClipSocket> out;
+    if (node >= graph.nodes.size()) return out;
+    const ClipNode& one = graph.nodes[node];
+    if (one.opaque) return out;
+
+    // Which of this node's inputs a socket already holds, so a child is not offered twice.
+    const auto link_for = [&](const std::string& key, u32 index) -> const ClipLink* {
+        u32 seen = 0;
+        for (const ClipLink& link : one.links) {
+            if (link.key != key) continue;
+            if (seen == index) return &link;
+            ++seen;
+        }
+        return nullptr;
+    };
+
+    // 1. The bare name, when the statement takes one.
+    ClipCarries bare_takes = ClipCarries::Shape;
+    if (const char* bare = bare_name_socket(one.head, bare_takes)) {
+        ClipSocket socket;
+        socket.name = bare;
+        socket.takes = bare_takes;
+        socket.where = ClipSocket::Where::Word;
+        // **`solid` and `paint` push an input and no LINK**: a solid's expression may be written
+        // out where it stands rather than named, and a coat's voxel type is a word rather than a
+        // reference. So the wire is read from `inputs` here, which is the one thing both have.
+        if (const ClipLink* link = link_for({}, 0); link != nullptr && link->named) {
+            socket.linked = true;
+            socket.from = link->from;
+        } else if (!one.inputs.empty()) {
+            socket.linked = true;
+            socket.from = one.inputs.front();
+        }
+        for (usize w = 0; w < one.words.size(); ++w) {
+            if (one.words[w].key.empty()) {
+                socket.has_word = true;
+                socket.word_at = static_cast<u32>(w);
+                break;
+            }
+        }
+        out.push_back(std::move(socket));
+    }
+
+    // 2. Its positional numbers, named by what that position means.
+    u32 positional_count = 0;
+    for (const ClipNumber& number : one.numbers) {
+        if (number.key.empty()) ++positional_count;
+    }
+    u32 positional = 0;
+    for (usize i = 0; i < one.numbers.size(); ++i) {
+        if (!one.numbers[i].key.empty()) continue;
+        ClipSocket socket;
+        socket.name = clip_number_name(one, positional, positional_count);
+        socket.takes = ClipCarries::Value;
+        socket.where = ClipSocket::Where::Number;
+        socket.index = positional;
+        socket.has_number = true;
+        socket.number_at = static_cast<u32>(i);
+        ++positional;
+        out.push_back(std::move(socket));
+    }
+
+    // 3. Its keys, in the order they are written — and the ones it OFFERS but does not write, so a
+    //    voxel type shows every property it can take whether or not it takes it (D786).
+    std::vector<std::string> keys_done;
+    for (usize i = 0; i < one.numbers.size(); ++i) {
+        const ClipNumber& number = one.numbers[i];
+        if (number.key.empty()) continue;
+        u32 parts = 0;
+        for (const ClipNumber& other : one.numbers) {
+            if (other.key == number.key) ++parts;
+        }
+        ClipSocket socket;
+        socket.name = number.key;
+        if (parts == 3) {
+            static const char* kChannel[3]{" red", " green", " blue"};
+            socket.name += kChannel[number.index % 3];
+        } else if (parts > 1) {
+            socket.name += " " + std::to_string(number.index + 1);
+        }
+        socket.takes = ClipCarries::Value;
+        socket.where = ClipSocket::Where::Number;
+        socket.key = number.key;
+        socket.index = number.index;
+        socket.has_number = true;
+        socket.number_at = static_cast<u32>(i);
+        if (const ClipLink* link = link_for(number.key, 0); link != nullptr && link->named) {
+            socket.linked = true;
+            socket.from = link->from;
+        }
+        keys_done.push_back(number.key);
+        out.push_back(std::move(socket));
+    }
+    // A key whose value is a NAME rather than a number — `where=grain`, `axis=y`.
+    for (usize w = 0; w < one.words.size(); ++w) {
+        const ClipWord& word = one.words[w];
+        if (word.key.empty()) continue;
+        if (std::find(keys_done.begin(), keys_done.end(), word.key) != keys_done.end()) continue;
+        ClipSocket socket;
+        socket.name = word.key;
+        socket.takes = word.names_a_part ? ClipCarries::Value : ClipCarries::Value;
+        socket.where = ClipSocket::Where::Key;
+        socket.key = word.key;
+        socket.has_word = true;
+        socket.word_at = static_cast<u32>(w);
+        if (const ClipLink* link = link_for(word.key, 0); link != nullptr && link->named) {
+            socket.linked = true;
+            socket.from = link->from;
+        }
+        keys_done.push_back(word.key);
+        out.push_back(std::move(socket));
+    }
+    // The keys this KIND of statement takes a NAME in and this one does not write — a coat's
+    // `where`, a weathering's `on`. Without these there is no socket to drop a pattern on until
+    // somebody has already typed one.
+    for (const auto& takes : wire_keys_of(one.head)) {
+        if (std::find(keys_done.begin(), keys_done.end(), takes.first) != keys_done.end()) continue;
+        ClipSocket socket;
+        socket.name = takes.first;
+        socket.takes = takes.second;
+        socket.where = ClipSocket::Where::Key;
+        socket.key = takes.first;
+        keys_done.push_back(takes.first);
+        out.push_back(std::move(socket));
+    }
+    // And the ones this KIND of statement offers and this one does not write.
+    for (const ClipProperty& offer : clip_properties_of(one.head)) {
+        if (std::find(keys_done.begin(), keys_done.end(), offer.key) != keys_done.end()) continue;
+        for (u32 part = 0; part < offer.parts; ++part) {
+            ClipSocket socket;
+            socket.name = offer.key;
+            if (offer.parts == 3) {
+                static const char* kChannel[3]{" red", " green", " blue"};
+                socket.name += kChannel[part];
+            } else if (offer.parts > 1) {
+                socket.name += " " + std::to_string(part + 1);
+            }
+            socket.takes = ClipCarries::Value;
+            socket.where = ClipSocket::Where::Key;
+            socket.key = offer.key;
+            socket.index = part;
+            out.push_back(std::move(socket));
+        }
+    }
+
+    // 4. Its children: one socket each, and an empty one at the end to drop into. That empty
+    //    socket is what a `union` is FOR, and without it there is nowhere to put a fifth shape.
+    if (takes_many(one.head) || takes_one(one.head) || !one.inputs.empty()) {
+        u32 child = 0;
+        for (const ClipLink& link : one.links) {
+            if (!link.key.empty()) continue;
+            if (one.head == "solid" || one.head == "region" || one.head == "paint") continue;
+            ClipSocket socket;
+            socket.name = "part " + std::to_string(child + 1);
+            socket.takes = (one.carries == ClipCarries::Value) ? ClipCarries::Value
+                                                               : ClipCarries::Shape;
+            socket.where = ClipSocket::Where::Child;
+            socket.index = child;
+            socket.linked = link.named;
+            socket.from = link.from;
+            ++child;
+            out.push_back(std::move(socket));
+        }
+        if (takes_many(one.head) || (takes_one(one.head) && child == 0)) {
+            ClipSocket socket;
+            socket.name = child == 0 ? "made of" : "and";
+            socket.takes = (one.carries == ClipCarries::Value) ? ClipCarries::Value
+                                                               : ClipCarries::Shape;
+            socket.where = ClipSocket::Where::Child;
+            socket.index = child;
+            out.push_back(std::move(socket));
+        }
+    }
+
+    return out;
+}
+
+std::string connect_clip_socket(std::vector<std::string>& lines, const ClipGraph& graph, u32 target,
+                                u32 socket, u32 source) {
+    if (target >= graph.nodes.size() || source >= graph.nodes.size()) return "nothing to join";
+    if (target == source) return "a thing cannot be made of itself";
+    const ClipNode& into = graph.nodes[target];
+    const ClipNode& from = graph.nodes[source];
+    const std::vector<ClipSocket> sockets = clip_sockets_of(graph, target);
+    if (socket >= sockets.size()) return "there is no such socket";
+    const ClipSocket& where = sockets[socket];
+
+    if (from.name.empty()) {
+        return "that one has no name -- give it one in the script and it can be joined";
+    }
+    if (from.carries != where.takes && !from.unresolved) {
+        static const auto what = [](ClipCarries carries) {
+            return (carries == ClipCarries::Shape)      ? "a shape"
+                   : (carries == ClipCarries::Material) ? "a voxel type"
+                                                        : "a number";
+        };
+        return std::string(where.name) + " takes " + what(where.takes) + ", and " + from.name +
+               " is " + what(from.carries);
+    }
+    // A ring is a document that cannot be built, and the reader would spin on it.
+    std::vector<u32> stack{source};
+    std::vector<bool> seen(graph.nodes.size(), false);
+    while (!stack.empty()) {
+        const u32 at = stack.back();
+        stack.pop_back();
+        if (at >= graph.nodes.size() || seen[at]) continue;
+        seen[at] = true;
+        if (at == target) return "that would make a ring, and a ring cannot be built";
+        for (u32 input : graph.nodes[at].inputs) stack.push_back(input);
+    }
+    if (into.line == 0 || into.line > lines.size()) return "nothing to join it to";
+
+    // Whatever is WIRED into the socket comes out first, so joining twice replaces rather than
+    // doubles. A bare name is replaced in place below; a number is left alone, because taking a
+    // positional number out of a statement is taking the statement apart.
+    if (where.linked && where.where != ClipSocket::Where::Word) {
+        const std::string why = disconnect_clip_socket(lines, graph, target, socket);
+        if (!why.empty()) return why;
+        // The spans in `graph` are stale from here on. Nothing below reads one: every branch
+        // writes from the socket's own description and from `into.line`, which a cut on the same
+        // line does not move.
+    }
+
+    switch (where.where) {
+        case ClipSocket::Where::Word: {
+            // A bare name is REPLACED rather than added to: `solid` names one shape and a coat
+            // paints with one voxel type, so there was never room for two.
+            if (where.has_word && where.word_at < into.words.size()) {
+                const ClipWord& was = into.words[where.word_at];
+                if (was.line == 0 || was.line > lines.size()) {
+                    return "the document has moved -- try again";
+                }
+                std::string& line = lines[was.line - 1];
+                if (was.column + was.text.size() > line.size()) {
+                    return "the document has moved under this -- try again";
+                }
+                line.replace(was.column, was.text.size(), from.name);
+                return {};
+            }
+            std::string& line = lines[into.line - 1];
+            const usize after = into.word_column + into.head.size();
+            if (after > line.size()) return "the document has moved under this -- try again";
+            line = line.substr(0, after) + " " + from.name + line.substr(after);
+            return {};
+        }
+        case ClipSocket::Where::Number: {
+            // A number that has become a name: written as its own key, because a positional number
+            // has no name to put a reference under.
+            if (where.key.empty()) {
+                return std::string(where.name) +
+                       " is a number of this statement's own shape -- type into it instead";
+            }
+            std::string& line = lines[into.line - 1];
+            line = without_placement(line) + " " + where.key + "=" + from.name;
+            return {};
+        }
+        case ClipSocket::Where::Key: {
+            std::string& line = lines[into.line - 1];
+            line = without_placement(line) + " " + where.key + "=" + from.name;
+            return {};
+        }
+        case ClipSocket::Where::Child: {
+            // Into its braces, or into new ones when it has none.
+            if (into.has_block && into.close_line > 0 && into.close_line <= lines.size()) {
+                std::string& line = lines[into.close_line - 1];
+                if (into.close_column > line.size() || line[into.close_column] != '}') {
+                    return "the document has moved under this -- try again";
+                }
+                line.insert(into.close_column, from.name + " ");
+                return {};
+            }
+            std::string& line = lines[into.line - 1];
+            const usize after = into.word_column + into.head.size();
+            if (after > line.size()) return "the document has moved under this -- try again";
+            line.insert(after, " { " + from.name + " }");
+            return {};
+        }
+    }
+    return "that socket cannot be joined";
+}
+
+std::string disconnect_clip_socket(std::vector<std::string>& lines, const ClipGraph& graph,
+                                   u32 target, u32 socket) {
+    if (target >= graph.nodes.size()) return "nothing to cut";
+    const ClipNode& into = graph.nodes[target];
+    const std::vector<ClipSocket> sockets = clip_sockets_of(graph, target);
+    if (socket >= sockets.size()) return "there is no such socket";
+    const ClipSocket& where = sockets[socket];
+
+    // A wire is a NAME, and the span it occupies was recorded where it was read.
+    if (where.linked) {
+        for (u32 k = 0; k < into.links.size(); ++k) {
+            const ClipLink& link = into.links[k];
+            const bool mine = (where.where == ClipSocket::Where::Child)
+                                  ? (link.key.empty() && link.from == where.from)
+                                  : (link.key == where.key && link.from == where.from);
+            if (!mine) continue;
+            return disconnect_clip_node(lines, graph, target, k);
+        }
+        return "nothing to cut";
+    }
+    // Not a wire: a key with a value in it, which comes out the same way *put this back* takes one
+    // out (D801). A positional number is part of the statement's own shape and does not come out.
+    if (!where.key.empty()) {
+        return erase_clip_key(lines, into, where.key) ? std::string()
+                                                     : "there is nothing in there";
+    }
+    return "there is nothing in there";
 }
 
 std::string clip_may_join(const ClipNode& target, const ClipNode& source, std::string& key) {

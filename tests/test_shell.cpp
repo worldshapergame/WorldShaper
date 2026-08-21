@@ -482,9 +482,11 @@ TEST_CASE("a clip written by a Windows editor opens, and keeps its byte order ma
     CHECK(file_text(clip) == marked);
 }
 
-TEST_CASE("a material box opens where it stands and nothing lands on top of it") {
-    // *These material nodes should show their settings inside their actual node instead of in
-    // another settings window.* An open box is several cells tall and two across, so the whole of
+TEST_CASE("a box wears every socket it has and nothing lands on top of it") {
+    // **The rewrite, from the outside.** *This entire thing is uncomprehensible, rewrite the
+    // whole way in which nodes connect.* A box used to be a name with a fold you could open to
+    // find its properties; it is now a title and one named, typed row per socket, always. So a
+    // box is several cells tall and two across for EVERY node in the document, and the whole of
     // the no-overlap promise has to hold for a rectangle of cells rather than for one.
     Scratch scratch("shell-open-box");
     const std::filesystem::path mat = write_file(
@@ -500,17 +502,15 @@ TEST_CASE("a material box opens where it stands and nothing lands on top of it")
     quiet_frame(shell, 0.0);
     CHECK(shell.boxes_overlapping() == 0);
 
-    REQUIRE(shell.open_node_named("brass"));
-    quiet_frame(shell, 0.1);
-    CHECK(shell.boxes_overlapping() == 0);
+    // Every property a voxel type can take is a row, whether or not the file writes it (D786) --
+    // which is what makes a box worth reading: an empty socket is where the next wire goes, and a
+    // socket that appears only once something is already in it is a socket nobody can use.
+    CHECK(shell.sockets_on("brass") == shell.sockets_on("iron"));
+    CHECK(shell.sockets_on("brass") >= 8);
+    CHECK(shell.sockets_on("nothing of that name") == 0);
 
-    REQUIRE(shell.open_node_named("iron"));
-    REQUIRE(shell.open_node_named("glass"));
     quiet_frame(shell, 0.2);
     CHECK(shell.boxes_overlapping() == 0);
-
-    // A box with no list of properties has nothing to open.
-    CHECK_FALSE(shell.open_node_named("nothing of that name"));
 }
 
 // --- typing, and putting it back ----------------------------------------------------------------

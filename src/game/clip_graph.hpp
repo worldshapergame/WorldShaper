@@ -371,6 +371,76 @@ bool clip_head_matches(const std::string& head, const std::string& text);
 // written", exactly as before.
 const std::vector<ClipProperty>& clip_properties_of(const std::string& head);
 
+// --- SOCKETS: every place a wire can land, by name ------------------------------------------------
+//
+// **This is the rewrite.** Asked for directly: *rewrite the whole way in which nodes connect, make
+// it work exactly like on the old version of the game.*
+//
+// What the old one did, and what this now does: **a node is a list of named, typed input sockets
+// down its left side and one output on its right.** Every socket says what it is called and what
+// kind of thing it takes; a socket with no wire shows the value it holds and can be typed into; a
+// wire is dragged from an output dot and dropped on the input dot you mean. Nothing is guessed.
+//
+// What was there before guessed. A wire attached to a NODE and a heuristic decided which of its
+// inputs the player had meant — so `where=` and `by=` and a child of a `{ }` block were all *a
+// wire into that box*, and the only way to find out where one had gone was to read the script.
+// That is the whole of *this entire thing is uncomprehensible*.
+//
+// The mapping onto the clip language is exact rather than invented, which is why it can be done at
+// all without giving up the document:
+//
+//   a positional number      one socket, named by what that position means (`x0`, `r`, `sides`)
+//   a `key=value`            one socket named `key`; `rgb=` is three, named `rgb red` and so on
+//   a child of a `{ }` block one socket per child, plus an empty one at the end to drop into
+//   a bare name             one socket, for the thing a statement names (`solid X`, `paint TYPE`)
+//
+// So a socket is a place in the TEXT as much as a place on the screen, and connecting one writes
+// exactly the bytes a person would have typed.
+struct ClipSocket {
+    std::string name;               // what it is called on the node
+    ClipCarries takes = ClipCarries::Value;
+
+    // Where it lives in the document, which is what `connect_clip_socket` writes to.
+    enum class Where : u8 {
+        Number,   // a positional number or one of a key's numbers
+        Key,      // a `key=` that is not there yet
+        Child,    // one of a `{ }` block's children, or the empty one at the end
+        Word,     // the bare name a statement takes: `solid X`, `paint TYPE`
+    };
+    Where where = Where::Number;
+    std::string key;                // for Key and for a keyed Number
+    u32 index = 0;                  // which number of that key, or which child
+
+    // What is in it now. A socket holds a wire or a value, never both.
+    bool linked = false;
+    u32 from = 0;                   // the node the wire comes from, when `linked`
+    bool implied = false;           // the language means it; the document does not say it (D796)
+
+    // The constant, when there is one. Both are indices into the node's own arrays so that a
+    // caller can write the bytes back — a pointer into a graph that is re-read every keystroke is
+    // a pointer that is stale by the time it is used.
+    bool has_number = false;
+    u32 number_at = 0;              // into `node.numbers`
+    bool has_word = false;
+    u32 word_at = 0;                // into `node.words`
+};
+
+// Every socket a node has, in the order they are drawn: its bare name first, then its positional
+// numbers, then its keys, then its children.
+std::vector<ClipSocket> clip_sockets_of(const ClipGraph& graph, u32 node);
+
+// Join `source`'s output to one socket of `target`. Empty on success, one line otherwise.
+std::string connect_clip_socket(std::vector<std::string>& lines, const ClipGraph& graph, u32 target,
+                                u32 socket, u32 source);
+// And take whatever is in that socket back out.
+std::string disconnect_clip_socket(std::vector<std::string>& lines, const ClipGraph& graph,
+                                   u32 target, u32 socket);
+
+// What a positional number is called on a node. `box`'s six are two corners; a `sphere`'s three are
+// a place. Named rather than numbered because *the fourth number of a box* is not something anybody
+// can hold in their head.
+std::string clip_number_name(const ClipNode& node, u32 index, u32 count);
+
 // --- what may be wired into what ----------------------------------------------------------------
 //
 // **A wire had no type at all, and that is a bug rather than a looseness.** Reported: *if i take a
