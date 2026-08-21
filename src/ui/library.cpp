@@ -84,7 +84,11 @@ const std::vector<Kind>& shipped_kinds() {
         // have, and every one of them came back on the next launch anyway looking like the delete
         // had failed. The facility and the twenty-two pieces it is assembled out of are here.
         Kind{"clips", ".wsclip", "clips", Icon::Clip, true, "#", ".clip", "clips"},
-        Kind{"materials", ".wsmat", "materials", Icon::Material, true, "#"},
+        // And the voxel types the game ships with, listed beside the player's own and never copied
+        // anywhere (D494). The shelf is the tool's palette now (D806), so a shelf with nothing on
+        // it is a game a player cannot build in — Q and E always had SOMETHING to step through
+        // because it came out of the open world, and a library has to be given a start.
+        Kind{"materials", ".wsmat", "materials", Icon::Material, true, "#", "", "materials"},
         // There is no scripts shelf (D492). It held `.wslua`, which is Lua, which is what a mod is
         // written in — and `mods\` was already specified as *Lua and native packages*. So it was
         // two shelves for one format, exactly as characters and clips were, and the thing that

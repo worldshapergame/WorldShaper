@@ -1,0 +1,3 @@
+# WSauthor: worldshaper
+# Unlacquered brass. Metal reflects its own colour, which is what makes it look like metal.
+material brass rgb=196,152,66 rough=70 metal=225 brush=2

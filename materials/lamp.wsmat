@@ -1,0 +1,3 @@
+# WSauthor: worldshaper
+# A warm filament. Anything with emit above nought is a light source in its own right.
+material lamp rgb=255,226,178 rough=140 emit=220

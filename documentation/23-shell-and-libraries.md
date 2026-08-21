@@ -394,6 +394,24 @@ detail:
   graph, the material graph and the clip graph are the same editor with different nodes in the
   palette — the player learns it once.
 
+#### The materials shelf is the tool's palette (D806)
+
+**Pressing a row on the materials shelf is choosing what to build with.** That is what *open* means
+on every other shelf — a world opens by being entered — and a shelf where the obvious gesture edits
+the file instead is a shelf a player has to be told about. Editing one is on its row's menu, where
+editing a world is.
+
+It replaced **Q and E**, which stepped through whatever the open world happened to declare, in the
+order it declared them: a palette a player cannot see, cannot name, cannot add to and cannot take
+anything out of. A library is all four of those already.
+
+The file is read by the same parser everything else is, into **this world's own type table**, which
+is what mints the id the tool builds with. Interning is idempotent, so switching between two types
+does not grow the table. The row is lit and bold while it is the one in use.
+
+The game ships six of them — stone, oak, brass, glass, lamp, moss — because the shelf is the palette
+and a shelf with nothing on it is a game a player cannot build in.
+
 #### A material is a list of properties, and it opens where it stands (D786, D787, D788)
 
 A node's panel listed the numbers that are **written**. For a shape that is complete — a `box` has

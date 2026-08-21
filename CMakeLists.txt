@@ -455,6 +455,22 @@ add_custom_target(ws_clips ALL
     COMMENT "clips -> ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/clips")
 add_dependencies(WorldShaper ws_clips)
 
+# And the voxel types the game ships with, for exactly the same reason and by exactly the same
+# route.
+#
+# **The materials shelf is where the tool's palette comes from now** (D806), so a shelf with nothing
+# on it is a game a player cannot build in. Q and E stepped through whatever the open world declared
+# and there was therefore always SOMETHING; a library that starts empty has to be given a start.
+# Six of them, each one a different thing about how a surface takes light, so the shelf is also the
+# shortest explanation of what a voxel type is.
+add_custom_target(ws_materials ALL
+    COMMAND ${CMAKE_COMMAND}
+            -DSRC="${CMAKE_CURRENT_SOURCE_DIR}/materials"
+            -DDST="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/materials"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_clips.cmake"
+    COMMENT "materials -> ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/materials")
+add_dependencies(WorldShaper ws_materials)
+
 # Record where glslc lives so runtime hot reload can find it without a PATH lookup.
 target_compile_definitions(ws_gpu PUBLIC WS_GLSLC_PATH="${Vulkan_GLSLC_EXECUTABLE}")
 

@@ -281,6 +281,13 @@ document writes it (D786). Left out, each takes the value in the last column.
 
 A **`.wsmat`** file is a clip document holding one or more of these and nothing else. It is spliced
 into a clip by `include` like any other part, which is why one editor and one language cover both.
+It is also what the tool builds with: pressing a row on the materials shelf reads that file into the
+open world's type table and hands the id to the chisel (D806).
+
+The interface calls a `material` a **voxel type** (D800): it sets the look of a voxel, which is the
+simple thing every clip has always used, and "material" is coming to mean the richer thing that is a
+graph of its own. The keyword does not change, because a keyword is a promise to every clip ever
+written.
 
 ## A note on what a clip file may begin with
 

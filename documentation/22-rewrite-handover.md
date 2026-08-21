@@ -626,7 +626,40 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### THE EDITOR, 2026-08-21 — D772–D788. Read this first
+#### THE EDITOR AND THE PALETTE, 2026-08-21 — D790–D806. Read this first
+
+**One long message from playing plus three more while it was being written up.** The worst of them
+first: **the script editor could take one letter at a time and no more** (D790). D777's selection
+dropped its anchor on every path that MOVES the caret and on none of the paths that EDIT, so typing
+one character left a one-character selection behind and the next character replaced it. One line.
+
+| what changed | | how to look at it |
+|---|---|---|
+| **ctrl-Z and ctrl-Y**, from either view, keeping whole documents rather than a list of edits (D791) | an edit here is a slider moving three bytes, a node taken out of a file, a paste of twenty lines and a keystroke | — |
+| **ctrl-C/X/V/A on chosen boxes**, through the system clipboard, carrying the statements as TEXT (D792) | a node you copy pastes into a text editor, into another clip, and back | — |
+| **a selection pulled past the edge pans the window** (D793) | a selection could only ever be as long as what was on the screen | — |
+| **a box grows until every wire has four pixels of edge to land on** (D794) | forty-two wires into a box one cell high is half a pixel each; it was never a routing fault | — |
+| **a box shows what it is MADE of**, one level below each answer (D795) | the answers-only view hid every box that was joined to something | — |
+| **the wires the LANGUAGE has are drawn**, dimmer and with no tab (D796) | a `paint` coats the solid and never says so | — |
+| **the document's box takes only what nothing else reads** (D795) | it was taking every box on the canvas | — |
+| **a part lives on its SHELF and an include is looked for there** (D797) | a clip made in the editor was written into the worlds folder and was in no library | `ui::where_includes_live` |
+| **the glass is three times as blurry at the same cost** (D798) | move the taps, do not add any | — |
+| **ink has no colour of its own** (D799) | the blind band is answered in the GLASS now, not in the letters | — |
+| **the old material node is a voxel type** (D800) | two things cannot share one word while one is being built | — |
+| **a node's settings fold, and every row can be put back** (D801) | | — |
+| **a document with no shapes is not missing its solid** (D802) | | — |
+| **a node's head is a dropdown** (D803) | a cube can become a cone; a clip can become another clip | — |
+| **hollow and stretch wrap the statement in `shell { }` / `scale { }`** (D805) | the words the language already has | — |
+| **the tool's palette is the materials shelf; Q and E are gone** (D806) | Q and E stepped a palette a player could not see, name or add to | `--paint-with FILE` |
+
+**Two traps this wave produced, and both are the same shape.** A node records `line`/`column` for
+where its STATEMENT begins and `word_line`/`word_column` for where its own word is; they differ on
+exactly the statements that bind a name, and using the first for the second wrote `cone` over `let`
+(D804). And `build_with` was called from the place that sets the tool's palette up — there are TWO
+of those, a world off the cache and a world off the ladder, so the choice applied in one was undone
+by the other (D806). Both were caught by reading a log, not by a test.
+
+#### THE EDITOR, 2026-08-21 — D772–D788
 
 **One message from playing, fourteen items, and two of them were losing work.** Everything below is
 in the build.
@@ -652,19 +685,27 @@ the bottom of a row have no box in them, and a wire only ever turns in those.
 
 #### The next thing, and it needs a decision
 
-**A material that a player can pick up and paint with.** The message that asked for the property list
-also said materials *will not just be usable for clips but the player ingame will be able to select a
-material and paint with it or place different shapes with his tools with it so that has something to
-do with how materials use positions* — and then, in the same breath, *this reframes the entire way
-all clips use materials which we can adapt later*.
+**A voxel type whose properties are driven by POSITION.** Half of what that message asked for is
+built: a `.wsmat` is a document in the same language, it opens in the same editor, it is spliced
+into a clip by `include`, every property it can carry is on the screen with a slider on it, and the
+player can pick one off the shelf and build with it (D806). What it does not have is `rgb` that
+reads an `fbm` or `rough` that reads a `distance` — which is what would make a voxel type a GRAPH
+rather than a row of constants, and is the thing the message called *the more complex one that is
+actual materials* and said *we can adapt later*.
 
-So it was deliberately not half-built. What exists now is the shape of it: a `.wsmat` is a document
-in the same language, it opens in the same editor, it is spliced into a clip by `include`, and every
-property it can carry is on the screen with a slider on it. What it does not have is a property
-**driven by position** — `rgb` that reads an `fbm`, `rough` that reads a `distance` — which is what
-would make a material a graph rather than a row of constants, and which is also what the tool
-palette would have to carry into the world. That is a language change and a renderer change
-together, and it is the next thing to decide rather than the next thing to type.
+That is a language change and a renderer change together: the type table holds a `VisualRecord` of
+fixed bytes per type, and a property that varies per voxel is not one of those. `variation` is the
+nearest thing that exists and it is a hashed wobble rather than a field. **Decide the shape of it
+before typing any of it.**
+
+**And two smaller gaps, written down rather than faked:**
+
+- **A clip node cannot be hollowed or stretched** (D805). An `include` is spliced as TEXT, so there
+  is nothing to wrap in a `shell { }` — the language would need a per-include transform, which the
+  splicer cannot express because it works before a token is read.
+- **A world naming a part on the sender's shelf will not resolve on the recipient's** (D797).
+  Gathering a world's parts beside it is what PACKAGING is, and packaging is the thing to build when
+  sending exists.
 
 #### THE EDITOR, 2026-08-20 — D743–D771
 
