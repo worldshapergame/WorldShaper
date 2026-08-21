@@ -14255,6 +14255,16 @@ int run_windowed(const Options& options) {
                     leave = true;
                     break;
                 }
+                // A voxel type chosen from the TITLE is remembered until there is a world to
+                // build in. There is no chisel yet — no world, no type table, nothing to intern
+                // into — and a press that visibly does nothing is worse than one that is refused,
+                // so it is kept and applied the moment a world opens. The same field
+                // `--paint-with` uses, so there is one path and not two.
+                if (!verdict.paint_with.empty()) {
+                    round.paint_with = verdict.paint_with.string();
+                    shell.set_painting(verdict.paint_with);
+                    shell.say("building with " + verdict.paint_with.stem().string(), 2.5);
+                }
                 if (verdict.open_world) {
                     round.world = verdict.world.string();
                     break;
